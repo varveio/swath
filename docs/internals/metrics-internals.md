@@ -16,6 +16,25 @@ The §3 forensics fields, §5, §5a, §7 trace format, and §8 below are here.
 
 ## 3. JSON run-summary — post-hoc forensics fields
 
+**Every distribution statistic is run-scoped.** `max` and all published percentiles
+(`probe_latency[]`, `shape.regime.api_latency_p*`, and every `swath.*` timer's `max_ms`) cover the
+whole run, exactly like the `count`/`total_ms` beside them. This is deliberate and non-default:
+Micrometer's stock `DistributionStatisticConfig` is a *rolling* window (`expiry=2m`,
+`bufferLength=3`), under which `max`/percentiles decay while `count`/`totalTime` stay cumulative — so
+a single summary row would mix two time bases, and any run longer than two minutes would report
+percentiles describing only its final window. `RunMetrics#DISTRIBUTION_WINDOW` pins one
+non-rotating bucket instead; `RunMetricsDistributionWindowTest` is the guard. If you add a `Timer` or
+`DistributionSummary` to `RunMetrics`, build it through `runScopedTimer`/`runScopedSummary` or it
+will silently reintroduce the rolling window.
+
+**Consequence for any MID-RUN reader.** These percentiles are now run-cumulative, not recent-window,
+so a consumer that samples them *while the run is going* (a progress line, a live dashboard, an OTLP
+scrape) sees the run so far rather than "the last two minutes". That is the correct semantics for the
+end-of-run summary these feed today, but a future live-monitoring consumer that genuinely wants a
+recent window must derive it (successive scrapes) rather than assume decay. Memory is unaffected:
+expiry governs histogram rotation, not bucket count, and `bufferLength=1` holds fewer rings than the
+default 3.
+
 These are the deep, post-hoc forensics fields of the JSON run-summary artifact (the artifact itself,
 its write/atomicity semantics, and the `stop_source`/`error_class` terminal facts are in
 [`docs/metrics-and-observability.md`](../metrics-and-observability.md) §3). Each reconstructs some
@@ -100,8 +119,10 @@ carries four plain per-range counters — bumped
 alongside the existing GLOBAL `swath.steal_reason` counters at the same decision points (never a new
 hot-path check, never a per-range map): `cursor_passed_pivot` (a thief lost the race — the drainer's
 cursor had already passed the pivot), `no_pivot` (this range hit a genuine dead end — no room left to
-split), `structure_suppressed` (this victim's zero-fan-out `delimiter=/` structure probes were
-suppressed — see `STRUCTURE.suppressed_zero_fanout`, §5), `demand_gated` (this range's OWN proactive
+split), `structure_suppressed` (this victim's `delimiter=/` structure probes were suppressed, either
+because it proved zero-fan-out or because its probes kept timing out — see
+`STRUCTURE.suppressed_zero_fanout` / `STRUCTURE.suppressed_probe_timeout`, §5; this one per-range
+tally covers both, though the global counters distinguish them), `demand_gated` (this range's OWN proactive
 owner-split was suppressed by the saturation/demand gate — see `OWNER_SPLIT.demand_gated`, §5).
 Always present as an array (possibly empty — an empty array is itself informative: nothing is left
 in flight, e.g. a genuinely COMPLETED run has already drained every range by the time its terminal
@@ -487,6 +508,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `PIVOT` | `reflect_hit` | the reflected empty-upper pivot probed NON-empty (seeded a commit at m_r, skipping the blind bisection) | |
 | `PIVOT` | `reflect_empty` | the reflected empty-upper pivot probed empty; bisection re-seeded at the shorter `(c, m_r]` interval | |
 | `STRUCTURE` | `suppressed_zero_fanout` | per-victim structure-probe suppression after K consecutive zero-fan-out probes | |
+| `STRUCTURE` | `probe_timed_out` | a `delimiter=/` structure probe hit its attempt-timeout budget; recorded against the victim so the timeout streak can suppress further probing there (a timeout otherwise reports NOTHING, destroying the evidence that would stop the next probe) | |
+| `STRUCTURE` | `suppressed_probe_timeout` | per-victim structure-probe suppression driven by the TIMEOUT streak rather than zero fan-out — the region could not answer at all, vs. answered "flat" | |
 | `STRUCTURE` | `fanout_capped` | a structure probe's page truncated at `STRUCTURE_PROBE_MAX_KEYS` — its CommonPrefixes are a prefix of the directory's children, so any committed pivot is the furthest proved boundary (`PIVOT.{structure,adaptive_structure}_capped`), not the true median | |
 | `OWNER_SPLIT` | `demand_gated` | a proactive owner self-split was suppressed by the saturation/demand gate | |
 | `OWNER_SPLIT` | `floor_reflected_blocked` | a proactive owner self-split was blocked by the observed-mass child-tail floor (reflected estimate) | |

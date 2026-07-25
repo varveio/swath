@@ -47,7 +47,7 @@ public final class LatencyModels {
      * so a composed test can (a) configure the ENGINE's attempt-timeout budget for the fixture run
      * at/below this value (scale the timeout DOWN to ms-scale rather than sleeping seconds) and
      * (b) layer a {@code
-     * PageInterceptor} that inspects {@code request.apiCallAttemptTimeoutOverride()} the way {@code
+     * PageInterceptor} that inspects {@code request.attemptTimeoutEscalationLevel()} the way {@code
      * GaugedFetcherAttemptTimeoutEscalationTest} does, to turn an over-threshold cold delay into an
      * actual {@code ThrottleException(Kind.ATTEMPT_TIMEOUT)} — reproducing the probe-timeout
      * spiral end to end. That composition is deliberately left to the caller (the big Hive-keyspace

@@ -134,6 +134,10 @@ final class GaugedFetcher implements PageFetcher {
         // RunMetrics#recordTransientRetryCapExhaustion.
         int attemptTimeoutFaults = 0;
         int votingFaults = 0;
+        // A floor, never a starting point -- see TransientRetryFetcher#fetchPage's identical
+        // incomingLevel for why: this loop's own streak restarting at 0 must never step a
+        // pre-escalated incoming request DOWN to a smaller budget.
+        int incomingLevel = req.attemptTimeoutEscalationLevel();
         while (true) {
             // Check cancellation before each attempt and again after each throttle (a flag-only
             // cancel does not interrupt the backoff sleep), so a persistently-throttled/timing-out
@@ -141,10 +145,8 @@ final class GaugedFetcher implements PageFetcher {
             // InterruptedException, which the engine maps to CancelledException so the run
             // unwinds gracefully.
             throwIfRunCancelled();
-            int level = TransientRetryFetcher.escalationLevel(consecutiveAttemptTimeouts);
-            PageRequest attemptReq = level == 0 ? req
-                    : req.withApiCallAttemptTimeoutOverride(
-                            TransientRetryFetcher.escalatedAttemptTimeout(consecutiveAttemptTimeouts));
+            int level = Math.max(incomingLevel, TransientRetryFetcher.escalationLevel(consecutiveAttemptTimeouts));
+            PageRequest attemptReq = level == incomingLevel ? req : req.withAttemptTimeoutEscalationLevel(level);
             try {
                 ListPage page = fetchOnce(attemptReq);
                 if (reportSuccess) {
@@ -193,7 +195,8 @@ final class GaugedFetcher implements PageFetcher {
                                 slotGated ? "attempt_timeout_worker" : "attempt_timeout_probe");
                         consecutiveAttemptTimeouts++;
                         attemptTimeoutFaults++;
-                        int nextLevel = TransientRetryFetcher.escalationLevel(consecutiveAttemptTimeouts);
+                        int nextLevel = Math.max(incomingLevel,
+                                TransientRetryFetcher.escalationLevel(consecutiveAttemptTimeouts));
                         if (nextLevel > 0) {
                             metrics.recordStealReason("TRANSIENT", "attempt_timeout_escalated_" + nextLevel);
                         }

@@ -64,15 +64,21 @@ public final class S3PageFetcher implements PageFetcher {
     private final RunMetrics metrics;
     private final S3FaultClassifier faultClassifier;
     /**
-     * Per-request {@code apiCallAttemptTimeout} override applied to a probe call
-     * class (pivot or structure — see {@link #callClass}), unless the request already carries an
-     * explicit {@link PageRequest#apiCallAttemptTimeoutOverride()} (the escalation path, which
-     * always wins). Worker pages are never touched — they keep the client-level {@link
-     * S3Config#DEFAULT_ATTEMPT_TIMEOUT} budget with no per-request override. Defaults to {@link
-     * S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT} for every constructor that does not thread an explicit
-     * {@link S3Config}.
+     * Per-request {@code apiCallAttemptTimeout} override applied to the POINT-probe call
+     * class ({@code pivot_probe} — see {@link #usesShortProbeBudget}), unless the request carries a
+     * non-zero {@link PageRequest#attemptTimeoutEscalationLevel()} (the escalation path, which always
+     * wins). Worker pages and {@code delimiter=/} structure probes are never touched —
+     * both are scan-class calls and keep the client-level {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT}
+     * budget with no per-request override. Defaults to {@link S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT}
+     * for every constructor that does not thread an explicit {@link S3Config}.
      */
     private final Duration probeApiCallAttemptTimeout;
+    /**
+     * The client-level per-attempt budget the SCAN call classes run under. Never applied as a
+     * per-request override at level 0 (the client already enforces it) — it is the BASE that
+     * {@link #attemptTimeoutForLevel} doubles when the engine escalates a scan-class call.
+     */
+    private final Duration scanApiCallAttemptTimeout;
     private final AtomicLong apiCalls = new AtomicLong();
 
     /**
@@ -92,9 +98,29 @@ public final class S3PageFetcher implements PageFetcher {
     private final AtomicLong slowProbeExemplarCount =
             new AtomicLong();
 
-    /** The no-option convenience: an OBJECTS fetcher with {@link S3PageFetcherConfig#DEFAULT} wiring. */
+    /**
+     * The no-option convenience: an OBJECTS fetcher with {@link S3PageFetcherConfig#DEFAULT} wiring,
+     * except the scan-class base is read back from {@code s3} itself rather than assumed —
+     * {@link S3PageFetcherConfig#scanApiCallAttemptTimeout} must be the SAME value the client was
+     * built with (see its javadoc), so a caller pairing this overload with a client configured at a
+     * non-default {@code apiCallAttemptTimeout} would otherwise escalate against the wrong base.
+     * Falls back to {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} when {@code s3} cannot report its own
+     * configuration -- {@link S3Client#serviceClientConfiguration()}'s default method throws {@link
+     * UnsupportedOperationException} for a hand-rolled {@code S3Client} test double, which is every
+     * other caller of this overload.
+     */
     public S3PageFetcher(S3Client s3, String bucket) {
-        this(s3, bucket, S3PageFetcherConfig.DEFAULT);
+        this(s3, bucket, S3PageFetcherConfig.DEFAULT.withScanApiCallAttemptTimeout(
+                clientAttemptTimeoutOrDefault(s3)));
+    }
+
+    private static Duration clientAttemptTimeoutOrDefault(S3Client s3) {
+        try {
+            return s3.serviceClientConfiguration().overrideConfiguration()
+                    .apiCallAttemptTimeout().orElse(S3Config.DEFAULT_ATTEMPT_TIMEOUT);
+        } catch (RuntimeException e) {
+            return S3Config.DEFAULT_ATTEMPT_TIMEOUT;
+        }
     }
 
     /**
@@ -111,6 +137,7 @@ public final class S3PageFetcher implements PageFetcher {
         this.requestPayer = config.requestPayer();
         this.metrics = config.metrics() != null ? config.metrics() : new RunMetrics(new SimpleMeterRegistry());
         this.probeApiCallAttemptTimeout = config.probeApiCallAttemptTimeout();
+        this.scanApiCallAttemptTimeout = config.scanApiCallAttemptTimeout();
         this.faultClassifier = new S3FaultClassifier(bucket, this.metrics);
     }
 
@@ -161,14 +188,16 @@ public final class S3PageFetcher implements PageFetcher {
         // has, store-layer, never engine-aware (see #callClass's javadoc). Computed before the
         // attempt-timeout override below, which needs it to pick the right budget.
         String callClass = callClass(req);
-        if (req.apiCallAttemptTimeoutOverride() != null) {
-            // The caller's escalated per-attempt override (see PageRequest#apiCallAttemptTimeoutOverride)
-            // always wins over the probe default immediately below.
-            Duration override = req.apiCallAttemptTimeoutOverride();
-            b.overrideConfiguration(o -> o.apiCallAttemptTimeout(override));
-        } else if (isProbeCallClass(callClass)) {
-            // A probe (pivot or structure) gets its own short per-attempt budget instead of the
-            // WORKER-page client-level default -- see S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT for why.
+        if (req.attemptTimeoutEscalationLevel() > 0) {
+            // The engine escalated this logical fetch (see PageRequest#attemptTimeoutEscalationLevel):
+            // map the level onto THIS call class's own base budget.
+            Duration escalated = attemptTimeoutForLevel(callClass, req.attemptTimeoutEscalationLevel());
+            b.overrideConfiguration(o -> o.apiCallAttemptTimeout(escalated));
+        } else if (usesShortProbeBudget(callClass)) {
+            // A POINT probe (pivot) gets its own short per-attempt budget instead of the client-level
+            // scan budget -- see S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT for why. A delimiter=/ structure
+            // probe deliberately does NOT: it is a scan-class call and keeps the client-level budget
+            // (see #usesShortProbeBudget).
             Duration probeOverride = probeApiCallAttemptTimeout;
             b.overrideConfiguration(o -> o.apiCallAttemptTimeout(probeOverride));
         }
@@ -208,7 +237,7 @@ public final class S3PageFetcher implements PageFetcher {
             // S3FaultClassifier#classify, which dispatches most-specific-first.
             long elapsedNanos = System.nanoTime() - startedNs;
             recordFailureOutcomeAndCheckInterrupt(callClass, req, elapsedNanos, phaseCapture, sample);
-            throw faultClassifier.classify(e);
+            throw faultClassifier.classify(e, faultContext(callClass, req));
         } catch (RuntimeException e) {
             // A NON-SdkException RuntimeException escaping the SDK call (the SdkException arm
             // above already claims every modeled SDK fault family). A socket closure surfacing from a
@@ -230,7 +259,7 @@ public final class S3PageFetcher implements PageFetcher {
             // probe_latency[], same interrupt guard so our own cancel still unwinds cooperatively).
             long elapsedNanos = System.nanoTime() - startedNs;
             recordFailureOutcomeAndCheckInterrupt(callClass, req, elapsedNanos, phaseCapture, sample);
-            throw faultClassifier.classifySocketClosure(e);
+            throw faultClassifier.classifySocketClosure(e, faultContext(callClass, req));
         }
         } finally {
             // Fires exactly once regardless of how the inner try/catch above exits.
@@ -389,6 +418,15 @@ public final class S3PageFetcher implements PageFetcher {
         return new String(raw, StandardCharsets.UTF_8);
     }
 
+    /**
+     * The faulting request's identity for {@link S3FaultClassifier}'s retryable fault lines — built
+     * here, not in the classifier, so {@link #describe}'s control-char escaping stays single-sourced.
+     */
+    private static S3FaultClassifier.FaultContext faultContext(String callClass, PageRequest req) {
+        return new S3FaultClassifier.FaultContext(
+                callClass, describe(req.prefix()), describe(req.startAfter()));
+    }
+
     private static String describe(byte[] raw) {
         return raw == null ? "<none>" : ControlCharEscaper.escape(toRequestParam(raw));
     }
@@ -428,13 +466,58 @@ public final class S3PageFetcher implements PageFetcher {
     }
 
     /**
-     * True for either probe call class (pivot or structure) — the set of call
-     * classes that get the short {@link #probeApiCallAttemptTimeout} per-request override instead of
-     * the 10 s WORKER-page client-level budget. See {@link #callClass}.
+     * True for the POINT-probe call class only — the set of call classes that get the short
+     * {@link #probeApiCallAttemptTimeout} per-request override instead of the client-level
+     * {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} scan budget. See {@link #callClass}.
+     *
+     * <p><b>Why {@code structure_probe} is deliberately NOT in this set.</b> A {@code max_keys<=1}
+     * pivot probe is a point lookup: S3 answers it from the first key at/after the cursor, so it is
+     * cheap and near-constant. A {@code delimiter=/} structure probe is the opposite: S3 must SCAN
+     * forward, rolling keys up into {@code CommonPrefixes}, so its cost tracks the keyspace it
+     * crosses — on a deep bucket, measurably ~10x a pivot probe standalone and several times that
+     * again at high concurrency. Sharing the point-probe budget put a scan-class call behind a 3 s
+     * fuse, timing out roughly half of all structure-probe attempts and starving the thief of pivots.
+     * See {@code docs/internals/probe-budgets.md} §2.
      */
-    private static boolean isProbeCallClass(String callClass) {
-        return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass)
-                || RunMetrics.CALL_CLASS_STRUCTURE_PROBE.equals(callClass);
+    private static boolean usesShortProbeBudget(String callClass) {
+        return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass);
+    }
+
+    /**
+     * The per-attempt budget this call class runs under absent any escalation — the base
+     * {@link #attemptTimeoutForLevel} doubles per level.
+     */
+    private Duration baseAttemptTimeoutFor(String callClass) {
+        return usesShortProbeBudget(callClass) ? probeApiCallAttemptTimeout : scanApiCallAttemptTimeout;
+    }
+
+    /**
+     * The per-attempt budget for {@code callClass} at escalation {@code level} — {@code
+     * base(callClass) * 2^level}.
+     *
+     * <p>The engine publishes only a LEVEL ({@link PageRequest#attemptTimeoutEscalationLevel}); this
+     * is where a level becomes wall-clock, because only the store knows each call class's base. So a
+     * scan-class call climbs 10 s -> 20 s -> 40 s while a point-class probe climbs 3 s -> 6 s -> 12 s,
+     * each doubling from a base that actually reflects what that call costs.
+     *
+     * <p>Doubling from the class's own base is monotone by construction: an escalation can only ever
+     * BUY room, never shrink the budget, whatever base a store is configured with. An earlier design
+     * had the engine author absolute durations against one assumed base and had to divide them back
+     * out here, which needed an explicit floor to stop a large configured base from letting
+     * "escalation" shrink the budget. See {@code docs/internals/probe-budgets.md} §3.
+     *
+     * <p>{@code level} is also capped at {@link #MAX_ESCALATION_SHIFT} — the engine itself never
+     * asks for more than {@code TransientRetryFetcher.MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL}, but
+     * this is the store's own boundary, so it must not trust an out-of-tree caller's level:
+     * {@code 1L << level} is a Java shift, not arithmetic, so it silently wraps (not overflows) once
+     * {@code level >= 64} -- e.g. {@code level=64} wraps back to a shift of 0, i.e. the UNESCALATED
+     * base budget, which is the opposite of what an "escalated" request asked for.
+     */
+    private static final int MAX_ESCALATION_SHIFT = 30;
+
+    Duration attemptTimeoutForLevel(String callClass, int level) {
+        int clamped = Math.min(Math.max(level, 0), MAX_ESCALATION_SHIFT);
+        return baseAttemptTimeoutFor(callClass).multipliedBy(1L << clamped);
     }
 
     /**
@@ -459,13 +542,15 @@ public final class S3PageFetcher implements PageFetcher {
         if (n > SLOW_PROBE_LOG_FIRST_N && Long.bitCount(n) != 1) {
             return;   // rate-limited: first N unconditionally, then only powers of two
         }
-        long overrideMs = req.apiCallAttemptTimeoutOverride() == null
-                ? 0L : req.apiCallAttemptTimeoutOverride().toMillis();
+        // The EFFECTIVE budget this attempt ran under, not merely "was there an override" -- with a
+        // level-based escalation the store can always state the real number, so a slow exemplar says
+        // what it was actually given (and at which rung) instead of leaving the base implicit.
+        long budgetMs = attemptTimeoutForLevel(callClass, req.attemptTimeoutEscalationLevel()).toMillis();
         log.warn("slow_probe_exemplar bucket={} call_class={} prefix={} start_after={} elapsed_ms={} "
-                        + "connect_acquire_ms={} ttfb_ms={} attempt_timeout_override_ms={} exemplar_n={}",
+                        + "connect_acquire_ms={} ttfb_ms={} attempt_timeout_ms={} escalation_level={} exemplar_n={}",
                 bucketForLog, callClass, describe(req.prefix()), describe(req.startAfter()), elapsedMs,
                 phaseCapture.connectAcquireNanos() < 0 ? -1 : phaseCapture.connectAcquireNanos() / 1_000_000L,
                 phaseCapture.timeToFirstByteNanos() < 0 ? -1 : phaseCapture.timeToFirstByteNanos() / 1_000_000L,
-                overrideMs, n);
+                budgetMs, req.attemptTimeoutEscalationLevel(), n);
     }
 }

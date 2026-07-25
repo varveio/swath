@@ -50,5 +50,9 @@ dependencies {
     // (micrometer-core is now `implementation` above, on this module's own main; several
     // s3 tests reference Meter/MeterRegistry directly, and testImplementation extends
     // implementation for the same project, so no separate test-scope declaration is needed.)
+    // logback is the runtime SLF4J binding; S3FaultLogAttributionTest captures the retryable
+    // fault lines via a logback ListAppender (same idiom as swath-core's observability tests),
+    // so it must be on the test compile classpath here too.
+    testImplementation(libs.logback.classic)
     testRuntimeOnly(libs.junit.platform.launcher)
 }

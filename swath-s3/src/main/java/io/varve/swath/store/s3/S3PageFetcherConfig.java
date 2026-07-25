@@ -21,35 +21,53 @@ import java.time.Duration;
  *                     ({@code --request-payer requester}; requester-pays buckets)
  * @param metrics the run metrics sink; {@code null} (the default) means the fetcher installs a fresh
  *                no-op {@code SimpleMeterRegistry} sink so it never records against a shared registry
- * @param probeApiCallAttemptTimeout per-request attempt-timeout override applied to probe call
- *                                   classes only (see {@link S3PageFetcher#probeApiCallAttemptTimeout})
+ * @param probeApiCallAttemptTimeout per-attempt budget for the POINT-probe call class, applied as a
+ *                                   per-request override (see
+ *                                   {@link S3PageFetcher#probeApiCallAttemptTimeout})
+ * @param scanApiCallAttemptTimeout the per-attempt BASE budget for the SCAN call classes (worker
+ *                                  page, {@code delimiter=/} structure probe). Never applied as an
+ *                                  override at escalation level 0 — the client already enforces it —
+ *                                  but it is the base {@link S3PageFetcher#attemptTimeoutForLevel}
+ *                                  doubles once the engine escalates. Should be the same value the
+ *                                  client was built with, so level 0 and level 1 describe one ladder.
  */
 public record S3PageFetcherConfig(
         boolean fetchOwner,
         boolean requestPayer,
         RunMetrics metrics,
-        Duration probeApiCallAttemptTimeout) {
+        Duration probeApiCallAttemptTimeout,
+        Duration scanApiCallAttemptTimeout) {
 
     /**
      * The canonical default: no owner fetch, no requester-pays, a fresh no-op metrics sink (via the
-     * {@code null} sentinel), and the {@link S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT} probe budget.
+     * {@code null} sentinel), the {@link S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT} point-probe budget,
+     * and the {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} scan budget.
      */
-    public static final S3PageFetcherConfig DEFAULT =
-            new S3PageFetcherConfig(false, false, null, S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
+    public static final S3PageFetcherConfig DEFAULT = new S3PageFetcherConfig(
+            false, false, null, S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT, S3Config.DEFAULT_ATTEMPT_TIMEOUT);
 
     public S3PageFetcherConfig withFetchOwner(boolean fetchOwner) {
-        return new S3PageFetcherConfig(fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout);
+        return new S3PageFetcherConfig(
+                fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout, scanApiCallAttemptTimeout);
     }
 
     public S3PageFetcherConfig withRequestPayer(boolean requestPayer) {
-        return new S3PageFetcherConfig(fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout);
+        return new S3PageFetcherConfig(
+                fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout, scanApiCallAttemptTimeout);
     }
 
     public S3PageFetcherConfig withMetrics(RunMetrics metrics) {
-        return new S3PageFetcherConfig(fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout);
+        return new S3PageFetcherConfig(
+                fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout, scanApiCallAttemptTimeout);
     }
 
     public S3PageFetcherConfig withProbeApiCallAttemptTimeout(Duration probeApiCallAttemptTimeout) {
-        return new S3PageFetcherConfig(fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout);
+        return new S3PageFetcherConfig(
+                fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout, scanApiCallAttemptTimeout);
+    }
+
+    public S3PageFetcherConfig withScanApiCallAttemptTimeout(Duration scanApiCallAttemptTimeout) {
+        return new S3PageFetcherConfig(
+                fetchOwner, requestPayer, metrics, probeApiCallAttemptTimeout, scanApiCallAttemptTimeout);
     }
 }

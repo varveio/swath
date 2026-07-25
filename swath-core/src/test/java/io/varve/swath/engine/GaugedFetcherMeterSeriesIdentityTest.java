@@ -17,7 +17,6 @@ import io.varve.swath.runtime.CancellationToken;
 import io.varve.swath.store.PageRequest;
 import io.varve.swath.testkit.MockPageFetcher;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -107,7 +106,7 @@ final class GaugedFetcherMeterSeriesIdentityTest {
 
         // Drive each fault path the loop can take. Sharing one RunMetrics/registry lets the
         // lazily-registered counters accumulate into a single snapshot of the owned surface.
-        driveWorkerPageCompletesAtEscalationLevel(metrics, Duration.ofSeconds(20));   // level 1
+        driveWorkerPageCompletesAtEscalationLevel(metrics, 1);
         driveProbeFailsFast(metrics);
         driveWorkerBoundedCapStuck(metrics);
         driveWorkerStormRideOutThenHeals(metrics);                                    // level 2 + ride-out
@@ -122,14 +121,13 @@ final class GaugedFetcherMeterSeriesIdentityTest {
      * escalates the per-attempt timeout — materializing {@code attempt_timeout_worker},
      * {@code attempt_timeout_escalated_1} and {@code page_completed_at_1} for a 20&nbsp;s page.
      */
-    private static void driveWorkerPageCompletesAtEscalationLevel(RunMetrics metrics, Duration needs)
+    private static void driveWorkerPageCompletesAtEscalationLevel(RunMetrics metrics, int needsLevel)
             throws Exception {
         MockPageFetcher delegate = MockPageFetcher.builder()
                 .keys(List.of(b("data/a")))
                 .interceptor((req, idx, page) -> {
-                    Duration override = req.apiCallAttemptTimeoutOverride();
-                    if (override == null || override.compareTo(needs) < 0) {
-                        throw ThrottleException.attemptTimeout("page needs " + needs);
+                    if (req.attemptTimeoutEscalationLevel() < needsLevel) {
+                        throw ThrottleException.attemptTimeout("page needs escalation level " + needsLevel);
                     }
                     return page;
                 })

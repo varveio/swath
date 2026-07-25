@@ -254,6 +254,45 @@ public final class RunMetrics {
     public static final String LATENCY_PHASE_TOTAL = "total";
     private final ConcurrentMap<String, Timer> callClassLatencyTimers = new ConcurrentHashMap<>();
 
+    /**
+     * Distribution-statistic window for every {@link Timer}/{@link DistributionSummary} here: one
+     * non-rotating bucket covering the whole run.
+     *
+     * <p>Micrometer's DEFAULT is a ROLLING window — {@code expiry=2m}, {@code bufferLength=3} — which
+     * makes {@code max()} and every published percentile decay, while {@code count()} and {@code
+     * totalTime()} stay cumulative. In a JSON run summary, which is explicitly a post-hoc forensics
+     * artifact, that silently mixes two different time bases in one row. One run showed the mismatch
+     * starkly: {@code swath.rate_limit.wait} reported {@code count=6819, total_ms=143045,
+     * max_ms=0.001117} — 21 ms of average slot wait but a sub-microsecond max, because slot
+     * contention stopped partway through and the rolling max had decayed to nothing by the time the
+     * summary was written. Every percentile in {@code probe_latency[]} and {@code
+     * shape.regime.api_latency_p*} had the same defect: they described only the run's last ~2 minutes
+     * while being presented, and read, as run-level facts.
+     *
+     * <p>A single bucket that never rotates makes {@code max}/percentiles cover exactly what {@code
+     * count}/{@code total} already cover — the run. Bounded in memory: expiry governs histogram
+     * ROTATION, not bucket count.
+     */
+    private static final Duration DISTRIBUTION_WINDOW = Duration.ofDays(3650);
+
+    /**
+     * A {@link Timer} builder whose distribution statistics span the whole run rather than
+     * Micrometer's rolling 2-minute default — see {@link #DISTRIBUTION_WINDOW} for why every timer
+     * feeding the run summary must be built through this.
+     */
+    private static Timer.Builder runScopedTimer(String name) {
+        return Timer.builder(name)
+                .distributionStatisticExpiry(DISTRIBUTION_WINDOW)
+                .distributionStatisticBufferLength(1);
+    }
+
+    /** The {@link DistributionSummary} sibling of {@link #runScopedTimer}. */
+    private static DistributionSummary.Builder runScopedSummary(String name) {
+        return DistributionSummary.builder(name)
+                .distributionStatisticExpiry(DISTRIBUTION_WINDOW)
+                .distributionStatisticBufferLength(1);
+    }
+
     // Demand-gate T-vs-Tmax visibility -- the last/min effective T observed at the INSTANT an
     // OWNER_SPLIT.demand_gated suppression fired, plus the run's Tmax, so a shed-shrunken demand gate is
     // readable from one artifact. `-1` = never fired (the nanIfUnavailable/atomicLongOrNan idiom, NaN
@@ -317,6 +356,8 @@ public final class RunMetrics {
         // §3.1: one pre-resolved Counter per ThrottleType — self-inflicted attempt_timeout is now
         // distinguishable from a real S3 slowdown/server5xx/network throttle on the dashboard.
         throttleEvents = new EnumMap<>(ThrottleType.class);
+        // (see #runScopedTimer for why every Timer/DistributionSummary below is built through the
+        // run-scoped helpers rather than Micrometer's rolling defaults)
         for (ThrottleType type : ThrottleType.values()) {
             throttleEvents.put(type,
                     Counter.builder("swath.throttle.events").tag("type", type.tag()).register(registry));
@@ -329,33 +370,33 @@ public final class RunMetrics {
         Gauge.builder("swath.aimd.latency_baseline_ms", latencyBaselineMillis, AtomicLong::get).register(registry);
         // Publish client-side p50/p99 so the regime-confound RTT is real (the timer
         // otherwise exposes only mean/max) — read back into the shape block at end of run.
-        listObjectsLatency = Timer.builder("swath.api.latency").tag("op", "listObjectsV2")
+        listObjectsLatency = runScopedTimer("swath.api.latency").tag("op", "listObjectsV2")
                 .publishPercentiles(0.5, 0.90, 0.99).register(registry);
-        queueWait = Timer.builder("swath.queue.wait").register(registry);
-        rateLimitWait = Timer.builder("swath.rate_limit.wait").register(registry);
+        queueWait = runScopedTimer("swath.queue.wait").register(registry);
+        rateLimitWait = runScopedTimer("swath.rate_limit.wait").register(registry);
         // Splits the reactive AIMD concurrency-slot wait (above) from the opt-in
         // `--rate-limit-api` proactive client-side cap, which accrues here
         // instead (see
         // docs/metrics-and-observability.md §1.1).
-        apiRateLimitWait = Timer.builder("swath.rate_limit.api_wait").register(registry);
+        apiRateLimitWait = runScopedTimer("swath.rate_limit.api_wait").register(registry);
 
         // Idle-backoff.
         idleBackoffResets = Counter.builder("swath.idle_backoff.resets").register(registry);
         idleBackoffSlotDenied = Counter.builder("swath.idle_backoff.slot_denied").register(registry);
-        idleBackoffParkTime = Timer.builder("swath.idle_backoff.park_time").register(registry);
+        idleBackoffParkTime = runScopedTimer("swath.idle_backoff.park_time").register(registry);
         Gauge.builder("swath.idle_backoff.level", idleBackoffLevel, AtomicLong::get).register(registry);
 
         // Checkpoint/resume (the SqliteCheckpointStore single-writer path).
-        checkpointCommitLatency = Timer.builder("swath.checkpoint.commit.latency").register(registry);
-        checkpointQueueWait = Timer.builder("swath.checkpoint.queue.wait").register(registry);
-        checkpointCommitBatchSize = DistributionSummary.builder("swath.checkpoint.commit_batch_size").register(registry);
+        checkpointCommitLatency = runScopedTimer("swath.checkpoint.commit.latency").register(registry);
+        checkpointQueueWait = runScopedTimer("swath.checkpoint.queue.wait").register(registry);
+        checkpointCommitBatchSize = runScopedSummary("swath.checkpoint.commit_batch_size").register(registry);
 
         // Parquet writer pool (rotation/finalize/discard).
-        parquetFinalizeLatency = Timer.builder("swath.parquet.finalize.latency").register(registry);
+        parquetFinalizeLatency = runScopedTimer("swath.parquet.finalize.latency").register(registry);
 
         // Text-sink broken-pipe outcome + end-of-run duration/throughput aggregates.
         outputBrokenPipe = Counter.builder("swath.output.broken_pipe").register(registry);
-        runDuration = Timer.builder("swath.run.duration").register(registry);
+        runDuration = runScopedTimer("swath.run.duration").register(registry);
         Gauge.builder("swath.run.throughput", runThroughputKeysPerSec,
                         r -> r.get() == null ? Double.NaN : r.get())
                 .register(registry);
@@ -365,10 +406,10 @@ public final class RunMetrics {
         sortSegmentsWritten = Counter.builder("swath.sort.segments.written").register(registry);
         sortSegmentBytes = Counter.builder("swath.sort.segment.bytes").baseUnit("bytes").register(registry);
         sortMergePasses = Counter.builder("swath.sort.merge.passes").register(registry);
-        sortMergeLatency = Timer.builder("swath.sort.merge.latency").register(registry);
-        sortMergeRangeLatency = Timer.builder("swath.sort.merge.range.latency").register(registry);
-        sortBackpressureWait = Timer.builder("swath.sort.backpressure.wait").register(registry);
-        sortPageRunsPerBuffer = DistributionSummary.builder("swath.sort.page_runs_per_buffer").register(registry);
+        sortMergeLatency = runScopedTimer("swath.sort.merge.latency").register(registry);
+        sortMergeRangeLatency = runScopedTimer("swath.sort.merge.range.latency").register(registry);
+        sortBackpressureWait = runScopedTimer("swath.sort.backpressure.wait").register(registry);
+        sortPageRunsPerBuffer = runScopedSummary("swath.sort.page_runs_per_buffer").register(registry);
         // Peak in-flight staging bytes / handoff-queue depth / off-thread buffer count — see
         // the field javadoc above for the bounded-vs-unbounded reading guide.
         Gauge.builder("swath.sort.staging.bytes.peak", sortStagingBytesPeak, AtomicLong::get)
@@ -872,7 +913,7 @@ public final class RunMetrics {
             return;
         }
         String key = normalizeTag(callClass) + "." + normalizeTag(phase);
-        callClassLatencyTimers.computeIfAbsent(key, ignored -> Timer.builder("swath.fetch.latency.phase")
+        callClassLatencyTimers.computeIfAbsent(key, ignored -> runScopedTimer("swath.fetch.latency.phase")
                         .tag("call_class", callClass)
                         .tag("phase", phase)
                         .publishPercentiles(0.5, 0.90, 0.99)

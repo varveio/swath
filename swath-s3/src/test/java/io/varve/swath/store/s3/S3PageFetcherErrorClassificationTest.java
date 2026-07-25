@@ -182,7 +182,8 @@ class S3PageFetcherErrorClassificationTest {
         S3FaultClassifier classifier = new S3FaultClassifier(
                 "bucket", new RunMetrics(new SimpleMeterRegistry()));
 
-        ListingException classified = classifier.classify(fault);
+        // A region redirect is a terminal one-shot fault -- no request context on its log line.
+        ListingException classified = classifier.classify(fault, S3FaultClassifier.FaultContext.NONE);
 
         assertThat(classified).isInstanceOf(RegionRedirectException.class);
         assertThat(((RegionRedirectException) classified).correctRegion())

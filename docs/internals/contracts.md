@@ -175,21 +175,25 @@ public record PageRequest(ListingMode mode, int maxKeys, byte[] prefix, byte[] d
                           byte[] endBefore,         // optional upper range bound for range-param stores (GCS startOffset/endOffset); null for S3
                           String continuationToken, // unused for OBJECTS (kept for marker/opaque stores)
                           byte[] keyMarker, String versionIdMarker,
-                          java.time.Duration apiCallAttemptTimeoutOverride) {}
-                          // nullable (default null = the base 10 s per-attempt timeout, §7): a
-                          // per-request override of the SDK per-attempt timeout for THIS attempt
-                          // only, set by the retry loops (TransientRetryFetcher,
-                          // WorkStealingScan.GaugedFetcher) to escalate a genuinely-slow tail
-                          // page's timeout (10s->20s->40s) on consecutive attempt-timeout faults
-                          // of the SAME logical fetch instead of retrying forever at a budget it
-                          // can never beat under maxAttempts=1; applied ONLY by S3PageFetcher
-                          // (the store-fetcher seam), other stores may ignore it; does not touch
-                          // args_hash or the checkpoint schema. Additive for
-                          // serialization/checkpoint compatibility (a stored PageRequest
-                          // predating this field still decodes, defaulting to null) — NOT Java
-                          // constructor binary compatibility: a record's canonical constructor's
-                          // arity changes when this grows. That is acceptable for the unsupported
-                          // v0.1 Java surface; out-of-tree callers have no compatibility guarantee.
+                          int attemptTimeoutEscalationLevel) {}
+                          // default 0 = the STORE's own base per-attempt budget for this request's
+                          // call class (§7). Set by the retry loops (TransientRetryFetcher,
+                          // WorkStealingScan.GaugedFetcher) on consecutive attempt-timeout faults
+                          // of the SAME logical fetch, so a genuinely-slow tail page can complete
+                          // instead of retrying forever at a budget it can never beat under
+                          // maxAttempts=1. A LEVEL, deliberately not a Duration: retry POLICY (how
+                          // many rungs, when to climb) is the engine's; what a rung is WORTH is the
+                          // store's, because only the store knows each call class's base and call
+                          // classes differ by more than a constant factor (a point lookup and a
+                          // scan are not the same call). S3PageFetcher maps level to duration as
+                          // base(callClass) * 2^level -- scan 10/20/40s, point 3/6/12s -- which is
+                          // monotone by construction, so an escalation can never shrink a budget.
+                          // Other stores may ignore it; does not touch args_hash or the checkpoint
+                          // schema. Additive for serialization/checkpoint compatibility (a stored
+                          // PageRequest predating this field still decodes, defaulting to 0) — NOT
+                          // Java constructor binary compatibility: a record's canonical
+                          // constructor's arity changes when this grows. That is acceptable for the
+                          // unsupported v0.1 Java surface; out-of-tree callers have no guarantee.
 public record ListPage(List<ListEntry> entries, List<KeyBytes> commonPrefixes, boolean truncated,
                        String nextContinuationToken, byte[] nextKeyMarker, String nextVersionIdMarker,
                        int httpStatus, java.time.Duration latency) {}

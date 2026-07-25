@@ -14,15 +14,21 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /**
- * Probe call classes get their own (short) per-attempt timeout.
+ * Per-attempt timeout budgets are assigned by CALL-CLASS COST SHAPE, not by "is it a probe".
  *
- * <p>Each probe call class ({@code structure_probe} = {@code delimiter=/}, {@code pivot_probe} =
- * {@code max_keys<=1} — see {@link S3PageFetcher#callClass}) gets its own configurable, shorter
+ * <p>The split is point-lookup vs scan. The POINT-probe class ({@code pivot_probe} =
+ * {@code max_keys<=1}, no delimiter — see {@link S3PageFetcher#callClass}) is answered from the
+ * first key at/after the cursor, so it is cheap and near-constant; it gets a configurable, shorter
  * per-attempt budget (default {@code 3s}) threaded onto the request via the SDK's per-request
- * {@code overrideConfiguration}, so a stuck probe is abandoned in ~3&nbsp;s and retried (probes
- * already cap their transient retries at {@code PROBE_TRANSIENT_RETRY_CAP=1}) rather than holding
- * the shared {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} (10&nbsp;s) client-level budget for a full
- * attempt into unwarmed keyspace; a WORKER page keeps that 10&nbsp;s client-level budget unchanged.
+ * {@code overrideConfiguration}, so a stuck one is abandoned in ~3&nbsp;s and retried (probes
+ * already cap their transient retries at {@code PROBE_TRANSIENT_RETRY_CAP=1}).
+ *
+ * <p>The SCAN classes — a WORKER page and, despite also being a probe, a {@code delimiter=/}
+ * {@code structure_probe} — both keep the {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} (10&nbsp;s)
+ * client-level budget with no per-request override. A structure probe makes S3 scan forward rolling
+ * keys up into {@code CommonPrefixes}, so its cost tracks the keyspace crossed rather than being
+ * constant; it previously shared the 3&nbsp;s point-probe fuse, which is the defect
+ * {@link #structureProbeKeepsTheScanClassTimeout_noShortProbeFuse} guards.
  *
  * <p><b>Placement.</b> The knob lives store-side ({@code swath-s3}): the timeout is
  * selected by {@link S3PageFetcher#callClass}, which the core engine / {@code MockPageFetcher} never
@@ -31,9 +37,10 @@ import org.junit.jupiter.api.Test;
  * per-attempt timeout written onto the outgoing {@code ListObjectsV2Request}. A capturing fake client
  * records the exact request each fetch issues (same technique as {@code S3PageFetcherUnitTest}).
  *
- * <p>This test binds the probe default to {@code 3s} ({@code S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT}).
- * A default-constructed {@link S3PageFetcher} applies it to probe-class requests; the assertions
- * below read the effective per-request {@code apiCallAttemptTimeout} straight off the request.
+ * <p>This test binds the point-probe default to {@code 3s}
+ * ({@code S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT}). A default-constructed {@link S3PageFetcher}
+ * applies it to pivot-probe requests; the assertions below read the effective per-request
+ * {@code apiCallAttemptTimeout} straight off the request.
  */
 class S3PageFetcherProbeAttemptTimeoutTest {
 
@@ -56,8 +63,20 @@ class S3PageFetcherProbeAttemptTimeoutTest {
                         .hasValue(PROBE_ATTEMPT_TIMEOUT));
     }
 
+    /**
+     * REGRESSION (probe-timeout storm): a {@code delimiter=/} structure probe is a SCAN-class call,
+     * not a point probe, and must keep the client-level {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT}
+     * budget rather than the short point-probe fuse.
+     *
+     * <p>Against the old behavior (structure probes sharing the 3 s pivot budget) this test fails on
+     * the {@code isEmpty()} assertion. That 3 s fuse is what produced a probe-timeout storm on a deep
+     * bucket: structure probes measured ~1.15 s standalone and ~5.4 s at the run's own 64-way
+     * concurrency, so ~half of all structure-probe attempts timed out, starving the thief of pivots.
+     * A pivot probe over the same run never timed out once under the same 3 s budget — see
+     * {@code docs/internals/probe-budgets.md} §2 and {@code docs/ops/dev/field-investigations.md}.
+     */
     @Test
-    void structureProbeGetsTheShortProbeAttemptTimeout() throws Exception {
+    void structureProbeKeepsTheScanClassTimeout_noShortProbeFuse() throws Exception {
         FakeS3Client client = FakeS3Client.captureOnly();
         // structure probe: delimiter=/ (SeedStep / Thief#structurePivot) -> CALL_CLASS_STRUCTURE_PROBE.
         PageRequest structureProbe = PageRequest.objectsDelimited(
@@ -67,10 +86,9 @@ class S3PageFetcherProbeAttemptTimeoutTest {
 
         assertThat(S3PageFetcher.callClass(structureProbe)).isEqualTo(RunMetrics.CALL_CLASS_STRUCTURE_PROBE);
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("a delimiter=/ structure probe carries the short per-attempt timeout override")
-                .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout())
-                        .as("structure-probe attempt timeout == the short probe default (3 s), not 10 s")
-                        .hasValue(PROBE_ATTEMPT_TIMEOUT));
+                .as("a delimiter=/ structure probe is scan-class: it keeps the 10 s client-level budget "
+                        + "with NO per-request override, exactly like a worker page")
+                .isEmpty();
     }
 
     @Test
@@ -88,20 +106,28 @@ class S3PageFetcherProbeAttemptTimeoutTest {
                 .isEmpty();
     }
 
+    /**
+     * An ESCALATED probe takes the escalation path, not the short-probe default — the flat 3 s
+     * default must never clobber a retry loop's escalation.
+     *
+     * <p>The level maps onto this call class's OWN base ({@code S3PageFetcher#attemptTimeoutForLevel}):
+     * a 3 s point probe at level 1 lands on 6 s, not the scan class's 20 s. The full level-to-duration
+     * mapping has dedicated coverage in {@link S3PageFetcherEscalationBudgetTest} — asserted here only
+     * enough to prove which of the two branches was taken.
+     */
     @Test
-    void explicitAttemptTimeoutOverrideStillWinsOverTheProbeDefault() throws Exception {
+    void escalationBeatsTheShortProbeDefault() throws Exception {
         FakeS3Client client = FakeS3Client.captureOnly();
-        // A probe whose logical fetch already escalated its per-attempt budget must keep the
-        // escalated value -- the probe default must not clobber the retry loop's explicit override.
         PageRequest escalatedProbe = PageRequest.objects(null, null, 1)
-                .withApiCallAttemptTimeoutOverride(Duration.ofSeconds(20));
+                .withAttemptTimeoutEscalationLevel(1);
 
         new S3PageFetcher(client, "bucket").fetchPage(escalatedProbe);
 
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("an explicit escalation override wins over the probe attempt-timeout default")
+                .as("an escalated probe uses its escalated budget, not the flat probe default")
                 .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout())
-                        .hasValue(Duration.ofSeconds(20)));
+                        .as("the escalation branch was taken (3s base x 2^1 = 6s), NOT the 3s default")
+                        .hasValue(Duration.ofSeconds(6)));
     }
 
 }

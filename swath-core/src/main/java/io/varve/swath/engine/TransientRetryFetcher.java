@@ -15,7 +15,6 @@ import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.PageRequest;
 import io.varve.swath.store.StoreCapabilities;
-import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -57,37 +56,32 @@ public final class TransientRetryFetcher implements PageFetcher {
     static final long STORM_BACKOFF_CAP_MILLIS = 15_000L;
 
     /**
-     * Per-attempt-timeout escalation levels, applied to the SAME logical fetch on
-     * CONSECUTIVE {@link ThrottleException.Kind#ATTEMPT_TIMEOUT} faults — base (10 s, {@link
-     * PageRequest#apiCallAttemptTimeoutOverride()} left {@code null}) -> 20 s -> 40 s (cap; the
-     * client's {@code apiCallTimeout} 60 s ceiling is never overridden). Escalation exists because
-     * ride-out alone would retry a genuinely-slow tail page forever at the SAME budget under
-     * {@code maxAttempts=1} without ever completing it; escalating the budget is what lets it finish.
-     * Shared with {@code GaugedFetcher} (one source of truth, like the backoff schedule above).
+     * How many per-attempt-timeout escalation rungs exist above the base budget, applied to the SAME
+     * logical fetch on CONSECUTIVE {@link ThrottleException.Kind#ATTEMPT_TIMEOUT} faults. Escalation
+     * exists because ride-out alone would retry a genuinely-slow tail page forever at the SAME budget
+     * under {@code maxAttempts=1} without ever completing it; buying the attempt more room is what
+     * lets it finish. Shared with {@code GaugedFetcher} (one source of truth, like the backoff
+     * schedule above).
+     *
+     * <p><b>Rung COUNT only — never rung durations.</b> How long a rung is worth is the STORE's to
+     * decide, because only the store knows a given call class's base budget, and call classes differ
+     * by more than a constant factor (a point lookup and a scan are not the same call). The engine
+     * publishes the level on {@link PageRequest#attemptTimeoutEscalationLevel()} and the store maps it
+     * to a duration (for S3: {@code base(callClass) * 2^level}). This file previously held absolute
+     * durations authored against one store's base; see {@code docs/internals/probe-budgets.md} §3 for
+     * the mismatch that produced.
      */
-    static final Duration[] ATTEMPT_TIMEOUT_ESCALATION_LEVELS = {
-            Duration.ofSeconds(20), Duration.ofSeconds(40),
-    };
+    static final int MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL = 2;
 
     /**
-     * The per-attempt timeout override to use for the NEXT attempt of a logical fetch that has
-     * seen {@code consecutiveAttemptTimeouts} CONSECUTIVE {@code ATTEMPT_TIMEOUT} faults so far.
-     * {@code null} (no override; base budget) when {@code consecutiveAttemptTimeouts <= 0}.
-     */
-    static Duration escalatedAttemptTimeout(int consecutiveAttemptTimeouts) {
-        int level = escalationLevel(consecutiveAttemptTimeouts);
-        return level == 0 ? null : ATTEMPT_TIMEOUT_ESCALATION_LEVELS[level - 1];
-    }
-
-    /**
-     * The 1-based escalation level (0 = base, no override) implied by {@code
-     * consecutiveAttemptTimeouts}, capped at {@link #ATTEMPT_TIMEOUT_ESCALATION_LEVELS}'s length —
-     * used for both {@link #escalatedAttemptTimeout} and the {@code attempt_timeout_escalated_<n>}
-     * / {@code page_completed_at_<n>} engagement counters: a page that completes only at a non-zero
-     * level is post-hoc proof it needed the escalated budget.
+     * The 0-based escalation level (0 = the store's base budget) implied by {@code
+     * consecutiveAttemptTimeouts}, capped at {@link #MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL} — used for
+     * both {@link PageRequest#withAttemptTimeoutEscalationLevel} and the {@code
+     * attempt_timeout_escalated_<n>} / {@code page_completed_at_<n>} engagement counters: a page that
+     * completes only at a non-zero level is post-hoc proof it needed the escalated budget.
      */
     static int escalationLevel(int consecutiveAttemptTimeouts) {
-        return Math.min(Math.max(consecutiveAttemptTimeouts, 0), ATTEMPT_TIMEOUT_ESCALATION_LEVELS.length);
+        return Math.min(Math.max(consecutiveAttemptTimeouts, 0), MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL);
     }
 
     /**
@@ -165,11 +159,16 @@ public final class TransientRetryFetcher implements PageFetcher {
         // RunMetrics#recordTransientRetryCapExhaustion.
         int attemptTimeoutFaults = 0;
         int votingFaults = 0;
+        // A floor, never a starting point: if req already arrived carrying an escalation level (a
+        // caller retrying an already-escalated logical fetch), the locally-derived level below must
+        // never step BELOW it -- escalation only ever buys room (PageRequest#withAttemptTimeoutEscalationLevel's
+        // javadoc), so a request entering at level 2 must not be handed a level-1 (halved) budget on
+        // its very next attempt just because this loop's own streak restarted at 0.
+        int incomingLevel = req.attemptTimeoutEscalationLevel();
         while (true) {
             throwIfRunCancelled();
-            int level = escalationLevel(consecutiveAttemptTimeouts);
-            PageRequest attemptReq = level == 0
-                    ? req : req.withApiCallAttemptTimeoutOverride(escalatedAttemptTimeout(consecutiveAttemptTimeouts));
+            int level = Math.max(incomingLevel, escalationLevel(consecutiveAttemptTimeouts));
+            PageRequest attemptReq = level == incomingLevel ? req : req.withAttemptTimeoutEscalationLevel(level);
             try {
                 ListPage page = delegate.fetchPage(attemptReq);
                 if (level > 0 && metrics != null) {
@@ -182,7 +181,7 @@ public final class TransientRetryFetcher implements PageFetcher {
                 if (te.kind() == ThrottleException.Kind.ATTEMPT_TIMEOUT) {
                     consecutiveAttemptTimeouts++;
                     attemptTimeoutFaults++;
-                    int nextLevel = escalationLevel(consecutiveAttemptTimeouts);
+                    int nextLevel = Math.max(incomingLevel, escalationLevel(consecutiveAttemptTimeouts));
                     if (nextLevel > 0 && metrics != null) {
                         metrics.recordStealReason("TRANSIENT", "attempt_timeout_escalated_" + nextLevel);
                     }
