@@ -24,14 +24,12 @@ import java.time.Duration;
  * @param probeApiCallAttemptTimeout per-attempt budget for the POINT-probe call class, applied as a
  *                                   per-request override (see
  *                                   {@link S3PageFetcher#probeApiCallAttemptTimeout})
- * @param scanApiCallAttemptTimeout the client-level per-attempt budget the SCAN call classes (worker
- *                                  page, {@code delimiter=/} structure probe) actually run under.
- *                                  Carried here — not applied as an override — so the fetcher can
- *                                  re-express the engine's scan-based escalation ladder against each
- *                                  call class's OWN base; see
- *                                  {@link S3PageFetcher#escalatedAttemptTimeoutFor}. Must match the
- *                                  {@code apiCallAttemptTimeout} the client was built with, or the
- *                                  rescale is computed against the wrong base.
+ * @param scanApiCallAttemptTimeout the per-attempt BASE budget for the SCAN call classes (worker
+ *                                  page, {@code delimiter=/} structure probe). Never applied as an
+ *                                  override at escalation level 0 — the client already enforces it —
+ *                                  but it is the base {@link S3PageFetcher#attemptTimeoutForLevel}
+ *                                  doubles once the engine escalates. Should be the same value the
+ *                                  client was built with, so level 0 and level 1 describe one ladder.
  */
 public record S3PageFetcherConfig(
         boolean fetchOwner,

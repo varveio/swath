@@ -22,7 +22,6 @@ import io.varve.swath.store.PageRequest;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.SeedSteps;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -339,19 +338,17 @@ final class TransientRetryFetcherTest {
     // ---- attempt-timeout escalation -----------------------------------------------------
 
     /**
-     * A page interceptor that records the {@code apiCallAttemptTimeoutOverride} seen on every call
+     * A page interceptor that records the {@code attemptTimeoutEscalationLevel} seen on every call
      * (MockPageFetcher forwards the request unchanged — this is how "MockPageFetcher sees the
-     * override" is exercised) and only stops throwing {@link ThrottleException.Kind#ATTEMPT_TIMEOUT}
-     * once the override reaches {@code needs}. {@code null} override (the fixed 10 s base) never
-     * satisfies a positive {@code needs}, modeling a genuinely-slow tail page that can never complete
-     * without escalation.
+     * escalation" is exercised) and only stops throwing {@link ThrottleException.Kind#ATTEMPT_TIMEOUT}
+     * once the level reaches {@code needsLevel}. Level 0 (the base budget) never satisfies a positive
+     * {@code needsLevel}, modeling a genuinely-slow tail page that cannot complete without escalation.
      */
-    private static MockPageFetcher.PageInterceptor slowPageInterceptor(Duration needs, List<Duration> seenOverrides) {
+    private static MockPageFetcher.PageInterceptor slowPageInterceptor(int needsLevel, List<Integer> seenLevels) {
         return (req, idx, page) -> {
-            seenOverrides.add(req.apiCallAttemptTimeoutOverride());
-            Duration override = req.apiCallAttemptTimeoutOverride();
-            if (override == null || override.compareTo(needs) < 0) {
-                throw ThrottleException.attemptTimeout("page needs " + needs);
+            seenLevels.add(req.attemptTimeoutEscalationLevel());
+            if (req.attemptTimeoutEscalationLevel() < needsLevel) {
+                throw ThrottleException.attemptTimeout("page needs escalation level " + needsLevel);
             }
             return page;
         };
@@ -369,10 +366,10 @@ final class TransientRetryFetcherTest {
     @Timeout(30)
     void escalation_pageThatNeeds20s_neverCompletesAtBase_completesAtLevel1() throws Exception {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
-        List<Duration> seenOverrides = new ArrayList<>();
+        List<Integer> seenLevels = new ArrayList<>();
         MockPageFetcher delegate = MockPageFetcher.builder()
                 .keys(List.of(b("data/a")))
-                .interceptor(slowPageInterceptor(Duration.ofSeconds(20), seenOverrides))
+                .interceptor(slowPageInterceptor(1, seenLevels))
                 .build();
         TransientRetryFetcher fetcher =
                 new TransientRetryFetcher(delegate, new CancellationToken(), metrics, NO_SLEEP);
@@ -380,9 +377,9 @@ final class TransientRetryFetcherTest {
         ListPage page = fetcher.fetchPage(PageRequest.objects(new byte[0], null, 1000));
 
         assertThat(page).as("the escalated attempt completes the fetch").isNotNull();
-        assertThat(seenOverrides)
+        assertThat(seenLevels)
                 .as("attempt 1 used the fixed base budget (no override) and failed; attempt 2 escalated to 20s")
-                .containsExactly(null, Duration.ofSeconds(20));
+                .containsExactly(0, 1);
         assertThat(steal(metrics, "TRANSIENT", "attempt_timeout_escalated_1"))
                 .as("the escalation to level 1 is recorded")
                 .isEqualTo(1.0);
@@ -399,10 +396,10 @@ final class TransientRetryFetcherTest {
     @Timeout(30)
     void escalation_pageThatNeeds40s_completesAtCapLevel2() throws Exception {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
-        List<Duration> seenOverrides = new ArrayList<>();
+        List<Integer> seenLevels = new ArrayList<>();
         MockPageFetcher delegate = MockPageFetcher.builder()
                 .keys(List.of(b("data/a")))
-                .interceptor(slowPageInterceptor(Duration.ofSeconds(40), seenOverrides))
+                .interceptor(slowPageInterceptor(2, seenLevels))
                 .build();
         TransientRetryFetcher fetcher =
                 new TransientRetryFetcher(delegate, new CancellationToken(), metrics, NO_SLEEP);
@@ -410,9 +407,9 @@ final class TransientRetryFetcherTest {
         ListPage page = fetcher.fetchPage(PageRequest.objects(new byte[0], null, 1000));
 
         assertThat(page).as("the level-2-capped attempt completes the fetch").isNotNull();
-        assertThat(seenOverrides)
+        assertThat(seenLevels)
                 .as("base -> 20s -> 40s, in order")
-                .containsExactly(null, Duration.ofSeconds(20), Duration.ofSeconds(40));
+                .containsExactly(0, 1, 2);
         assertThat(steal(metrics, "TRANSIENT", "attempt_timeout_escalated_2"))
                 .as("escalated all the way to the level-2 cap")
                 .isGreaterThanOrEqualTo(1.0);
@@ -428,11 +425,11 @@ final class TransientRetryFetcherTest {
     @Timeout(30)
     void escalation_isLocalToOneFetchPageCall_doesNotBleedIntoTheNextFetch() throws Exception {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
-        List<Duration> seenOverrides = new ArrayList<>();
+        List<Integer> seenLevels = new ArrayList<>();
         MockPageFetcher delegate = MockPageFetcher.builder()
                 .keys(List.of(b("data/a"), b("data/b")))
                 .interceptor((req, idx, page) -> {
-                    seenOverrides.add(req.apiCallAttemptTimeoutOverride());
+                    seenLevels.add(req.attemptTimeoutEscalationLevel());
                     // Call 0 (first logical fetch, attempt 1 @ base): fail so it escalates.
                     // Call 1 (first logical fetch, attempt 2 @ level 1): succeed.
                     // Call 2 (SECOND logical fetch, a fresh fetchPage() below): must ALSO be @ base
@@ -452,10 +449,10 @@ final class TransientRetryFetcherTest {
         ListPage secondPage = fetcher.fetchPage(PageRequest.objects(b("data/a"), null, 1000));
         assertThat(secondPage).isNotNull();
 
-        assertThat(seenOverrides)
+        assertThat(seenLevels)
                 .as("fetch 1: base (fails), then escalated to level 1 (succeeds); fetch 2 on the SAME "
                         + "fetcher instance starts fresh at base — no escalation state carried over")
-                .containsExactly(null, Duration.ofSeconds(20), null);
+                .containsExactly(0, 1, 0);
     }
 
     /**
@@ -470,7 +467,7 @@ final class TransientRetryFetcherTest {
     @Timeout(30)
     void escalation_resetsOnNetworkFault_breaksTheConsecutiveStreak() throws Exception {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
-        List<Duration> seenOverrides = new ArrayList<>();
+        List<Integer> seenLevels = new ArrayList<>();
         List<ThrottleException.Kind> script = List.of(
                 ThrottleException.Kind.ATTEMPT_TIMEOUT,   // call 0: base -> fails, escalates to level 1
                 ThrottleException.Kind.NETWORK,           // call 1: @ level 1 override, but NOT a timeout
@@ -479,7 +476,7 @@ final class TransientRetryFetcherTest {
         MockPageFetcher delegate = MockPageFetcher.builder()
                 .keys(List.of(b("data/a")))
                 .interceptor((req, idx, page) -> {
-                    seenOverrides.add(req.apiCallAttemptTimeoutOverride());
+                    seenLevels.add(req.attemptTimeoutEscalationLevel());
                     if (idx < script.size()) {
                         ThrottleException.Kind kind = script.get(idx);
                         throw ThrottleException.classifiedTransient("scripted " + kind, kind);
@@ -493,9 +490,9 @@ final class TransientRetryFetcherTest {
         ListPage page = fetcher.fetchPage(PageRequest.objects(new byte[0], null, 1000));
 
         assertThat(page).isNotNull();
-        assertThat(seenOverrides)
+        assertThat(seenLevels)
                 .as("base, level-1 (interrupted by the NETWORK fault), base again, level-1 again")
-                .containsExactly(null, Duration.ofSeconds(20), null, Duration.ofSeconds(20));
+                .containsExactly(0, 1, 0, 1);
         assertThat(steal(metrics, "TRANSIENT", "attempt_timeout_escalated_2"))
                 .as("the intervening NETWORK fault reset the streak — level 2 is never reached")
                 .isEqualTo(0.0);

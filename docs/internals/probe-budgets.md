@@ -60,29 +60,38 @@ fail-fast, and `IdleStealBackoff`'s fleet-wide pacing — and every rung of it b
 deadline set below the call's intrinsic cost. That is a configuration no controller can rescue, which
 is why the fix is budget sizing and not concurrency.
 
-## 3. Escalation is re-expressed against each class's own base
+## 3. Escalation is a level; the store decides what a level costs
 
 `GaugedFetcher` escalates a logical fetch's per-attempt budget on consecutive `ATTEMPT_TIMEOUT`
-faults via `TransientRetryFetcher.ATTEMPT_TIMEOUT_ESCALATION_LEVELS` — 20 s then 40 s. Those are
-**absolute durations authored against the scan base of 10 s**: the ladder is really "2× base, then
-4× base". The engine cannot know any better — escalation level is all it has, and only the store
-layer knows what each call class's base budget actually is.
+faults. What it publishes is a **level** on `PageRequest.attemptTimeoutEscalationLevel` — never a
+duration. The store maps level to wall-clock in `S3PageFetcher#attemptTimeoutForLevel`:
 
-Applied unclamped, a 3 s point probe's first escalation is a **6.7× jump straight to 20 s**. With
-`PROBE_TRANSIENT_RETRY_CAP=1` (one retry, then fail fast), a failing pivot probe would burn
-3 s + 20 s and still return nothing.
+```
+budget = base(callClass) × 2^level
+```
 
-`S3PageFetcher#escalatedAttemptTimeoutFor` therefore converts the engine's ask to the **multiple** it
-represents over the scan base and re-applies that multiple to the call class's own base — preserving
-the ladder's progression rather than flattening it to a single ceiling:
-
-| call class | base | level 1 | level 2 |
+| call class | base (level 0) | level 1 | level 2 |
 |---|---|---|---|
-| scan (`worker_page`, `structure_probe`) | 10 s | 20 s | 40 s (untouched — the ladder as authored) |
+| scan (`worker_page`, `structure_probe`) | 10 s | 20 s | 40 s |
 | point (`pivot_probe`) | 3 s | 6 s | 12 s |
 
-The multiple is **derived** from the two base durations rather than hardcoded, so the ladder stays
-single-sourced in the engine: re-tune it there and the rescale follows.
+**Why the split of ownership.** Retry *policy* — how many rungs exist and when to climb one — is the
+engine's; it is about failure behaviour. What a rung is *worth* is the store's, because only the
+store knows each call class's base budget, and (per §1) call classes differ by more than a constant
+factor. `TransientRetryFetcher` therefore holds only `MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL`.
+
+**This used to be the other way round, and it bit.** The engine held absolute durations
+(`{20 s, 40 s}`) authored against the scan base of 10 s. Applied to a 3 s point probe, the first
+escalation was a **6.7× jump straight to 20 s** — with `PROBE_TRANSIENT_RETRY_CAP=1`, a failing pivot
+probe burned 3 s + 20 s and still returned nothing. The interim fix divided the engine's ask back out
+to recover the multiple and re-applied it to the class's own base; that worked, but it also shipped a
+latent bug, because the pass-through branch for scan-class calls was un-floored and a scan base
+configured *above* a ladder rung let an "escalation" **shrink** the budget below its own base.
+
+Doubling from the class's own base makes that unrepresentable rather than guarded: the result is
+monotone in `level` for any configured base, so escalation can only ever buy room. If you need a
+different ladder shape, change `MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL` (rung count) in the engine or
+the mapping in the store — but keep durations out of the engine.
 
 ## 4. Guards
 
@@ -90,8 +99,8 @@ single-sourced in the engine: re-tune it there and the rescale follows.
 |---|---|
 | `S3PageFetcherProbeAttemptTimeoutTest#structureProbeKeepsTheScanClassTimeout_noShortProbeFuse` | a `delimiter=/` probe carries **no** per-request override (scan-class budget) |
 | `S3PageFetcherProbeAttemptTimeoutTest#pivotProbeGetsTheShortProbeAttemptTimeout` | a `max_keys<=1` probe still gets the 3 s point budget |
-| `S3PageFetcherEscalationRescaleTest` | escalation is re-expressed on the class's own base; the scan-class 20 s/40 s ladder passes through untouched; the multiple is derived, not hardcoded |
-| `GaugedFetcherAttemptTimeoutEscalationTest` | the engine-side escalation ladder itself (base → 20 s → 40 s) |
+| `S3PageFetcherEscalationBudgetTest` | each class climbs its own ladder (scan 10/20/40 s, point 3/6/12 s); escalation never shrinks a budget at any configured base |
+| `GaugedFetcherAttemptTimeoutEscalationTest` | the engine-side rung policy (level 0 → 1 → 2, capped) |
 
 ## 5. If you change a budget
 

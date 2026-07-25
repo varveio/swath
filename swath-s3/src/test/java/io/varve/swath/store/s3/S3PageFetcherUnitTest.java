@@ -70,7 +70,7 @@ class S3PageFetcherUnitTest {
         assertThat(fetcher.capabilities().supportsVersions()).isFalse();
 
         PageRequest versions = new PageRequest(ListingMode.VERSIONS, 1000,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, 0);
         assertThatThrownBy(() -> fetcher.fetchPage(versions))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
@@ -116,26 +116,26 @@ class S3PageFetcherUnitTest {
     }
 
     /**
-     * {@link PageRequest#apiCallAttemptTimeoutOverride()}, when set, must be threaded
-     * onto the ListObjectsV2 request's per-request {@code overrideConfiguration} — this is the ONLY
-     * wiring that lets the escalation retry loops (TransientRetryFetcher / GaugedFetcher) actually
-     * shorten/lengthen the SDK's per-attempt budget for a single retried attempt. Absent an
-     * override, no {@code overrideConfiguration} is set at all (the client-level base timeout
-     * applies).
+     * {@link PageRequest#attemptTimeoutEscalationLevel()}, when non-zero, must be mapped onto the
+     * ListObjectsV2 request's per-request {@code overrideConfiguration} — this is the ONLY wiring
+     * that lets the escalation retry loops (TransientRetryFetcher / GaugedFetcher) actually lengthen
+     * the SDK's per-attempt budget for a single retried attempt. At level 0 a scan-class call sets no
+     * {@code overrideConfiguration} at all (the client-level base timeout applies).
      */
     @Test
-    void apiCallAttemptTimeoutOverrideIsThreadedOntoTheRequest() throws Exception {
+    void escalationLevelIsMappedOntoTheRequestAsAnAttemptTimeout() throws Exception {
         FakeS3Client client = FakeS3Client.captureOnly();
 
         new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
         assertThat(client.lastRequest().overrideConfiguration())
                 .as("no override set on the request by default").isEmpty();
 
+        // Level 1 on a scan-class call (worker page, 10s base) -> 10s * 2^1 = 20s.
         PageRequest escalated = PageRequest.objects(null, null, 1000)
-                .withApiCallAttemptTimeoutOverride(Duration.ofSeconds(20));
+                .withAttemptTimeoutEscalationLevel(1);
         new S3PageFetcher(client, "bucket").fetchPage(escalated);
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("the escalated attempt timeout is set as a per-request override")
+                .as("level 1 maps to 2x the scan-class base as a per-request override")
                 .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout())
                         .hasValue(Duration.ofSeconds(20)));
     }

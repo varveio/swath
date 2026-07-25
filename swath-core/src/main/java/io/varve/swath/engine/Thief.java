@@ -676,7 +676,7 @@ public final class Thief {
             metrics.recordProbeFetch();
         }
         ListPage page = fetcher.fetchPage(
-                new PageRequest(mode, 1, prefix, null, m, null, null, null, null, null));
+                new PageRequest(mode, 1, prefix, null, m, null, null, null, null, 0));
         for (ListEntry e : page.entries()) {
             byte[] k = e.key().rawUnsafe();
             return H == null || KeyBytes.compareUnsigned(k, H) <= 0;
@@ -709,7 +709,7 @@ public final class Thief {
     private StructuralPivot structurePivot(WorkerState victim, byte[] q, byte[] cForPivot, byte[] startAfter,
                                            byte[] H) throws SwathException, InterruptedException {
         ListPage page = fetcher.fetchPage(new PageRequest(
-                mode, STRUCTURE_PROBE_MAX_KEYS, q, SeedStep.DELIMITER, startAfter, null, null, null, null, null));
+                mode, STRUCTURE_PROBE_MAX_KEYS, q, SeedStep.DELIMITER, startAfter, null, null, null, null, 0));
         int fanout = page.commonPrefixes().size();
         // The delimiter=/ fan-out this runtime structure probe observed (§5 classification).
         // Structure-probe fetches are their own probe-I/O class (swath.probe.structure_fetches).
@@ -890,7 +890,7 @@ public final class Thief {
             // the leaf's true minimum key to seed the reflection — no delimiter, matching the probe arity
             // used elsewhere in Thief. Bounded by progress-gating + the unproductive-steal suppression.
             ListPage page = fetcher.fetchPage(
-                    new PageRequest(mode, 1, leafDir, null, null, null, null, null, null, null));
+                    new PageRequest(mode, 1, leafDir, null, null, null, null, null, null, 0));
             byte[] kFirst = null;
             for (ListEntry e : page.entries()) {
                 kFirst = e.key().rawUnsafe();

@@ -107,27 +107,26 @@ class S3PageFetcherProbeAttemptTimeoutTest {
     }
 
     /**
-     * A probe whose logical fetch already escalated takes the ESCALATION path, not the short-probe
-     * default — the 3 s default must never clobber the retry loop's explicit override.
+     * An ESCALATED probe takes the escalation path, not the short-probe default — the flat 3 s
+     * default must never clobber a retry loop's escalation.
      *
-     * <p>The escalated value itself is then re-expressed against this call class's own base
-     * ({@code S3PageFetcher#escalatedAttemptTimeoutFor}): the engine's ladder level 1 is 2x the scan
-     * base, so a 3 s point probe lands on 6 s. That rescale has its own dedicated coverage in
-     * {@link S3PageFetcherEscalationRescaleTest} — asserted here only enough to prove which of the two
-     * branches was taken.
+     * <p>The level maps onto this call class's OWN base ({@code S3PageFetcher#attemptTimeoutForLevel}):
+     * a 3 s point probe at level 1 lands on 6 s, not the scan class's 20 s. The full level-to-duration
+     * mapping has dedicated coverage in {@link S3PageFetcherEscalationBudgetTest} — asserted here only
+     * enough to prove which of the two branches was taken.
      */
     @Test
-    void explicitAttemptTimeoutOverrideStillWinsOverTheProbeDefault() throws Exception {
+    void escalationBeatsTheShortProbeDefault() throws Exception {
         FakeS3Client client = FakeS3Client.captureOnly();
         PageRequest escalatedProbe = PageRequest.objects(null, null, 1)
-                .withApiCallAttemptTimeoutOverride(Duration.ofSeconds(20));
+                .withAttemptTimeoutEscalationLevel(1);
 
         new S3PageFetcher(client, "bucket").fetchPage(escalatedProbe);
 
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("an explicit escalation override wins over the probe attempt-timeout default")
+                .as("an escalated probe uses its escalated budget, not the flat probe default")
                 .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout())
-                        .as("the escalation branch was taken (rescaled to 6s), NOT the 3s probe default")
+                        .as("the escalation branch was taken (3s base x 2^1 = 6s), NOT the 3s default")
                         .hasValue(Duration.ofSeconds(6)));
     }
 

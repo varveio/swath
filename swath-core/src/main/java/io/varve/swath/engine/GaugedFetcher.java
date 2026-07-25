@@ -142,9 +142,7 @@ final class GaugedFetcher implements PageFetcher {
             // unwinds gracefully.
             throwIfRunCancelled();
             int level = TransientRetryFetcher.escalationLevel(consecutiveAttemptTimeouts);
-            PageRequest attemptReq = level == 0 ? req
-                    : req.withApiCallAttemptTimeoutOverride(
-                            TransientRetryFetcher.escalatedAttemptTimeout(consecutiveAttemptTimeouts));
+            PageRequest attemptReq = level == 0 ? req : req.withAttemptTimeoutEscalationLevel(level);
             try {
                 ListPage page = fetchOnce(attemptReq);
                 if (reportSuccess) {
