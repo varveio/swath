@@ -40,8 +40,7 @@ final class ObservabilityLoggerNameCharacterizationTest {
             JsonRunSummaryWriter.class, "io.varve.swath.observability.JsonRunSummaryWriter",
             JsonlTraceSink.class, "io.varve.swath.observability.JsonlTraceSink",
             MeterRegistries.class, "io.varve.swath.observability.MeterRegistries",
-            RunProgressReporter.class, "io.varve.swath.observability.RunProgressReporter",
-            SortMergeHeartbeat.class, "io.varve.swath.observability.SortMergeHeartbeat");
+            RunProgressReporter.class, "io.varve.swath.observability.RunProgressReporter");
 
     /**
      * Classes that deliberately declare NO logger of their own. {@link DaemonSchedulers} logs under
