@@ -1184,6 +1184,21 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 .map(PartRef::path).collect(Collectors.toSet());
         if (run.resumed()) {
             ParquetResume.discardNonFinalized(dir, finalizedNames);
+            // Those carried-over parts are rows this dataset holds, listed by a previous attempt that
+            // this fresh RunMetrics never saw: without the backfill the summary's objects (and the
+            // ratios derived from it) describe only the relisted tail, while output_files/
+            // compressed_size_bytes — computed from the very same carried-over parts — already
+            // describe the whole dataset, so the summary contradicts the manifest it just published.
+            // The same backfill the --sort reattach resume does with its durable segments; the
+            // session/recovered split is what keeps live rates measuring THIS process's work.
+            ctx.metrics().recordRecoveredObjects(finalized.stream().mapToLong(PartRef::rows).sum());
+            // Those carried-over parts are rows this dataset holds, listed by a previous attempt that
+            // this fresh RunMetrics never saw: without the backfill the summary's objects (and the
+            // ratios derived from it) describe only the relisted tail, while output_files/
+            // compressed_size_bytes — computed from the same carried-over parts — already describe
+            // the whole dataset, so the summary contradicts the manifest it just published. Same
+            // backfill the --sort reattach resume does with its durable segments, and the
+            // session/recovered split is what keeps live rates measuring THIS process's work.
         }
         // The consumer manifest needs an MD5 per part. The checkpoint doesn't persist it, so a
         // resumed run recomputes the MD5 of each carried-over finalized part ONCE here (finalized

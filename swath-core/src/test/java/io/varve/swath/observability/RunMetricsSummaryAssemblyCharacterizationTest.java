@@ -88,8 +88,10 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(s.errors()).isEqualTo(3L);
         assertThat(s.outputFiles()).isEqualTo(2L);
         assertThat(s.compressedBytes()).isEqualTo(4_096L);
-        assertThat(s.keysPerSecond()).isCloseTo(910 / 5.0, within(1e-9));
-        assertThat(s.apiCallsPer1kObjects()).isCloseTo(3 * 1_000.0 / 910, within(1e-9));
+        // Session work over session time / session API calls: the 10 recovered rows are part of the
+        // dataset `objects` reports, but this process neither listed them nor paid a call for them.
+        assertThat(s.keysPerSecond()).isCloseTo(900 / 5.0, within(1e-9));
+        assertThat(s.apiCallsPer1kObjects()).isCloseTo(3 * 1_000.0 / 900, within(1e-9));
 
         // The resource/CPU scalars read the live JVM/OS, so their exact bytes aren't value-pinnable.
         // But their AVAILABILITY is deterministic on any given platform: probe ResourceMetrics
@@ -128,7 +130,7 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         // Derived ratios — numerator/denominator pairing is exactly what a decomposition can
         // silently re-home (raw_keys/entries, mean-keys-per-page/max-keys, unsplittable/steals,
         // empty-upper/(probe+structure probes), child-created/steals, raw-bytes/compressed).
-        assertThat(s.overfetchRatio()).isCloseTo(900 / 910.0, within(1e-9));
+        assertThat(s.overfetchRatio()).isCloseTo(900 / 900.0, within(1e-9));   // raw keys / SESSION keys
         assertThat(s.pageFillRatio()).isCloseTo(900 / 1_000.0, within(1e-9));
         assertThat(s.emptySplitRatio()).isCloseTo(1 / 2.0, within(1e-9));
         assertThat(s.wastedProbeRatio()).isCloseTo(1 / 2.0, within(1e-9));

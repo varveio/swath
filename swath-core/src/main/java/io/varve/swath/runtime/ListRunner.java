@@ -768,6 +768,9 @@ public final class ListRunner {
             // this is NOT a blind counter replay (progress.units/entries are deliberately untouched).
             ctx.metrics().recordRecoveredSortSegments(segRows.size());
 
+            // Progress ends before the first terminal record, exactly as in runLifecycle's epilogue:
+            // the reporter this method's merge started is closed, but the CLI's session reporter is not.
+            ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = ctx.metrics().summary(elapsed, "WORK_STEALING",
                     result.finalFiles().size(), sortedOutputBytes(result.finalFiles()), result.totalRows());
@@ -784,6 +787,7 @@ public final class ListRunner {
         } finally {
             if (!summaryEmitted) {
                 emitQuietly(() -> {
+                    ctx.metrics().finishProgress();   // before the pinned record, same rule as above
                     Duration unwound = elapsedSince(startedNs);
                     RunSummary partial = snapshot.get();
                     JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, null);
@@ -857,9 +861,10 @@ public final class ListRunner {
                             finalFiles, ctx.metrics()),
                     ctx.metrics()::recordProgress,
                     // WRITING becomes reachable here — the cascade passes above stay MERGING;
-                    // once they're done and only the final streaming pass + publish remain, the
-                    // swath.phase gauge advances instead of folding both into MERGING.
-                    () -> ctx.metrics().setPhase(Phase.WRITING));
+                    // once only the output-writing work + publish remain, the swath.phase gauge
+                    // advances instead of folding both into MERGING. The flag is whether that
+                    // remaining work has an honest completion denominator (see FinalPassListener).
+                    ctx.metrics()::startFinalMergePass);
             ctx.metrics().recordSortMerge(mergeSample);
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             return result;
@@ -1222,8 +1227,8 @@ public final class ListRunner {
         if (attributed == null) {
             return null;
         }
-        if (attributed == StopReason.MAX_DURATION && ctx.metrics().objectsEmitted() == 0L) {
-            // The whole timebox burned with zero objects emitted (a pathological/slow
+        if (attributed == StopReason.MAX_DURATION && ctx.metrics().sessionObjectsEmitted() == 0L) {
+            // The whole timebox burned with zero objects emitted THIS session (a pathological/slow
             // bucket, or a node that only ever attempt-times-out/gets throttled) — distinct from
             // a legit large timeboxed partial that actually made headway. Exit code is unaffected:
             // ListCommand#timeboxExitOrRethrow keys off the CancellationToken's own MAX_DURATION
@@ -1298,6 +1303,7 @@ public final class ListRunner {
     private static <E extends Exception> void emitUnwoundSummary(RunContext ctx, LifecyclePlan<E> plan,
                                                                   JsonRunSummaryWriter jsonWriter, long startedNs) {
         emitQuietly(() -> {
+            ctx.metrics().finishProgress();   // before the pinned record, same rule as the epilogue
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = plan.snapshotSummary.apply(elapsed);
             JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, plan.outputStage);
@@ -1495,7 +1501,11 @@ public final class ListRunner {
                 // Slot 2 — complete: the per-path ordered store-mutation chain, before the terminal summary.
                 plan.complete.commit();
             }
-            // Slot 3 — epilogue.
+            // Slot 3 — epilogue. Progress ends HERE, before the first terminal record is written:
+            // the reporter closed above is only this method's scope, while the CLI's session
+            // reporter spans the whole command, so a scheduled tick would otherwise still be able
+            // to land between the list_run_summary line and the emit that ends progress.
+            ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = plan.terminalSummary.apply(elapsed);
             ctx.metrics().setPhase(Phase.COMPLETE);

@@ -1477,10 +1477,10 @@ public final class RunMetrics {
      * progress reports alongside (never instead of) session elapsed, and — entering {@link
      * Phase#MERGING} — pins the {@code progress.units} baseline the merge's own row count is
      * measured from, so a merge reports the rows IT moved rather than the run's emitted objects
-     * (which stay flat throughout a merge, and are zero outright on a merge-only resume). Entering
-     * {@link Phase#WRITING} (the final merge pass) pins a SECOND baseline: only that pass drains
-     * exactly the staged rows once, so only it has an honest completion denominator — see
-     * {@link #completionOf}.
+     * (which stay flat throughout a merge, and are zero outright on a merge-only resume). The final
+     * merge pass's own baseline — the one a completion fraction is measured from — is pinned by
+     * {@link #startFinalMergePass(boolean)}, not here, because only the merge knows whether the work
+     * from that point on is one pass over the staged rows.
      *
      * <p>The phase clock reads {@link System#nanoTime()} directly, NOT the injectable {@code
      * nanoClock}: that seam exists so the in-flight gauge and the {@code time_to_*} summary fields
@@ -1492,9 +1492,26 @@ public final class RunMetrics {
         phaseStartNanos.set(System.nanoTime());
         if (phase == Phase.MERGING) {
             mergeProgressBaseline.compareAndSet(-1L, progressUnitsTally.get());
-        } else if (phase == Phase.WRITING) {
+        }
+    }
+
+    /**
+     * The merge has stopped folding intermediates and started writing the output it will publish
+     * ({@link io.varve.swath.sort.FinalPassListener}): advance {@code swath.phase} to
+     * {@link Phase#WRITING} and, when that remaining work is exactly ONE pass over the staged rows,
+     * pin the baseline its completion fraction is measured from. A merge that still cascades from
+     * here — the parallel range merge, whose ranges each fold their own intermediates — pins
+     * nothing, so it reports rows merged and no percentage ({@link #completionOf}) rather than a
+     * figure that runs past 100% and shows a finished merge before any output exists.
+     *
+     * <p>The baseline is pinned BEFORE the phase flips, so no tick can observe {@code WRITING}
+     * with a denominator that is about to be withdrawn.
+     */
+    public void startFinalMergePass(boolean stagedRowsAreTheDenominator) {
+        if (stagedRowsAreTheDenominator) {
             finalPassProgressBaseline.compareAndSet(-1L, progressUnitsTally.get());
         }
+        setPhase(Phase.WRITING);
     }
 
     /**
@@ -1686,12 +1703,21 @@ public final class RunMetrics {
 
     /**
      * A live read of objects emitted so far (the same counter {@link #summary}'s
-     * {@code objects} field reports), cheap enough for a terminal {@code stop_reason}
-     * classification (zero-progress {@code --max-duration} vs. a legit timeboxed partial)
-     * without building a full {@link RunSummary} snapshot.
+     * {@code objects} field reports), cheap enough for a diagnostic line without building a full
+     * {@link RunSummary} snapshot.
      */
     public long objectsEmitted() {
         return Math.round(counterTotal("swath.entries.emitted"));
+    }
+
+    /**
+     * As {@link #objectsEmitted()}, minus whatever a resume backfilled from a previous attempt — the
+     * read a "did this process make ANY headway" judgement needs (zero-progress {@code
+     * --max-duration} vs. a legit timeboxed partial): a resume that recovered a prior attempt's rows
+     * and then listed nothing at all made no headway, whatever the run total says.
+     */
+    public long sessionObjectsEmitted() {
+        return sessionObjects(objectsEmitted());
     }
 
     /**
@@ -1871,19 +1897,33 @@ public final class RunMetrics {
     }
 
     private ProgressEvent.Listing listingProgress(Duration sessionElapsed) {
-        long keyCount = Math.round(entriesEmitted.count());
+        // Every rate here is SESSION work over SESSION time: the elapsed clock started with this
+        // process, so dividing the whole run's objects (a resume's recovered rows included) by it
+        // would report a resumed run's pre-crash billions as this second's throughput.
+        long sessionKeys = sessionObjects(Math.round(entriesEmitted.count()));
         double seconds = Math.max(0.001, sessionElapsed.toNanos() / 1_000_000_000.0);
-        double avgRate = keyCount / seconds;
+        double avgRate = sessionKeys / seconds;
         return new ProgressEvent.Listing(
-                Math.max(0L, keyCount - recoveredObjects.get()),
+                sessionKeys,
                 recoveredObjects.get(),
-                windowedRate(sessionElapsed.toNanos(), keyCount, avgRate),
+                windowedRate(sessionElapsed.toNanos(), sessionKeys, avgRate),
                 avgRate,
                 pages.get(),
                 currentInFlight(),
                 concurrencyTarget.get(),
                 stealsTally.get(),
                 splits.get());
+    }
+
+    /**
+     * The objects THIS process listed out of {@code totalObjects}: the run total minus whatever a
+     * resume backfilled from a previous attempt ({@link #recordRecoveredObjects}). Object COUNTS
+     * describe the dataset and so use the total; anything divided by this session's elapsed time, or
+     * measured against this session's API calls, uses this instead — the pre-crash rows cost this
+     * process neither a second nor a LIST call.
+     */
+    private long sessionObjects(long totalObjects) {
+        return Math.max(0L, totalObjects - recoveredObjects.get());
     }
 
     private ProgressEvent.Merging mergingProgress() {
@@ -1920,6 +1960,10 @@ public final class RunMetrics {
         long keyCount = objectsOverride != null
                 ? objectsOverride
                 : Math.round(counterTotal("swath.entries.emitted"));
+        // objects/keys describe the DATASET (recovered rows included); every figure below that is
+        // per-second or per-API-call describes this PROCESS's work, so it divides the session's own
+        // objects instead — see sessionObjects(long).
+        long sessionKeyCount = sessionObjects(keyCount);
         long apiCallCount = Math.round(counterTotal("swath.api.calls"));
         double seconds = Math.max(0.001, duration.toNanos() / 1_000_000_000.0);
         double cpuSec = cpuSeconds();   // sample CPU once so cpu_efficiency == cpu_seconds / wall
@@ -1963,13 +2007,13 @@ public final class RunMetrics {
                 totalSteals,
                 splits.get(),
                 Math.round(counterTotal("swath.errors")),
-                keyCount / seconds,
-                apiCallsPer1kObjects(apiCallCount, keyCount),
+                sessionKeyCount / seconds,
+                apiCallsPer1kObjects(apiCallCount, sessionKeyCount),
                 ResourceMetrics.peakRssBytes(),
                 ResourceMetrics.peakHeapBytes(),
                 cpuSec,
                 cpuEfficiency(cpuSec, seconds),
-                ratio(rawKeyCount, keyCount),
+                ratio(rawKeyCount, sessionKeyCount),
                 ratio(meanKeysPerPage, configuredMaxKeys.get()),
                 ratio(unsplittable, totalSteals),
                 ratio(emptyUpperCount, totalProbeFetchCount),

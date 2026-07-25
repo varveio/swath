@@ -84,7 +84,7 @@ final class LiveProgressContractTest {
         metrics.recordSortStaged(4L, 1_000L);
         metrics.setPhase(Phase.MERGING);
         metrics.recordProgress(250);
-        metrics.setPhase(Phase.WRITING);   // the final pass: the one with an exact denominator
+        metrics.startFinalMergePass(true);   // the final pass: the one with an exact denominator
         metrics.recordProgress(250);
 
         ProgressEvent event = metrics.progressEvent(Duration.ofSeconds(9));
@@ -113,7 +113,7 @@ final class LiveProgressContractTest {
                 .as("a cascade cannot report a fraction: 10/5 would show a finished merge")
                 .isNull();
 
-        metrics.setPhase(Phase.WRITING);
+        metrics.startFinalMergePass(true);
         metrics.recordProgress(2);
         assertThat(metrics.progressEvent(Duration.ofSeconds(4)).completion())
                 .isEqualTo(new ProgressEvent.Completion(2L, 5L, ProgressEvent.Unit.ROWS));
@@ -178,6 +178,54 @@ final class LiveProgressContractTest {
         assertThat(listing.recoveredObjects()).isEqualTo(5_000_000L);
         // The summary's objects field still counts the whole run — the split is a display concern.
         assertThat(metrics.objectsEmitted()).isEqualTo(5_000_120L);
+    }
+
+    /**
+     * The counts and the rates must split the same way. Session elapsed starts with THIS process, so
+     * a rate whose numerator still carried the recovered rows reported a resumed run's whole
+     * previous attempt as this session's throughput — 4 billion objects over the first few seconds.
+     */
+    @Test
+    void aResumedRunsRatesMeasureSessionWorkOverSessionTime() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.setPhase(Phase.LISTING);
+        metrics.recordRecoveredObjects(4_000_000_000L);   // the pre-crash rows, known before listing
+        metrics.recordEntriesEmitted(200);
+
+        ProgressEvent.Listing first = metrics.progressEvent(Duration.ofSeconds(10)).listing();
+
+        assertThat(first.averageObjectsPerSecond())
+                .as("200 objects in 10s, not 4,000,000,200")
+                .isCloseTo(20.0, within(1e-9));
+        assertThat(first.liveObjectsPerSecond())
+                .as("the first tick has no window yet and falls back to the same session average")
+                .isCloseTo(20.0, within(1e-9));
+
+        metrics.recordEntriesEmitted(300);
+        ProgressEvent.Listing second = metrics.progressEvent(Duration.ofSeconds(20)).listing();
+
+        assertThat(second.averageObjectsPerSecond()).isCloseTo(25.0, within(1e-9));
+        assertThat(second.liveObjectsPerSecond()).isCloseTo(30.0, within(1e-9));
+    }
+
+    /**
+     * The reattach backfill lands in one lump mid-run, so the windowed rate must not see it as a
+     * window's worth of work either — the same numerator, sampled a tick apart.
+     */
+    @Test
+    void aBackfillLandingBetweenTicksIsNotAWindowOfThroughput() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.setPhase(Phase.LISTING);
+        metrics.recordEntriesEmitted(100);
+        metrics.progressEvent(Duration.ofSeconds(10));   // the tick that sets the window baseline
+
+        metrics.recordRecoveredObjects(4_000_000_000L);
+        metrics.recordEntriesEmitted(100);
+        ProgressEvent.Listing afterBackfill = metrics.progressEvent(Duration.ofSeconds(20)).listing();
+
+        assertThat(afterBackfill.liveObjectsPerSecond()).isCloseTo(10.0, within(1e-9));
+        assertThat(afterBackfill.averageObjectsPerSecond()).isCloseTo(10.0, within(1e-9));
+        assertThat(afterBackfill.recoveredObjects()).isEqualTo(4_000_000_000L);
     }
 
     @Test

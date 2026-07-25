@@ -396,6 +396,31 @@ final class RunMetricsContractTest {
         assertThat(registry.find("swath.progress.units").counter().count()).isEqualTo(0.0);
     }
 
+    /**
+     * The terminal summary splits the same way live progress does: {@code objects} describes the
+     * DATASET (recovered rows included, which is what the published manifest holds), while every
+     * figure measured against this session's clock or its API calls describes only the work this
+     * process did — a resume that recovered 4B rows did not list them in ten seconds, nor pay a
+     * single LIST call for them.
+     */
+    @Test
+    void summaryRatesDescribeSessionWorkWhileObjectsDescribeTheDataset() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.recordRecoveredObjects(4_000_000_000L);
+        metrics.recordEntriesEmitted(1_000);
+        for (int i = 0; i < 20; i++) {
+            metrics.recordApiCall();
+        }
+
+        RunSummary summary = metrics.summary(Duration.ofSeconds(10), "WORK_STEALING", 0L, 0L);
+
+        assertThat(summary.objects()).isEqualTo(4_000_001_000L);
+        assertThat(summary.keysPerSecond()).isCloseTo(100.0, within(1e-9));
+        assertThat(summary.apiCallsPer1kObjects())
+                .as("20 calls bought this session's 1,000 objects, not the whole dataset")
+                .isCloseTo(20.0, within(1e-9));
+    }
+
     @Test
     void recordRecoveredSortSegments_backfillsSegmentsWrittenOnly_neverEntriesOrProgressUnits() {
         // The merge-only-resume backfill must bump swath.sort.segments.written (so the

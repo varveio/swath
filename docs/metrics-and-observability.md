@@ -185,6 +185,12 @@ proactive-cap contribution mixed into it.
 Core: `run_id, objects, duration_ms, strategy, api_calls, cost_usd, output_files,
 compressed_size_bytes, keys, pages, peak_in_flight, steals, splits, errors, keys_per_sec`.
 
+`objects` describes the **dataset the run published**, so on a resume it includes the rows a
+previous attempt already made durable (managed-Parquet parts, `--sort` staging segments) — the same
+rows the published `manifest.json` counts. Everything measured against this process's own clock or
+its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`, `overfetch_ratio`) excludes them: the
+recovered rows cost this run neither a second nor a LIST call.
+
 The JSON report's `engine` block additionally carries the two ramp-up timings the
 `list_run_diagnostics` line prints — `time_to_first_steal_ms` and `time_to_peak_in_flight_ms`
 (milliseconds from run start; `null` when the event never happened) — and `cost.basis` names the
@@ -195,7 +201,7 @@ rate `cost_usd` was derived from (`rate_per_1k_usd`, `source`), so no consumer h
 
 | field | meaning | how to read it |
 |---|---|---|
-| `api_calls_per_1k_objects` | actual S3 requests per 1000 objects listed | **efficiency.** Healthy flat/deep listing ≈ 1 (1 page = 1000 keys). **High** (tens–thousands) = wasted probes — over-splitting / idle-worker steal churn. The single best "are we being efficient" number. |
+| `api_calls_per_1k_objects` | actual S3 requests per 1000 objects listed **by this run** (a resume's recovered rows are excluded — they cost this process no LIST call) | **efficiency.** Healthy flat/deep listing ≈ 1 (1 page = 1000 keys). **High** (tens–thousands) = wasted probes — over-splitting / idle-worker steal churn. The single best "are we being efficient" number. |
 | `peak_rss_bytes` | peak resident memory (`/proc/self/status` VmHWM) | the real memory footprint — use to size containers / pick a heap |
 | `peak_heap_bytes` | peak JVM heap (sum of heap-pool peaks) | JVM heap demand (Parquet path is the heaviest) |
 | `cpu_seconds` | process CPU time consumed by the run | total compute spent |
@@ -428,7 +434,7 @@ above, which are genuinely platform-unavailable).
 
 | field | numerator / denominator | how to read it |
 |---|---|---|
-| `overfetch_ratio` | `swath.page.raw_keys` / `swath.entries.emitted` | **the classifier's key number.** Keys actually fetched from the store per key emitted downstream; `1.0` is perfectly efficient (every fetched key was kept and emitted), higher means wasted fetch volume — over-splitting, probe/steal churn, or heavy filtering. |
+| `overfetch_ratio` | `swath.page.raw_keys` / this session's emitted objects (`swath.entries.emitted` less a resume's recovered rows, which this process never fetched) | **the classifier's key number.** Keys actually fetched from the store per key emitted downstream; `1.0` is perfectly efficient (every fetched key was kept and emitted), higher means wasted fetch volume — over-splitting, probe/steal churn, or heavy filtering. |
 | `page_fill_ratio` | mean keys per fetched page / configured `max-keys` | how full pages come back; near `1.0` is healthy, low means many short/truncated pages. |
 | `empty_split_ratio` | `UNSPLITTABLE` steal outcomes / total steal attempts | the fraction of steals that hit a victim with no valid pivot. |
 | `wasted_probe_ratio` | `swath.probe.empty_upper_bisections` / (`swath.probe.fetches` + `swath.probe.structure_fetches`) | the fraction of probe I/O (1-key steal probes and `delimiter=/` structure probes) that found an empty upper half — i.e. produced no usable split on that probe. |
