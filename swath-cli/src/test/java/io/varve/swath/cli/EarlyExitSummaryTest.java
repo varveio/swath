@@ -181,7 +181,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());
@@ -211,7 +211,7 @@ final class EarlyExitSummaryTest {
         ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "seedhash",
-                ctx, 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+                ctx, 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING");
 
         assertThat(emitted).hasSize(1);
         assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.SEED_FAILURE);
@@ -221,6 +221,53 @@ final class EarlyExitSummaryTest {
                 ctx.metrics().diagnostics(Duration.ZERO), emitted.getFirst()))
                 .first(STRING)
                 .isEqualTo("INCOMPLETE (seed_failure)");
+    }
+
+    /**
+     * Regression for a seed-phase interruption that lied about its own elapsed time: {@code
+     * writeEarlyExitSummary} used to hand {@link RunMetrics#summary} a hardcoded {@code
+     * Duration.ZERO} no matter how long the seed actually ran, so an operator killed mid-seed after
+     * real wall-clock time (and real API calls) still saw {@code "0 objects in 0.0s"} — disagreeing
+     * with the correct API-call count on the very next line. Both the operator-facing block and the
+     * {@code --report} sidecar must instead carry the run's real elapsed time.
+     */
+    @Test
+    void seedFailureReportsARealNonZeroDurationInBothSurfaces(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<RunSummary> emittedSummaries = new ArrayList<>();
+        List<JsonRunSummaryWriter.TerminalStatus> emittedStatus = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> {
+            emittedSummaries.add(summary);
+            emittedStatus.add(status);
+        });
+        // A seed that ran for 22s before it was interrupted -- the reproduction's own numbers.
+        long startedNs = System.nanoTime() - Duration.ofSeconds(22).toNanos();
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "seedhash",
+                ctx, 7L, startedNs, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+
+        RunSummary summary = emittedSummaries.getFirst();
+        assertThat(summary.duration())
+                .as("the seed-phase early exit must report the run's real elapsed time, not zero")
+                .isGreaterThan(Duration.ofSeconds(20));
+
+        List<String> lines = SummaryRenderer.lines(
+                new SummaryRenderer.Preferences(true, false, true, true, null, false),
+                summary, ctx.metrics().diagnostics(summary.duration()), emittedStatus.getFirst());
+        assertThat(lines.get(1))
+                .as("the human block's elapsed figure must not read 0.0s for a 22s seed window")
+                .doesNotContain("in 0.0s")
+                .contains("objects in");
+
+        Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
+        JsonNode root = MAPPER.readTree(sidecar.toFile());
+        assertThat(root.get("duration_ms").asLong())
+                .as("the JSON sidecar must carry the same real duration, not duration_ms:0")
+                .isGreaterThan(20_000L);
     }
 
     /**
@@ -239,7 +286,7 @@ final class EarlyExitSummaryTest {
         ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
-                ctx, 7L, false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+                ctx, 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "WORK_STEALING");
 
         assertThat(emitted).isEmpty();
         assertThat(dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME))
@@ -265,7 +312,7 @@ final class EarlyExitSummaryTest {
         ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
-                ctx, 7L, false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+                ctx, 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "WORK_STEALING");
 
         assertThat(emitted).hasSize(1);
         assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.RESUME_REFUSED);
@@ -323,7 +370,7 @@ final class EarlyExitSummaryTest {
         String errorClass = seedFailure.errorClass();
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING",
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING",
                 exitCode, errorClass);
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
@@ -372,7 +419,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                ctx, 7L, false, StopReason.STUCK, "WORK_STEALING");
+                ctx, 7L, System.nanoTime(), false, StopReason.STUCK, "WORK_STEALING");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());
@@ -416,7 +463,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.RESUME_REFUSED, "SEQUENTIAL");
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "SEQUENTIAL");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());

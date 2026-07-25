@@ -710,7 +710,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // resumable, regardless of checkpoint status: COMPLETED can precede a failed final
                 // publication, so treating it as a harmless no-op would report false success.
                 if (output.resolvedKind == OutputOptions.DestinationKind.FILE) {
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: checkpoint destination -o "
                             + output.destination + " is recorded as FILE kind, which is non-resumable; "
@@ -730,7 +730,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // the CLI's fatal-error guard itself marked (runEngineGuarded / the seed-probe catch
                 // below) carries fatalError()==true.
                 if (run.status() == RunStatus.FAILED && run.fatalError()) {
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: run " + run.id() + " for "
                             + s3uri.bucket() + "/" + s3uri.prefixAsString() + " is recorded FAILED "
@@ -743,7 +743,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // or --sort/--no-sort mode changed", which made the user guess.
                 if (!changedIdentity.isEmpty()) {
                     // Even a pre-run refusal writes a summary so a consumer always finds one.
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: "
                             + String.join(", ", changedIdentity)
@@ -767,7 +767,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             .filter(f -> !ListRunner.SORT_SEGMENT_FORMAT.equals(f))
                             .toList();
                     if (!staleFormats.isEmpty()) {
-                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                                 false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                         throw new InvalidArgsException("swath resume refused: the sort staging format "
                                 + "changed since the checkpointed run (checkpoint records "
@@ -830,6 +830,11 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // "empty ⇒ done" determinations, so a re-seeded resume proceeds normally in either
                 // mode; a normal partial resume (nodes present) is unaffected.
                 if (!run.resumed() || store.countNodes(run.id()) == 0) {
+                    // Bind the metrics run id before the seed heartbeat starts, so its progress line
+                    // reports the real run id instead of RunMetrics' unset default (-1) — run.id() is
+                    // already known (openRun assigned it above); writeEarlyExitSummary/ListRunner
+                    // re-set the same value later, a harmless idempotent re-assignment.
+                    ctx.metrics().setRunId(run.id());
                     // A zero-progress heartbeat for the seed window specifically — the gap the
                     // issue evidenced (a hung seed produced zero log lines for hours, since
                     // RunProgressReporter only starts once ListRunner's engine dispatch is entered,
@@ -880,7 +885,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             }
                             StopReason reason = ctx.cancellation().stopReason();
                             writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, run.id(),
-                                    false, reason != null ? reason : StopReason.STUCK,
+                                    runStartedNs, false, reason != null ? reason : StopReason.STUCK,
                                     STRATEGY_WORK_STEALING);
                             throw new CancelledException(
                                     "seed aborted: run cancelled (stop_reason=" + reason + ")", e);
@@ -896,7 +901,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         // generic seed failure) so a supervisor can tell a permissions/config problem
                         // apart from an unclassified crash.
                         writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, run.id(),
-                                false, StopReason.SEED_FAILURE, STRATEGY_WORK_STEALING,
+                                runStartedNs, false, StopReason.SEED_FAILURE, STRATEGY_WORK_STEALING,
                                 ExitCodes.forThrowable(e), seedErrorClass(e));
                         // A fatal seed failure inserts ZERO nodes, so without this
                         // the run stays RUNNING and a later bare swath resume would find nodes.isEmpty()
@@ -926,13 +931,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     // may still be pending (contract §6 state machine); runSortedParquet owns that.
                     try (TraceSink traceSink = engine.openTraceSink()) {
                         return runEngineGuarded(store, run.id(), () -> runSortedParquet(s3uri, channelCapacity,
-                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink));
+                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink,
+                                runStartedNs));
                     }
                 }
 
                 if (nodes.isEmpty()) {
                     // A resume with nothing left genuinely finished — a completed summary.
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
                     return ExitCodes.SUCCESS;   // resume of an already-complete run: nothing to do
                 }
@@ -1267,7 +1273,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      RunMeta run,
                                      List<Node> nodes,
                                      PageFetcher fetcher, S3Config config,
-                                     TraceSink traceSink) throws Exception {
+                                     TraceSink traceSink, long runStartedNs) throws Exception {
         Path outputDir = output.openParquetDir();
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
@@ -1294,7 +1300,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 cleanSortStagingAndStaleTmp(outputDir, stagingDir);
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
-                writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(),
+                writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
                         true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
                 return ExitCodes.SUCCESS;
             }
@@ -1583,9 +1589,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
-     * The pre-run early-exit paths (no-op resume, seed-probe failure, resume refusal) each
+     * The early-exit paths (no-op resume, seed-probe failure, resume refusal) each
      * leave a JSON run-summary behind so a batch/orchestrator always finds one, with a {@code
-     * stop_reason} that names the category. A completed no-op resume writes {@code
+     * stop_reason} that names the category. Only a resume refusal is genuinely pre-run (it exits
+     * before the S3 client is even built); a seed-probe failure or seed-time {@code STUCK} can have
+     * issued real API calls over real wall time, which {@code startedNs} lets this carry honestly.
+     * A completed no-op resume writes {@code
      * completed:true}; the failure paths write a {@code completed:false} terminal record whose
      * {@code exit_code} is {@code null} (the writer never learns the process code) while {@code
      * stop_reason} carries {@code seed_failure}/{@code resume_refused}. Respects {@code
@@ -1594,17 +1603,22 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * {@code strategy} is the actual strategy the invocation would have used (the caller knows
      * this — every current early-exit path is inside the checkpointed/WORK_STEALING branch; a
      * hardcoded literal here would mislabel a future non-WORK_STEALING early-exit caller).
+     * {@code startedNs} is the {@link System#nanoTime()} the caller's attempt actually began at
+     * (the same source {@code runWithCheckpoint}'s {@code runStartedNs} threads into {@link
+     * io.varve.swath.store.FirstRequestMarkerFetcher}) — a seed failure or seed-time {@code STUCK}
+     * can carry real elapsed time and a real API-call count, so the block must not report a
+     * duration of zero next to them.
      */
     void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
-                               RunContext ctx, long runId, boolean completed, StopReason reason,
-                               String strategy)
+                               RunContext ctx, long runId, long startedNs, boolean completed,
+                               StopReason reason, String strategy)
             throws InvalidConfigException {
-        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, completed, reason, strategy,
-                null, null);
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, null, null);
     }
 
     /**
-     * As the 8-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
+     * As the 9-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
      * resolved process {@code exitCode} (so the summary reports the true exit 1, not {@code null})
      * and a classified {@code errorClass} (e.g. {@code access_denied}/{@code no_such_bucket}) so a
      * supervisor can tell a permissions/config failure apart from an unclassified crash. Both are
@@ -1613,14 +1627,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * ignores both and defers to {@link ListRunner#stuckTerminalStatus} as before.
      */
     void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
-                               RunContext ctx, long runId, boolean completed, StopReason reason,
-                               String strategy, Integer exitCode, String errorClass)
+                               RunContext ctx, long runId, long startedNs, boolean completed,
+                               StopReason reason, String strategy, Integer exitCode, String errorClass)
             throws InvalidConfigException {
         JsonRunSummaryWriter.Config summaryConfig =
                 buildJsonSummaryConfig(resolved, config, argsHash);
         ctx.metrics().setRunId(runId);
         RunSummary summary =
-                ctx.metrics().summary(Duration.ZERO, strategy, 0L, 0L);
+                ctx.metrics().summary(elapsedSince(startedNs), strategy, 0L, 0L);
         // A seed-time retry-cap STUCK must carry the same
         // stop_source/error_class the normal-run summary path derives — reuse ListRunner's shared
         // helper rather than duplicating the source-tag -> RunMetrics#stuckErrorClass routing here.
@@ -1668,7 +1682,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         if (status.reason() == StopReason.RESUME_REFUSED && !Boolean.TRUE.equals(output.stats)) {
             return;
         }
-        ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(Duration.ZERO), status);
+        // summary already carries the real elapsed time (see writeEarlyExitSummary above); reuse
+        // it here too, rather than diagnostics() computing its own duration_ms of zero.
+        ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(summary.duration()), status);
     }
 
     /**
@@ -1679,10 +1695,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * run escaping RUNNING-unseeded by the wrong path. Mirrors {@link #markBestEffort}.
      */
     private void writeEarlyExitSummaryBestEffort(OutputFormat resolved, S3Config config, String argsHash,
-                                                 RunContext ctx, long runId, boolean completed,
+                                                 RunContext ctx, long runId, long startedNs, boolean completed,
                                                  StopReason reason, String strategy) {
-        writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, runId, completed, reason,
-                strategy, null, null);
+        writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, runId, startedNs, completed,
+                reason, strategy, null, null);
     }
 
     /**
@@ -1690,16 +1706,21 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * errorClass} for the classified seed-failure path.
      */
     private void writeEarlyExitSummaryBestEffort(OutputFormat resolved, S3Config config, String argsHash,
-                                                 RunContext ctx, long runId, boolean completed,
+                                                 RunContext ctx, long runId, long startedNs, boolean completed,
                                                  StopReason reason, String strategy,
                                                  Integer exitCode, String errorClass) {
         try {
-            writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, completed, reason, strategy,
-                    exitCode, errorClass);
+            writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                    strategy, exitCode, errorClass);
         } catch (Exception summaryEx) {
             log.warn("list_seed_early_exit_summary_write_failed run_id={} message={}",
                     runId, summaryEx.getMessage());
         }
+    }
+
+    /** Wall-clock elapsed since {@code startedNs}, as {@link ListRunner}'s private helper of the same name. */
+    private static Duration elapsedSince(long startedNs) {
+        return Duration.ofNanos(System.nanoTime() - startedNs);
     }
 
     /**
