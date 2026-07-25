@@ -440,7 +440,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // default in place for the cases it declined to display (see ProgressDisplay#sinkFor).
         ProgressSink progressSink = ProgressDisplay.sinkFor(new ProgressDisplay.Preferences(
                 output.progress, quiet, verbosity > 0, liveness.progressInterval != null,
-                terminal.stderrIsTerminal()), stderr, new AnsiPalette(colorEnabled));
+                terminal.stderrIsTerminal(), env.apply("TERM")), stderr, new AnsiPalette(colorEnabled));
         // The tick cadence is read off the surface that was actually installed, not recomputed:
         // only a display that redraws can afford — and needs — the faster default (§
         // LivenessOptions#resolveDisplayProgressInterval).

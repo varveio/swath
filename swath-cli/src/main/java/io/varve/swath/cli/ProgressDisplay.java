@@ -74,9 +74,13 @@ final class ProgressDisplay implements ProgressSink {
      *         for progress at that cadence and therefore opts in on its own
      * @param stderrIsTerminal whether fd 2 is a terminal — the fd this display writes to, never
      *         stdout's terminal-ness
+     * @param termEnv the raw {@code TERM} value, or {@code null} if unset. Carried here rather than
+     *         read from {@code System.getenv} inside {@link #shouldRedraw}, for the reason {@link
+     *         AnsiPalette#resolveEnabled} states: the gate stays a pure function a test can pin,
+     *         instead of one whose result depends on the terminal the suite happens to run under
      */
     record Preferences(Boolean progress, boolean quiet, boolean verbose, boolean intervalExplicit,
-                       boolean stderrIsTerminal) {
+                       boolean stderrIsTerminal, String termEnv) {
     }
 
     private final StderrCoordinator.ProgressChannel channel;
@@ -143,7 +147,7 @@ final class ProgressDisplay implements ProgressSink {
      * whose effect cannot be predicted.
      */
     static boolean shouldRedraw(Preferences prefs, IntSupplier width) {
-        if (!prefs.stderrIsTerminal() || "dumb".equals(System.getenv("TERM"))) {
+        if (!prefs.stderrIsTerminal() || "dumb".equals(prefs.termEnv())) {
             return false;
         }
         return width.getAsInt() >= TerminalGeometry.MIN_USABLE_WIDTH;

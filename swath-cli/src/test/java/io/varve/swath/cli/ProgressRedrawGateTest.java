@@ -20,16 +20,42 @@ class ProgressRedrawGateTest {
     private static final IntSupplier WIDE = () -> 120;
     private static final IntSupplier UNKNOWN = () -> TerminalGeometry.UNKNOWN;
 
+    /**
+     * A capable terminal, stated rather than inherited: the gate reads {@code TERM} off the
+     * {@link ProgressDisplay.Preferences} it is given, so these assertions hold on a developer
+     * machine and a CI image alike — including one that exports {@code TERM=dumb}.
+     */
+    private static final String XTERM = "xterm-256color";
+
     private static final List<String> PARTS =
             List.of("listing", "1,204,993 objects", "4,781 keys/s", "1,208 API calls");
 
     private static ProgressDisplay.Preferences prefs(Boolean progress, boolean stderrIsTerminal) {
-        return new ProgressDisplay.Preferences(progress, false, false, false, stderrIsTerminal);
+        return new ProgressDisplay.Preferences(progress, false, false, false, stderrIsTerminal, XTERM);
     }
 
     @Test
     void aTerminalWideEnoughToSaySoRedraws() {
         assertThat(ProgressDisplay.shouldRedraw(prefs(null, true), WIDE)).isTrue();
+    }
+
+    @Test
+    void aTerminalThatDisclaimsCapabilityKeepsThePlainRecords() {
+        // TERM=dumb is taken at its word, on the same reasoning --color=auto uses: a terminal that
+        // says it cannot act on control sequences is not sent any. Width is irrelevant here — a
+        // dumb terminal wide enough to redraw into still must not be redrawn into.
+        assertThat(ProgressDisplay.shouldRedraw(
+                new ProgressDisplay.Preferences(null, false, false, false, true, "dumb"), WIDE))
+                .isFalse();
+    }
+
+    @Test
+    void anUnsetTermIsNotTreatedAsDumb() {
+        // Absent is not a disclaimer: only the literal "dumb" disables the redraw, so a terminal
+        // that simply never exported TERM keeps the display it is otherwise entitled to.
+        assertThat(ProgressDisplay.shouldRedraw(
+                new ProgressDisplay.Preferences(null, false, false, false, true, null), WIDE))
+                .isTrue();
     }
 
     @Test

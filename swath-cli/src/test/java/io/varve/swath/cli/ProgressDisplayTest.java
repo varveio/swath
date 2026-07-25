@@ -36,6 +36,9 @@ final class ProgressDisplayTest {
     /** Colour off: these tests pin field content, which is identical either way. */
     private static final AnsiPalette PLAIN = new AnsiPalette(false);
 
+    /** A capable terminal, stated rather than inherited from whatever the suite runs under. */
+    private static final String XTERM = "xterm-256color";
+
     /** A frame's fields as one string, unbounded and unstyled — what these tests assert on. */
     private static String line(ProgressEvent event) {
         return String.join(OperatorText.SEP, ProgressDisplay.parts(event));
@@ -141,9 +144,9 @@ final class ProgressDisplayTest {
     @Test
     void autoStandsDownUnderQuietAndUnderVerbose() {
         assertThat(ProgressDisplay.shouldDisplay(
-                new ProgressDisplay.Preferences(null, true, false, false, true))).isFalse();
+                new ProgressDisplay.Preferences(null, true, false, false, true, XTERM))).isFalse();
         assertThat(ProgressDisplay.shouldDisplay(
-                new ProgressDisplay.Preferences(null, false, true, false, true)))
+                new ProgressDisplay.Preferences(null, false, true, false, true, XTERM)))
                 .as("-v makes the structured progress log record the run's progress surface")
                 .isFalse();
     }
@@ -151,13 +154,13 @@ final class ProgressDisplayTest {
     @Test
     void anExplicitProgressFlagBeatsQuietAndANonTerminalStderr() {
         assertThat(ProgressDisplay.shouldDisplay(
-                new ProgressDisplay.Preferences(true, true, true, false, false))).isTrue();
+                new ProgressDisplay.Preferences(true, true, true, false, false, XTERM))).isTrue();
     }
 
     @Test
     void noProgressSuppressesItEverywhere() {
         assertThat(ProgressDisplay.shouldDisplay(
-                new ProgressDisplay.Preferences(false, false, false, true, true))).isFalse();
+                new ProgressDisplay.Preferences(false, false, false, true, true, XTERM))).isFalse();
     }
 
     @Test
@@ -165,7 +168,7 @@ final class ProgressDisplayTest {
         StderrCoordinator stderr = coordinator(new ByteArrayOutputStream());
 
         assertThat(ProgressDisplay.sinkFor(
-                new ProgressDisplay.Preferences(false, false, true, true, true), stderr, PLAIN))
+                new ProgressDisplay.Preferences(false, false, true, true, true, XTERM), stderr, PLAIN))
                 .as("--no-progress must silence the structured record too, or -v still gets ticks")
                 .isSameAs(ProgressSink.NONE);
     }
@@ -183,7 +186,7 @@ final class ProgressDisplayTest {
     @Test
     void anExplicitIntervalIsItselfAnOptIn() {
         assertThat(ProgressDisplay.shouldDisplay(
-                new ProgressDisplay.Preferences(null, false, false, true, false)))
+                new ProgressDisplay.Preferences(null, false, false, true, false, XTERM)))
                 .as("asking for a cadence asks for the thing that has a cadence")
                 .isTrue();
     }
@@ -251,7 +254,7 @@ final class ProgressDisplayTest {
     // ---- fixtures ----------------------------------------------------
 
     private static ProgressDisplay.Preferences auto(boolean stderrIsTerminal) {
-        return new ProgressDisplay.Preferences(null, false, false, false, stderrIsTerminal);
+        return new ProgressDisplay.Preferences(null, false, false, false, stderrIsTerminal, XTERM);
     }
 
     private static StderrCoordinator coordinator(ByteArrayOutputStream captured) {
