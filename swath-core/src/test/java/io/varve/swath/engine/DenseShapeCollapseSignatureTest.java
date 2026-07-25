@@ -72,16 +72,25 @@ import org.junit.jupiter.api.Timeout;
  * <p><b>What the strict steal bound changed here.</b> This fixture was written against an engine
  * whose speculative steal probes ran concurrently fleet-wide, so probe-timeout pressure scaled with
  * the number of idle thieves and the OFF arm produced dozens of {@code attempt_timeout_probe} faults.
- * Making that bound strict (one attempt in flight fleet-wide) serializes the probes, and a
- * non-productive attempt then paces the next one out to the backoff cap — so this 1.7s collapsed tail
- * now issues exactly ONE probe, deterministically (1/1 across 8 runs). The volume thresholds this arm
- * used to assert (>15 timeouts, >5 cursor races) were therefore measuring the OLD steal policy, not
- * the collapse: they cannot be restored by re-tuning the fixture, because the pressure they counted is
- * precisely what the bound removed.
+ * Making that bound strict (one attempt in flight fleet-wide) SERIALIZES the probes: the single slot
+ * is occupied for essentially the whole tail by back-to-back 90-160ms cold probes, so probe volume is
+ * capped at roughly one per probe-latency rather than scaling with W. The counters say so directly —
+ * measured on this arm, denials split ~6000 {@code IDLE_SLOT.in_flight} against ~275
+ * {@code IDLE_SLOT.paced}, i.e. workers are refused because the slot is BUSY, not because the backoff
+ * is holding them off (pacing barely bites here: {@code IdleStealBackoff#reset} is called by unrelated
+ * workers on every ordinary claim and every non-empty page commit, and the two drainers commit warm
+ * 1ms pages continuously). The volume thresholds this arm used to assert (>15 timeouts, >5 cursor
+ * races) were therefore measuring the OLD steal policy, not the collapse, and cannot be restored by
+ * re-tuning the fixture: the pressure they counted is precisely what the bound removed.
  *
- * <p>Nor can a weaker "&gt;= 1 probe timeout" stand in: whether the tail issues ANY probe before it
- * drains is machine-dependent — 1 on an 8-core dev box (8/8 runs), 0 on the 4-core CI runner. So this
- * class no longer asserts on probe timeouts in either arm. What it asserts is what is deterministic:
+ * <p>Nor can a weaker "&gt;= 1 probe timeout" stand in — but NOT because the engine stops probing.
+ * Steal attempts flow identically on both machine shapes ({@code STEAL.attempted} = 6 on an 8-core dev
+ * box and on 4 pinned cores; most die at {@code NO_VICTIM.no_splittable_victim}, 5 of 6, or lose the
+ * cursor race, exactly the collapse this fixture characterizes). What is a coin flip is whether one of
+ * that handful of probe fetches lands on the interceptor's fault pattern, which fires on
+ * {@code callIndex % 8} over the GLOBAL call index — a stream dominated by warm bulk pages. Hence 1
+ * timeout locally and 0 on the CI runner from the same six attempts. So this class no longer asserts
+ * on probe timeouts in either arm. What it asserts is what is deterministic:
  * the collapse's structural signature (a ~2-range seed against 50 tiled, serial_frac at 1.0,
  * avg-in-flight far below W, byte-exact output), and the latency-only discriminator in the SHED
  * dimension — {@link #offStorm} fires a sustained-timeout shed that {@link #control1} never can,
@@ -191,11 +200,12 @@ final class DenseShapeCollapseSignatureTest {
                 .as("OFF sustains only a low average in-flight (a couple of drainers, not W)")
                 .isLessThan(WORKERS / 4.0);
 
-        // NO probe-timeout assertion -- see the class javadoc. Under the fleet-wide
-        // one-attempt-in-flight bound, whether this collapsed tail issues ANY steal probe before it
-        // drains is machine-dependent: 1 every time on an 8-core dev box, 0 on the 4-core CI runner.
-        // The latency-only discriminator the class exists to prove now lives in the shed dimension
-        // (offStorm vs control1), which fires by construction rather than by timing.
+        // NO probe-timeout assertion -- see the class javadoc. The tail still probes (6 attempts on
+        // both an 8-core box and 4 pinned cores), but the strict bound serializes them, and whether
+        // one of that handful lands on the interceptor's global-callIndex fault pattern is a
+        // scheduling coin flip: 1 timeout locally, 0 on the CI runner. The latency-only discriminator
+        // the class exists to prove now lives in the shed dimension (offStorm vs control1), which
+        // fires by construction rather than by timing.
     }
 
     // ---- CONTROL 1: the zero-latency harness is blind to the spiral ---------------------------------
@@ -216,8 +226,9 @@ final class DenseShapeCollapseSignatureTest {
                 .isZero();
 
         // The blind spot as a delta, in the one dimension that survives the strict steal bound: the
-        // SHED. The probe-timeout delta is gone -- the OFF arm's probe count is machine-dependent
-        // (1 here, 0 on the 4-core CI runner), so it can no longer carry this claim. The storm arm's
+        // SHED. The probe-timeout delta is gone -- with probes serialized, the OFF arm's timeout
+        // count rides on whether a probe coincides with the fixture's fault pattern (1 here, 0 on the
+        // 4-core CI runner), so it can no longer carry this claim. The storm arm's
         // shed does, and by construction: its leading cold-start burst is the workers' OWN first-page
         // reads, which need no steal slot and so are untouched by the bound.
         assertThat(offStorm.sheds)
@@ -336,9 +347,10 @@ final class DenseShapeCollapseSignatureTest {
      *   <li><b>Sustained tail</b> (both modes): ~1-in-8 cold split-PROBE attempts ({@code maxKeys <= 1})
      *       time out ({@code attempt_timeout_probe}), while the other ~7-in-8 cold probes SLOW-succeed
      *       so the owner's fast warm cursor races past the far-ahead pivot during the slow probe
-     *       ({@code cursor_passed_pivot}). Both counts are now incidental rather than asserted: the
-     *       strict steal bound means only a handful of probes — often none at all — are issued in a
-     *       run this short. Worker BULK pages ({@code maxKeys > 1}) are never faulted here —
+     *       ({@code cursor_passed_pivot}). Both counts are now incidental rather than asserted: with
+     *       probes serialized by the strict steal bound only a handful are issued per run, and this
+     *       predicate keys on the GLOBAL call index — so whether any probe coincides with it is a
+     *       scheduling accident. Worker BULK pages ({@code maxKeys > 1}) are never faulted here —
      *       they must complete for the run to stay byte-exact.</li>
      *   <li><b>STORM only</b>: a leading cold-start burst — the first {@link #STARTUP_TIMEOUT_BURST}
      *       COLD reads (the workers' own first-page fetches into the unwarmed keyspace) time out before any
