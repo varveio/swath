@@ -68,7 +68,7 @@ all of these.
 | `--sort` / `--no-sort` | `--no-sort` |
 | `--report` | `<output>/_swath_summary.json` for every non-stdout Parquet destination (including FILE-kind `*.parquet`), else none |
 | `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops short of finishing, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
-| `--progress` / `--no-progress` | auto — the live progress record prints when stderr is a terminal and neither `-q` nor `-v` was given; `--progress` forces it past every gate (a non-terminal stderr and `-q` alike), `--no-progress` suppresses it, and an explicit `--progress-interval` opts in on its own |
+| `--progress` / `--no-progress` | auto — the live **display** prints when stderr is a terminal and neither `-q` nor `-v` was given; `--progress` forces it past every gate (a non-terminal stderr and `-q` alike), `--no-progress` suppresses both surfaces, and an explicit `--progress-interval` opts in on its own. Where the display stands down, progress falls back to the structured INFO `progress` log record — which, being a log record, prints only under `-v`; at the default WARN level a run without the display shows no progress at all |
 
 ### Filters
 
