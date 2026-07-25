@@ -1,9 +1,9 @@
 # swath — probe budgets (contributor reference)
 
 > **You don't need this to use swath.** This is the contributor-tier reference for how swath sizes
-> the per-attempt SDK timeout of each **call class**, and for the failure mode that motivated the
-> current split. The user-facing timeout/retry knobs are in
-> [`docs/configuration.md`](../configuration.md).
+> the per-attempt SDK timeout of each **call class**. The user-facing timeout/retry knobs are in
+> [`docs/configuration.md`](../configuration.md). The field data behind the current sizing is in
+> [`docs/ops/dev/field-investigations.md`](../ops/dev/field-investigations.md).
 
 ---
 
@@ -29,62 +29,31 @@ different budgets.
 `S3PageFetcher#usesShortProbeBudget` is the single place that encodes this. It returns true for
 `pivot_probe` only.
 
-## 2. Why: the genomeark probe-timeout storm
+## 2. Why the split exists
 
 Structure probes originally shared the 3 s point-probe budget, on the reasoning that "a probe carries
 no backpressure signal, so abandon it quickly." That reasoning is right for a point probe and wrong
-for a scan.
+for a scan, and on a large deep bucket it produced a self-sustaining **probe-timeout storm**:
 
-A `swath list s3://genomeark/` run (6.6 M keys, `T=64`) produced this:
+- A structure probe on a deep keyspace measured ~1.15 s standalone but ~5.4 s at 64-way concurrency —
+  so the 3 s budget sat *below the call's real cost at the concurrency the run was using*, and about
+  half of all structure-probe attempts timed out. Pivot probes, on the same client and the same
+  budget, never timed out once.
+- Each timeout aborts its connection, forcing a fresh TLS handshake — the storm pays for its own
+  reconnection churn.
+- Structure probes are the thief's **pivot source**, so the real cost was not the wasted calls but
+  **work starvation**: splits collapsed, steal success fell to a few percent, workers parked, and
+  in-flight concurrency decayed to a small fraction of its target while throughput fell ~20×.
 
-| class | calls | p50 total | p99 total | attempt timeouts |
-|---|---|---|---|---|
-| `pivot_probe` | 3169 | 103 ms | 300 ms | **0** |
-| `structure_probe` | 2612 | 10,196 ms | 20,397 ms | **~1308** |
-| `worker_page` | 6819 | 172 ms | 482 ms | 0 |
+The timeouts were the visible symptom; work starvation was the actual cost. Correcting the budget
+split raised splits ~7×, roughly doubled throughput, and turned a run that never finished into one
+that completes. Full before/after numbers, and the bucket to reproduce on, are in
+[`field-investigations.md`](../ops/dev/field-investigations.md).
 
-Same client, same 3 s budget, same concurrency — the point-probe class never tripped the fuse once,
-and the scan-probe class tripped it on roughly half of all attempts. Measured directly against the
-bucket, a single structure probe on that keyspace costs ~1.15 s standalone, ~1.68 s at 16-way, and
-~5.4 s at the run's own 64-way concurrency. The 3 s budget sat **below the call's real cost at the
-concurrency the run itself was using**.
-
-The consequences compounded well past the wasted calls:
-
-- Every attempt timeout aborts its connection (1308 `swath.s3.pool.connection_aborted`, 1:1 with the
-  timeouts), forcing a fresh TLS handshake (1392 `swath.s3.pool.handshakes`) — so the storm paid for
-  its own re-connection churn.
-- Structure probes are the thief's pivot source. With half of them failing, the split machinery
-  starved: **55 splits and 39 stolen children for 6.6 M keys**, a 2.5 % steal success rate, 2126
-  `STEAL/futility_paced` and 1005 `OWNER_SPLIT/floor_reflected_blocked`.
-- With no work to steal, workers parked (31762 `swath.idle_backoff.slot_denied`). Concurrency
-  collapsed from 18.5 in-flight to **2.0** against a target of 64, and throughput decayed from 147 k
-  to 7.3 k keys/s over the run.
-
-The timeouts were the visible symptom; **work starvation was the actual cost**.
-
-### 2.1 Measured effect of the fix
-
-Same bucket, same box, same flags — before the split vs after (the "after" run listed the bucket to
-completion, so its wall-clock is the whole bucket, not a truncated window):
-
-| | before | after |
-|---|---|---|
-| `structure_probe` p50 / p99 | 10,196 ms / 20,397 ms | **38.8 ms / 1,006 ms** |
-| attempt timeouts | 1308 | **139** |
-| connections aborted / TLS handshakes | 1308 / 1392 | **139 / 382** |
-| splits | 55 | **350** |
-| `latency_inflation` freezes | 1176 | **29** |
-| throughput | 23.8 k keys/s | **57.2 k keys/s** |
-| run | 6.6 M objects in 280 s, still going | **8.8 M objects, complete, 154 s** |
-
-Two things worth reading off this table beyond the headline. First, the collapse really was
-**probe-driven**: nothing about the worker path changed, yet splits went up 6.4× once the thief could
-get pivots again. Second, the freeze count fell 40× **without the freeze rung being touched** — the
-1176 freezes were a downstream symptom of the storm's connection churn inflating worker latency, not
-an independent mis-tuning. On the healthy run the Vegas rung reads a 64 ms baseline against a 90 ms
-worker p50 (ratio 1.41, comfortably under `LATENCY_FREEZE_FACTOR = 2.0`) and correctly stays quiet.
-Retuning that constant off the storm-contaminated run would have been fixing a symptom.
+**A note on what this is not.** The storm was invisible to AIMD, correctly: only a handful of genuine
+5xx occurred, attempt timeouts deliberately don't vote `T` down, and *probe* timeouts are excluded
+from every AIMD down path. Reaching for a lower `--concurrency` would only have masked the problem by
+shrinking probe fan-out. Budget sizing, not concurrency, is the lever here.
 
 ## 3. Escalation is re-expressed against each class's own base
 
@@ -121,8 +90,13 @@ single-sourced in the engine: re-tune it there and the rescale follows.
 
 ## 5. If you change a budget
 
-Re-derive it from a measurement on a real bucket at the concurrency the run will actually use, not
-from a single-request timing — the genomeark structure probe is 4.7× slower at 64-way than
-standalone, and that gap is precisely what the original 3 s budget missed. `probe_latency[]` in the
-JSON run summary already decomposes `connect_acquire`/`ttfb`/`total` per call class, so a single run
-tells you whether a budget is sized correctly.
+Re-derive it from a measurement on a real bucket **at the concurrency the run will actually use**,
+not from a single-request timing — a structure probe measured 4.7× slower at 64-way than standalone,
+and that gap is precisely what the original 3 s budget missed. `probe_latency[]` in the JSON run
+summary already decomposes `connect_acquire`/`ttfb`/`total` per call class over the whole run, so a
+single run tells you whether a budget is sized correctly. Write the result up in
+[`field-investigations.md`](../ops/dev/field-investigations.md).
+
+A scan-class budget cannot be sized to cover every keyspace: a `delimiter=/` probe crossing a very
+large flat directory can exceed any fixed budget, which is what the escalation ladder is for. Judge a
+budget by its **p50 and the run completing**, not by driving tail timeouts to zero.

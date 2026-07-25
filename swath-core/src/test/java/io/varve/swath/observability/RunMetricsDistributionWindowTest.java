@@ -22,12 +22,13 @@ import org.junit.jupiter.api.Test;
  * <p>REGRESSION: Micrometer's default {@code DistributionStatisticConfig} is a rolling window
  * ({@code expiry=2m}, {@code bufferLength=3}), so {@code max()} and every published percentile DECAY
  * while {@code count()}/{@code totalTime()} stay cumulative. The JSON run summary is explicitly a
- * post-hoc forensics artifact, so that silently mixed two time bases in a single row. A genomeark run
+ * post-hoc forensics artifact, so that silently mixed two time bases in a single row. One field run
  * reported {@code swath.rate_limit.wait} as {@code count=6819, total_ms=143045, max_ms=0.001117} —
- * 21 ms of average slot wait against a sub-microsecond max — because slot contention stopped once
- * concurrency collapsed and the rolling max had decayed by the time the summary was written. Every
- * {@code probe_latency[]} percentile and {@code shape.regime.api_latency_p*} shared the defect,
- * describing only the run's last ~2 minutes while being read as run-level facts.
+ * 21 ms of average slot wait against a sub-microsecond max — because slot contention stopped partway
+ * through and the rolling max had decayed by the time the summary was written. Every {@code
+ * probe_latency[]} percentile and {@code shape.regime.api_latency_p*} shared the defect, describing
+ * only the run's last ~2 minutes while being read as run-level facts. See
+ * {@code docs/ops/dev/field-investigations.md}.
  *
  * <p>Against Micrometer's defaults both tests below fail (max and p99 read 0.0 after the window
  * rotates). See {@code RunMetrics#DISTRIBUTION_WINDOW}.

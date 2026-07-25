@@ -261,11 +261,11 @@ public final class RunMetrics {
      * <p>Micrometer's DEFAULT is a ROLLING window — {@code expiry=2m}, {@code bufferLength=3} — which
      * makes {@code max()} and every published percentile decay, while {@code count()} and {@code
      * totalTime()} stay cumulative. In a JSON run summary, which is explicitly a post-hoc forensics
-     * artifact, that silently mixes two different time bases in one row. A genomeark run showed the
-     * mismatch starkly: {@code swath.rate_limit.wait} reported {@code count=6819, total_ms=143045,
+     * artifact, that silently mixes two different time bases in one row. One run showed the mismatch
+     * starkly: {@code swath.rate_limit.wait} reported {@code count=6819, total_ms=143045,
      * max_ms=0.001117} — 21 ms of average slot wait but a sub-microsecond max, because slot
-     * contention stopped once concurrency collapsed and the rolling max had decayed to nothing by the
-     * time the summary was written. Every percentile in {@code probe_latency[]} and {@code
+     * contention stopped partway through and the rolling max had decayed to nothing by the time the
+     * summary was written. Every percentile in {@code probe_latency[]} and {@code
      * shape.regime.api_latency_p*} had the same defect: they described only the run's last ~2 minutes
      * while being presented, and read, as run-level facts.
      *

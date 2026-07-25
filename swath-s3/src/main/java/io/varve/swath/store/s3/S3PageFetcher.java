@@ -454,13 +454,12 @@ public final class S3PageFetcher implements PageFetcher {
      *
      * <p><b>Why {@code structure_probe} is deliberately NOT in this set.</b> A {@code max_keys<=1}
      * pivot probe is a point lookup: S3 answers it from the first key at/after the cursor, so it is
-     * cheap and near-constant (a genomeark run measured p50 103 ms / p99 300 ms over 3169 calls, with
-     * ZERO attempt timeouts under the 3 s budget). A {@code delimiter=/} structure probe is the
-     * opposite: S3 must SCAN forward, rolling keys up into {@code CommonPrefixes}, so its cost tracks
-     * the keyspace it crosses — the same run measured p50 1.15 s standalone and 5.4 s at the run's own
-     * 64-way concurrency. Sharing the point-probe budget put a scan-class call behind a 3 s fuse, and
-     * roughly half of all structure-probe attempts (1308 of 2612) tripped it. That storm is what
-     * starved the thief of pivots; see {@code docs/internals/probe-budgets.md} §2.
+     * cheap and near-constant. A {@code delimiter=/} structure probe is the opposite: S3 must SCAN
+     * forward, rolling keys up into {@code CommonPrefixes}, so its cost tracks the keyspace it
+     * crosses — on a deep bucket, measurably ~10x a pivot probe standalone and several times that
+     * again at high concurrency. Sharing the point-probe budget put a scan-class call behind a 3 s
+     * fuse, timing out roughly half of all structure-probe attempts and starving the thief of pivots.
+     * See {@code docs/internals/probe-budgets.md} §2.
      */
     private static boolean usesShortProbeBudget(String callClass) {
         return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass);

@@ -62,12 +62,12 @@ final class S3FaultClassifier {
      * attributable from the log alone.
      *
      * <p>A retryable fault repeats, potentially thousands of times in one run, and "which call class
-     * and which key range" is the whole diagnosis: a genomeark run emitted 1308 {@code s3_timeout}
-     * lines carrying only {@code bucket} and {@code type}, which is indistinguishable between a sick
-     * network and one mis-budgeted call class. It was in fact the latter — every one of those
-     * timeouts was a {@code structure_probe}, and none were worker pages — but that could only be
-     * recovered from the JSON run summary's per-call-class histograms, never from the 1308 log lines
-     * themselves. See {@code docs/internals/probe-budgets.md} §2.
+     * and which key range" is the whole diagnosis. A probe-timeout storm once emitted ~1300 {@code
+     * s3_timeout} lines carrying only {@code bucket} and {@code type}, which is indistinguishable
+     * between a sick network and one mis-budgeted call class. It was in fact the latter — every one
+     * of those timeouts was a {@code structure_probe}, and none were worker pages — but that could
+     * only be recovered from the JSON run summary's per-call-class histograms, never from the log
+     * lines themselves. See {@code docs/ops/dev/field-investigations.md}.
      *
      * <p>Deliberately NOT attached to the terminal one-shot faults ({@code s3_no_such_bucket},
      * {@code s3_access_denied}, {@code s3_unauthorized}, {@code s3_region_redirect}, {@code

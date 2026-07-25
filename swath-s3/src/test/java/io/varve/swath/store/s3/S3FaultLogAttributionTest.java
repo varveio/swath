@@ -27,12 +27,12 @@ import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
  * A RETRYABLE fault's log line names the call class and key range that faulted, so a fault STORM is
  * attributable from the log alone.
  *
- * <p>REGRESSION: the genomeark probe-timeout storm emitted 1308 {@code s3_timeout} lines carrying
- * only {@code bucket} and {@code type} — indistinguishable, from the log, between a sick network and
- * one mis-budgeted call class. It was the latter (every timeout was a {@code structure_probe}, none
- * were worker pages), but that could only be recovered from the JSON run summary's per-call-class
+ * <p>REGRESSION: a probe-timeout storm once emitted ~1300 {@code s3_timeout} lines carrying only
+ * {@code bucket} and {@code type} — indistinguishable, from the log, between a sick network and one
+ * mis-budgeted call class. It was the latter (every timeout was a {@code structure_probe}, none were
+ * worker pages), but that could only be recovered from the JSON run summary's per-call-class
  * histograms. Against the un-attributed line {@link #retryableTimeoutLineNamesTheCallClassAndRange}
- * fails. See {@code docs/internals/probe-budgets.md} §2.
+ * fails. See {@code docs/ops/dev/field-investigations.md}.
  */
 class S3FaultLogAttributionTest {
 
@@ -76,9 +76,9 @@ class S3FaultLogAttributionTest {
                 new S3FaultClassifier("bucket", new RunMetrics(new SimpleMeterRegistry()));
         // The exact shape that stormed: a delimiter=/ structure probe deep inside a dense prefix.
         PageRequest structureProbe = PageRequest.objectsDelimited(
-                "working/".getBytes(StandardCharsets.UTF_8),
+                "corpus/".getBytes(StandardCharsets.UTF_8),
                 "/".getBytes(StandardCharsets.UTF_8),
-                "working/T2T/ruminant/Alpaca/assembly".getBytes(StandardCharsets.UTF_8),
+                "corpus/2024/region-a/shard-0007".getBytes(StandardCharsets.UTF_8),
                 32);
 
         classifier.classify(
@@ -91,8 +91,8 @@ class S3FaultLogAttributionTest {
         assertThat(warnLine("s3_timeout"))
                 .as("a storm of these must be attributable to a call class and a key range")
                 .contains("call_class=" + RunMetrics.CALL_CLASS_STRUCTURE_PROBE)
-                .contains("prefix=working/")
-                .contains("start_after=working/T2T/ruminant/Alpaca/assembly");
+                .contains("prefix=corpus/")
+                .contains("start_after=corpus/2024/region-a/shard-0007");
     }
 
     /** The whole fetch path wires the context through — not just a direct classifier call. */

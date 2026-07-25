@@ -69,11 +69,11 @@ class S3PageFetcherProbeAttemptTimeoutTest {
      * budget rather than the short point-probe fuse.
      *
      * <p>Against the old behavior (structure probes sharing the 3 s pivot budget) this test fails on
-     * the {@code isEmpty()} assertion. That 3 s fuse is what produced the genomeark storm: structure
-     * probes measured p50 1.15 s standalone and 5.4 s at the run's own 64-way concurrency, so ~half of
-     * all structure-probe attempts (1308 of 2612) timed out, starving the thief of pivots. A pivot
-     * probe over the same run never timed out once under the same 3 s budget — see
-     * {@code docs/internals/probe-budgets.md}.
+     * the {@code isEmpty()} assertion. That 3 s fuse is what produced a probe-timeout storm on a deep
+     * bucket: structure probes measured ~1.15 s standalone and ~5.4 s at the run's own 64-way
+     * concurrency, so ~half of all structure-probe attempts timed out, starving the thief of pivots.
+     * A pivot probe over the same run never timed out once under the same 3 s budget — see
+     * {@code docs/internals/probe-budgets.md} §2 and {@code docs/ops/dev/field-investigations.md}.
      */
     @Test
     void structureProbeKeepsTheScanClassTimeout_noShortProbeFuse() throws Exception {
