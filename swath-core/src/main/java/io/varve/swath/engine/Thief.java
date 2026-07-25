@@ -1074,11 +1074,14 @@ public final class Thief {
      * (Scoped per-victim): whether a {@code delimiter=/} structure probe
      * should fire this attempt against {@code victim}. Enabled until {@code victim} has racked up
      * {@link #STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD} consecutive zero-fan-out probes proving THIS
-     * victim's region has no sub-directory structure at the probed level; once suppressed for this
-     * victim, only a 1-in-{@link #STRUCTURE_SUPPRESS_RETRY_DIVISOR} recovery probe fires so
-     * late-appearing structure still re-enables probing (the next non-zero fan-out resets the
-     * counter in {@link #structurePivot}). A DIFFERENT victim's counter is entirely independent, so
-     * one flat/suppressed victim can never starve structure probing on another (the same
+     * victim's region has no sub-directory structure at the probed level, OR
+     * {@link #STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD} consecutive probes that TIMED OUT rather than
+     * answering (see {@link #probeStructure}); once suppressed for this victim by EITHER streak, only
+     * a 1-in-{@link #STRUCTURE_SUPPRESS_RETRY_DIVISOR} recovery probe fires so late-appearing
+     * structure still re-enables probing (the next non-zero fan-out resets the zero-fan-out counter
+     * in {@link #structurePivot}; the next successful answer resets the timeout counter in
+     * {@link #probeStructure}). A DIFFERENT victim's counters are entirely independent, so one
+     * flat/suppressed victim can never starve structure probing on another (the same
      * global-vs-per-victim scoping discipline as the futility pacing in {@link #steal} above).
      */
     private boolean structureProbesEnabled(WorkerState victim) {
