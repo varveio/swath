@@ -45,7 +45,9 @@ import org.junit.jupiter.api.io.TempDir;
  * {@link IdleStealBackoff} admits <b>at most one in-flight steal attempt
  * engine-wide</b> ({@code attemptInFlight}), released only once {@code thief.steal()} fully RETURNS —
  * so idle-worker COUNT never multiplies probe pressure (30 idle workers behave no differently from 3
- * here):
+ * here). <b>This class does not measure that bound</b> — it asserts probe <i>pressure</i> and takes
+ * the bound as given; {@link IdleStealSlotOwnershipTest} and {@link IdleStealProbeConcurrencyTest}
+ * are what guard it (a leak that let unrelated workers hand the slot away survived here undetected):
  * <ul>
  *   <li>{@link #narrowTail_permanentAttemptTimeoutStorm_probeFetchesNeverStart} — a storm from
  *       {@code t=0} (no worker has EVER committed a page): {@code eligibleVictims()} is permanently

@@ -141,6 +141,8 @@ surprises:
 | `ThiefTest` | default | `Thief` steal logic: bounded `delimiter=/` structure discovery (median-CommonPrefix split, reached only after a probe exposes an empty upper), empty-upper bisection, lock hand-off re-validation |
 | `LivelockUnderLatencyTest` | default | with 64 workers + 20ms page latency + instant probes, the scan completes within timeout (livelocked pre-fix); progress-gated victim eligibility |
 | `IdleThiefProbeScalingTest` | default | with high concurrency + deep keyspace, `api_calls` stays bounded (idle-steal backoff) |
+| `IdleStealSlotOwnershipTest` | default | CONC: the fleet-wide one-attempt slot is owned by its acquirer — `reset()` from unrelated workers never hands it away, a release admits exactly one successor, and a denied worker parks on the in-flight backstop |
+| `IdleStealProbeConcurrencyTest` | `deep` | the same bound measured at the store across a live scan: max **concurrent** probe fetches is exactly 1 while every worker's page commits fire resets |
 | `WorkStealingScanSmokeTest` | default | Fast PERF-1 smoke: ~2k skewed keyspace, work-stealing balances, exactly-once |
 | `WorkStealingScanPerf1Test` | `perf` | Full PERF-1: 99%-skewed 100k keyspace, balance + O(W·log ρ) probe overhead |
 | `ParquetPerf2Test` | `perf` | Full PERF-2: 100k keys, measured peak heap < §7.2 budget, no VT pinning |
@@ -181,7 +183,9 @@ surprises:
   stay per-commit, and `StealStructureProbeTest`'s O(pages) structure-probe bound catches the gross
   probe regression per-commit. (The probe-budget tests — `StealStructureProbeTest` et al. —
   are **kept per-commit**, made robust with a documented contention margin instead of being
-  demoted to `deep`.)
+  demoted to `deep`.) `IdleStealProbeConcurrencyTest` (sleeps to open the probe-overlap window,
+  races real workers) → `IdleStealSlotOwnershipTest`, which drives the same
+  handover interleaving deterministically off real threads with no injected latency.
 
 If you write a PERF-tier or large-matrix test, it **must** be `@Tag("perf")` and follow
 the no-mass-populate rule above. If you write a latency-injecting or schedule-sensitive test,

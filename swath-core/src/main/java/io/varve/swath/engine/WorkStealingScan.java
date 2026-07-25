@@ -81,6 +81,14 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
     private static final long PARK_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
     /** Cap for shared idle-steal backoff after consecutive non-productive steal attempts. */
     private static final long IDLE_STEAL_BACKOFF_CAP_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+    /**
+     * Park backstop for a worker denied the sole in-flight steal slot. Sized to the seconds-scale a
+     * real probe can take, not to {@link #PARK_NANOS}: the slot's release signals the ledger, so
+     * this only ever covers a lost signal, while polling at the 5 ms base produced ~11k denials/sec
+     * against a multi-second probe. Quiescence is unaffected — enqueue/decrement/progress all
+     * broadcast.
+     */
+    private static final long IDLE_STEAL_ATTEMPT_PARK_NANOS = TimeUnit.SECONDS.toNanos(1);
 
     private final PageFetcher fetcher;
     private final CheckpointStore store;
@@ -230,7 +238,8 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         // Wire the live-worklist snapshot source for the terminal/mid-run slow_ranges[] dump —
         // observation only, read only when a summary is built (never on the hot path).
         this.metrics.registerRangeSnapshotSource(this::snapshotLiveRanges);
-        this.idleStealBackoff = new IdleStealBackoff(PARK_NANOS, IDLE_STEAL_BACKOFF_CAP_NANOS, this.metrics);
+        this.idleStealBackoff = new IdleStealBackoff(
+                PARK_NANOS, IDLE_STEAL_BACKOFF_CAP_NANOS, IDLE_STEAL_ATTEMPT_PARK_NANOS, this.metrics);
         // Production (gaugeClock == null) uses the gauge's own System::nanoTime + jittered-window
         // defaults, byte-for-byte the plain path; a regime test injects a compressed clock/window.
         this.gauge = gaugeClock == null
@@ -505,18 +514,30 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
             // creating new nodes adds more S3 load when the store is already backing off).
             if (gauge.isStealingAllowed()) {
                 if (idleStealBackoff.tryAcquireAttemptSlot()) {
-                    log.debug("steal_attempted run_id={} worker_id={} live_workers={} outstanding={}",
-                            runId, RunContext.workerIdOrNone(), livePool.size(), worklist.outstanding());
-                    metrics.recordStealAttempt();   // attempt denominator vs successes (§5)
-                    Thief.Outcome outcome = thief.steal(eligibleVictims());
-                    metrics.recordSteal(outcome.name());
-                    log.debug("steal_finished run_id={} worker_id={} outcome={} live_workers={} outstanding={}",
-                            runId, RunContext.workerIdOrNone(), outcome, livePool.size(), worklist.outstanding());
-                    if (outcome == Thief.Outcome.CHILD_CREATED) {
-                        idleStealBackoff.reset();
-                        continue;   // a child was enqueued + counted; loop to claim it
+                    // Everything done while holding the slot lives in this try: an escape from ANY
+                    // of it — metrics, logging, eligibleVictims(), the thief's child enqueue — would
+                    // otherwise strand the slot and disable stealing for the rest of the run.
+                    try {
+                        log.debug("steal_attempted run_id={} worker_id={} live_workers={} outstanding={}",
+                                runId, RunContext.workerIdOrNone(), livePool.size(), worklist.outstanding());
+                        metrics.recordStealAttempt();   // attempt denominator vs successes (§5)
+                        Thief.Outcome outcome = thief.steal(eligibleVictims());
+                        metrics.recordSteal(outcome.name());
+                        log.debug("steal_finished run_id={} worker_id={} outcome={} live_workers={} outstanding={}",
+                                runId, RunContext.workerIdOrNone(), outcome, livePool.size(), worklist.outstanding());
+                        if (outcome == Thief.Outcome.CHILD_CREATED) {
+                            idleStealBackoff.reset();
+                            continue;   // a child was enqueued + counted; loop to claim it
+                        }
+                        idleStealBackoff.recordNonProductive();
+                    } finally {
+                        // Release, then wake the workers parked on the in-flight backstop. The
+                        // signal is issued here — outside the backoff monitor — because
+                        // Worklist.park holds its gate across parkNanos(), so gate→backoff is the
+                        // only safe order (see IdleStealBackoff#releaseSlot).
+                        idleStealBackoff.releaseSlot();
+                        worklist.signalAll();
                     }
-                    idleStealBackoff.recordNonProductive();
                 } else {
                     // The backoff guard (not the AIMD gauge) denied this worker an attempt
                     // slot — distinct from a slow/throttled store (§5).
@@ -715,11 +736,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
      */
     private void signalStealableProgress() {
         // Reset immediately before the broadcast, so workers woken by this signal observe the cleared
-        // backoff/slot state (otherwise an eager not-yet-parked worker could re-take the attempt slot
-        // in the gap, and the woken workers would re-park for a full backoff window — defeating the
-        // prompt-rebalance intent of this signal). The reset touches only the self-synchronized
-        // IdleStealBackoff — never the ledger — so it needs no gate; the broadcast takes the ledger
-        // gate inside signalAll, so the woken parkers still cannot run until it is released.
+        // backoff PACING state and not a stale next-attempt instant (otherwise they would re-park for
+        // a full backoff window — defeating the prompt-rebalance intent of this signal). It clears
+        // pacing only: an attempt already in flight keeps its slot until its owner releases, so this
+        // signal can never admit a second concurrent attempt. The reset touches only the
+        // self-synchronized IdleStealBackoff — never the ledger — so it needs no gate; the broadcast
+        // takes the ledger gate inside signalAll, so the woken parkers still cannot run until it is
+        // released.
         idleStealBackoff.reset();
         worklist.signalAll();
     }
