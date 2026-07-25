@@ -1,9 +1,10 @@
 # swath replay server
 
-> **Developer tool, not a release artifact.** `swath-replay-server` is built by this repository's
-> Gradle project for fixture and conformance work, but is not part of the supported `swath` CLI
-> distribution or public release surface. Its operational CLI behavior (including diagnostics and
-> JVM launcher settings) is therefore not a v0.1 user contract.
+> **Built here, but not part of the `swath` CLI distribution.** `swath-replay-server` is built by
+> this repository's Gradle project and is a supported thing to use; it is simply shipped separately
+> from the `swath` CLI rather than inside it. Its wire behavior — what it serves for a given fixture
+> — is stable and conformance-tested. Its *operational* surface (diagnostics, logging destinations,
+> JVM launcher settings) is still being smoothed and is not yet a v0.1 user contract.
 
 The swath replay server serves a swath Parquet listing as an HTTP endpoint
 that looks like S3 `ListObjectsV2` — the only wire protocol it speaks today;

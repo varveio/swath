@@ -108,17 +108,21 @@ included, and swath will tell you so rather than pretend otherwise.
 
 ## Replay server
 
-This repo also builds `swath-replay-server`, a development tool. It serves a
-captured swath listing back as an S3-compatible `ListObjectsV2` endpoint, so you
-can point a lister at a deterministic, zero-cost bucket whose key distribution you
-already know — including the pathological shapes that are expensive to find and
-slow to list. It can inject per-request latency keyed on the shape of the request,
-which is how swath's own hard cases get reproduced without going back to the real
-bucket.
+`swath-replay-server` serves a captured swath listing back as an S3-compatible
+`ListObjectsV2` endpoint. Point a lister at it and you get a deterministic,
+zero-cost bucket whose key distribution you already know — including the
+pathological shapes that are expensive to find and slow to list. It can inject
+per-request latency keyed on the shape of the request, so a bucket that only
+misbehaves under a particular latency profile can be reproduced on a laptop.
 
-It is not a general S3 emulator and not part of the release: path-style
-`ListObjectsV2` over an existing listing fixture, no object data, no
-authentication. See
+That makes it useful beyond swath itself: reproducing someone's bucket shape
+without their credentials or their bill, testing your own tooling against a
+listing that would otherwise cost money to enumerate every run, and pinning
+listing behaviour in regression tests.
+
+Scope: path-style `ListObjectsV2` over an existing listing fixture — no object
+data, no authentication, not a general S3 emulator. It is built by this repo but
+is not part of the swath CLI distribution. See
 [`docs/swath-replay-server.md`](docs/swath-replay-server.md).
 
 ## Comparisons
