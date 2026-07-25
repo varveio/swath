@@ -483,7 +483,12 @@ retired — its emitter was deleted in the same change that added the annotation
 <!-- ci:steal-reason-table:start -->
 | category | reason | meaning | status |
 |---|---|---|---|
-| `NO_VICTIM` | `no_splittable_victim` | no live victim had a splittable range this steal attempt | |
+| `NO_VICTIM` | `no_splittable_victim` | no live victim had a splittable range this steal attempt. **The aggregate** — exactly one of the five discriminators below co-fires with it, so `sum(discriminators) == no_splittable_victim` and either series can be read alone | |
+| `NO_VICTIM` | `pool_empty` | the steal-eligible pool was EMPTY: every live worker is awaiting its next non-empty page commit (`WorkerState#stealEligible`), which is the progress gate doing its job, not a failure. Expected to dominate on a healthy high-concurrency run and to be near-zero on a collapsed one | |
+| `NO_VICTIM` | `all_no_remaining_span` | every candidate scored `estRemaining <= 0`. ⚠️ On a deep shared prefix this can be a MEASUREMENT artefact rather than a fact about the keyspace: `StealMath.fracIn` reads only `K = 12` bytes past the longest common prefix of `[lo, hi]`, so a cursor that agrees with `hi` across those 12 bytes yields a span that underflows to exactly 0.0 in double precision even with millions of keys left. A run where this dominates while the range is demonstrably not exhausted is the signature of that artefact and should be investigated before the range is believed | |
+| `NO_VICTIM` | `all_futility_paced` | every candidate was in its per-victim futility cooldown (`WorkerState#stealPaced`, armed by consecutive `cursor_passed_pivot`/`bound_moved`/`bisect_budget_exhausted`). Means the thieves are correctly backing off racing drainers; co-read with `STEAL.futility_paced` for the skip volume | |
+| `NO_VICTIM` | `all_unsplittable` | every candidate was cached `unsplittable` (a genuine no-pivot terminal — bounds UTF-8-adjacent, or a frontier cursor at its ceiling). The cache is PERMANENT for a worker, so a rising count means ranges are genuinely atomic, not transiently unlucky | |
+| `NO_VICTIM` | `mixed_skips` | candidates were rejected for more than one reason in the same attempt, so no single discriminator explains it. A high share means the pool is heterogeneous and the aggregate should be read per-worker (slow-range dump) rather than fleet-wide | |
 | `RETRY` | `unchanged_nonproductive_snapshot` | the victim's cursor/hi snapshot hadn't advanced since the last look | |
 | `RETRY` | `cursor_at_or_past_hi` | the victim's cursor had already reached/passed `hi`; nothing left to steal | |
 | `RETRY` | `unstarted_frontier` | the range hasn't started far enough in to slice yet | |
