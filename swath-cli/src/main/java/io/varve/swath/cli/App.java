@@ -11,6 +11,7 @@ import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import picocli.AutoComplete;
 import picocli.CommandLine;
@@ -120,22 +121,37 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
     private static int handleExecutionException(Exception ex, CommandLine cmd,
                                                 CommandLine.ParseResult parseResult) {
         // A terminal error line is the run's last word on stderr: end live progress permanently
-        // first, so no frame still being formatted can land after it.
-        StderrCoordinator.shared().finishProgress();
+        // first, so no frame still being formatted can land after it — then write the whole record
+        // under the coordinator's lock, so a log event cannot splice a multi-line stack trace or
+        // land after the error either. picocli's own writer keeps doing the writing: an embedding
+        // application may have redirected it.
+        StderrCoordinator coordinator = StderrCoordinator.shared();
+        coordinator.finishProgress();
         int code = ExitCodes.forThrowable(ex);
         SwathException domain = domainException(ex);
         if (domain != null) {
-            cmd.getErr().println("swath: " + domain.getMessage());
+            recordError(coordinator, cmd, err -> err.println("swath: " + domain.getMessage()));
         } else if (code == ExitCodes.UNEXPECTED) {
-            PrintWriter err = cmd.getErr();
-            err.println("swath: unexpected error: " + ex);
-            if (GlobalOptions.effectiveVerbosity(cmd) > 0) {
-                ex.printStackTrace(err);
-            }
+            recordError(coordinator, cmd, err -> {
+                err.println("swath: unexpected error: " + ex);
+                if (GlobalOptions.effectiveVerbosity(cmd) > 0) {
+                    ex.printStackTrace(err);
+                }
+            });
         } else if (code != ExitCodes.SUCCESS) {
-            cmd.getErr().println("swath: " + ex.getMessage());
+            recordError(coordinator, cmd, err -> err.println("swath: " + ex.getMessage()));
         }
         return code;
+    }
+
+    /** One error record on picocli's writer, complete and flushed, under the stderr coordinator's lock. */
+    private static void recordError(StderrCoordinator coordinator, CommandLine cmd,
+            Consumer<PrintWriter> body) {
+        coordinator.record(() -> {
+            PrintWriter err = cmd.getErr();
+            body.accept(err);
+            err.flush();
+        });
     }
 
     private static SwathException domainException(Throwable throwable) {

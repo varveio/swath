@@ -54,9 +54,6 @@ final class StderrCoordinator {
     /** The channel currently allowed to emit frames; {@code null} once progress has finished. */
     private ProgressChannel current;
 
-    /** Sticky: a stderr that failed a write once is not going to start working again. */
-    private boolean channelBroken;
-
     StderrCoordinator(Supplier<PrintStream> target) {
         this.target = target;
     }
@@ -92,53 +89,87 @@ final class StderrCoordinator {
     }
 
     /**
+     * Write one complete record through a writer this coordinator does not own — picocli's {@code
+     * cmd.getErr()}, which the CLI's tests and an embedding application may have redirected, so it
+     * cannot simply be replaced by the stream above. The body still runs under the one lock, which
+     * is the part that matters: a multi-line stack trace is written whole, with no log event spliced
+     * into it and none after it.
+     */
+    void record(Runnable body) {
+        synchronized (lock) {
+            body.run();
+        }
+    }
+
+    /**
      * The stream Logback's console appender is re-pointed at, so its events are serialized with
      * everything else on this fd. Writes pass straight through to the current stderr under the
      * lock, so an appender's write/flush pair cannot be reordered around a frame.
      */
     OutputStream logStream() {
-        return new OutputStream() {
-            @Override
-            public void write(int b) {
-                synchronized (lock) {
-                    target.get().write(b);
-                }
-            }
+        return new LogStream();
+    }
 
-            @Override
-            public void write(byte[] b, int off, int len) {
-                synchronized (lock) {
-                    target.get().write(b, off, len);
-                }
-            }
+    /** Whether {@code stream} is already one of this coordinator's — see {@link #logStream()}. */
+    boolean ownsLogStream(Object stream) {
+        return stream instanceof LogStream logStream && logStream.owner() == this;
+    }
 
-            @Override
-            public void flush() {
-                synchronized (lock) {
-                    target.get().flush();
-                }
+    /** The {@link #logStream()} type, named so an already-routed appender is recognisable. */
+    private final class LogStream extends OutputStream {
+
+        @Override
+        public void write(int b) {
+            synchronized (lock) {
+                target.get().write(b);
             }
-        };
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) {
+            synchronized (lock) {
+                target.get().write(b, off, len);
+            }
+        }
+
+        @Override
+        public void flush() {
+            synchronized (lock) {
+                target.get().flush();
+            }
+        }
+
+        private StderrCoordinator owner() {
+            return StderrCoordinator.this;
+        }
     }
 
     /** One live-progress generation: it may write frames until it — or the summary — closes it. */
     final class ProgressChannel implements AutoCloseable {
 
         /**
+         * Sticky for THIS generation only. A write failure says the stream this generation has been
+         * writing to is gone, not that the process's stderr is gone forever: the target is resolved
+         * per write, so a later in-process invocation — after {@link System#setErr} handed it a
+         * healthy stream — opens a new generation and starts clean.
+         */
+        private boolean broken;
+
+        /**
          * Write one complete frame, flushed. Returns whether it was written: {@code false} once
-         * this channel has been closed or stderr has broken, which is also what {@link #isActive()}
-         * reports so a tick can skip building an event at all.
+         * this channel has been closed or its stderr has broken, which is also what {@link
+         * #isActive()} reports so a tick can skip building an event at all.
          */
         boolean frame(String line) {
             synchronized (lock) {
-                if (current != this || channelBroken) {
+                if (current != this || broken) {
                     return false;
                 }
                 PrintStream err = target.get();
                 err.println(line);
                 err.flush();
                 if (err.checkError()) {
-                    channelBroken = true;
+                    broken = true;
                     return false;
                 }
                 return true;
@@ -147,7 +178,7 @@ final class StderrCoordinator {
 
         boolean isActive() {
             synchronized (lock) {
-                return current == this && !channelBroken;
+                return current == this && !broken;
             }
         }
 

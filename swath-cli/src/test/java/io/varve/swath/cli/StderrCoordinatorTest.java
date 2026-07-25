@@ -11,6 +11,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -162,9 +164,73 @@ final class StderrCoordinatorTest {
 
         assertThat(channel.frame("  listing · 1 objects")).isFalse();
         assertThat(channel.isActive()).isFalse();
-        assertThat(coordinator.openProgress().frame("  listing · 2 objects"))
-                .as("a stderr that failed a write is not going to start working again")
+        assertThat(channel.frame("  listing · 2 objects"))
+                .as("the stream this generation writes to failed once; it will not start working again")
                 .isFalse();
+    }
+
+    @Test
+    @Timeout(30)
+    void anErrorRecordOnPicocliOwnWriterStillTakesTheLock() throws Exception {
+        // The terminal error path writes through picocli's writer (an embedding application may have
+        // redirected it), so it cannot be handed this coordinator's stream -- but a multi-line stack
+        // trace must still be written whole, with no log event spliced into it.
+        StringWriter picocli = new StringWriter();
+        StderrCoordinator coordinator = new StderrCoordinator(() -> new PrintStream(
+                OutputStream.nullOutputStream(), true, StandardCharsets.UTF_8));
+        CountDownLatch insideError = new CountDownLatch(1);
+        CountDownLatch releaseError = new CountDownLatch(1);
+
+        Thread error = new Thread(() -> coordinator.record(() -> {
+            PrintWriter err = new PrintWriter(picocli);
+            err.println("swath: unexpected error: java.lang.IllegalStateException");
+            insideError.countDown();
+            await(releaseError);
+            err.println("\tat io.varve.swath.Whatever.method(Whatever.java:1)");
+            err.flush();
+        }), "error");
+        error.start();
+        assertThat(insideError.await(10, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch logWritten = new CountDownLatch(1);
+        Thread logEvent = new Thread(() -> {
+            coordinator.record(err -> err.println("12:00:00.000 WARN  swath - late event"));
+            logWritten.countDown();
+        }, "log");
+        logEvent.start();
+
+        assertThat(logWritten.await(200, TimeUnit.MILLISECONDS))
+                .as("a log event must wait for the whole error record, stack trace included")
+                .isFalse();
+        releaseError.countDown();
+        error.join();
+        logEvent.join();
+        assertThat(picocli.toString().lines()).hasSize(2);
+    }
+
+    @Test
+    void brokennessBelongsToTheStreamThatBrokeNotToTheProcess() {
+        // The shared coordinator outlives a single invocation and resolves System.err per write, so
+        // one run's broken capture must not disable progress for every later run in this JVM.
+        PrintStream broken = new PrintStream(new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                throw new IOException("Broken pipe");
+            }
+        }, true, StandardCharsets.UTF_8);
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream healthy = new PrintStream(captured, true, StandardCharsets.UTF_8);
+        AtomicBoolean useBroken = new AtomicBoolean(true);
+        StderrCoordinator coordinator = new StderrCoordinator(() -> useBroken.get() ? broken : healthy);
+
+        assertThat(coordinator.openProgress().frame("  listing · lost")).isFalse();
+        useBroken.set(false);
+
+        assertThat(coordinator.openProgress().frame("  listing · 2 objects"))
+                .as("a later invocation with a healthy stderr gets its progress back")
+                .isTrue();
+        assertThat(captured.toString(StandardCharsets.UTF_8).lines())
+                .containsExactly("  listing · 2 objects");
     }
 
     private static StderrCoordinator coordinator(ByteArrayOutputStream captured) {
