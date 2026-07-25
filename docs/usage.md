@@ -354,12 +354,10 @@ after the whole merge finishes — a mid-merge `_swath_summary.json` snapshot le
 shows them flat/zero for the whole (potentially multi-minute) merge. Watch
 `sort.merge_progress_units` instead to confirm a merge is genuinely advancing
 (the SAME `swath.progress.units` tally the in-JVM liveness watchdog trusts), or
-tail the log for the periodic `sort_merge_progress passes=<n> progress_units=<n>
-elapsed_ms=<n>` heartbeat line, emitted at the SAME `--progress-interval`
-cadence as the listing-phase progress line (default: 30 s when
-`--progress-interval` is not passed) — so a short `--sort` merge run with a
-tight `--progress-interval` gets periodic ticks too, not just the one line at
-merge end.
+tail the log for the periodic `progress … phase=merging` record, emitted by the
+run's single progress reporter at the `--progress-interval` cadence (default:
+30 s) — its `rows_merged` field counts the rows the merge itself has moved,
+against the exact staged-row total it was handed.
 
 **Finalize/publish liveness.** The tail AFTER the merge — footer-fsyncing
 each final part and streaming every part through MD5 to build `manifest.json` —
@@ -729,10 +727,23 @@ parts in name order reads the dataset in key order — once the output crosses t
 
 ### Progress
 
-Progress is logged to stderr every 30 seconds — at INFO, so it needs `-v` — with strategy,
-active/target worker count, instantaneous `in_flight` ranges, live and average object rate, total
-emitted, API call count with estimated cost, and oldest pending range. Use `--progress-interval` to
-override the cadence (e.g. `2s` for dense sampling on short runs).
+Progress is logged to stderr every 30 seconds — at INFO, so it needs `-v` — as one `progress`
+record per tick, for the whole run: the seed step, listing, the sort merge and the final write. Every
+record carries the run id, the phase, session and phase elapsed, API calls with estimated cost, and
+retries; the tail is whatever that phase actually has. Seeding reports probes completed against the
+seed's probe budget and the age of the last completed probe — the signal that tells a healthy seed
+from a hung one, since a seeding run emits no objects, fetches no pages and holds no workers.
+Listing reports objects emitted this session (recovered rows from a resume are counted separately,
+so a resumed run neither shows a zero it did not earn nor jumps by billions at the end), live and
+average object rate, pages, in-flight ranges and the target worker count. Merging reports rows
+merged against the staged row total.
+
+There is deliberately **no ETA and no percentage for listing**: an unsorted scan has no honest
+denominator — the object total is not known until the run ends. Seeding and merging do have exact
+ones (the probe budget; the staged rows), so those phases carry a completion figure and listing does
+not. The first record lands a couple of seconds in rather than a whole cadence later, so a run that
+finishes in 22 seconds is not silent. Use `--progress-interval` to override the cadence (e.g. `2s`
+for dense sampling on short runs).
 
 ### End-of-run summary
 

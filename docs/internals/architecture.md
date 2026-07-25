@@ -46,7 +46,7 @@ dependency rules, and the decisions behind them — see
 | `concurrent` | `io.varve.swath.concurrent` | `Scope` — the in-house structured-concurrency helper over virtual threads (no `--enable-preview`) |
 | `cli` | `io.varve.swath.cli` | `App` (Picocli root), `ListCommand`, `ResumeCommand`, `ExitCodes`, `S3Uri` |
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
-| `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (fixed-cadence progress), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
+| `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.
