@@ -368,6 +368,34 @@ steal():
   commit resets this pacing; enqueue/decrement/progress signals still wake
   parked workers, so quiescence detection and the progress-gated liveness fix
   are unchanged.
+- **At most one speculative steal attempt is in flight fleet-wide, and the bound
+  is strict.** *Pacing state* (backoff level, next-attempt instant) and *slot
+  ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`: the
+  slot belongs to the worker that acquired it and is released only by that worker,
+  in a `finally` covering the whole acquired region — so no escape from the
+  metrics, logging, victim curation or child enqueue inside it can strand the slot
+  and disable stealing for the rest of the run. The pacing reset is called by
+  *unrelated* workers on every claim and every non-empty page commit and therefore
+  must never touch ownership; when it did, the effective bound was
+  `1 + (reset rate × attempt duration)` — tens of concurrent probes under load.
+  Concurrent attempts would remain *safe* (`victim.lock` + the I4 CAS guard); they
+  are simply not *efficient*, because N thieves converge on the same argmax victim
+  and all but one lose the CAS. Measured on a 6.6M-key bucket, honouring the bound
+  raised steal success from ~4% to ~25% and cut API calls ~35%.
+- **Waiting on the slot is release-driven, not poll-driven.** A denied worker
+  re-reads the state under the ledger gate and acts on what it finds there — it may
+  claim a child that became ready meanwhile, or park on whatever pacing window the
+  attempt's own outcome left behind. When it does park *because the slot is still
+  held*, the backstop is seconds-scale, not the ~5 ms pacing base, because the
+  release itself broadcasts on the ledger. That backstop
+  bounds the wait for an attempt that *outlives* it — it is not the mechanism that
+  ends an ordinary wait, and not merely a lost-signal fallback. The release
+  must be signalled *outside* the backoff monitor: `Worklist.park` holds its gate
+  across the `parkNanos()` call, so gate→backoff is the only safe lock order.
+  That same gate hold is what makes the signal unlosable — a denied worker either
+  reads the cleared flag under the gate and parks briefly, or is already awaiting
+  when the broadcast lands. Quiescence is unaffected; enqueue, decrement and
+  progress all still broadcast.
 - **In-memory `cursor` leads the durable cursor — this is what makes the
   hand-off race-free.** A worker advances its in-memory `victim.cursor`
   (`AtomicReference`, §1.2) **under `victim.lock` at the instant it *enqueues*
