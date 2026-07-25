@@ -3,8 +3,8 @@ Resume a run by its output directory: swath resume <dir>.
       [<dir>]            The directory-dataset run handle to resume (opens
                            <dir>/.swath/checkpoint.sqlite).
   -h, --help             Show this help message and exit.
-  -q, --quiet            Suppress the startup destination echo; lowers the log
-                           level (repeatable).
+  -q, --quiet            Decrease verbosity (-q ERROR, -qq silent); suppresses
+                           the startup destination echo.
       --tune=KEY=VALUE   Set a resume-safe typed expert option (repeatable).
   -v                     Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
   -V, --version          Print version information and exit.

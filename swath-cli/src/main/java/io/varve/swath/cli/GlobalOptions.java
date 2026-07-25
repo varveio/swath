@@ -15,9 +15,10 @@ import picocli.CommandLine.Option;
  * subcommand that accepts it — each occurrence is its own independent picocli option, so {@link
  * #effectiveVerbosity} merges whichever level(s) the user actually populated.
  *
- * <p>{@code -q} suppresses {@link OutputOptions#echoResolvedOutput}'s startup destination line and,
- * repeated ({@code -qq}), lowers the log level below what {@code -v}/{@code -vv}/{@code -vvv} would
- * otherwise raise it to — see {@link CliLogging#configure}.
+ * <p>{@code -q} lowers the log level and suppresses {@link OutputOptions#echoResolvedOutput}'s startup
+ * destination line: a single {@code -q} drops the level to ERROR, {@code -qq} (or higher) turns
+ * logging off entirely. Quiet wins over verbosity when both are given — see {@link
+ * CliLogging#configure}.
  */
 final class GlobalOptions {
 
@@ -27,7 +28,8 @@ final class GlobalOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = {"-q", "--quiet"},
-            description = "Suppress the startup destination echo; lowers the log level (repeatable).")
+            description = "Decrease verbosity (-q ERROR, -qq silent); suppresses the startup "
+                    + "destination echo.")
     boolean[] quiet = new boolean[0];
 
     /** A command whose CLI surface carries a {@link GlobalOptions} mixin. */

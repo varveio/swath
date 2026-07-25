@@ -101,8 +101,8 @@ Diagnostics:
                                SWATH_OTLP_ENDPOINT).
       --no-metrics           Disable metrics export, including environment
                                configuration.
-  -q, --quiet                Suppress the startup destination echo; lowers the
-                               log level (repeatable).
+  -q, --quiet                Decrease verbosity (-q ERROR, -qq silent);
+                               suppresses the startup destination echo.
       --trace=PATH           Write a diagnostic JSONL run trace to PATH.
       --tune=KEY=VALUE       Set a typed expert option (repeatable; use --tune
                                help).

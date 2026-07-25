@@ -1,8 +1,8 @@
 Usage: swath [-hVqv] [COMMAND]
 High-performance object-store lister.
   -h, --help      Show this help message and exit.
-  -q, --quiet     Suppress the startup destination echo; lowers the log level
-                    (repeatable).
+  -q, --quiet     Decrease verbosity (-q ERROR, -qq silent); suppresses the
+                    startup destination echo.
   -v              Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
   -V, --version   Print version information and exit.
 Commands:

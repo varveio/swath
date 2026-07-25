@@ -595,10 +595,14 @@ though the checkpoint is gone.
 | `-v` | INFO |
 | `-vv` | DEBUG |
 | `-vvv` | TRACE |
+| `-q` | ERROR |
+| `-qq` | off (logging silenced entirely) |
+
+`-q` wins over `-v` when both are given — e.g. `-vvv -q` still logs at ERROR.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-q, --quiet` | off | Suppress the startup destination echo |
+| `-q, --quiet` | off | Lowers the log level (see above) and suppresses the startup destination echo. `-qq` silences logging, but not the terminal `swath: …` error line printed on failure — that goes straight to the CLI's error stream, not through the logger |
 
 ---
 
@@ -774,7 +778,7 @@ A Prometheus scrape endpoint (`--metrics-port`) is planned for v1.1.
 
 SLF4J + Logback; structured fields in `snake_case`. The run's `args_hash`,
 strategy, and checkpoint path are logged at startup. Use `-v` / `-vv` / `-vvv`
-to raise the log level.
+to raise the log level, or `-q` / `-qq` to lower it (`-q` wins if both are given).
 
 ---
 

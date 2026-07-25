@@ -129,7 +129,8 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = {"-q", "--quiet"},
-                description = "Suppress the startup destination echo; lowers the log level (repeatable).")
+                description = "Decrease verbosity (-q ERROR, -qq silent); suppresses the startup "
+                        + "destination echo.")
         void quiet(boolean[] values) {
             global.quiet = values;
         }

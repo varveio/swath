@@ -8,6 +8,7 @@ and the replay-server meters — is [`docs/internals/metrics-internals.md`](inte
 
 Logs go to **stderr** (stdout is data). Verbosity is a global flag, accepted **before or after** the
 subcommand: `swath -v list …` and `swath list -v …` both work (INFO), `-vv` (DEBUG), `-vvv` (TRACE).
+`-q` lowers the level instead — `-q` (ERROR) or `-qq` (off), winning over `-v` if both are given.
 With `-v` or higher enabling INFO logs, progress is logged to stderr at a 30 s default cadence,
 configurable with `--progress-interval`.
 

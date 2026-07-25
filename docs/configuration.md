@@ -128,7 +128,7 @@ both as sensitive run artifacts.
 | Flag | Default |
 | --- | --- |
 | `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
-| `-q, --quiet` | off |
+| `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
 | `-h, --help` | — (prints help and exits) |
 | `-V, --version` | — (prints version and exits) |
 
