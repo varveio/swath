@@ -738,7 +738,7 @@ When a run ends, swath prints a short summary block to **stderr** (stdout stays 
 
 ```
   1,204,993 objects in 4m12s · 4,781 keys/s
-  1,208 API calls · 1.00 per 1k objects · in flight avg 52.0 · peak 64
+  1,208 API calls · 1.00 per 1k objects · in flight avg 52.00 · peak 64
   ~$0.006 (est. @ $0.005/1k LIST)
   12 files · 84.0 MB written · peak RSS 512.0 MB
 ```
@@ -747,7 +747,9 @@ A **faults line** — `throttled N · retried M · errors K` — is inserted onl
 counts is non-zero, so its presence is itself the signal: `throttled` counts real S3 backpressure
 (503 SlowDown / transient 5xx), `retried` counts client-side transients that were retried and
 recovered, and the two are deliberately never folded together. A run that stopped short leads with
-`INCOMPLETE (<reason>)`, plus `— resume: swath resume <dir>` when the run left something resumable.
+`INCOMPLETE (<reason>)`, plus `— resume: swath resume <dir>` when the run left something resumable
+and resuming could actually help — a crash is a deterministic failure a resume would hit again, so
+it gets the marker without the invitation.
 A run stopped by a closed downstream (`swath list | head`) is not an incident: it prints nothing by
 default, and reads `stopped early — downstream closed` if you asked for the block explicitly.
 

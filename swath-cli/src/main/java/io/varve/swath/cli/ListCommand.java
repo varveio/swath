@@ -394,9 +394,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // same reason the destination echo uses it: a directly-constructed ListCommand has no
         // picocli spec. Cost is withheld under --endpoint-url, where the provider's LIST pricing
         // is unknowable.
-        ctx.metrics().setSummarySink(new SummaryRenderer(System.err, new SummaryRenderer.Preferences(
-                output.stats, quiet, resolvedOutput.kind() != OutputOptions.DestinationKind.STDOUT,
-                connection.endpointUrl == null, resumeDestination(resolvedOutput, mode))));
+        // The preferences are read at EMIT time, not here: a bare `swath resume <dir>` only learns
+        // its destination from the checkpoint's restored run context (restoreRunContext /
+        // recomputeKindAfterRestore), long after the sink is installed, so capturing them now
+        // would render every resume as a non-durable, non-resumable stdout run.
+        ctx.metrics().setSummarySink(new SummaryRenderer(System.err, () -> new SummaryRenderer.Preferences(
+                output.stats, quiet, output.resolvedKind != OutputOptions.DestinationKind.STDOUT,
+                connection.endpointUrl == null, resumeDestination(mode))));
 
         // A SIGTERM/SIGINT flips the cancellation flag (stop_reason=signal); the --max-duration
         // deadline flips it with stop_reason=max_duration. Either way the run thread observes the
@@ -1662,9 +1666,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * swath resume <dir>} opens: {@code --checkpoint none} keeps no durable state, a stdout or
      * single-file destination has no run handle to reopen, and an explicit {@code --checkpoint
      * PATH} is not where the resume verb looks.
+     *
+     * <p>A run that {@code swath resume} itself started is the exception: {@link ResumeCommand}
+     * hands the checkpoint over as an explicit {@code --checkpoint} location, so the mode is not
+     * auto, yet the run handle it was invoked on is exactly what a further resume takes — and an
+     * already-interrupted resume is the run most likely to be interrupted again.
+     *
+     * <p>Called at emit time (see the sink installed in {@link #call()}), so the destination it
+     * reads is the one a resume restored, not the pre-restore placeholder.
      */
-    private String resumeDestination(OutputOptions.Resolved resolved, CheckpointOptions.CheckpointMode mode) {
-        return mode.isAuto() && resolved.kind() == OutputOptions.DestinationKind.DIRECTORY
+    private String resumeDestination(CheckpointOptions.CheckpointMode mode) {
+        if (resumeCommandRunHandle != null) {
+            return resumeCommandRunHandle.toString();
+        }
+        return mode.isAuto() && output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
                 ? output.destination
                 : null;
     }

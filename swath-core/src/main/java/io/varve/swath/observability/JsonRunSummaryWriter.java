@@ -556,7 +556,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // The rate cost_usd was derived from, named rather than implied: it is a single-region
         // reference rate, so a reader in another region (or on another provider) can rescale
         // instead of trusting a number swath cannot know. Same constant the terminal summary
-        // block labels its figure with.
+        // block labels its figure with. Additive under schema v2 — NOT a v3 bump.
         ObjectNode basisNode = costNode.putObject("basis");
         basisNode.put("rate_per_1k_usd", RunMetrics.LIST_COST_PER_1K_USD);
         basisNode.put("source", RunMetrics.LIST_COST_SOURCE);
@@ -587,7 +587,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         engineNode.put("avg_in_flight", summary.avgInFlight());
         // Ramp-up timings: how long the run took to reach its first steal and its peak
         // concurrency. Both were previously readable only off the -v list_run_diagnostics line,
-        // unlike every other field on it; -1 when the event never happened.
+        // unlike every other field on it; -1 when the event never happened. Additive under
+        // schema v2 — NOT a v3 bump.
         putLongOrNull(engineNode, "time_to_first_steal_ms", summary.timeToFirstStealMs());
         putLongOrNull(engineNode, "time_to_peak_in_flight_ms", summary.timeToPeakInFlightMs());
         engineNode.put("steals", summary.steals());

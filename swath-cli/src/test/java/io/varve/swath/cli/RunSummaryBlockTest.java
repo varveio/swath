@@ -8,17 +8,29 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.checkpoint.NodeSpec;
+import io.varve.swath.checkpoint.PageCommit;
+import io.varve.swath.checkpoint.RunKey;
+import io.varve.swath.checkpoint.RunMeta;
+import io.varve.swath.checkpoint.SoftRestoreContext;
+import io.varve.swath.checkpoint.SqliteCheckpointStore;
+import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.testkit.MockPageFetcher;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +51,8 @@ final class RunSummaryBlockTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String ENDPOINT = "http://localhost:4566";
+    private static final String BUCKET = "bucket";
+    private static final String PREFIX = "data/";
 
     private final ch.qos.logback.classic.Logger swathLogger =
             (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("io.varve.swath");
@@ -107,20 +121,94 @@ final class RunSummaryBlockTest {
         cmd.output.stats = true;
         cmd.output.summaryJson = report.toString();
 
-        String stderr = runCapturingStderr(cmd);
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        swathLogger.setLevel(Level.INFO);   // the -v tier, where list_run_summary lives
+        swathLogger.addAppender(logged);
+        String stderr;
+        try {
+            stderr = runCapturingStderr(cmd);
+        } finally {
+            swathLogger.detachAppender(logged);
+        }
+        String logLine = logged.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(line -> line.startsWith("list_run_summary "))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no list_run_summary line was logged"));
 
         JsonNode root = MAPPER.readTree(report.toFile());
         long objects = root.get("objects").asLong();
         long apiCalls = root.get("cost").get("api_calls").asLong();
+        long peakInFlight = root.get("engine").get("peak_in_flight").asLong();
         assertThat(block(stderr))
                 .as("the block and the report render one source, so their figures cannot disagree")
                 .contains(objects + " objects in")
                 .contains(apiCalls + " API calls")
-                .contains("peak " + root.get("engine").get("peak_in_flight").asLong());
+                .contains("peak " + peakInFlight);
+        assertThat(logLine)
+                .as("the -v log line is the THIRD rendering of that one source, and scrapers read "
+                        + "it: it must agree with the other two field for field")
+                .contains("objects=" + objects)
+                .contains("api_calls=" + apiCalls)
+                .contains("peak_in_flight=" + peakInFlight);
         assertThat(root.get("cost").get("basis").get("rate_per_1k_usd").asDouble())
                 .isEqualTo(RunMetrics.LIST_COST_PER_1K_USD);
         assertThat(root.get("cost").get("basis").get("source").asText())
                 .isEqualTo(RunMetrics.LIST_COST_SOURCE);
+        assertThat(root.get("engine").has("time_to_first_steal_ms"))
+                .as("the ramp-up timings are report fields too, not only -v log fields")
+                .isTrue();
+        assertThat(root.get("engine").has("time_to_peak_in_flight_ms")).isTrue();
+    }
+
+    /**
+     * A {@code swath resume <dir>} learns its destination only when the checkpoint's run context is
+     * restored, long after the summary sink is installed — so a resume that finishes in well under
+     * the auto threshold still earns its block, because the durable dataset it produced is the
+     * reason to report. Read the preferences at install time instead and every resume renders as a
+     * short stdout run and says nothing at all.
+     */
+    @Test
+    void aShortResumeStillEarnsTheBlockForTheDatasetItProduced(@TempDir Path dir) throws Exception {
+        Path outputDir = seedResumableDataset(dir);
+
+        ResumeCommand cmd = new ResumeCommand();
+        cmd.directory = outputDir;
+        cmd.fetcherOverride = mockObjects(20, 0L);
+
+        String stderr = runCapturingStderr(cmd::call, ExitCodes.SUCCESS);
+
+        assertThat(block(stderr)).contains("objects in").contains("API calls");
+    }
+
+    /**
+     * And the resume that was interrupted — the run most likely to be interrupted again — offers
+     * the resume that will work. {@code swath resume} hands the checkpoint over as an explicit
+     * location, so the hint cannot be derived from the checkpoint mode: it is the run handle. The
+     * fields set here are exactly what {@link ResumeCommand} wires onto its delegate, plus the
+     * timebox it has no flag for.
+     */
+    @Test
+    void anInterruptedResumeOffersTheRunHandleItWasInvokedOn(@TempDir Path dir) throws Exception {
+        Path outputDir = seedResumableDataset(dir);
+
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.connection.region = "us-east-1";
+        cmd.connection.noSignRequest = true;
+        cmd.resumeCommandCheckpoint = colocatedCheckpoint(outputDir);
+        cmd.resumeCommandRunHandle = outputDir;
+        cmd.checkpoint.resume = true;
+        cmd.checkpoint.location = colocatedCheckpoint(outputDir).toString();
+        cmd.liveness.maxDuration = "250ms";
+        cmd.fetcherOverride = mockObjects(400, 400L);
+
+        String stderr = runCapturingStderr(cmd::call, ExitCodes.TIMEBOX);
+
+        assertThat(block(stderr).lines().findFirst().orElseThrow().strip())
+                .startsWith("INCOMPLETE (")
+                .endsWith("— resume: swath resume " + outputDir);
     }
 
     /**
@@ -170,15 +258,64 @@ final class RunSummaryBlockTest {
     }
 
     private static String runCapturingStderr(ListCommand cmd) throws Exception {
+        return runCapturingStderr(cmd::call, ExitCodes.SUCCESS);
+    }
+
+    private static String runCapturingStderr(Callable<Integer> run, int expectedExit) throws Exception {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         PrintStream original = System.err;
         System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
         try {
-            assertThat(cmd.call()).isEqualTo(ExitCodes.SUCCESS);
+            assertThat(run.call()).isEqualTo(expectedExit);
         } finally {
             System.setErr(original);
         }
         return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * A directory dataset with listing work still outstanding and its checkpoint co-located under
+     * the run handle: the state {@code swath resume <dir>} exists to pick up.
+     */
+    private static Path seedResumableDataset(Path parent) throws Exception {
+        Path outputDir = parent.resolve("dataset");
+        Path db = colocatedCheckpoint(outputDir);
+        Files.createDirectories(db.getParent());
+        RunKey key = new RunKey("s3", null, BUCKET, PREFIX.getBytes(StandardCharsets.UTF_8),
+                ArgsHashFields.forListing("s3", "", BUCKET, PREFIX).hash(),
+                "auto", ListingMode.OBJECTS, new ListCommand().filters.spec(),
+                OutputFormat.PARQUET.name(),
+                new SoftRestoreContext(true, null, "us-east-1", false, false,
+                        outputDir.toString(), false, null, null),
+                false);
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(key, false, false);
+            long node = store.insertNode(NodeSpec.rootRange(run.id()));
+            store.commitPage(new PageCommit(node, "k1".getBytes(StandardCharsets.UTF_8), false));
+        }
+        return outputDir;
+    }
+
+    private static Path colocatedCheckpoint(Path outputDir) {
+        return CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+    }
+
+    /** A mock keyspace under the seeded prefix, optionally slowed to outlast a timebox. */
+    private static MockPageFetcher mockObjects(int count, long perPageDelayMs) {
+        List<byte[]> keys = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            keys.add(String.format(PREFIX + "key-%05d", i).getBytes(StandardCharsets.UTF_8));
+        }
+        MockPageFetcher.Builder fetcher = MockPageFetcher.builder().keys(keys).maxKeysCap(20);
+        if (perPageDelayMs > 0) {
+            fetcher.interceptor((req, idx, page) -> {
+                if (idx >= 1) {
+                    TimeUnit.MILLISECONDS.sleep(perPageDelayMs);
+                }
+                return page;
+            });
+        }
+        return fetcher.build();
     }
 
     private static ListCommand listCommand(Path out) {

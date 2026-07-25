@@ -96,7 +96,11 @@ class Int12BrokenPipeProcessIT {
                 .as("no stack trace / unexpected-error on a broken pipe")
                 .doesNotContain("\tat ")
                 .doesNotContain("Exception")
-                .doesNotContain("unexpected error");
+                .doesNotContain("unexpected error")
+                // The end-to-end pin on wasBrokenPipe() -> completionStatus -> summary suppressed:
+                // `swath list | head` is the most ordinary interactive workflow there is and must
+                // never be dressed up as an incident.
+                .doesNotContain("INCOMPLETE");
     }
 
     private static String quote(String s) {

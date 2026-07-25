@@ -359,8 +359,9 @@ final class OutputOptions {
      */
     @Resume(ResumeClass.FREE)
     @Option(names = "--stats", negatable = true,
-            description = "Print the end-of-run summary to stderr (default: on for runs that "
-                    + "take over a second, produce output, or stop early).")
+            description = "Print the end-of-run summary to stderr (default: on for runs over "
+                    + "1.5s, runs that produce output, and runs that stop short of finishing; "
+                    + "a closed downstream pipe stays silent).")
     Boolean stats;
 
     boolean noSummaryJson;

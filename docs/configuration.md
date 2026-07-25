@@ -55,6 +55,7 @@ it honors the same environment variables any AWS SDK v2 client does.
 | `--part-rotation-max-rows` | `2000000` |
 | `--sort` / `--no-sort` | `--no-sort` |
 | `--report` | `<output>/_swath_summary.json` for every non-stdout Parquet destination (including FILE-kind `*.parquet`), else none |
+| `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops short of finishing, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
 
 ### Filters
 
@@ -129,7 +130,6 @@ both as sensitive run artifacts.
 | --- | --- |
 | `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
 | `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
-| `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops early, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
 | `-h, --help` | — (prints help and exits) |
 | `-V, --version` | — (prints version and exits) |
 

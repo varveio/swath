@@ -92,6 +92,34 @@ final class SummaryRendererTest {
         assertThat(SummaryRenderer.shouldRender(AUTO, summary(LONG), BROKEN_PIPE)).isFalse();
     }
 
+    @Test
+    void statsBypassesEvenTheBrokenPipeGate() {
+        SummaryRenderer.Preferences forced =
+                new SummaryRenderer.Preferences(true, false, false, true, null);
+        assertThat(SummaryRenderer.shouldRender(forced, summary(LONG), BROKEN_PIPE))
+                .as("an explicit --stats bypasses EVERY gate, the broken-pipe one included: the "
+                        + "flag check must stay ahead of all of them")
+                .isTrue();
+    }
+
+    @Test
+    void theAutoThresholdIsExclusiveSoAnExactlyOnTheBoundaryRunStaysSilent() {
+        assertThat(SummaryRenderer.shouldRender(AUTO, summary(SummaryRenderer.AUTO_MIN_ELAPSED), COMPLETED))
+                .isFalse();
+        assertThat(SummaryRenderer.shouldRender(
+                AUTO, summary(SummaryRenderer.AUTO_MIN_ELAPSED.plusMillis(1)), COMPLETED)).isTrue();
+    }
+
+    @Test
+    void aDurableDestinationThatProducedNothingDoesNotEarnASummary() {
+        SummaryRenderer.Preferences toDisk =
+                new SummaryRenderer.Preferences(null, false, true, true, null);
+        assertThat(SummaryRenderer.shouldRender(toDisk, summary(SHORT), COMPLETED))
+                .as("the reason to report is output that exists, not a destination that could "
+                        + "have held some")
+                .isFalse();
+    }
+
     // ---- content -----------------------------------------------------
 
     @Test
@@ -121,7 +149,10 @@ final class SummaryRendererTest {
 
     @Test
     void costStatesTheRateItAssumed() {
-        List<String> lines = render(AUTO, LONG, metrics -> metrics.recordEntriesEmitted(1_000L), COMPLETED);
+        List<String> lines = render(AUTO, LONG, metrics -> {
+            metrics.recordEntriesEmitted(1_000L);
+            metrics.recordApiCall();
+        }, COMPLETED);
 
         assertThat(lines).anyMatch(line -> line.contains("(est. @ $0.005/1k LIST)"));
     }
@@ -131,7 +162,10 @@ final class SummaryRendererTest {
         SummaryRenderer.Preferences selfHosted =
                 new SummaryRenderer.Preferences(null, false, false, false, null);
 
-        List<String> lines = render(selfHosted, LONG, metrics -> metrics.recordEntriesEmitted(1_000L), COMPLETED);
+        List<String> lines = render(selfHosted, LONG, metrics -> {
+            metrics.recordEntriesEmitted(1_000L);
+            metrics.recordApiCall();
+        }, COMPLETED);
 
         assertThat(lines).as("--endpoint-url means the provider's LIST pricing is unknown; any $ "
                         + "would be a guess").noneMatch(line -> line.contains("$"));
@@ -166,17 +200,47 @@ final class SummaryRendererTest {
     }
 
     @Test
-    void printedBlockIsIndentedPlainTextAndGoesNowhereNearStdout() {
+    void aCrashIsMarkedButNeverInvitesAResumeThatWouldFailAgain() {
+        SummaryRenderer.Preferences resumable =
+                new SummaryRenderer.Preferences(null, false, true, true, "./out");
+
+        List<String> lines = render(resumable, LONG, metrics -> { }, new TerminalStatus(StopReason.CRASH));
+
+        assertThat(lines.getFirst())
+                .as("a crash is deterministic: a resume would hit the same failure again")
+                .isEqualTo("INCOMPLETE (crash)");
+    }
+
+    @Test
+    void aRunThatIssuedNoListCallsShowsNoCostLineAtAll() {
+        List<String> lines = render(AUTO, LONG, metrics -> { }, COMPLETED);
+
+        assertThat(lines).as("a merge-only resume fetches nothing, and an exact zero rendered as "
+                        + "an estimate is noise")
+                .noneMatch(line -> line.contains("$"));
+    }
+
+    @Test
+    void printedBlockIsIndentedPlainTextAndNothingReachesStdout() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.markRunStarted();
         metrics.recordEntriesEmitted(10L);
 
-        new SummaryRenderer(new PrintStream(captured, true, StandardCharsets.UTF_8), AUTO)
-                .accept(metrics.summary(LONG, WORK_STEALING, 0L, 0L), metrics.diagnostics(LONG), COMPLETED);
+        PrintStream originalOut = System.out;
+        System.setOut(new PrintStream(stdout, true, StandardCharsets.UTF_8));
+        try {
+            new SummaryRenderer(new PrintStream(captured, true, StandardCharsets.UTF_8), () -> AUTO)
+                    .accept(metrics.summary(LONG, WORK_STEALING, 0L, 0L), metrics.diagnostics(LONG), COMPLETED);
+        } finally {
+            System.setOut(originalOut);
+        }
 
-        String text = captured.toString(StandardCharsets.UTF_8);
-        assertThat(text).startsWith("  10 objects in 30.0s").doesNotContain("[");
+        assertThat(captured.toString(StandardCharsets.UTF_8))
+                .startsWith("  10 objects in 30.0s").doesNotContain("[");
+        assertThat(stdout.toString(StandardCharsets.UTF_8))
+                .as("stdout is data, always: the block never goes near it").isEmpty();
     }
 
     private static List<String> render(SummaryRenderer.Preferences prefs, Duration duration,
@@ -184,8 +248,8 @@ final class SummaryRendererTest {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.markRunStarted();
         arrange.accept(metrics);
-        return new SummaryRenderer(System.err, prefs)
-                .lines(metrics.summary(duration, WORK_STEALING, 0L, 0L), metrics.diagnostics(duration), status);
+        return SummaryRenderer.lines(prefs, metrics.summary(duration, WORK_STEALING, 0L, 0L),
+                metrics.diagnostics(duration), status);
     }
 
     private static RunSummary summary(Duration duration) {

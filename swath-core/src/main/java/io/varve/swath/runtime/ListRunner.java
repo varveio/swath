@@ -746,9 +746,14 @@ public final class ListRunner {
         ctx.metrics().setPrefix(spec.prefix());
         ctx.metrics().setPhase(Phase.LISTING);
         ctx.metrics().recordStealReason("SORT", "merge_redone");
-        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(),
-                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L));
+        Supplier<RunSummary> snapshot =
+                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
+        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(), snapshot);
         log.info("list_sort_merge_resume run_id={} (re-running merge from staging, zero LIST fetches)", runId);
+        // The sink is contracted to observe every run exactly once, the unwound ones included: a
+        // merge that throws still writes a CRASH partial to the sidecar, and the operator-facing
+        // block must not be the one surface that goes silent on it.
+        boolean summaryEmitted = false;
         try {
             store.setSortPhase(runId, SortPhase.MERGING);
             ctx.metrics().setPhase(Phase.MERGING);
@@ -777,11 +782,19 @@ public final class ListRunner {
             ctx.metrics().recordOutput("parquet", "written",
                     result.finalFiles().size(), sortedOutputBytes(result.finalFiles()));
             logSummary(summary);
-            ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
-                    completionStatus(ctx, null));
+            summaryEmitted = true;
+            emitQuietly(() -> ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
+                    completionStatus(ctx, null)));
             finish(jsonWriter, summary);
             return new ListingStatistics(result.totalRows(), 0L, 0L, 0L, summary.apiCalls(), elapsed);
         } finally {
+            if (!summaryEmitted) {
+                emitQuietly(() -> {
+                    Duration unwound = elapsedSince(startedNs);
+                    ctx.metrics().emitSummary(snapshot.get(), ctx.metrics().diagnostics(unwound),
+                            terminalStatus(ctx, null));
+                });
+            }
             closeQuietly(jsonWriter);
         }
     }
@@ -1190,20 +1203,9 @@ public final class ListRunner {
     }
 
     private static JsonRunSummaryWriter.TerminalStatus terminalStatus(RunContext ctx, OutputStage outputStage) {
-        StopReason attributed = ctx.cancellation().stopReason();
-        if (attributed == StopReason.MAX_DURATION && ctx.metrics().objectsEmitted() == 0L) {
-            // The whole timebox burned with zero objects emitted (a pathological/slow
-            // bucket, or a node that only ever attempt-times-out/gets throttled) — distinct from
-            // a legit large timeboxed partial that actually made headway. Exit code is unaffected:
-            // ListCommand#timeboxExitOrRethrow keys off the CancellationToken's own MAX_DURATION
-            // attribution, not this refined summary value.
-            return new JsonRunSummaryWriter.TerminalStatus(StopReason.MAX_DURATION_NO_PROGRESS);
-        }
-        if (attributed == StopReason.STUCK) {
-            return stuckTerminalStatus(ctx);
-        }
+        JsonRunSummaryWriter.TerminalStatus attributed = attributedStatus(ctx);
         if (attributed != null) {
-            return new JsonRunSummaryWriter.TerminalStatus(attributed);   // max_duration / signal
+            return attributed;
         }
         if (outputStage != null && outputStage.wasBrokenPipe()) {
             return new JsonRunSummaryWriter.TerminalStatus(null);   // clean broken pipe — not a crash/signal
@@ -1221,6 +1223,33 @@ public final class ListRunner {
         return new JsonRunSummaryWriter.TerminalStatus(
                 StopReason.CRASH, null, fatalErrorClass,
                 fatalErrorClass == null ? null : CLASSIFIED_FATAL_EXIT_CODE);
+    }
+
+    /**
+     * The attributed stop reason, refined, or {@code null} when nothing ever cancelled this run.
+     * Both terminal classifiers consult this FIRST and a broken pipe second, so the two can never
+     * disagree about a run that suffered both: a downstream close during an already-cancelling run
+     * is a consequence of the cancel, and reporting it as the neutral broken-pipe stop would let
+     * the summary block claim a clean early exit while the report recorded {@code
+     * stop_reason=signal}.
+     */
+    private static JsonRunSummaryWriter.TerminalStatus attributedStatus(RunContext ctx) {
+        StopReason attributed = ctx.cancellation().stopReason();
+        if (attributed == null) {
+            return null;
+        }
+        if (attributed == StopReason.MAX_DURATION && ctx.metrics().objectsEmitted() == 0L) {
+            // The whole timebox burned with zero objects emitted (a pathological/slow
+            // bucket, or a node that only ever attempt-times-out/gets throttled) — distinct from
+            // a legit large timeboxed partial that actually made headway. Exit code is unaffected:
+            // ListCommand#timeboxExitOrRethrow keys off the CancellationToken's own MAX_DURATION
+            // attribution, not this refined summary value.
+            return new JsonRunSummaryWriter.TerminalStatus(StopReason.MAX_DURATION_NO_PROGRESS);
+        }
+        if (attributed == StopReason.STUCK) {
+            return stuckTerminalStatus(ctx);
+        }
+        return new JsonRunSummaryWriter.TerminalStatus(attributed);   // max_duration / signal
     }
 
     /**
@@ -1264,35 +1293,52 @@ public final class ListRunner {
      * Terminal-summary emit for a run that unwound before its epilogue (a cancel or a fatal): it
      * mirrors the JSON sidecar's {@code close()}-time partial record — same snapshot, same {@link
      * #terminalStatus} attribution — so the sink observes exactly the runs the report does, not
-     * only the ones that finished. Never throws: a sink failure must not mask the exception that
-     * ended the run.
+     * only the ones that finished.
+     *
+     * <p>It takes its own elapsed reading and its own snapshot, and the sidecar's {@code close()}
+     * takes another a moment later, so on an unwound run the block's {@code duration_ms} can differ
+     * from the report's by the cost of rendering. Everything else agrees: the counters are quiesced
+     * by the time either reading is taken.
      */
     private static <E extends Exception> void emitUnwoundSummary(RunContext ctx, LifecyclePlan<E> plan,
                                                                   long startedNs) {
-        try {
+        emitQuietly(() -> {
             Duration elapsed = elapsedSince(startedNs);
             ctx.metrics().emitSummary(plan.snapshotSummary.apply(elapsed),
                     ctx.metrics().diagnostics(elapsed), terminalStatus(ctx, plan.outputStage));
+        });
+    }
+
+    /**
+     * Run a terminal-summary emit so it can never end the run: the sink is presentation, and a
+     * rendering fault must cost the operator the block, not turn a successful run into a failure
+     * (nor a different exit code) on its way out.
+     */
+    private static void emitQuietly(Runnable emit) {
+        try {
+            emit.run();
         } catch (RuntimeException e) {
             log.debug("list_run_summary_emit_failed message={}", e.getMessage());
         }
     }
 
     /**
-     * The terminal disposition of a run that reached its epilogue: a broken pipe first (a
-     * downstream close is a clean stop, never a failure — {@link OutputStage#wasBrokenPipe()},
-     * carried as the {@code null} reason {@link JsonRunSummaryWriter.TerminalStatus} the sidecar
-     * uses), then any attributed cancel reason, else {@link StopReason#COMPLETED}. The unwound
-     * counterpart is {@link #terminalStatus(RunContext, OutputStage)}, which classifies a run that
-     * never got here.
+     * The terminal disposition of a run that reached its epilogue: any attributed cancel reason
+     * first, then a broken pipe (a downstream close is a clean stop, never a failure — {@link
+     * OutputStage#wasBrokenPipe()}, carried as the {@code null} reason {@link
+     * JsonRunSummaryWriter.TerminalStatus} the sidecar uses), else {@link StopReason#COMPLETED}.
+     * The precedence is {@link #attributedStatus}', shared with {@link #terminalStatus(RunContext,
+     * OutputStage)} — the unwound counterpart, which classifies a run that never got here.
      */
     private static JsonRunSummaryWriter.TerminalStatus completionStatus(RunContext ctx, OutputStage outputStage) {
+        JsonRunSummaryWriter.TerminalStatus attributed = attributedStatus(ctx);
+        if (attributed != null) {
+            return attributed;
+        }
         if (outputStage != null && outputStage.wasBrokenPipe()) {
             return new JsonRunSummaryWriter.TerminalStatus(null);
         }
-        StopReason attributed = ctx.cancellation().stopReason();
-        return new JsonRunSummaryWriter.TerminalStatus(
-                attributed != null ? attributed : StopReason.COMPLETED);
+        return new JsonRunSummaryWriter.TerminalStatus(StopReason.COMPLETED);
     }
 
     private static void logSummary(RunSummary summary) {
@@ -1454,8 +1500,12 @@ public final class ListRunner {
             RunMetrics.RunDiagnostics diagnostics = ctx.metrics().diagnostics(elapsed);
             logSummary(summary);
             logDiagnostics(diagnostics);
-            ctx.metrics().emitSummary(summary, diagnostics, completionStatus(ctx, plan.outputStage));
+            // Claimed BEFORE the emit, and the emit cannot throw: a sink that failed here would
+            // otherwise both escape this method (failing a run that succeeded) and be re-emitted
+            // by the finally below, attributed CRASH.
             summaryEmitted = true;
+            emitQuietly(() -> ctx.metrics().emitSummary(
+                    summary, diagnostics, completionStatus(ctx, plan.outputStage)));
             if (plan.outputStage == null) {
                 finish(jsonWriter, summary);
             } else {

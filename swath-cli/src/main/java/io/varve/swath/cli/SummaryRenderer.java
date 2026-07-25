@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,7 +54,11 @@ final class SummaryRenderer implements RunSummarySink {
     private static final String SEP = " · ";
 
     /**
-     * What the CLI resolved before the run started, and the renderer cannot work out for itself.
+     * What the CLI resolved, and the renderer cannot work out for itself. Read through a supplier
+     * at emit time rather than captured when the sink is installed: a {@code swath resume <dir>}
+     * only learns its destination — and therefore whether it is durable and what it is resumable
+     * from — after the checkpoint's run context is restored, which happens long after the sink is
+     * in place.
      *
      * @param stats the {@code --stats}/{@code --no-stats} flag: {@code null} = auto (§ {@link
      *         #shouldRender}), {@code TRUE} = always (bypassing every gate), {@code FALSE} = never
@@ -70,21 +75,22 @@ final class SummaryRenderer implements RunSummarySink {
     }
 
     private final PrintStream err;
-    private final Preferences prefs;
+    private final Supplier<Preferences> preferences;
 
-    SummaryRenderer(PrintStream err, Preferences prefs) {
+    SummaryRenderer(PrintStream err, Supplier<Preferences> preferences) {
         this.err = err;
-        this.prefs = prefs;
+        this.preferences = preferences;
     }
 
     @Override
     public void accept(RunSummary summary, RunMetrics.RunDiagnostics diagnostics,
             JsonRunSummaryWriter.TerminalStatus status) {
+        Preferences prefs = preferences.get();
         if (!shouldRender(prefs, summary, status)) {
             return;
         }
         try {
-            for (String line : lines(summary, diagnostics, status)) {
+            for (String line : lines(prefs, summary, diagnostics, status)) {
                 err.println(INDENT + line);
             }
             err.flush();
@@ -120,10 +126,10 @@ final class SummaryRenderer implements RunSummarySink {
     }
 
     /** The block's lines, without the indent — the shape the tests pin. */
-    List<String> lines(RunSummary summary, RunMetrics.RunDiagnostics diagnostics,
-            JsonRunSummaryWriter.TerminalStatus status) {
+    static List<String> lines(Preferences prefs, RunSummary summary,
+            RunMetrics.RunDiagnostics diagnostics, JsonRunSummaryWriter.TerminalStatus status) {
         List<String> lines = new ArrayList<>();
-        String disposition = disposition(status);
+        String disposition = disposition(prefs, status);
         if (disposition != null) {
             lines.add(disposition);
         }
@@ -142,7 +148,9 @@ final class SummaryRenderer implements RunSummarySink {
             lines.add("throttled " + count(throttled) + SEP + "retried " + count(retried)
                     + SEP + "errors " + count(summary.errors()));
         }
-        if (prefs.costKnown()) {
+        // No LIST call, no bill: a merge-only resume republishes staged output without fetching a
+        // single page, and "~$0.000" would be noise dressed up as an estimate.
+        if (prefs.costKnown() && summary.apiCalls() > 0) {
             lines.add(cost(summary.costUsd()));
         }
         String output = output(summary);
@@ -156,8 +164,14 @@ final class SummaryRenderer implements RunSummarySink {
      * The leading disposition line: the {@code INCOMPLETE} marker (with the reason the JSON report
      * records, and a resume invitation when this run left something to resume) for a run that
      * stopped short, neutral wording for a broken pipe, and nothing at all for a clean run.
+     *
+     * <p>A crash gets the marker but never the invitation. A signal, a timebox and a stuck run are
+     * all interruptions of a run that was otherwise going fine, so resuming picks up where it left
+     * off; a crash is a deterministic in-process failure (a denied bucket, a corrupt segment) that
+     * a resume will simply hit again, and inviting one would be advice that wastes the operator's
+     * time.
      */
-    private String disposition(JsonRunSummaryWriter.TerminalStatus status) {
+    private static String disposition(Preferences prefs, JsonRunSummaryWriter.TerminalStatus status) {
         if (isBrokenPipe(status)) {
             return "stopped early — downstream closed";
         }
@@ -165,7 +179,7 @@ final class SummaryRenderer implements RunSummarySink {
             return null;
         }
         String marker = "INCOMPLETE (" + status.reason().wireName() + ")";
-        return prefs.resumeDestination() == null
+        return prefs.resumeDestination() == null || status.reason() == StopReason.CRASH
                 ? marker
                 : marker + " — resume: swath resume " + prefs.resumeDestination();
     }
@@ -191,7 +205,7 @@ final class SummaryRenderer implements RunSummarySink {
      * figure would over-claim (and a region→rate table in an OSS repo would silently go stale).
      */
     private static String cost(double usd) {
-        String amount = usd > 0.0 && usd < 0.001
+        String amount = usd < 0.001
                 ? "<$0.001"
                 : String.format(Locale.ROOT, "~$%.3f", usd);
         return amount + " (est. @ $" + RunMetrics.LIST_COST_PER_1K_USD + "/1k LIST)";
