@@ -129,6 +129,14 @@ so it left every counter untouched — *the timeout destroyed the very evidence 
 the next probe*, and the thief re-probed regions that had already proved they could not answer.
 `Thief#probeStructure` is the chokepoint that closes it.
 
+**What resets the timeout streak, precisely.** Only a probe that comes back with a genuine structure
+answer resets it — `probeStructure`'s success path unconditionally calls
+`victim.resetTimedOutStructureProbes()`. A `SLOWDOWN`/5xx or a `NETWORK` fault does neither: it is
+store backpressure or a client-side blip, not evidence about this keyspace's shape, so it leaves an
+existing streak exactly where it was — neither incremented (only `Kind.ATTEMPT_TIMEOUT` counts) nor
+cleared (reset is SUCCESS-only). See `StructureProbeTimeoutSuppressionTest`, which pins this from a
+pre-existing streak so "left untouched" cannot be confused with "reset".
+
 **Don't make the budgets adaptive.** Deriving a budget from an observed latency EWMA/percentile looks
 attractive but is the wrong shape here. The structure-probe distribution is *bimodal*, not drifting
 (p50 43 ms against p90 10.2 s): a budget sized off the healthy mode shrinks and still times out on

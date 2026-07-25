@@ -119,8 +119,10 @@ carries four plain per-range counters — bumped
 alongside the existing GLOBAL `swath.steal_reason` counters at the same decision points (never a new
 hot-path check, never a per-range map): `cursor_passed_pivot` (a thief lost the race — the drainer's
 cursor had already passed the pivot), `no_pivot` (this range hit a genuine dead end — no room left to
-split), `structure_suppressed` (this victim's zero-fan-out `delimiter=/` structure probes were
-suppressed — see `STRUCTURE.suppressed_zero_fanout`, §5), `demand_gated` (this range's OWN proactive
+split), `structure_suppressed` (this victim's `delimiter=/` structure probes were suppressed, either
+because it proved zero-fan-out or because its probes kept timing out — see
+`STRUCTURE.suppressed_zero_fanout` / `STRUCTURE.suppressed_probe_timeout`, §5; this one per-range
+tally covers both, though the global counters distinguish them), `demand_gated` (this range's OWN proactive
 owner-split was suppressed by the saturation/demand gate — see `OWNER_SPLIT.demand_gated`, §5).
 Always present as an array (possibly empty — an empty array is itself informative: nothing is left
 in flight, e.g. a genuinely COMPLETED run has already drained every range by the time its terminal
