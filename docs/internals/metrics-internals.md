@@ -16,6 +16,17 @@ The §3 forensics fields, §5, §5a, §7 trace format, and §8 below are here.
 
 ## 3. JSON run-summary — post-hoc forensics fields
 
+**Every distribution statistic is run-scoped.** `max` and all published percentiles
+(`probe_latency[]`, `shape.regime.api_latency_p*`, and every `swath.*` timer's `max_ms`) cover the
+whole run, exactly like the `count`/`total_ms` beside them. This is deliberate and non-default:
+Micrometer's stock `DistributionStatisticConfig` is a *rolling* window (`expiry=2m`,
+`bufferLength=3`), under which `max`/percentiles decay while `count`/`totalTime` stay cumulative — so
+a single summary row would mix two time bases, and any run longer than two minutes would report
+percentiles describing only its final window. `RunMetrics#DISTRIBUTION_WINDOW` pins one
+non-rotating bucket instead; `RunMetricsDistributionWindowTest` is the guard. If you add a `Timer` or
+`DistributionSummary` to `RunMetrics`, build it through `runScopedTimer`/`runScopedSummary` or it
+will silently reintroduce the rolling window.
+
 These are the deep, post-hoc forensics fields of the JSON run-summary artifact (the artifact itself,
 its write/atomicity semantics, and the `stop_source`/`error_class` terminal facts are in
 [`docs/metrics-and-observability.md`](../metrics-and-observability.md) §3). Each reconstructs some
