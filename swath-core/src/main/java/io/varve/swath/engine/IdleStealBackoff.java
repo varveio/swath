@@ -24,11 +24,15 @@ import io.varve.swath.observability.RunMetrics;
  * <p>Consecutive non-productive outcomes exponentially space the next attempt for the whole fleet,
  * while a created child, claimed work, or a non-empty page commit resets that spacing immediately.
  * A worker denied the slot parks on the seconds-scale {@code attemptParkNanos} backstop rather than
- * the ~5 ms base — the slot's release signals the ledger, so the backstop is only ever the fallback
- * for a lost signal, and polling it at the base interval is pure denial churn. Enqueue/decrement
- * signals still wake parked workers, so this never delays quiescence detection.
+ * the ~5 ms base: the release broadcasts on the ledger, so the backstop is what bounds the wait for
+ * an attempt that outlives it (or, rarely, for a signal that found no one parked yet) — not the
+ * mechanism that ends an ordinary wait. Polling at the base interval instead is pure denial churn.
+ * Enqueue/decrement signals still wake parked workers, so this never delays quiescence detection.
  */
 final class IdleStealBackoff {
+    /** {@code recordStealReason} category for the two attempt-slot denial regimes (§5). */
+    private static final String DENIAL_CATEGORY = "IDLE_SLOT";
+
     private final long baseNanos;
     private final long capNanos;
     private final long attemptParkNanos;
@@ -45,12 +49,34 @@ final class IdleStealBackoff {
     }
 
     synchronized boolean tryAcquireAttemptSlot() {
-        long now = System.nanoTime();
-        if (attemptInFlight || now < nextAttemptNanos) {
+        if (attemptInFlight) {
+            deny("in_flight");
+            return false;
+        }
+        if (System.nanoTime() < nextAttemptNanos) {
+            deny("paced");
             return false;
         }
         attemptInFlight = true;
         return true;
+    }
+
+    /**
+     * A denial and <b>which of the two regimes</b> caused it (§5 engagement idiom): {@code
+     * in_flight} — another worker owns the slot, so this one waits for the release signal on the
+     * seconds-scale backstop; {@code paced} — the slot is free but a non-productive streak has the
+     * fleet in exponential backoff. The aggregate {@code slot_denied} counter cannot separate them,
+     * and they call for opposite responses (wait vs. nothing to wait for), so post-hoc analysis
+     * needs the split to tell "the bound is holding" from "the fleet is backed off".
+     */
+    private void deny(String reason) {
+        metrics.recordIdleBackoffSlotDenied();
+        metrics.recordStealReason(DENIAL_CATEGORY, reason);
+    }
+
+    /** Whether the sole attempt slot is currently owned — the CONC guards' observation point. */
+    synchronized boolean attemptInFlight() {
+        return attemptInFlight;
     }
 
     /**

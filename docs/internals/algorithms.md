@@ -384,7 +384,9 @@ steal():
   raised steal success from ~4% to ~25% and cut API calls ~35%.
 - **A worker denied the slot waits for its release, it does not poll for it.**
   The park backstop while an attempt is in flight is seconds-scale, not the ~5 ms
-  pacing base, because the release itself broadcasts on the ledger. The release
+  pacing base, because the release itself broadcasts on the ledger. The backstop
+  bounds the wait for an attempt that *outlives* it — it is not the mechanism that
+  ends an ordinary wait, and not merely a lost-signal fallback. The release
   must be signalled *outside* the backoff monitor: `Worklist.park` holds its gate
   across the `parkNanos()` call, so gate→backoff is the only safe lock order.
   That same gate hold is what makes the signal unlosable — a denied worker either

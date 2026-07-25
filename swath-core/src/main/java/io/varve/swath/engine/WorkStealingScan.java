@@ -83,10 +83,10 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
     private static final long IDLE_STEAL_BACKOFF_CAP_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
     /**
      * Park backstop for a worker denied the sole in-flight steal slot. Sized to the seconds-scale a
-     * real probe can take, not to {@link #PARK_NANOS}: the slot's release signals the ledger, so
-     * this only ever covers a lost signal, while polling at the 5 ms base produced ~11k denials/sec
-     * against a multi-second probe. Quiescence is unaffected — enqueue/decrement/progress all
-     * broadcast.
+     * real probe can take, not to {@link #PARK_NANOS}: the slot's release broadcasts on the ledger,
+     * so this bounds the wait for an attempt that outlives it rather than ending the ordinary wait,
+     * while polling at the 5 ms base produced ~11k denials/sec against a multi-second probe.
+     * Quiescence is unaffected — enqueue/decrement/progress all broadcast.
      */
     private static final long IDLE_STEAL_ATTEMPT_PARK_NANOS = TimeUnit.SECONDS.toNanos(1);
 
@@ -538,11 +538,10 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                         idleStealBackoff.releaseSlot();
                         worklist.signalAll();
                     }
-                } else {
-                    // The backoff guard (not the AIMD gauge) denied this worker an attempt
-                    // slot — distinct from a slow/throttled store (§5).
-                    metrics.recordIdleBackoffSlotDenied();
                 }
+                // A denial (the backoff guard, not the AIMD gauge — distinct from a slow/throttled
+                // store, §5) is counted and attributed inside tryAcquireAttemptSlot, which is the
+                // only place that knows WHICH of the two regimes refused: in_flight vs paced.
             }
             // Nothing claimable right now: park until an enqueue/decrement signals (or the
             // poll backstop fires), then re-evaluate. The ledger re-checks under its lock to avoid a
@@ -552,6 +551,15 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
             }
             worklist.park(idleStealBackoff::parkNanos, metrics);
         }
+    }
+
+    /**
+     * Whether the sole fleet-wide steal-attempt slot is currently owned. The observation point for
+     * the CONC guard on the release: after every worker has exited, a slot still held means some
+     * path out of the acquired region above skipped its {@code finally}.
+     */
+    boolean stealAttemptInFlight() {
+        return idleStealBackoff.attemptInFlight();
     }
 
     /**

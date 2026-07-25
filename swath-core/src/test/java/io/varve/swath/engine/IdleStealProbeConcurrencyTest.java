@@ -6,6 +6,7 @@
 package io.varve.swath.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.checkpoint.Node;
 import io.varve.swath.checkpoint.NodeSpec;
@@ -45,9 +46,11 @@ import org.junit.jupiter.api.io.TempDir;
  * continuously — each commit is a {@code reset()} from a worker that does not own the slot — while
  * probes are held open long enough that any handover shows up as two probes in flight at once.
  *
- * <p>{@code deep}: it is latency-injecting (probes sleep to create the overlap window) and races
- * real worker threads, so it is schedule-sensitive by construction. Its contract line is pinned
- * per-commit by the deterministic {@link IdleStealSlotOwnershipTest} (TESTING.md § tag convention).
+ * <p>Only the overlap method is {@code deep} — it is latency-injecting (probes sleep to open the
+ * overlap window) and races real worker threads, so it is schedule-sensitive by construction; its
+ * contract line is pinned per-commit by the deterministic {@link IdleStealSlotOwnershipTest}
+ * (TESTING.md § tag convention). The release-on-throw method injects no latency and aborts at the
+ * first probe, so it stays per-commit.
  */
 final class IdleStealProbeConcurrencyTest {
 
@@ -124,5 +127,62 @@ final class IdleStealProbeConcurrencyTest {
                 .as("at most one speculative steal attempt in flight fleet-wide (%d probes seen)",
                         totalProbes.get())
                 .isEqualTo(1);
+    }
+
+    /**
+     * The release is unconditional. An <b>unchecked</b> throw from inside the acquired region —
+     * modelled here at the probe fetch, but equally reachable from the metrics, logging,
+     * {@code eligibleVictims()} or the child enqueue that share that region — must still hand the
+     * slot back, or stealing is dead for the rest of the run.
+     *
+     * <p>Fails against a release wired only to the productive {@code CHILD_CREATED} path (the shape
+     * the prototype for #3 had): there the throw skips the release entirely and the slot stays
+     * owned by a worker that no longer exists. Fast and deterministic, so it stays per-commit.
+     */
+    @Test
+    @Timeout(60)
+    void anUncheckedThrowInsideTheAcquiredRegionStillReleasesTheSlot(@TempDir Path dir) throws Exception {
+        List<byte[]> keyspace = new ArrayList<>();
+        for (int i = 0; i < KEYS; i++) {
+            keyspace.add(("k%05d".formatted(i)).getBytes(StandardCharsets.UTF_8));
+        }
+        AtomicInteger probesThrown = new AtomicInteger();
+        RunContext ctx = RunContext.create();
+        MockPageFetcher fetcher = MockPageFetcher.builder()
+                .keys(keyspace)
+                .interceptor((req, idx, page) -> {
+                    if (isProbe(req)) {
+                        probesThrown.incrementAndGet();
+                        throw new IllegalStateException("injected unchecked fault inside the steal attempt");
+                    }
+                    Thread.sleep(1);   // keep workers committing, so someone reaches the steal path
+                    return page;
+                })
+                .build();
+
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(dir.resolve("steal-throw.sqlite"))) {
+            RunMeta run = store.openRun(key(), false, false);
+            store.insertNode(NodeSpec.rootRange(run.id()));
+            List<Node> seeds = store.loadResumable(run.id(), false);
+
+            WorkStealingScan engine = new WorkStealingScan(
+                    EngineContexts.of(run.id(), new byte[0], ListingMode.OBJECTS, ctx.metrics()),
+                    fetcher, store, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY);
+
+            StringWriter out = new StringWriter();
+            OutputStage output = new OutputStage(new JsonlFormatter(out));
+            assertThatThrownBy(() -> new Pipeline<PageBatch>(1000).run(ctx, engine, output))
+                    .as("the injected fault is not swallowed — the scan aborts, as Scope requires")
+                    .isInstanceOf(Throwable.class);
+
+            assertThat(probesThrown.get())
+                    .as("the fixture must reach the steal path, or nothing was injected into the region")
+                    .isGreaterThan(0);
+            // Every worker has exited by the time run() returns; a slot still held means a path out
+            // of the acquired region skipped its finally.
+            assertThat(engine.stealAttemptInFlight())
+                    .as("the attempt slot is released even when the acquired region throws")
+                    .isFalse();
+        }
     }
 }

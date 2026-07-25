@@ -7,6 +7,7 @@ package io.varve.swath.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
 import java.util.concurrent.CountDownLatch;
@@ -40,11 +41,20 @@ final class IdleStealSlotOwnershipTest {
     private static final int WAITERS = 8;
 
     private static IdleStealBackoff backoff() {
+        return backoff(new SimpleMeterRegistry());
+    }
+
+    private static IdleStealBackoff backoff(MeterRegistry registry) {
         return new IdleStealBackoff(
                 TimeUnit.MILLISECONDS.toNanos(5),
                 TimeUnit.MILLISECONDS.toNanos(50),
                 TimeUnit.SECONDS.toNanos(1),
-                new RunMetrics(new SimpleMeterRegistry()));
+                new RunMetrics(registry));
+    }
+
+    private static double denials(MeterRegistry registry, String reason) {
+        return registry.get("swath.steal_reason").tag("outcome", "IDLE_SLOT").tag("reason", reason)
+                .counter().count();
     }
 
     /**
@@ -90,14 +100,17 @@ final class IdleStealSlotOwnershipTest {
             Thread.ofVirtual().start(() -> {
                 try {
                     start.await();
-                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                    while (System.nanoTime() < deadline) {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    // Every waiter attempts at least once; a loser stops as soon as it can see the
+                    // winner, so no thread burns a carrier spinning out the deadline. The deadline
+                    // is the fixture's own backstop, never the expected exit.
+                    do {
                         if (backoff.tryAcquireAttemptSlot()) {
                             acquired.incrementAndGet();
                             return;   // hold it, as a real attempt would
                         }
-                        Thread.onSpinWait();
-                    }
+                        Thread.sleep(1);   // sleep, not spin: unmounts the virtual thread
+                    } while (acquired.get() == 0 && System.nanoTime() < deadline);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } finally {
@@ -151,5 +164,30 @@ final class IdleStealSlotOwnershipTest {
 
         backoff.releaseSlot();
         assertThat(backoff.parkNanos()).as("released: back to the pacing base").isEqualTo(base);
+    }
+
+    /**
+     * The two denial regimes are separable post-hoc (§5). {@code slot_denied} alone cannot tell
+     * "the bound is holding, workers are waiting on a release" from "the fleet is in exponential
+     * backoff with the slot free" — opposite situations that call for opposite responses.
+     */
+    @Test
+    @Timeout(10)
+    void denialsAreAttributedToTheRegimeThatRefused() {
+        MeterRegistry registry = new SimpleMeterRegistry();
+        IdleStealBackoff backoff = backoff(registry);
+
+        assertThat(backoff.tryAcquireAttemptSlot()).isTrue();
+        assertThat(backoff.tryAcquireAttemptSlot()).as("refused: another worker owns the slot").isFalse();
+        assertThat(denials(registry, "in_flight")).isEqualTo(1.0);
+
+        backoff.recordNonProductive();   // arms the pacing window
+        backoff.releaseSlot();           // slot free, but the fleet is now paced
+        assertThat(backoff.tryAcquireAttemptSlot()).as("refused: exponential backoff, not ownership").isFalse();
+        assertThat(denials(registry, "paced")).isEqualTo(1.0);
+
+        assertThat(registry.get("swath.idle_backoff.slot_denied").counter().count())
+                .as("the aggregate still counts both")
+                .isEqualTo(2.0);
     }
 }
