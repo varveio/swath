@@ -60,6 +60,12 @@ repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
 - **`swath-core` is AWS-free and picocli-free** — the S3 backend and the CLI are separate modules,
   so a future `swath-gcs` build won't drag the AWS SDK. Guarded in CI
   (`grep import software.amazon` / `import picocli` over `swath-core/src` → 0).
+- **`swath-core` is terminal-free** — no JLine, no `isatty`, no notion of a tty at all. Core knows
+  *what* the run is doing and publishes it as a neutral `ProgressEvent` to a `ProgressSink`; whether
+  any of it reaches a terminal, in what form, and how wide that terminal is are decided entirely in
+  `swath-cli` (`ProgressDisplay`, `TerminalCapabilities`, `TerminalGeometry`, `StderrCoordinator`).
+  This is why the progress lifecycle carries no terminal booleans across the module edge: an
+  embedding application gets the events without inheriting swath's opinions about stderr.
 - **`api` vs `implementation`** is chosen per internal build edge: an edge is `api` when the downstream module's
   Java-visible surface exposes the upstream module's types (so sibling modules see them transitively),
   otherwise `implementation`. Concretely:
