@@ -21,16 +21,19 @@ The engine is one `WorkStealingScan` over `KeyBytes` ranges on JDK 25.
 Listing a large S3 bucket is hard for one reason: S3 only lets you page through a
 bucket sequentially. One `ListObjectsV2` call returns up to 1000 keys in sorted
 order plus a continuation token for the next 1000, and the only way to start
-somewhere other than the beginning is `start_after=<key>` — "give me the keys
+somewhere other than the beginning is `start_after=<token>` — "give me the keys
 after this one." There is no "give me keys 50,000–51,000" and no "how many keys
 are under this prefix." The key distribution inside a bucket is opaque until you
 list some of it.
 
-That makes parallel listing a guessing problem. To hand a second worker a useful
-starting point you need a real key from the middle of the bucket, and the only way
-to learn one is to list up to it. So swath does not divide a known range into equal
-pieces; it **guesses disjoint key ranges blind, starts workers on the guesses, and
-corrects them as real keys come back.**
+That makes parallel listing a guessing problem — though not because the split
+points are hard to name. `start_after` accepts any byte string, and it need not be
+a key that exists ([`algorithms.md`](algorithms.md) §1.2), so the
+keyspace can be carved wherever you like for free. What no request will tell you is
+how many keys sit between two split points; the only way to find out is to list
+them. So swath does not divide a known range into equal pieces; it **guesses
+disjoint key ranges blind, starts workers on the guesses, and corrects them as real
+keys come back.**
 
 The properties swath targets on supported general-purpose S3 buckets, with no
 preconfiguration:
