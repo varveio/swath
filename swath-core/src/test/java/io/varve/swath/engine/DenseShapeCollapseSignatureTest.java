@@ -54,9 +54,8 @@ import org.junit.jupiter.api.Timeout;
  *
  * <p>The comparison ({@link #off}/{@link #control1}/{@link #control2}) isolates what latency reveals:
  * <ul>
- *   <li><b>OFF + latency</b> — the collapse: low avg-in-flight / high serial_frac, {@code
- *       attempt_timeout_probe} > 0 — and byte-exact correct output (the collapse is a PERF failure,
- *       not a correctness one).</li>
+ *   <li><b>OFF + latency</b> — the collapse: low avg-in-flight / high serial_frac — and byte-exact
+ *       correct output (the collapse is a PERF failure, not a correctness one).</li>
  *   <li><b>CONTROL 1 — OFF, zero latency</b> — the blind spot: the SAME keyspace/toggle run with a
  *       zero-latency, fault-free harness produces ZERO probe timeouts and ZERO sheds. The whole
  *       spiral is invisible offline without a latency fixture. (Note: {@code cursor_passed_pivot}
@@ -78,9 +77,16 @@ import org.junit.jupiter.api.Timeout;
  * now issues exactly ONE probe, deterministically (1/1 across 8 runs). The volume thresholds this arm
  * used to assert (>15 timeouts, >5 cursor races) were therefore measuring the OLD steal policy, not
  * the collapse: they cannot be restored by re-tuning the fixture, because the pressure they counted is
- * precisely what the bound removed. What remains — and is asserted — is the collapse's structural
- * signature (a ~2-range seed, serial_frac at 1.0, avg-in-flight far below W) plus the latency-only
- * fact that a cold probe times out at all where the zero-latency control cannot.
+ * precisely what the bound removed.
+ *
+ * <p>Nor can a weaker "&gt;= 1 probe timeout" stand in: whether the tail issues ANY probe before it
+ * drains is machine-dependent — 1 on an 8-core dev box (8/8 runs), 0 on the 4-core CI runner. So this
+ * class no longer asserts on probe timeouts in either arm. What it asserts is what is deterministic:
+ * the collapse's structural signature (a ~2-range seed against 50 tiled, serial_frac at 1.0,
+ * avg-in-flight far below W, byte-exact output), and the latency-only discriminator in the SHED
+ * dimension — {@link #offStorm} fires a sustained-timeout shed that {@link #control1} never can,
+ * driven by the workers' own cold first-page reads, which need no steal slot and so are untouched by
+ * the bound.
  *
  * <p>The sustained-timeout SHED is proven in a dedicated cold-start-storm arm ({@link #offStorm}), because
  * it cannot coexist with the sustained-probe signature in ONE bounded run — see {@link
@@ -185,15 +191,11 @@ final class DenseShapeCollapseSignatureTest {
                 .as("OFF sustains only a low average in-flight (a couple of drainers, not W)")
                 .isLessThan(WORKERS / 4.0);
 
-        // Probe attempt-timeouts: a cold split-probe exceeds the scaled attempt-timeout budget and
-        // faults. The VOLUME is no longer a signature -- see the class javadoc: the fleet-wide
-        // one-attempt-in-flight bound serializes probes, so this collapsed tail issues exactly one
-        // in a 1.7s run (measured 1/1 across 8 runs) where the pre-bound engine issued dozens. What
-        // survives as the latency-only signal is that a cold probe times out AT ALL, which the
-        // zero-latency control (0, always) never does -- control1 asserts that delta.
-        assertThat(off.probeTimeouts)
-                .as("OFF: a cold split-probe exceeds the attempt-timeout budget (attempt_timeout_probe)")
-                .isGreaterThanOrEqualTo(1L);
+        // NO probe-timeout assertion -- see the class javadoc. Under the fleet-wide
+        // one-attempt-in-flight bound, whether this collapsed tail issues ANY steal probe before it
+        // drains is machine-dependent: 1 every time on an 8-core dev box, 0 on the 4-core CI runner.
+        // The latency-only discriminator the class exists to prove now lives in the shed dimension
+        // (offStorm vs control1), which fires by construction rather than by timing.
     }
 
     // ---- CONTROL 1: the zero-latency harness is blind to the spiral ---------------------------------
@@ -213,13 +215,11 @@ final class DenseShapeCollapseSignatureTest {
                 .as("zero latency: no timeout storm -> the sustained-timeout shed never fires")
                 .isZero();
 
-        // The blind spot as a delta: the fixture reveals probe-timeout pressure the zero-latency
-        // harness cannot. The delta is now 1 vs 0 rather than dozens vs 0 -- the strict steal bound
-        // caps the volume, not the visibility, and zero is exactly what the zero-latency harness can
-        // never rise above (a probe that costs nothing cannot exceed a budget).
-        assertThat(off.probeTimeouts)
-                .as("the latency fixture reveals probe-timeout pressure invisible to the zero-latency harness")
-                .isGreaterThan(control1.probeTimeouts);
+        // The blind spot as a delta, in the one dimension that survives the strict steal bound: the
+        // SHED. The probe-timeout delta is gone -- the OFF arm's probe count is machine-dependent
+        // (1 here, 0 on the 4-core CI runner), so it can no longer carry this claim. The storm arm's
+        // shed does, and by construction: its leading cold-start burst is the workers' OWN first-page
+        // reads, which need no steal slot and so are untouched by the bound.
         assertThat(offStorm.sheds)
                 .as("the latency fixture reveals shed storms invisible to the zero-latency harness")
                 .isGreaterThan(control1.sheds);
@@ -334,9 +334,11 @@ final class DenseShapeCollapseSignatureTest {
      *
      * <ul>
      *   <li><b>Sustained tail</b> (both modes): ~1-in-8 cold split-PROBE attempts ({@code maxKeys <= 1})
-     *       time out ({@code attempt_timeout_probe} >> 0), while the other ~7-in-8 cold probes SLOW-succeed
+     *       time out ({@code attempt_timeout_probe}), while the other ~7-in-8 cold probes SLOW-succeed
      *       so the owner's fast warm cursor races past the far-ahead pivot during the slow probe
-     *       ({@code cursor_passed_pivot}). Worker BULK pages ({@code maxKeys > 1}) are never faulted here —
+     *       ({@code cursor_passed_pivot}). Both counts are now incidental rather than asserted: the
+     *       strict steal bound means only a handful of probes — often none at all — are issued in a
+     *       run this short. Worker BULK pages ({@code maxKeys > 1}) are never faulted here —
      *       they must complete for the run to stay byte-exact.</li>
      *   <li><b>STORM only</b>: a leading cold-start burst — the first {@link #STARTUP_TIMEOUT_BURST}
      *       COLD reads (the workers' own first-page fetches into the unwarmed keyspace) time out before any
