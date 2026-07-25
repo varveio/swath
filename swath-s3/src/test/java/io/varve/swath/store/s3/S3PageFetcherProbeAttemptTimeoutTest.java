@@ -106,11 +106,19 @@ class S3PageFetcherProbeAttemptTimeoutTest {
                 .isEmpty();
     }
 
+    /**
+     * A probe whose logical fetch already escalated takes the ESCALATION path, not the short-probe
+     * default — the 3 s default must never clobber the retry loop's explicit override.
+     *
+     * <p>The escalated value itself is then re-expressed against this call class's own base
+     * ({@code S3PageFetcher#escalatedAttemptTimeoutFor}): the engine's ladder level 1 is 2x the scan
+     * base, so a 3 s point probe lands on 6 s. That rescale has its own dedicated coverage in
+     * {@link S3PageFetcherEscalationRescaleTest} — asserted here only enough to prove which of the two
+     * branches was taken.
+     */
     @Test
     void explicitAttemptTimeoutOverrideStillWinsOverTheProbeDefault() throws Exception {
         FakeS3Client client = FakeS3Client.captureOnly();
-        // A probe whose logical fetch already escalated its per-attempt budget must keep the
-        // escalated value -- the probe default must not clobber the retry loop's explicit override.
         PageRequest escalatedProbe = PageRequest.objects(null, null, 1)
                 .withApiCallAttemptTimeoutOverride(Duration.ofSeconds(20));
 
@@ -119,7 +127,8 @@ class S3PageFetcherProbeAttemptTimeoutTest {
         assertThat(client.lastRequest().overrideConfiguration())
                 .as("an explicit escalation override wins over the probe attempt-timeout default")
                 .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout())
-                        .hasValue(Duration.ofSeconds(20)));
+                        .as("the escalation branch was taken (rescaled to 6s), NOT the 3s probe default")
+                        .hasValue(Duration.ofSeconds(6)));
     }
 
 }

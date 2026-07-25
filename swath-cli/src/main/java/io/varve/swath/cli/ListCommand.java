@@ -776,7 +776,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         ? fetcherOverride
                         : connection.maybeRateLimited(new S3PageFetcher(s3, s3uri.bucket(),
                                 new S3PageFetcherConfig(connection.fetchOwner, connection.requestPayerEnabled,
-                                        ctx.metrics(), config.probeApiCallAttemptTimeout())),
+                                        ctx.metrics(), config.probeApiCallAttemptTimeout(),
+                                        // The SAME value the client above was built with -- the fetcher
+                                        // needs it as the escalation-rescale base, not as an override.
+                                        config.apiCallAttemptTimeout())),
                                 ctx.metrics());
                 // Wraps whichever call — seed probe or engine — issues this run's first real
                 // request, so a hang there logs list_first_request_issued/list_first_page_returned

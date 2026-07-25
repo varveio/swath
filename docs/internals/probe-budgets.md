@@ -63,15 +63,40 @@ The consequences compounded well past the wasted calls:
 
 The timeouts were the visible symptom; **work starvation was the actual cost**.
 
-## 3. Guards
+## 3. Escalation is re-expressed against each class's own base
+
+`GaugedFetcher` escalates a logical fetch's per-attempt budget on consecutive `ATTEMPT_TIMEOUT`
+faults via `TransientRetryFetcher.ATTEMPT_TIMEOUT_ESCALATION_LEVELS` — 20 s then 40 s. Those are
+**absolute durations authored against the scan base of 10 s**: the ladder is really "2× base, then
+4× base". The engine cannot know any better — escalation level is all it has, and only the store
+layer knows what each call class's base budget actually is.
+
+Applied unclamped, a 3 s point probe's first escalation is a **6.7× jump straight to 20 s**. With
+`PROBE_TRANSIENT_RETRY_CAP=1` (one retry, then fail fast), a failing pivot probe would burn
+3 s + 20 s and still return nothing.
+
+`S3PageFetcher#escalatedAttemptTimeoutFor` therefore converts the engine's ask to the **multiple** it
+represents over the scan base and re-applies that multiple to the call class's own base — preserving
+the ladder's progression rather than flattening it to a single ceiling:
+
+| call class | base | level 1 | level 2 |
+|---|---|---|---|
+| scan (`worker_page`, `structure_probe`) | 10 s | 20 s | 40 s (untouched — the ladder as authored) |
+| point (`pivot_probe`) | 3 s | 6 s | 12 s |
+
+The multiple is **derived** from the two base durations rather than hardcoded, so the ladder stays
+single-sourced in the engine: re-tune it there and the rescale follows.
+
+## 4. Guards
 
 | guard | what it pins |
 |---|---|
 | `S3PageFetcherProbeAttemptTimeoutTest#structureProbeKeepsTheScanClassTimeout_noShortProbeFuse` | a `delimiter=/` probe carries **no** per-request override (scan-class budget) |
 | `S3PageFetcherProbeAttemptTimeoutTest#pivotProbeGetsTheShortProbeAttemptTimeout` | a `max_keys<=1` probe still gets the 3 s point budget |
-| `GaugedFetcherAttemptTimeoutEscalationTest` | the engine-side escalation ladder (base → 20 s → 40 s) |
+| `S3PageFetcherEscalationRescaleTest` | escalation is re-expressed on the class's own base; the scan-class 20 s/40 s ladder passes through untouched; the multiple is derived, not hardcoded |
+| `GaugedFetcherAttemptTimeoutEscalationTest` | the engine-side escalation ladder itself (base → 20 s → 40 s) |
 
-## 4. If you change a budget
+## 5. If you change a budget
 
 Re-derive it from a measurement on a real bucket at the concurrency the run will actually use, not
 from a single-request timing — the genomeark structure probe is 4.7× slower at 64-way than

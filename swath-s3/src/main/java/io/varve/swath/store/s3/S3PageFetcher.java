@@ -73,6 +73,13 @@ public final class S3PageFetcher implements PageFetcher {
      * for every constructor that does not thread an explicit {@link S3Config}.
      */
     private final Duration probeApiCallAttemptTimeout;
+    /**
+     * The client-level per-attempt budget the SCAN call classes run under. Never applied as a
+     * per-request override (the client already enforces it) — it is the DENOMINATOR that
+     * {@link #escalatedAttemptTimeoutFor} uses to re-express the engine's escalation ladder as a
+     * multiple, so each call class escalates against its own base.
+     */
+    private final Duration scanApiCallAttemptTimeout;
     private final AtomicLong apiCalls = new AtomicLong();
 
     /**
@@ -111,6 +118,7 @@ public final class S3PageFetcher implements PageFetcher {
         this.requestPayer = config.requestPayer();
         this.metrics = config.metrics() != null ? config.metrics() : new RunMetrics(new SimpleMeterRegistry());
         this.probeApiCallAttemptTimeout = config.probeApiCallAttemptTimeout();
+        this.scanApiCallAttemptTimeout = config.scanApiCallAttemptTimeout();
         this.faultClassifier = new S3FaultClassifier(bucket, this.metrics);
     }
 
@@ -163,8 +171,9 @@ public final class S3PageFetcher implements PageFetcher {
         String callClass = callClass(req);
         if (req.apiCallAttemptTimeoutOverride() != null) {
             // The caller's escalated per-attempt override (see PageRequest#apiCallAttemptTimeoutOverride)
-            // always wins over the probe default immediately below.
-            Duration override = req.apiCallAttemptTimeoutOverride();
+            // always wins over the probe default immediately below -- but is first re-expressed against
+            // THIS call class's own base budget (see #escalatedAttemptTimeoutFor).
+            Duration override = escalatedAttemptTimeoutFor(req.apiCallAttemptTimeoutOverride(), callClass);
             b.overrideConfiguration(o -> o.apiCallAttemptTimeout(override));
         } else if (usesShortProbeBudget(callClass)) {
             // A POINT probe (pivot) gets its own short per-attempt budget instead of the client-level
@@ -446,6 +455,51 @@ public final class S3PageFetcher implements PageFetcher {
      */
     private static boolean usesShortProbeBudget(String callClass) {
         return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass);
+    }
+
+    /**
+     * The per-attempt budget this call class runs under absent any escalation — the
+     * denominator/multiplicand of {@link #escalatedAttemptTimeoutFor}.
+     */
+    private Duration baseAttemptTimeoutFor(String callClass) {
+        return usesShortProbeBudget(callClass) ? probeApiCallAttemptTimeout : scanApiCallAttemptTimeout;
+    }
+
+    /**
+     * Re-express the engine's escalated per-attempt ask against THIS call class's own base budget.
+     *
+     * <p>{@code GaugedFetcher} escalates a logical fetch's per-attempt budget on consecutive
+     * {@code ATTEMPT_TIMEOUT} faults via {@code TransientRetryFetcher.ATTEMPT_TIMEOUT_ESCALATION_LEVELS}
+     * — 20 s then 40 s. Those are ABSOLUTE durations authored against the SCAN base of 10 s, i.e. the
+     * ladder is really "2x base, then 4x base". The engine cannot know any better: escalation level is
+     * all it has, and only this store layer knows what each call class's base budget actually is.
+     *
+     * <p>Applied unclamped, a 3 s point probe's first escalation is a 6.7x jump straight to 20 s.
+     * Combined with {@code PROBE_TRANSIENT_RETRY_CAP=1} (one retry, then fail fast) a failing pivot
+     * probe would burn 3 s + 20 s and still return nothing. So the ask is converted to the MULTIPLE it
+     * represents over the scan base and re-applied to this class's base — preserving the ladder's
+     * progression instead of flattening it to a ceiling:
+     *
+     * <ul>
+     *   <li>scan class (10 s base): 20 s / 40 s — returned untouched, the ladder exactly as authored.
+     *   <li>point class (3 s base): 6 s / 12 s.
+     * </ul>
+     *
+     * <p>Deriving the multiple from the two base durations (rather than hardcoding 2x/4x here) keeps
+     * the ladder single-sourced in the engine: re-tune it there and this rescale follows. See
+     * {@code docs/internals/probe-budgets.md} §3.
+     */
+    Duration escalatedAttemptTimeoutFor(Duration engineEscalated, String callClass) {
+        Duration classBase = baseAttemptTimeoutFor(callClass);
+        long scanNanos = scanApiCallAttemptTimeout.toNanos();
+        if (classBase.equals(scanApiCallAttemptTimeout) || scanNanos <= 0L) {
+            return engineEscalated;   // the ladder's own base: nothing to re-express
+        }
+        // Ratio in floating point (never nanos*nanos, which overflows a long at these magnitudes).
+        double multiple = (double) engineEscalated.toNanos() / (double) scanNanos;
+        Duration rescaled = Duration.ofNanos((long) Math.ceil(classBase.toNanos() * multiple));
+        // Escalation only ever BUYS room: never hand back less than the class's own base budget.
+        return rescaled.compareTo(classBase) < 0 ? classBase : rescaled;
     }
 
     /**
