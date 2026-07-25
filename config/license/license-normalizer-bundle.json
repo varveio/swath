@@ -1,0 +1,15 @@
+{
+  "bundles": [
+    { "bundleName": "Apache-2.0", "licenseName": "Apache License, Version 2.0", "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0" },
+    { "bundleName": "CDDL-1.0", "licenseName": "Common Development and Distribution License 1.0", "licenseUrl": "https://oss.oracle.com/licenses/CDDL-1.0/" },
+    { "bundleName": "EPL-1.0", "licenseName": "Eclipse Public License 1.0", "licenseUrl": "https://www.eclipse.org/legal/epl-v10.html" }
+  ],
+  "transformationRules": [
+    { "bundleName": "Apache-2.0", "licenseNamePattern": ".*The Apache Software License, Version 2\\.0.*" },
+    { "bundleName": "Apache-2.0", "licenseNamePattern": ".*Apache 2.*" },
+    { "bundleName": "CDDL-1.0", "licenseNamePattern": ".*CDDL.*1\\.0.*" },
+    { "bundleName": "CDDL-1.0", "licenseNamePattern": "(?s).*Common Development and Distribution License.*" },
+    { "bundleName": "CDDL-1.0", "licenseNamePattern": "(?s).*CDDL License.*" },
+    { "bundleName": "EPL-1.0", "licenseNamePattern": ".*Eclipse Public License.*v?\\s*1\\.0.*" }
+  ]
+}

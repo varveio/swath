@@ -1,0 +1,157 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+
+      - name: Verify tag and build the release once
+        run: |
+          ./gradlew verifyReleaseVersion build :swath-cli:shadowJar :swath-cli:distZip :swath-cli:distTar \
+            -PreleaseTag="${GITHUB_REF_NAME}" --no-daemon --stacktrace
+
+      - id: version
+        name: Read canonical version
+        run: |
+          echo "version=$(./gradlew -q properties | sed -n 's/^version: //p' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact container payload
+        run: ./scripts/ci/prepare-container-promotion.sh promote
+
+      - name: Stage release payloads
+        run: |
+          mkdir -p release-assets
+          cp swath-cli/build/libs/swath.jar release-assets/
+          cp swath-cli/build/distributions/swath-*.zip release-assets/
+          cp swath-cli/build/distributions/swath-*.tar release-assets/
+
+      - name: Generate SPDX SBOM from the shipped jar
+        # anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          file: swath-cli/build/libs/swath.jar
+          format: spdx-json
+          output-file: release-assets/swath-${{ steps.version.outputs.version }}.spdx.json
+
+      - name: Write checksums for every unsigned release payload
+        run: (cd release-assets && sha256sum swath.jar swath-*.zip swath-*.tar *.spdx.json > SHA256SUMS)
+
+      # actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: release-assets
+          if-no-files-found: error
+
+      # actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: swath-container-payload
+          path: promote
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # Tags remain private-repository dry runs until the Phase 10 human gate has
+    # accepted the public cut and explicitly enables this protected environment.
+    # Operator note: this gate reads visibility from the triggering push event, so
+    # after flipping visibility/PUBLIC_RELEASE_ENABLED you must push a FRESH tag —
+    # re-running an existing dry-run reuses the stale event payload and will skip.
+    if: github.event.repository.visibility == 'public' && vars.PUBLIC_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: public-release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets
+          path: release-assets
+
+      # actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: swath-container-payload
+          path: promote
+
+      - name: Verify promoted artifacts
+        run: |
+          ./scripts/ci/verify-container-promotion.sh promote release-assets/swath.jar
+          (cd release-assets && sha256sum --check SHA256SUMS)
+
+      # docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      # docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: image
+        name: Publish exact tested jar as a multi-arch image
+        # docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          build-contexts: build=promote
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ needs.build.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+
+      - name: Install cosign
+        # sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
+
+      - name: Keylessly sign release files and image
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for asset in release-assets/swath.jar release-assets/swath-*.zip release-assets/swath-*.tar; do
+            cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"
+          done
+          cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
+
+      - name: Create GitHub release from verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --title "swath ${{ needs.build.outputs.version }}" --generate-notes

@@ -1,0 +1,333 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.engine;
+
+import io.varve.swath.error.InvalidArgsException;
+import io.varve.swath.observability.RunMetrics;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * The {@code --engine-toggle} ablation namespace: one immutable record threaded through the
+ * engine constructors, so a per-mechanism A/B measurement of the {@code WorkStealingScan} engine
+ * runs from one binary instead of a bespoke flag per experiment.
+ *
+ * <p><b>EXPERIMENTAL / DIAGNOSTIC — not a supported configuration.</b> {@link #DEFAULT} is the
+ * only supported configuration: the ten ablation toggles below default {@code true}, {@code
+ * readahead} is opt-in/default-off, and {@code mass_aware_seed} is opt-out/default-on. Turning a
+ * mechanism off silences its own counters and fires an explicit {@code TOGGLE.<name>_off} mark
+ * (§5 discipline, {@code docs/internals/metrics-internals.md}), so post-hoc analysis never has to
+ * infer an ablation from absence alone. Per-toggle effects, defaults, and measured cost profiles
+ * are the ablation and performance-toggle tables in {@code docs/usage.md}.
+ *
+ * <ul>
+ *   <li>{@code owner_split} — {@link WorkStealingScan}'s owner-side proactive self-split.</li>
+ *   <li>{@code density_ewma} — the EWMA density signal consumed by {@link #farAheadFraction} and
+ *       {@link #observedDensityRatio(WorkerState)}.</li>
+ *   <li>{@code radix_bands} — {@code SeedStep}'s dense-flat-region radix banding.</li>
+ *   <li>{@code structure_probes} — {@link Thief}'s demand-driven {@code delimiter=/} structure
+ *       probing.</li>
+ *   <li>{@code far_ahead} — the bounded-range steal pivot fraction; see {@link
+ *       #farAheadFraction}.</li>
+ *   <li>{@code alphabet_pivots} — the {@link AlphabetDigest} consult in {@link #interpolate}.</li>
+ *   <li>{@code reflect} — the density-reflected pivot placement; also gates {@code reflect_lift}
+ *       below, which never fires while this is off.</li>
+ *   <li>{@code confetti_feedback} — the realized-child-mass feedback gate in {@link
+ *       OwnerSelfSplit#maybeOwnerSelfSplit}.</li>
+ *   <li>{@code fanout_tiling} — {@code SeedStep}'s zero-probe {@code key=value/} partition-fanout
+ *       tiling; its interaction with {@code mass_aware_seed} is the precedence rule in {@code
+ *       docs/usage.md}.</li>
+ *   <li>{@code reflect_lift} — the reflect-lift alone, independent of plain {@code reflect}
+ *       staying active; gated on {@code reflect() && reflectLift()}.</li>
+ *   <li>{@code readahead} — opt-in, default OFF: lets {@link RangeScanner} engage {@link
+ *       SpeculativeReadahead} intra-range speculative readahead.</li>
+ *   <li>{@code mass_aware_seed} — opt-out, default ON: lets {@link SeedStep} sample an ambiguous
+ *       truncated cut's children to disambiguate a heavy subtree (banded to parallelize) from a
+ *       1:1 tiny-leaf explosion (the INT-8 shape, left whole for work-stealing).</li>
+ * </ul>
+ */
+public record EngineToggles(
+        boolean ownerSplit,
+        boolean densityEwma,
+        boolean radixBands,
+        boolean structureProbes,
+        boolean farAhead,
+        boolean alphabetPivots,
+        boolean reflect,
+        boolean confettiFeedback,
+        boolean reflectLift,
+        boolean fanoutTiling,
+        boolean readahead,
+        boolean massAwareSeed) {
+
+    public EngineToggles withOwnerSplit(boolean ownerSplit) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withDensityEwma(boolean densityEwma) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withRadixBands(boolean radixBands) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withStructureProbes(boolean structureProbes) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withFarAhead(boolean farAhead) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withAlphabetPivots(boolean alphabetPivots) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withReflect(boolean reflect) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withConfettiFeedback(boolean confettiFeedback) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withReflectLift(boolean reflectLift) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withFanoutTiling(boolean fanoutTiling) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withReadahead(boolean readahead) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    public EngineToggles withMassAwareSeed(boolean massAwareSeed) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+    }
+
+    /** The only supported configuration: every ablation toggle on, {@code readahead} off, {@code mass_aware_seed} on. */
+    public static final EngineToggles DEFAULT =
+            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true);
+
+    /**
+     * Valid ablation {@code --engine-toggle} names (each {@code on} by default, {@code off} to
+     * ablate), in the order they are documented/echoed; drives {@link #disabledNames()}. The
+     * opt-in {@code readahead} toggle is intentionally excluded — its being off is the normal
+     * state, not an ablation.
+     */
+    public static final List<String> NAMES = List.of(
+            "owner_split", "density_ewma", "radix_bands", "structure_probes", "far_ahead", "alphabet_pivots",
+            "reflect", "confetti_feedback", "reflect_lift", "fanout_tiling");
+
+    /** The opt-in {@code --engine-toggle readahead=on} name, default OFF; not in {@link #NAMES}. */
+    public static final String READAHEAD_NAME = "readahead";
+
+    /**
+     * The {@code --engine-toggle mass_aware_seed} name; opt-out,
+     * default ON — {@code mass_aware_seed=off} is
+     * the documented opt-out. Not in {@link #NAMES}.
+     */
+    public static final String MASS_AWARE_SEED_NAME = "mass_aware_seed";
+
+    /**
+     * The far-ahead fraction substituted for {@link WorkerState#densityFraction()} when {@code
+     * density_ewma} is off — {@link WorkerState#MAX_FAR_FRACTION}, the same ceiling the EWMA path
+     * saturates at for a uniformly-dense drainer, so {@code density_ewma=off} behaves like "always
+     * assume the densest case" rather than an arbitrary unrelated constant.
+     */
+    static final double DENSITY_EWMA_OFF_FRACTION = WorkerState.MAX_FAR_FRACTION;
+
+    /** The plain code-point byte-midpoint fraction {@code far_ahead=off} pins the pivot at. */
+    static final double PLAIN_MIDPOINT_FRACTION = 0.5;
+
+    /**
+     * Parse the repeatable {@code --engine-toggle NAME=on|off} occurrences plus the {@code
+     * --no-owner-split} alias into one {@link EngineToggles}. An unknown name, a malformed value
+     * (not {@code on}/{@code off}), or contradictory values for the same toggle (including a
+     * conflict between {@code --no-owner-split} and an explicit {@code --engine-toggle
+     * owner_split=on}) is a startup validation error (exit 2) listing the valid names.
+     *
+     * @param raw            the raw {@code NAME=VALUE} strings, in {@code --engine-toggle}
+     *                       occurrence order; {@code null}/empty means no explicit toggles
+     * @param noOwnerSplit   {@code --no-owner-split} (the pre-existing kill-switch), folded in as
+     *                       {@code owner_split=off} — single source of truth internally
+     */
+    public static EngineToggles parse(List<String> raw, boolean noOwnerSplit) throws InvalidArgsException {
+        Map<String, Boolean> values = new LinkedHashMap<>();
+        if (raw != null) {
+            for (String entry : raw) {
+                int eq = entry.indexOf('=');
+                if (eq < 0) {
+                    throw new InvalidArgsException("--engine-toggle must be NAME=on|off (got '" + entry + "')");
+                }
+                String name = entry.substring(0, eq).trim();
+                String rawValue = entry.substring(eq + 1).trim();
+                if (!NAMES.contains(name) && !READAHEAD_NAME.equals(name) && !MASS_AWARE_SEED_NAME.equals(name)) {
+                    throw new InvalidArgsException("--engine-toggle: unknown name '" + name
+                            + "' (valid names: " + String.join(", ", NAMES) + ", " + READAHEAD_NAME + ", "
+                            + MASS_AWARE_SEED_NAME + ")");
+                }
+                boolean on = parseOnOff(name, rawValue);
+                putConsistent(values, name, on, "--engine-toggle " + name + " given contradictory values");
+            }
+        }
+        if (noOwnerSplit) {
+            putConsistent(values, "owner_split", false,
+                    "--no-owner-split conflicts with --engine-toggle owner_split=on");
+        }
+        return new EngineToggles(
+                values.getOrDefault("owner_split", true),
+                values.getOrDefault("density_ewma", true),
+                values.getOrDefault("radix_bands", true),
+                values.getOrDefault("structure_probes", true),
+                values.getOrDefault("far_ahead", true),
+                values.getOrDefault("alphabet_pivots", true),
+                values.getOrDefault("reflect", true),
+                values.getOrDefault("confetti_feedback", true),
+                values.getOrDefault("reflect_lift", true),
+                values.getOrDefault("fanout_tiling", true),
+                values.getOrDefault(READAHEAD_NAME, false),
+                values.getOrDefault(MASS_AWARE_SEED_NAME, true));
+    }
+
+    private static void putConsistent(Map<String, Boolean> values, String name, boolean on, String conflictMessage)
+            throws InvalidArgsException {
+        Boolean prev = values.put(name, on);
+        if (prev != null && prev != on) {
+            throw new InvalidArgsException(conflictMessage);
+        }
+    }
+
+    private static boolean parseOnOff(String name, String value) throws InvalidArgsException {
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "on" -> true;
+            case "off" -> false;
+            default -> throw new InvalidArgsException(
+                    "--engine-toggle " + name + ": value must be on|off (got '" + value + "')");
+        };
+    }
+
+    /** {@code true} iff every toggle is at its supported default. */
+    public boolean isDefault() {
+        return DEFAULT.equals(this);
+    }
+
+    /** The names of the toggles currently {@code off}, in {@link #NAMES} order. */
+    public List<String> disabledNames() {
+        List<String> out = new ArrayList<>();
+        if (!ownerSplit) {
+            out.add("owner_split");
+        }
+        if (!densityEwma) {
+            out.add("density_ewma");
+        }
+        if (!radixBands) {
+            out.add("radix_bands");
+        }
+        if (!structureProbes) {
+            out.add("structure_probes");
+        }
+        if (!farAhead) {
+            out.add("far_ahead");
+        }
+        if (!alphabetPivots) {
+            out.add("alphabet_pivots");
+        }
+        if (!reflect) {
+            out.add("reflect");
+        }
+        if (!confettiFeedback) {
+            out.add("confetti_feedback");
+        }
+        if (!reflectLift) {
+            out.add("reflect_lift");
+        }
+        if (!fanoutTiling) {
+            out.add("fanout_tiling");
+        }
+        return out;
+    }
+
+    /**
+     * Fires {@code TOGGLE.<name>_off} for each of {@code owned} that is currently off, per {@link
+     * #disabledNames()} — the single source of the name → mark-string derivation ({@code name +
+     * "_off"}), so {@link WorkStealingScan}, {@link Thief}, and {@link SeedStep} — each owning and
+     * marking a different subset of the toggles — derive their marks from here instead of
+     * separately hand-spelling the string per toggle.
+     */
+    public void recordOffMarks(RunMetrics metrics, String... owned) {
+        for (String o : owned) {
+            if (!NAMES.contains(o)) {
+                throw new IllegalArgumentException("unknown toggle name: " + o);
+            }
+        }
+        List<String> off = disabledNames();
+        for (String name : off) {
+            for (String o : owned) {
+                if (o.equals(name)) {
+                    metrics.recordStealReason("TOGGLE", name + "_off");
+                }
+            }
+        }
+    }
+
+    /**
+     * The far-ahead pivot fraction for a bounded range ({@code hi != null}) at the two sites that
+     * otherwise call {@link WorkerState#densityFraction()} directly ({@link Thief} and {@link
+     * WorkStealingScan}'s owner-split site). {@code far_ahead=off} wins over {@code density_ewma}
+     * (checked first) — fixing the plain byte-midpoint takes precedence over any EWMA substitute.
+     */
+    public double farAheadFraction(WorkerState victim) {
+        if (!farAhead) {
+            return PLAIN_MIDPOINT_FRACTION;
+        }
+        if (!densityEwma) {
+            return DENSITY_EWMA_OFF_FRACTION;
+        }
+        return victim.densityFraction();
+    }
+
+    /**
+     * The observed-density ratio consumed by {@link WorkStealingScan}'s owner-split child-tail
+     * floor ({@code StealMath.childTailBelowObservedMassFloor}) and its reflection clamp. {@code
+     * density_ewma=off} must disable EVERY EWMA consumer, not just {@link #farAheadFraction} — so
+     * this returns {@link Double#POSITIVE_INFINITY} (the floor's own "no signal" fallback, which
+     * collapses {@code min(1, densityRatio)} to {@code 1} and makes the floor byte-for-byte the
+     * plain {@code (1-f) * est} span estimate) when the toggle is off, instead of the EWMA-derived
+     * {@link WorkerState#observedDensityRatio()}.
+     */
+    public double observedDensityRatio(WorkerState victim) {
+        return densityEwma ? victim.observedDensityRatio() : Double.POSITIVE_INFINITY;
+    }
+
+    /**
+     * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest)} when {@code
+     * alphabet_pivots} is on, else the plain code-point {@link StealMath#interpolate(byte[],
+     * byte[], double)} overload (no digest consult) — the same substitution at both call sites
+     * (Thief and the owner-split site).
+     */
+    public byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest) {
+        return alphabetPivots ? StealMath.interpolate(lo, hi, f, digest) : StealMath.interpolate(lo, hi, f);
+    }
+}

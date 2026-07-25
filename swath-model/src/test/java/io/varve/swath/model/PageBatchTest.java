@@ -1,0 +1,62 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.model;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Tests the {@link PageBatch} dual-form (raw entries vs. a pre-{@link PackedPage} page). The
+ * non-sort pipelines keep carrying a raw entry list ({@link PageBatch#isPacked()} false); the sort
+ * pipeline carries a packed page with {@code entries() == null} — and exactly one form is ever present.
+ */
+final class PageBatchTest {
+
+    private static ObjectEntry obj(String key) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, null, false, null, null, null, null);
+    }
+
+    @Test
+    void entriesFormIsNotPackedAndWeighsByListSize() {
+        PageBatch batch = new PageBatch(7L, 3L, List.of(obj("a"), obj("b")));
+        assertThat(batch.isPacked()).isFalse();
+        assertThat(batch.packed()).isNull();
+        assertThat(batch.entries()).hasSize(2);
+        assertThat(batch.entryCount()).isEqualTo(2);
+        assertThat(batch.nodeId()).isEqualTo(7L);
+        assertThat(batch.pageSeq()).isEqualTo(3L);
+    }
+
+    @Test
+    void packedFormCarriesPackedAndNullEntries() {
+        PackedPage packed = new StubPacked(5);
+        PageBatch batch = PageBatch.ofPacked(2L, 9L, packed);
+        assertThat(batch.isPacked()).isTrue();
+        assertThat(batch.entries()).isNull();
+        assertThat(batch.packed()).isSameAs(packed);
+        assertThat(batch.entryCount()).isEqualTo(5);
+        assertThat(batch.nodeId()).isEqualTo(2L);
+        assertThat(batch.pageSeq()).isEqualTo(9L);
+    }
+
+    @Test
+    void rejectsBothOrNeitherForm() {
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, null, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PageBatch(0L, 0L, List.of(obj("a")), new StubPacked(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private record StubPacked(long entryCount) implements PackedPage {
+        @Override public long objectCount() { return entryCount; }
+        @Override public long commonPrefixCount() { return 0; }
+        @Override public long deleteMarkerCount() { return 0; }
+        @Override public long totalObjectSize() { return 0; }
+    }
+}

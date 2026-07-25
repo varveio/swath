@@ -1,0 +1,109 @@
+Usage: swath list [-hqVv] [--fetch-owner] [--force] [--[no-]force-path-style]
+                  [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
+                  [--checkpoint=PATH|none|auto] [--concurrency=N]
+                  [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
+                  [--idle-timeout=DURATION] [--include=REGEX]
+                  [--max-duration=DURATION] [--max-size=SIZE]
+                  [--metrics-endpoint=URL] [--min-size=SIZE]
+                  [--modified-since=DATE] [--modified-until=DATE]
+                  [--no-progress-timeout=DURATION] [-o=PATH]
+                  [--object-listing-queue-size=N] [--output-type=file|dir]
+                  [--parquet-part-size=SIZE]
+                  [--part-rotation-interval=DURATION]
+                  [--part-rotation-max-rows=N] [--profile=NAME]
+                  [--progress-interval=DURATION] [--region=REGION]
+                  [--report=PATH] [--request-rate=N]
+                  [--requester-pays=requester] [--trace=PATH]
+                  [--engine-toggle=NAME=on|off]... [--storage-class=CLASS[,
+                  CLASS][,CLASS[,CLASS]...]]... [--tune=KEY=VALUE]... [<s3-uri>]
+List a bucket or prefix.
+      [<s3-uri>]             Source URI, e.g. s3://bucket/prefix (required
+                               unless requesting tune help)
+  -h, --help                 Show this help message and exit.
+  -V, --version              Print version information and exit.
+
+Output:
+      --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
+                               parquet (default: auto).
+  -o, --output=PATH          Write to PATH; known extension selects a file,
+                               otherwise a dataset; - is stdout.
+      --output-type=file|dir Override -o file/directory inference.
+      --parquet-part-size=SIZE
+                             Target Parquet part size (default: 256mb).
+      --part-rotation-interval=DURATION
+                             Rotate Parquet parts by age (default: 30s; 0/none
+                               disables).
+      --part-rotation-max-rows=N
+                             Rotate Parquet parts by row count (default:
+                               2000000; 0 disables).
+      --report=PATH          Write the machine-readable run report to PATH.
+
+Connection:
+      --concurrency=N        Maximum concurrent listing requests (default: 64).
+      --endpoint-url=URL     Custom S3 endpoint (LocalStack/MinIO).
+      --fetch-owner          Request object owner fields from S3.
+      --[no-]force-path-style
+                             Path-style addressing (defaults on when
+                               --endpoint-url is set).
+      --no-sign-request      Anonymous requests (public buckets).
+      --object-listing-queue-size=N
+                             Listing queue size in entries (default 50000).
+      --profile=NAME         AWS profile for credentials.
+      --region=REGION        AWS region (else resolved from the environment).
+      --request-rate=N       Cap aggregate S3 requests per second (default/0:
+                               unlimited).
+      --requester-pays=requester
+                             Send the requester-pays header (accepted value:
+                               requester).
+
+Filters:
+      --exclude=REGEX        Drop keys matching this regex.
+      --include=REGEX        Keep keys matching this regex.
+      --max-size=SIZE        Keep objects <= this size.
+      --min-size=SIZE        Keep objects >= this size (e.g. 1k, 256mb).
+      --modified-since=DATE  Keep rows modified at or after DATE (UTC if no
+                               offset).
+      --modified-until=DATE  Keep rows modified at or before DATE (UTC if no
+                               offset).
+      --storage-class=CLASS[,CLASS][,CLASS[,CLASS]...]
+                             Keep objects in these storage classes (e.g.
+                               STANDARD,GLACIER).
+
+Run control:
+      --idle-timeout=DURATION
+                             Abort after no activity (default: 120s; 0/none/off
+                               disables).
+      --max-duration=DURATION
+                             Stop after DURATION, leaving durable work
+                               resumable.
+      --no-progress-timeout=DURATION
+                             Abort after no committed progress (default: 10m;
+                               0/none/off disables).
+      --progress-interval=DURATION
+                             Set the progress reporting interval.
+      --[no-]sort            Globally sort a Parquet directory dataset by key.
+
+Resume:
+      --checkpoint=PATH|none|auto
+                             auto (default) co-locates the checkpoint in a
+                               directory output (<dir>/.swath/checkpoint.
+                               sqlite) and keeps nothing for stdout; a path
+                               pins the SQLite file; none runs ephemeral.
+      --force, --overwrite   Discard a COMPLETED run for this destination and
+                               re-list it.
+      --restart              Discard any prior checkpoint and start fresh.
+
+Diagnostics:
+      --engine-toggle=NAME=on|off
+                             Set a diagnostic engine ablation (repeatable; see
+                               docs/usage.md).
+      --metrics-endpoint=URL Export OTLP metrics to URL (overrides
+                               SWATH_OTLP_ENDPOINT).
+      --no-metrics           Disable metrics export, including environment
+                               configuration.
+  -q, --quiet                Suppress the startup destination echo.
+      --trace=PATH           Write a diagnostic JSONL run trace to PATH.
+      --tune=KEY=VALUE       Set a typed expert option (repeatable; use --tune
+                               help).
+  -v                         Increase verbosity (-v INFO, -vv DEBUG, -vvv
+                               TRACE).

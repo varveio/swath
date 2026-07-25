@@ -1,0 +1,327 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.sort;
+
+import java.util.function.UnaryOperator;
+
+/**
+ * Immutable snapshot of the {@code swath.sort.*} knobs, read <b>once</b> at construction.
+ * {@link #fromSystemProperties()} is the production entry point; {@link #fromProperties} takes an
+ * injectable property-lookup function so tests can exercise every knob without mutating the real,
+ * process-global {@link System} properties. All sizes are bytes.
+ *
+ * <ul>
+ *   <li>{@code segmentBytes} — the primary segment-flush gate (§6): estimated pre-encode bytes of
+ *       a sealed buffer. Heap-adaptive by default: {@code heapFraction × Runtime.maxMemory()},
+ *       floored at {@link #SEGMENT_BYTES_FLOOR} (64&nbsp;MB); an explicit
+ *       {@code swath.sort.segment-bytes} overrides the adaptive value. Bigger heap ⇒ bigger
+ *       segments ⇒ single-pass merge as the design point (I11: memory is a function of {@code -Xmx},
+ *       never of object count).</li>
+ *   <li>{@code segmentEntries} — secondary backstop entry cap on a sealed buffer.</li>
+ *   <li>{@code heapFraction} — the adaptive ratio {@code segmentBytes} derives from {@code -Xmx}.</li>
+ *   <li>{@code buffers} — in-flight sealed buffers (fill while the sealed buffer encodes off-thread);
+ *       consumed by the pipeline. Must be {@code >= 2}: {@link SortLane} bounds
+ *       live sealed buffers to exactly {@code buffers()} (fill + {@code buffers() - 1} off-thread), so
+ *       {@code buffers=1} would either deadlock (0 off-thread slots) or silently violate that corridor
+ *       invariant if floored — rejected outright instead.</li>
+ *   <li>{@code fanIn} — merge fan-in {@code F} (§6); open segment readers never exceed {@code F}.</li>
+ *   <li>{@code finalFileBytes} — roll threshold for multi-file sorted output; {@link Long#MAX_VALUE}
+ *       means a single file (contract default).</li>
+ *   <li>{@code finalRowGroupBytes} — the served file's seek granularity (row-group size) for the
+ *       final writer.</li>
+ *   <li>{@code segmentRowGroupBytes} — the row-group size for INTERNAL <b>columnar Parquet</b> staging
+ *       segments ({@link SegmentWriter}/{@link SegmentParquetSink}, still used by {@link CaptureSorter}'s
+ *       sort-fixture path and the off-by-default {@link ParallelRangeMerge} path): small on purpose
+ *       (default 1&nbsp;MB, not {@code finalRowGroupBytes}'s 8&nbsp;MB) because {@link SegmentReader}
+ *       preloads a whole row group per open Parquet stream. The live listing path stages
+ *       <b>page-run</b> segments (not columnar Parquet), so this knob no longer governs the serial
+ *       {@link #effectiveFanIn()} merge-memory bound — {@code mergePerStreamBytes} does. It survives only
+ *       as the Parquet-staging row-group size for the two columnar callers above; {@link ParallelRangeMerge}
+ *       keeps its own row-group-derived per-range bound.</li>
+ *   <li>{@code mergePerStreamBytes} — the estimated heap a single OPEN merge stream holds,
+ *       the denominator of the serial page-run merge's {@link #effectiveFanIn()} memory bound. A
+ *       {@link PageFrontierReader} currently retains the FULL packed page body per open stream (for CRC),
+ *       so per-stream heap ≈ one packed page (~tens of KiB); the default is a conservative 64&nbsp;KiB
+ *       <b>estimate, to be validated at the perf gate</b>. Replaces {@code segmentRowGroupBytes} as the
+ *       merge-memory denominator (the row-group concept has no page-run meaning). The runtime
+ *       merge-entry clamp ({@link SortTransform}) refines this with the exact per-segment
+ *       {@code maxRecordLen} from the page-run trailer when available.</li>
+ *   <li>{@code mergeBudgetBytes} — the merge-phase memory budget: caps how many
+ *       segment streams a single {@link KWayMerge} pass may hold open at once, via
+ *       {@link #effectiveFanIn()} = {@code min(fanIn, max(2, mergeBudgetBytes / mergePerStreamBytes))}
+ *       — bounding memory is a function of the budget, never of segment count (I11), even when
+ *       {@code fanIn} alone would have allowed more streams than the budget affords. Same heap-adaptive
+ *       shape as {@code segmentBytes} by default (floor 64&nbsp;MB). <b>The {@code max(2, …)} floor
+ *       is a documented floor, not a rejection:</b> {@link #effectiveFanIn()} never opens
+ *       fewer than 2 streams (a merge needs at least 2 to merge anything), so for a budget below
+ *       {@code 2 × mergePerStreamBytes} the realized peak is the 2-stream floor itself, not the
+ *       budget — i.e. {@code streams/pass × mergePerStreamBytes ≤ mergeBudgetBytes} holds for any
+ *       budget {@code ≥ 2 × mergePerStreamBytes}, and below that the true bound is
+ *       {@code 2 × mergePerStreamBytes} (the minimum realizable merge memory), which the caller
+ *       should read as the effective floor rather than expect a smaller number from a tiny budget.</li>
+ *   <li>{@code segmentCodec} — the codec {@link PageBlock#pack} compresses a page's
+ *       front-coded PAYLOAD at pack time ({@code NONE}, {@code LZ4}, or {@code ZSTD1}; default
+ *       {@code LZ4}) — the record HEADER (min/max, dict
+ *       tables, {@code useDict}, count, ordered-bit) is never compressed, so
+ *       {@link PageFrontierReader} keeps parsing it without decompressing. Threaded to
+ *       {@link PageBlock#pack} at the one seal call site ({@link SortBuffer#admit}).</li>
+ * </ul>
+ */
+public record SortConfig(long segmentBytes, long segmentEntries, double heapFraction,
+                         int buffers, int fanIn, long finalFileBytes, long finalRowGroupBytes,
+                         long segmentRowGroupBytes, long mergeBudgetBytes, int mergeParallelism,
+                         long mergePerStreamBytes, PageCodec segmentCodec) {
+
+    /** Floor for the heap-adaptive segment gate (§7). */
+    public static final long SEGMENT_BYTES_FLOOR = 64L * 1024 * 1024;
+
+    /**
+     * Default for {@code mergePerStreamBytes}: a conservative ~64&nbsp;KiB estimate of the heap a
+     * single open page-run merge stream holds (one packed page body, retained for CRC by
+     * {@link PageFrontierReader}). Documented as an estimate to be validated at the perf gate.
+     */
+    public static final long DEFAULT_MERGE_PER_STREAM_BYTES = 64L * 1024;
+
+    /**
+     * Default for {@code segmentCodec}: compress-at-pack is ON by default ({@link
+     * PageCodec#LZ4}) — staging disk exhaustion ({@code sort_disk_exhausted}) is the primary
+     * staging-disk risk, and compressing the page-run PAYLOAD (never the plain header) directly
+     * cuts both staging disk and in-flight buffered memory.
+     */
+    static final PageCodec DEFAULT_SEGMENT_CODEC = PageCodec.LZ4;
+
+    private static final String PREFIX = "swath.sort.";
+
+    /**
+     * Off-by-default: the number of contiguous key ranges the final merge is split
+     * into, each merged on its own thread producing a separate ordered part file whose concatenation
+     * (in range order) is the global sort. Default {@code 1} == today's single-threaded merge,
+     * byte-for-byte identical output. {@code >1} opts into {@link ParallelRangeMerge}; the decision to
+     * ship multi-file sorted output produced by a concurrent merge is RESERVED FOR THE OWNER. Never
+     * flip this default without that acceptance.
+     */
+    public static final int DEFAULT_MERGE_PARALLELISM = 1;
+
+    /** The §7 heap-adaptive ratio: {@code segmentBytes}/{@code mergeBudgetBytes} derive from {@code -Xmx}. */
+    private static final double DEFAULT_HEAP_FRACTION = 0.08;
+
+    /**
+     * The canonical default configuration — every knob at the value {@link #fromProperties} applies
+     * when the corresponding {@code swath.sort.*} property is unset. Callers derive a variant with the
+     * {@code withX} methods (a single differing knob is {@code DEFAULT.withFanIn(2)}); {@link
+     * #fromProperties} reads its per-knob defaults from here, so the defaults live in exactly one place.
+     */
+    public static final SortConfig DEFAULT = new SortConfig(
+            adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // heap-adaptive segment gate (§7), 64 MB floor
+            Long.MAX_VALUE,                               // segment-entries: the bytes gate governs by default
+            DEFAULT_HEAP_FRACTION,
+            2,                                            // buffers: fill + 1 off-thread (the minimum corridor)
+            // A high fan-in keeps a billion-scale run single-pass; the runtime clamp (SortTransform) bounds
+            // it by the real fd limit and per-segment page size, so this generous ceiling never over-opens.
+            10000,
+            1L << 30,                                     // final-file-bytes: rolls sorted output into ~1 GiB parts
+            8L * 1024 * 1024,                             // final-row-group-bytes: served-file seek granularity
+            1L * 1024 * 1024,                             // segment-row-group-bytes: columnar-Parquet staging only
+            adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // merge-budget: same heap-adaptive shape as segmentBytes
+            DEFAULT_MERGE_PARALLELISM,
+            DEFAULT_MERGE_PER_STREAM_BYTES,
+            DEFAULT_SEGMENT_CODEC);
+
+    public SortConfig {
+        if (segmentBytes <= 0) {
+            throw new IllegalArgumentException("segment-bytes must be > 0, got " + segmentBytes);
+        }
+        if (segmentEntries <= 0) {
+            throw new IllegalArgumentException("segment-entries must be > 0, got " + segmentEntries);
+        }
+        if (!(heapFraction > 0.0)) {
+            throw new IllegalArgumentException("heap-fraction must be > 0, got " + heapFraction);
+        }
+        if (buffers < 2) {
+            // SortLane's off-thread capacity is buffers()-1 (the fill buffer is the
+            // +1) — buffers=1 would leave 0 off-thread slots (a deadlock, every seal would block
+            // forever) unless floored, and any floor would silently violate the documented live<=
+            // buffers() corridor invariant (fill + 1 off-thread = 2 live > the requested 1). Rejected
+            // here, consistent with every other knob in this canonical constructor.
+            throw new IllegalArgumentException("buffers must be >= 2, got " + buffers);
+        }
+        if (fanIn < 2) {
+            throw new IllegalArgumentException("fan-in must be >= 2, got " + fanIn);
+        }
+        if (finalFileBytes <= 0) {
+            throw new IllegalArgumentException("final-file-bytes must be > 0, got " + finalFileBytes);
+        }
+        if (finalRowGroupBytes <= 0) {
+            throw new IllegalArgumentException("final-row-group-bytes must be > 0, got " + finalRowGroupBytes);
+        }
+        if (segmentRowGroupBytes <= 0) {
+            throw new IllegalArgumentException("segment-row-group-bytes must be > 0, got " + segmentRowGroupBytes);
+        }
+        if (mergeBudgetBytes <= 0) {
+            throw new IllegalArgumentException("merge-budget-bytes must be > 0, got " + mergeBudgetBytes);
+        }
+        if (mergePerStreamBytes <= 0) {
+            throw new IllegalArgumentException("merge-per-stream-bytes must be > 0, got " + mergePerStreamBytes);
+        }
+        if (mergeParallelism < 1) {
+            // 1 == serial (the shipped default); the knob only ever ADDS ranges. A
+            // value < 1 is meaningless — rejected here, consistent with every other knob.
+            throw new IllegalArgumentException("merge-parallelism must be >= 1, got " + mergeParallelism);
+        }
+        if (segmentCodec == null) {
+            throw new IllegalArgumentException("segment-codec must not be null");
+        }
+    }
+
+    public SortConfig withSegmentBytes(long segmentBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withSegmentEntries(long segmentEntries) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withHeapFraction(double heapFraction) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withBuffers(int buffers) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withFanIn(int fanIn) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withFinalFileBytes(long finalFileBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withFinalRowGroupBytes(long finalRowGroupBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withSegmentRowGroupBytes(long segmentRowGroupBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withMergeParallelism(int mergeParallelism) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    public SortConfig withSegmentCodec(PageCodec segmentCodec) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+    }
+
+    /** Read the knobs from system properties once, applying the documented defaults. */
+    public static SortConfig fromSystemProperties() {
+        return fromProperties(System::getProperty);
+    }
+
+    /**
+     * Read the knobs from an injected property source — lets tests exercise every knob
+     * combination without mutating the real, process-global {@link System} properties. {@code
+     * lookup} has the same contract as {@link System#getProperty(String)}: return {@code null} for
+     * an unset key. Production goes through {@link #fromSystemProperties()}.
+     */
+    static SortConfig fromProperties(UnaryOperator<String> lookup) {
+        // Each per-knob default is read from DEFAULT so the defaults live in exactly one place; the two
+        // heap-adaptive knobs recompute from the (possibly overridden) heap-fraction rather than DEFAULT's.
+        double heapFraction = doubleProp(lookup, "heap-fraction", DEFAULT.heapFraction());
+        long segmentBytes = longProp(lookup, "segment-bytes", adaptiveSegmentBytes(heapFraction));
+        long segmentEntries = longProp(lookup, "segment-entries", DEFAULT.segmentEntries());
+        int buffers = intProp(lookup, "buffers", DEFAULT.buffers());
+        int fanIn = intProp(lookup, "fan-in", DEFAULT.fanIn());
+        long finalFileBytes = longProp(lookup, "final-file-bytes", DEFAULT.finalFileBytes());
+        long finalRowGroupBytes = longProp(lookup, "final-row-group-bytes", DEFAULT.finalRowGroupBytes());
+        long segmentRowGroupBytes = longProp(lookup, "segment-row-group-bytes", DEFAULT.segmentRowGroupBytes());
+        long mergeBudgetBytes = longProp(lookup, "merge-budget-bytes", adaptiveSegmentBytes(heapFraction));
+        int mergeParallelism = intProp(lookup, "merge-parallelism", DEFAULT.mergeParallelism());
+        long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
+        String segmentCodecProp = lookup.apply(PREFIX + "segment-codec");
+        PageCodec segmentCodec = segmentCodecProp == null
+                ? DEFAULT.segmentCodec()
+                : parseSegmentCodec(segmentCodecProp);
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn,
+                finalFileBytes, finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism,
+                mergePerStreamBytes, segmentCodec);
+    }
+
+    private static PageCodec parseSegmentCodec(String raw) {
+        try {
+            return PageCodec.fromConfigValue(raw);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("swath.sort.segment-codec: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The <b>static</b> budget-bounded merge fan-in: {@code min(fanIn,
+     * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link KWayMerge} opens at most this many streams
+     * per pass, and each open page-run stream holds ≈ {@code mergePerStreamBytes} of heap (one packed
+     * page), so this keeps merge-phase peak memory a function of the budget knob, never of how many
+     * segments a run happens to produce (I11) — {@code fanIn} alone is only a correctness/fd bound
+     * (I2), not a memory bound.
+     *
+     * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate),
+     * NOT {@code segmentRowGroupBytes} (a columnar-Parquet row-group concept with no page-run meaning).
+     * This is the <em>static</em> config-level bound; the actual merge additionally applies a
+     * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
+     * exact per-segment {@code maxRecordLen}.
+     *
+     * <p><b>The {@code max(2, …)} floor is documented, not rejected:</b> a merge pass
+     * needs at least 2 streams to merge anything, so this never returns fewer than 2 regardless of
+     * how tiny {@code mergeBudgetBytes} is — for a budget below {@code 2 × mergePerStreamBytes} the
+     * realized peak is exactly the 2-stream floor (the minimum realizable merge memory), not the
+     * budget itself; {@code streams/pass × mergePerStreamBytes ≤ mergeBudgetBytes} only holds once
+     * the budget reaches that floor.
+     */
+    public int effectiveFanIn() {
+        long budgetBound = mergeBudgetBytes / mergePerStreamBytes;
+        return (int) Math.min(fanIn, Math.max(2L, budgetBound));
+    }
+
+    /** {@code max(floor, heapFraction × maxMemory)} — the §7 heap-adaptive default. */
+    static long adaptiveSegmentBytes(double heapFraction) {
+        long adaptive = (long) (heapFraction * Runtime.getRuntime().maxMemory());
+        return Math.max(SEGMENT_BYTES_FLOOR, adaptive);
+    }
+
+    private static long longProp(UnaryOperator<String> lookup, String name, long dflt) {
+        String v = lookup.apply(PREFIX + name);
+        return v == null ? dflt : Long.parseLong(v.trim());
+    }
+
+    private static int intProp(UnaryOperator<String> lookup, String name, int dflt) {
+        String v = lookup.apply(PREFIX + name);
+        return v == null ? dflt : Integer.parseInt(v.trim());
+    }
+
+    private static double doubleProp(UnaryOperator<String> lookup, String name, double dflt) {
+        String v = lookup.apply(PREFIX + name);
+        return v == null ? dflt : Double.parseDouble(v.trim());
+    }
+}

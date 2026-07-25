@@ -1,0 +1,38 @@
+# Normalize line endings: treat text files as text with LF in the repo, letting
+# Git handle the working-tree conversion per platform. This keeps diffs and the
+# reproducible build stable regardless of the contributor's OS.
+* text=auto eol=lf
+
+# Explicit text types (belt-and-suspenders for the common source/config files).
+*.java      text eol=lf
+*.kt        text eol=lf
+*.kts       text eol=lf
+*.gradle    text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.toml      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.properties text eol=lf
+*.sh        text eol=lf
+*.py        text eol=lf
+
+# Windows batch files must keep CRLF to run correctly.
+*.bat       text eol=crlf
+gradlew.bat text eol=crlf
+
+# The Gradle wrapper script stays LF-executable.
+gradlew     text eol=lf
+
+# Binary assets — never munge, never diff as text.
+*.jar       binary
+*.parquet   binary
+*.png       binary
+*.jpg       binary
+*.gz        binary
+*.zst       binary
+
+# Collapse generated/vendored files in PR diffs.
+gradle/wrapper/gradle-wrapper.jar binary
+THIRD_PARTY_NOTICES.md  linguist-generated=true

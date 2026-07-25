@@ -1,0 +1,79 @@
+name: Nightly deep verification
+
+# The deep + perf tiers, run on a schedule rather than per-commit. These are the tests
+# demoted off the per-commit fast gate:
+#   - `deep`: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle
+#             timing tests (also run on every main-merge via ci.yml's deep-tests job).
+#   - `perf`: the heavy scale/throughput tier (100k–1M-key mock-driven PERF-1/PERF-2/SORT-PERF),
+#             which is opt-in (-Pperf) and never runs per-commit.
+# The per-commit fast gate pins the *invariants* these guard via fast deterministic smokes;
+# this workflow is the exhaustive/timing-realistic backstop.
+#
+# ALERTING: a failure here (or a red deep-tests job on a main merge) means an invariant broke
+# outside the per-commit gate — GitHub emails the default recipients on a failed scheduled run;
+# wire that to wherever the owner actually watches (a follow-up, not yet done).
+
+on:
+  schedule:
+    # 07:00 UTC daily (~midnight US Pacific). Cron runs on the default branch only.
+    - cron: "0 7 * * *"
+  # Manual trigger for on-demand deep/perf runs from any branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deep-and-perf:
+    runs-on: ubuntu-latest
+    # The perf tier (1M-key SORT-PERF, 100k PERF-1/2) is the long pole; deep is ~minutes.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Deep tier serially (-PtestMaxParallelForks=1) so probe budgets are asserted without
+      # cross-fork CPU contention, exactly as the main-merge deep-tests job runs them.
+      - name: Deep tier (serial)
+        run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
+
+      # The real `kill -9` -> `--resume` exactly-once path -- see ci.yml's
+      # deep-tests job for the same step (this one is the schedule-driven backstop, matching
+      # the deep tier's own "runs on every main-merge (ci.yml) + nightly" pattern above).
+      - name: Real kill -9 -> --resume exactly-once
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      # Parametric external-kill matrix (schedule-driven backstop, mirrors ci.yml's deep-tests).
+      - name: Real kill -9 matrix -> --resume identical-to-clean
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      # Perf tier ONLY (-PonlyPerf runs just the @Tag("perf") classes — not the whole fast+
+      # integration suite — and the convention plugin bumps the test-worker heap to 2g for the
+      # GB-scale memory corridors these assert against). No DuckDB needed: the perf classes are
+      # mock-driven (the DuckDB-backed INT-6 is an integration test, not perf).
+      - name: Perf tier
+        run: ./gradlew test -PonlyPerf --no-daemon --stacktrace
+
+      # TODO: add a gated real-AWS public-bucket differential
+      # (`aws s3api --no-sign-request` vs swath) once the replay-server migration lands — the
+      # independent-implementation wire-fidelity anchor that supersedes LocalStack.
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-nightly
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore

@@ -1,0 +1,410 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Manual trigger so maintainers can run the full pipeline — including the
+  # image build + GHCR push (docker-publish) — from any branch on demand.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Top-level concurrency ONLY coalesces PRs: a new push to a PR cancels the
+# superseded run (saves minutes). main/dispatch runs each get a UNIQUE group
+# (github.run_id), so they are NEVER serialized/cancelled here — every merge runs
+# its full test suite. Publish serialization is a separate concern handled at the
+# docker-publish job level (a single global group), so no two publishes can race
+# the shared GHCR tags even though the runs themselves run in parallel.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast gate: unit / property / concurrency tiers only (no Docker). Gates every
+  # PR. Integration (Testcontainers/LocalStack) tiers are excluded here via
+  # -PnoIntegration so the gate stays ~1 min; they run in the separate
+  # integration-tests job below (main pushes only), which never blocks a PR.
+  fast-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Instrumentation-drift guard (§5)
+        run: ./scripts/ci/check-instrumentation-drift.sh
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # `gradle/wrapper/gradle-wrapper.jar` is the one binary this repository ships, and it
+      # executes before any other gate can run. Validate its checksum against the published
+      # Gradle releases so a tampered wrapper cannot bootstrap the build.
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+
+      # The shadowJar is built here (not just in the Docker image) so the EXACT uber-jar
+      # that passed this job's tests is what docker-publish ships — "test what you built".
+      # See the jar upload below + docker-publish's build-context promotion.
+      - name: Build + fast tests (no integration) + uber-jar
+        run: ./gradlew build -PnoIntegration :swath-cli:shadowJar --no-daemon --stacktrace
+
+      # Dependency-license gate: fails if any distributed (runtimeClasspath) dependency
+      # carries a license not on config/license/allowed-licenses.json — e.g. a new
+      # GPL/AGPL-only transitive dep. See THIRD_PARTY_NOTICES.md. Fast + no Docker, so
+      # it belongs on the PR gate.
+      - name: License compliance gate (allow-list)
+        run: ./gradlew checkLicense --no-daemon --stacktrace
+
+      # On main/manual runs, publish the tested uber-jar so docker-publish can ship THIS
+      # artifact (the one that just passed the fast tier + license gate) instead of a third
+      # from-source recompile inside the Docker build. docker-publish promotes it via a
+      # BuildKit --build-context override of the Dockerfile's `build` stage — ship exactly
+      # what was tested. PR runs do not publish an image, so they do not need this artifact.
+      - name: Prepare checked container-promotion payload
+        if: github.event_name != 'pull_request'
+        run: ./scripts/ci/prepare-container-promotion.sh promote
+
+      - name: Upload checked container-promotion payload
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: swath-container-payload
+          path: promote
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: test-reports-fast
+          # Test reports now live per-module (swath-model/build/reports/tests/, ...),
+          # not under a single root build/.
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
+  # Slow tier: Docker/LocalStack integration tests. Runs on `main` (merges) and
+  # manual dispatch -- NOT on PRs -- so a slow/flaky IT never blocks a PR while
+  # still giving automated real-store coverage on every merge. It also gates the
+  # image publish (docker-publish `needs` it), so it must run on every event that
+  # can publish; otherwise a skipped `needs` would silently skip the publish.
+  # Gate on `github.ref == main` (not just event_name == push) so it stays correct
+  # even if on.push.branches is ever widened. Docker is on the ubuntu-latest runner.
+  integration-tests:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+
+      # INT-6 reads swath's Parquet parts back with DuckDB (an independent engine).
+      # Without the CLI on PATH the test aborts (skips), so the DuckDB-readback
+      # acceptance would pass vacuously -- install it so the reader actually runs.
+      - name: Install DuckDB CLI
+        run: |
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+          duckdb --version
+
+      # Integration tier ONLY (Docker/LocalStack ITs). -PonlyIntegration runs just the
+      # @Tag("integration") classes, so this job no longer recompiles-and-re-runs the entire
+      # fast tier that `fast-tests` already ran on the same commit. The fast tier's
+      # compile + unit/property/concurrency suite is the fast-tests job's responsibility; here
+      # we compile (unavoidable on a separate runner) and execute only the ~8 ITs.
+      - name: Integration tests only (Docker/LocalStack tier)
+        run: ./gradlew test -PonlyIntegration --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: test-reports-integration
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
+  # Deep tier: schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/
+  # timeout tests, demoted OFF the per-commit fast gate (they are slow and/or flaky-under-
+  # contention). Runs on `main` (merges) + dispatch — NOT on PRs, so a slow/flaky deep test
+  # never blocks a PR — and again nightly (see nightly.yml). Runs SERIALLY (-PtestMaxParallelForks=1)
+  # so the probe budgets are asserted without cross-fork CPU contention. Gates the publish.
+  # The invariants these guard are pinned on every PR by fast deterministic smokes.
+  deep-tests:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
+
+      - name: Deep tier (schedule-sensitive + latency tests, serial)
+        run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
+
+      # The real `kill -9` -> `--resume` exactly-once path is env-gated
+      # (`-Dswath.it.sigkill=true`, @EnabledIfSystemProperty) and SKIPPED everywhere else. A
+      # separate, untagged invocation (not `-Pdeep`/`-PonlyIntegration`, which would tag-filter
+      # it out) targets just this one class so it runs on every main-merge/dispatch alongside
+      # the rest of the deep tier without widening what the fast/PR gate or the bulk
+      # integration-tests job execute. Docker/Testcontainers (LocalStack) -- ubuntu-latest ships
+      # Docker, no extra setup step needed.
+      - name: Real kill -9 -> --resume exactly-once
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      # Parametric external-kill matrix (many lifecycle points x {no-sort, --sort}) ->
+      # --resume -> identical-to-clean oracle. Same `-Dswath.it.sigkill=true` gate/tag as the
+      # single-point IT above; separate untagged invocation for the same reason (a `-Pdeep`/
+      # `-PonlyIntegration` run would tag-filter it out). Honest KILLED-vs-DEGRADED tally in output.
+      - name: Real kill -9 matrix -> --resume identical-to-clean
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: test-reports-deep
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
+  # PR-only Docker build gate: validate the root Dockerfile builds multi-arch and
+  # the image runs, on pull requests. It does NOT run on `main`/dispatch — there,
+  # docker-publish builds+smokes+pushes the image itself, so a separate validation
+  # build would just be a redundant second multi-arch build per merge. No push, no
+  # credentials, no network — fork-safe.
+  #
+  # Deliberately NO docker/setup-qemu-action: the runtime stage only pulls the
+  # JRE base and COPYs the arch-neutral uber-jar (no RUN), so building the foreign
+  # arch on this amd64 runner is pure pull+copy+metadata and needs no emulation.
+  # That also makes this job a guard -- add a RUN to the runtime stage and the
+  # arm64 build here starts needing QEMU and fails, flagging the regression.
+  docker-image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Build multi-arch image (validate both arches, no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha
+          # ignore-error: a fork PR can't write the base repo's Actions cache
+          # (read-only token) — degrade to a warning instead of failing the build.
+          cache-to: type=gha,mode=max,ignore-error=true
+
+      - name: Build native image + load for smoke
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          load: true
+          tags: swath:ci
+          cache-from: type=gha
+
+      - name: Smoke — image runs and entrypoint passes args to swath
+        run: docker run --rm swath:ci --help
+
+  # Manual GHCR publish + deep runtime smoke. Tagged releases publish through
+  # release.yml; ordinary main pushes never publish a mutable image. Gated on the tests: `needs`
+  # fast-tests + integration-tests, so an image is never published from code that
+  # fails its tests. It builds the image itself (so it does not need docker-image).
+  # Gated on ALL test jobs (`needs` fast-tests + integration-tests + deep-tests), so an image
+  # is never published from code that fails any tier. It also promotes the tested uber-jar
+  # from fast-tests into the image (see the build-context step below) rather than recompiling.
+  # Pushes the multi-arch manifest to this repository's GHCR namespace via the
+  # built-in GITHUB_TOKEN. Package visibility is managed in the repository/package
+  # settings; the workflow itself does not assume private or public visibility.
+  docker-publish:
+    needs: [fast-tests, integration-tests, deep-tests]
+    if: github.event_name == 'workflow_dispatch'
+    # Serialize ALL publishes globally (main + any dispatched branch share this one
+    # group) so two publishes can never race the shared GHCR tags (main/sha-).
+    # cancel-in-progress: false — never kill a publish mid-push; queue instead. If
+    # publishes stack, only a superseded commit's *publish* is dropped (its tests
+    # still ran, since the test jobs are not in this group), and the `main`/`sha-`
+    # tags still converge to the newest commit.
+    concurrency:
+      group: ghcr-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      # Download the EXACT uber-jar that passed fast-tests and lay it out at the path the
+      # Dockerfile's `build` stage emits (/src/swath-cli/build/libs/swath.jar). The
+      # `build-contexts: build=promote` below then substitutes this directory for the
+      # Dockerfile's compile-from-source `build` stage, so the image ships the tested bytes
+      # and skips a third Gradle compile. Local `docker build .` is unaffected (no override).
+      # NOTE: the promote layout mirrors the Dockerfile's `COPY --from=build /src/...` path —
+      # keep them in sync if that COPY path ever changes.
+      - name: Download checked container-promotion payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: swath-container-payload
+          path: promote
+
+      - name: Verify container-promotion payload
+        run: ./scripts/ci/verify-container-promotion.sh promote
+
+      # Smoke BEFORE push: build the native image, run the deep runtime smoke,
+      # and only push if it passes — so a shading/exclude/runtime regression can
+      # never reach the GHCR tags (`branch`/`sha-`).
+      - name: Build native image + load for deep smoke
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          build-contexts: |
+            build=promote
+          load: true
+          tags: swath:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install DuckDB CLI
+        run: |
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+          duckdb --version
+
+      # Deep runtime smoke: exercise the shaded uber-jar's real paths that --help
+      # can't reach -- ServiceLoader/FileSystem service files, sqlite native-lib
+      # load, the Parquet write path, and managed resume. Runs only here (non-PR), so a network
+      # hiccup never blocks a PR. The container runs as uid 10001, so the mounted
+      # output dir is made world-writable. Gates the push below.
+      - name: Smoke — container Parquet write + read + resume (public bucket)
+        run: |
+          set -euo pipefail
+          mkdir -p dockersmoke && chmod 777 dockersmoke
+          # A small, stable public AWS Open Data prefix (CMAS air-quality sample,
+          # us-east-1, anonymous / not requester-pays) — just a convenient tiny
+          # listing target for the smoke, nothing swath-specific about it.
+          BUCKET='s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/'
+          docker run --rm -v "$PWD/dockersmoke:/out" swath:ci \
+            list "$BUCKET" --no-sign-request --region us-east-1 \
+            --format parquet -o /out/data
+          N=$(duckdb -noheader -list -c "select count(*) from '$PWD/dockersmoke/data/**/*.parquet'")
+          echo "objects read back from Parquet: $N"
+          test "$N" -ge 1
+          # The supported resume command takes the managed output-directory run
+          # handle. Against a completed dataset it must be a clean no-op — the
+          # object count must be unchanged, not just exit 0.
+          docker run --rm -v "$PWD/dockersmoke:/out" swath:ci \
+            resume /out/data
+          N2=$(duckdb -noheader -list -c "select count(*) from '$PWD/dockersmoke/data/**/*.parquet'")
+          echo "objects after resume: $N2"
+          test "$N2" -eq "$N"
+
+      # Only now — after the smoke passed — log in and push the multi-arch
+      # manifest to this repository's GHCR namespace.
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata (tags + labels + annotations)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        env:
+          # Emit OCI annotations at the INDEX level too (default is manifest-only).
+          # A multi-arch push renders its top-level image INDEX in the GHCR package
+          # page; without index annotations, org.opencontainers.image.{source,
+          # description,…} live only inside the per-arch config blobs (via `labels`),
+          # which GHCR's UI/repo-auto-link don't read — so the package shows a bare
+          # digest list. Index+manifest annotations give GHCR the repo link + desc.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # Dev images only: immutable sha- tags plus the branch name. The mutable
+          # `latest` tag belongs to published releases and is owned solely by
+          # release.yml, so a manual dev publish can never regress it to an
+          # unversioned main build.
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+
+      # Provenance note: the deep smoke above ran the native `--load`ed amd64 image;
+      # this step rebuilds the multi-arch manifest from the SAME build cache in the
+      # SAME job seconds later, so the pushed amd64 is effectively the smoked amd64.
+      # Two residual facts, accepted as low-risk for an arch-neutral RUN-free jar:
+      # (1) if the BuildKit cache ever misses between the two builds, shadowJar is
+      #     not guaranteed byte-reproducible, so the pushed bytes could differ;
+      # (2) arm64 is validated to build + start but is NOT runtime-smoked (no arm64
+      #     runner / no QEMU) — it is the same arch-neutral jar on the arm64 JRE.
+      # Exact image-digest promotion would require build-once → smoke →
+      # `imagetools create`; the current workflow instead promotes the exact tested
+      # jar and rebuilds the image manifest from the same cache.
+      - name: Build + push multi-arch image to GHCR
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          # Promote the SAME tested uber-jar (see the smoke build above): substitute the
+          # Dockerfile's compile-from-source `build` stage with the prebuilt jar. The jar is
+          # arch-neutral bytecode, so one artifact serves both linux/amd64 and linux/arm64.
+          build-contexts: |
+            build=promote
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # OCI annotations on the index/manifest (not just the per-arch config
+          # `labels` above) so the GHCR package page shows the description and
+          # auto-links back to this repo for the multi-arch manifest.
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # Provenance kept ON (buildx default): the extra `unknown/unknown` entry in
+          # the GHCR package is the SLSA build-provenance attestation manifest (a
+          # supply-chain attestation, NOT a broken arch — it references the real
+          # amd64/arm64 images and is ignored by `docker pull`/`run`. Set
+          # `provenance: false` here to drop it.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Surface the pushed manifest's digest so consumers can pin
+      # `ghcr.io/…@sha256:…` without relying on a mutable tag.
+      - name: Report pushed image digest
+        run: |
+          {
+            echo "### swath image pushed to GHCR"
+            echo '```'
+            echo "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

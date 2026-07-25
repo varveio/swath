@@ -1,0 +1,76 @@
+# Keep the Docker build context small and free of host build artifacts —
+# Gradle build outputs and caches are always rebuilt inside the image.
+build/
+**/build/
+.gradle/
+**/.gradle/
+out/
+**/out/
+
+# VCS / editor / IDE cruft — irrelevant to the Gradle build. `*.swp` matters beyond tidiness:
+# an editor swap file (e.g. `.AGENTS.md.swp`) holds the buffer's text, so it can carry private
+# prose into the context even when the file it shadows is excluded.
+.git/
+.github/
+.idea/
+**/.idea/
+*.iml
+.vscode/
+*.swp
+*.class
+.project
+.classpath
+.settings/
+bin/
+**/bin/
+
+# Documentation, notes, and design material — not needed to build/run the
+# engine image.
+docs/
+README.md
+AGENTS.md
+
+# Internal trees — notes, infra, tooling, measurement instruments, run artifacts.
+# None of it is part of the engine image.
+private/
+
+# Non-Docker tooling trees — not part of the engine image. `tools/` carries no tracked
+# files, but an untracked, regenerable uv virtualenv can still sit there on disk; this
+# is a build-context (filesystem) path, so the bare name is deliberate.
+# The legal notice verifier invoked by shadowJar needs this renderer; keep every
+# other script out of the builder context.
+scripts/
+!scripts/
+scripts/*
+!scripts/legal/
+scripts/legal/*
+!scripts/legal/render-third-party-notices.py
+tools/
+
+# Run artifacts + local state. `.gitignore` already keeps these out of git, but a
+# .dockerignore MISS is not the same as a .gitignore hit: `COPY . .` copies from the
+# FILESYSTEM, so anything git merely ignores still enters the build context — and CI
+# exports builder layers with `cache-to: type=gha,mode=max`, so it reaches a remote
+# cache. These carry real listing data: a local `.swath-checkpoint/` SQLite here held a
+# bucket name and a non-loopback RFC1918 endpoint. Keep the two ignore files in step.
+.swath-checkpoint/
+**/.swath-checkpoint/
+.jqwik-database
+**/.jqwik-database
+*.parquet
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/tmp-fixtures/
+.agent/
+__pycache__/
+*.pyc
+.venv/
+**/.venv/
+.pytest_cache/
+**/.pytest_cache/
+*.egg-info/
+
+# Misc
+*.log
+.DS_Store

@@ -1,0 +1,14 @@
+<configuration>
+    <!-- swath logs to stderr so stdout stays clean for piped listing output. -->
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{20} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="WARN">
+        <appender-ref ref="STDERR"/>
+    </root>
+    <logger name="io.varve.swath" level="INFO"/>
+</configuration>

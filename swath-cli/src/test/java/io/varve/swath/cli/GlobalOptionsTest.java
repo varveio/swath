@@ -1,0 +1,84 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.cli;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
+
+/**
+ * Pins: {@code -v}/{@code -q} are accepted BEFORE or AFTER the verb —
+ * {@code swath -v list …} and {@code swath list -v …} both work, and {@link
+ * GlobalOptions#effectiveVerbosity} sees whichever placement the user actually used.
+ */
+class GlobalOptionsTest {
+
+    @Test
+    void verbosityBeforeTheVerbIsVisibleOnTheRootCommand() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("-v", "list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isEqualTo(1);
+    }
+
+    @Test
+    void verbosityAfterTheVerbIsAlsoVisible() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix", "-v");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isEqualTo(1);
+    }
+
+    @Test
+    void repeatedVFlagsStack() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix", "-vvv");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isEqualTo(3);
+    }
+
+    @Test
+    void noVerbosityFlagIsZero() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isZero();
+    }
+
+    @Test
+    void quietParsesOnEitherSideOfTheVerbToo() {
+        CommandLine before = App.commandLine();
+        before.parseArgs("-q", "list", "s3://bucket/prefix");
+        CommandLine beforeList = before.getSubcommands().get("list");
+        ListCommand listBefore = (ListCommand) beforeList.getCommand();
+        assertThat(listBefore.global.quiet).isFalse();   // set on the ROOT App's mixin, not list's own
+        assertThat(GlobalOptions.effectiveQuiet(beforeList)).isTrue();
+
+        CommandLine after = App.commandLine();
+        after.parseArgs("list", "s3://bucket/prefix", "-q");
+        ListCommand listAfter = (ListCommand) after.getSubcommands().get("list").getCommand();
+        assertThat(listAfter.globalOptions().quiet).isTrue();
+    }
+
+    @Test
+    void verbosityConfiguresTheSwathLogbackLogger() {
+        Logger logger = (Logger)
+                LoggerFactory.getLogger("io.varve.swath");
+        Level originalLevel = logger.getLevel();
+        try {
+            CommandLine cmd = App.commandLine();
+            cmd.execute("-vv", "--help");
+
+            assertThat(logger.getLevel()).isEqualTo(Level.DEBUG);
+        } finally {
+            logger.setLevel(originalLevel);
+        }
+    }
+}

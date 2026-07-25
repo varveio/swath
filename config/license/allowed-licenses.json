@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Allow-list for jk1 `checkLicense` — the swath dependency-license gate.",
+    "A distributed dependency PASSES if AT LEAST ONE of its declared licenses matches an",
+    "entry here (so dual-licensed deps like Jetty=Apache/EPL, Logback=EPL/LGPL, and the",
+    "Java-EE CDDL/GPL-with-Classpath-Exception bits all pass via their permissive option).",
+    "Entries are matched as regex against the NORMALIZED license name (see",
+    "license-normalizer-bundle.json). Bare GPL/LGPL/AGPL are deliberately NOT listed: a",
+    "future dependency that is GPL/AGPL-ONLY (no permissive alternative) will FAIL the build.",
+    "There are NO per-module exemptions, and none should be added: an exemption admits an",
+    "artifact precisely because its license could not be established, which is the one case",
+    "the gate exists to catch. If a dependency cannot pass on its declared license, exclude",
+    "the dependency (see excludeHadoopServiceStack in swath-core/build.gradle.kts).",
+    "Keep in sync with THIRD_PARTY_NOTICES.md. See build.gradle.kts `licenseReport` block."
+  ],
+  "allowedLicenses": [
+    { "moduleLicense": "Apache License, Version 2.0" },
+    { "moduleLicense": "MIT License" },
+    { "moduleLicense": "MIT-0" },
+    { "moduleLicense": ".*2-Clause BSD.*" },
+    { "moduleLicense": ".*3-Clause BSD.*" },
+    { "moduleLicense": "Revised BSD" },
+    { "moduleLicense": ".*Eclipse Public License.*" },
+    { "moduleLicense": "(?s).*CDDL.*" },
+    { "moduleLicense": "(?s).*Common Development and Distribution License.*" },
+    { "moduleLicense": "PUBLIC DOMAIN" },
+    { "moduleLicense": "Creative Commons Legal Code" },
+    { "moduleLicense": "The Go license" }
+  ]
+}

@@ -1,0 +1,78 @@
+[versions]
+picocli = "4.7.6"
+slf4j = "2.0.16"
+logback = "1.5.18"
+micrometer = "1.17.0"
+awssdk = "2.31.78"
+parquet = "1.15.1"
+hadoop = "3.4.1"
+zstdjni = "1.5.6-9"
+# Pinned explicitly rather than relying on the transitive version pulled in by
+# parquet-hadoop/hadoop-mapreduce-client-core (currently the same 2.0.2) — see swath-core's
+# PageCodec#LZ4, which references io.airlift.compress.lz4 classes directly.
+aircompressor = "2.0.2"
+junit = "5.11.4"
+assertj = "3.27.3"
+jqwik = "1.9.2"
+awaitility = "4.2.2"
+testcontainers = "1.20.6"
+sqlitejdbc = "3.47.1.0"
+jetty = "12.1.10"
+duckdbjdbc = "1.5.4.0"
+jmh = "1.37"
+jmhplugin = "0.7.3"
+jackson = "2.22.0"
+bucket4j = "8.10.1"
+commonscodec = "1.16.1"
+shadowplugin = "8.3.9"
+licensereport = "3.1.4"
+spotless = "7.0.2"
+otelproto = "1.10.0-alpha"
+
+[libraries]
+picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
+picocli-codegen = { module = "info.picocli:picocli-codegen", version.ref = "picocli" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
+micrometer-registry-otlp = { module = "io.micrometer:micrometer-registry-otlp", version.ref = "micrometer" }
+
+awssdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awssdk" }
+awssdk-s3 = { module = "software.amazon.awssdk:s3" }
+awssdk-apache-client = { module = "software.amazon.awssdk:apache-client" }
+awssdk-sts = { module = "software.amazon.awssdk:sts" }
+
+parquet-hadoop = { module = "org.apache.parquet:parquet-hadoop", version.ref = "parquet" }
+hadoop-common = { module = "org.apache.hadoop:hadoop-common", version.ref = "hadoop" }
+hadoop-mapreduce-client-core = { module = "org.apache.hadoop:hadoop-mapreduce-client-core", version.ref = "hadoop" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstdjni" }
+aircompressor = { module = "io.airlift:aircompressor", version.ref = "aircompressor" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlitejdbc" }
+jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
+jetty-server = { module = "org.eclipse.jetty:jetty-server" }
+duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdbjdbc" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+bucket4j-core = { module = "com.bucket4j:bucket4j-core", version.ref = "bucket4j" }
+commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonscodec" }
+
+testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-junit = { module = "org.testcontainers:junit-jupiter" }
+testcontainers-localstack = { module = "org.testcontainers:localstack" }
+
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
+# Test-scope only: the real OTLP wire proto types, so an export-path test can assert on
+# the actual exported NumberDataPoint value, not just series presence. Already a transitive
+# runtime dep of micrometer-registry-otlp; this pins it explicitly on the test compile classpath
+# (see OtlpNaNOmissionTest's javadoc for why it wasn't there before).
+opentelemetry-proto = { module = "io.opentelemetry.proto:opentelemetry-proto", version.ref = "otelproto" }
+
+[plugins]
+jmh = { id = "me.champeau.jmh", version.ref = "jmhplugin" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadowplugin" }
+license-report = { id = "com.github.jk1.dependency-license-report", version.ref = "licensereport" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }

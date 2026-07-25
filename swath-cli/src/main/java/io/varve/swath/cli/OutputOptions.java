@@ -1,0 +1,542 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.cli;
+
+import io.varve.swath.error.InvalidArgsException;
+import io.varve.swath.error.InvalidConfigException;
+import io.varve.swath.filter.SizeParser;
+import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.parquet.PartWriter;
+import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintStream;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.Map;
+import picocli.CommandLine.ITypeConverter;
+import picocli.CommandLine.Option;
+import picocli.CommandLine.TypeConversionException;
+
+/**
+ * Output destination and shape: the {@code --format}/{@code -o} sink, the Parquet writer pool and
+ * part-rotation cadence, and the JSON run-summary sidecar flags. Owns opening the text
+ * and Parquet sinks and validating the memory-bounded writer/rotation knobs.
+ */
+final class OutputOptions {
+
+    /** The leading {@code _} keeps the sidecar out of a bare {@code *.parquet} glob. */
+    static final String DEFAULT_SUMMARY_JSON_NAME = "_swath_summary.json";
+
+    @Resume(value = ResumeClass.IDENTITY, restored = true)
+    @Option(names = "--format", paramLabel = "FORMAT", converter = FormatConverter.class,
+            description = "Output encoding: auto, table, tsv, jsonl, or parquet (default: auto).")
+    void setFormat(OutputFormat format) {
+        this.format = format;
+        this.formatSpecified = true;
+    }
+
+    /** Concrete parsed format, or {@code null} for omitted/explicit {@code auto}. Direct assignment
+     * remains a same-package construction seam for tests and {@link ResumeCommand}. */
+    OutputFormat format;
+
+    /** Picocli presence bit: unlike {@link #format}, distinguishes omitted from explicit auto. */
+    private boolean formatSpecified;
+
+    /** Accepts the explicit {@code auto} spelling alongside the four concrete formats. Auto maps
+     * to {@code null}; {@link #formatSpecified} preserves its option presence so resume treats it
+     * exactly like an explicitly selected concrete format rather than restoring over it. */
+    static final class FormatConverter implements ITypeConverter<OutputFormat> {
+        @Override
+        public OutputFormat convert(String value) {
+            if ("auto".equalsIgnoreCase(value)) {
+                return null;
+            }
+            try {
+                return OutputFormat.valueOf(value.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new TypeConversionException(
+                        "'" + value + "' is not one of [table, tsv, jsonl, parquet, auto]");
+            }
+        }
+    }
+
+    @Resume(value = ResumeClass.IDENTITY, restored = true)
+    @Option(names = {"-o", "--output"}, paramLabel = "PATH",
+            description = "Write to PATH; known extension selects a file, otherwise a dataset; - is stdout.")
+    String destination;
+
+    @Resume(value = ResumeClass.IDENTITY, restored = true)
+    @Option(names = "--output-type", paramLabel = "file|dir",
+            description = "Override -o file/directory inference.")
+    String outputType;
+
+    /** Stored run-context field retained for resume reconstruction; new runs always escape text. */
+    boolean rawOutput;
+
+    int parquetWriters = 3;
+
+    /** Resolved -o destination kind: set once by {@link #resolveOutput} in {@code call()}. */
+    DestinationKind resolvedKind = DestinationKind.STDOUT;
+
+    /** The concrete format {@link #resolveOutput} settled on (post-TTY/-extension resolution), i.e.
+     * exactly what {@code run_meta.output_format} stores — never the raw {@code auto}/{@code null}
+     * {@link #format}. {@link ResumeRegistry#identitySpec} reads this so the identity string a run
+     * persists at creation matches the one recomputed on resume; {@link ListCommand} keeps it in
+     * step with its {@code resolved} local across the resume restore. */
+    OutputFormat resolvedFormat;
+
+    /** The two axes {@code -o} resolves to: a durable directory dataset (today: parquet
+     * only -- the multi-writer pool) or an atomically-named single file. {@code STDOUT} is its own
+     * kind (no destination given, or {@code -o -}). */
+    enum DestinationKind { STDOUT, FILE, DIRECTORY }
+
+    /** A fully resolved {@code --format} x {@code -o} decision. */
+    record Resolved(OutputFormat format, DestinationKind kind) {
+    }
+
+    /** Known {@code -o} single-file extensions -> format: "One rule, reused from
+     * format inference." {@code table} has no file extension -- it is the TTY-only human view. */
+    private static final Map<String, OutputFormat> EXTENSION_FORMATS = Map.of(
+            ".tsv", OutputFormat.TSV,
+            ".jsonl", OutputFormat.JSONL,
+            ".parquet", OutputFormat.PARQUET);
+
+    static String token(OutputFormat format) {
+        return format.name().toLowerCase(Locale.ROOT);
+    }
+
+    /** Whether the caller selected {@code --format}, including explicit {@code auto}. A direct
+     * concrete field assignment is also explicit for same-package command-construction seams. */
+    boolean formatWasExplicitlySet() {
+        return formatSpecified || format != null;
+    }
+
+    private static String extensionOf(String destination) {
+        Path name = Path.of(destination).getFileName();
+        String fileName = name == null ? "" : name.toString();
+        int dot = fileName.lastIndexOf('.');
+        return dot < 0 ? "" : fileName.substring(dot).toLowerCase(Locale.ROOT);
+    }
+
+    /** Format implied by a recognized destination extension, or {@code null} when none is known. */
+    static OutputFormat formatFromExtension(String destination) {
+        if (destination == null || "-".equals(destination)) {
+            return null;
+        }
+        // A trailing separator carries no destination-kind meaning. Strip it before asking Path
+        // for the final name component, otherwise a recorded
+        // "out.jsonl/" would evade FILE-origin resume refusal. Treat both common separator
+        // spellings as metadata may have been written on a different host OS.
+        int end = destination.length();
+        while (end > 0) {
+            char last = destination.charAt(end - 1);
+            if (last != '/' && last != '\\') {
+                break;
+            }
+            end--;
+        }
+        if (end == 0) {
+            return null;
+        }
+        String normalized = destination.substring(0, end);
+        String fileName;
+        try {
+            Path name = Path.of(normalized).getFileName();
+            fileName = name == null ? "" : name.toString();
+        } catch (InvalidPathException e) {
+            // Foreign/corrupt checkpoint metadata still needs the recorded-destination gate to
+            // fail closed. Its filesystem probe will reject the invalid path; retain only the
+            // lexical final component here so a recognized extension reaches that probe.
+            int slash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+            fileName = normalized.substring(slash + 1);
+        }
+        if (fileName.isEmpty()) {
+            return null;
+        }
+        int dot = fileName.lastIndexOf('.');
+        String extension = dot < 0 ? "" : fileName.substring(dot).toLowerCase(Locale.ROOT);
+        return EXTENSION_FORMATS.get(extension);
+    }
+
+    /**
+     * Resolve only destination kind while {@link ResumeCommand} defers parsing checkpoint format
+     * metadata until after the recorded-destination refusal. Full format/extension validation is
+     * repeated once that gate has passed.
+     */
+    Resolved resolveDeferredResumeOutput(boolean stdoutIsTerminal) throws InvalidArgsException {
+        OutputFormat placeholder = OutputFormat.defaultFor(stdoutIsTerminal);
+        if (isStdoutDestination()) {
+            if (outputType != null) {
+                parseOutputType(outputType);
+                throw new InvalidArgsException("--output-type is meaningless with a stdout destination "
+                        + "(no -o, or -o -) -- there is no file-vs-directory choice to override; drop "
+                        + "--output-type, or pass a real -o PATH");
+            }
+            resolvedKind = DestinationKind.STDOUT;
+            return new Resolved(placeholder, resolvedKind);
+        }
+        OutputFormat fromExtension = formatFromExtension(destination);
+        resolvedKind = resolveOutputTypeOverride(
+                fromExtension != null ? DestinationKind.FILE : DestinationKind.DIRECTORY);
+        return new Resolved(fromExtension != null ? fromExtension : placeholder, resolvedKind);
+    }
+
+    /** {@code true} iff {@code -o} was omitted, or given literally as {@code -} (both
+     * mean stdout). Deliberately does NOT mutate {@link #destination} to {@code null}:
+     * an explicit {@code -o -} must stay visible to {@code restoreString} in
+     * {@link ListCommand#restoreRunContext} (else a bare {@code swath resume} could silently restore
+     * the checkpointed destination OVER the user's explicit stdout request) and to {@link
+     * ListCommand#validateSortFlags} (else a sorted {@code swath resume -o -} could bypass the
+     * stdout-vs-{@code --sort} rejection on the resume-carve-out branch, since that branch only
+     * skips the check when {@code destination == null}). */
+    boolean isStdoutDestination() {
+        return destination == null || "-".equals(destination);
+    }
+
+    private static DestinationKind parseOutputType(String outputType) throws InvalidArgsException {
+        return switch (outputType.toLowerCase(Locale.ROOT)) {
+            case "file" -> DestinationKind.FILE;
+            case "dir", "directory" -> DestinationKind.DIRECTORY;
+            default -> throw new InvalidArgsException(
+                    "--output-type must be 'file' or 'dir' (got '" + outputType + "')");
+        };
+    }
+
+    private DestinationKind resolveOutputTypeOverride(DestinationKind inferred) throws InvalidArgsException {
+        return outputType == null ? inferred : parseOutputType(outputType);
+    }
+
+    /**
+     * Resolve the {@code --format} x {@code -o} destination axes in one place, so
+     * every conflict/precedence rule lives beside its sibling: no {@code -o} (or {@code -o -}) is
+     * stdout, format defaults via {@code auto}. A real {@code -o} path with a known
+     * extension is a single file (the extension can supply the format when {@code --format} is
+     * omitted, and MUST agree with it when both are given, REGARDLESS of any {@code --output-type}
+     * override — the extension's implied format is a fact about the path, not something a
+     * file-vs-directory override changes); any other path is a directory dataset -- {@code
+     * --output-type} overrides the file-vs-directory call for a pathological name. Directory
+     * datasets are engine-supported for {@code parquet} only today (a true bare-file atomic
+     * Parquet writer and text-format dataset directories both need swath-core capabilities that
+     * don't exist yet — deferred, not this unit's to build; see the exit-2 guards below).
+     */
+    Resolved resolveOutput(boolean stdoutIsTerminal) throws InvalidArgsException, InvalidConfigException {
+        boolean explicitFormat = formatWasExplicitlySet();
+        OutputFormat selected = format != null ? format : OutputFormat.defaultFor(stdoutIsTerminal);
+        if (isStdoutDestination()) {
+            if (outputType != null) {
+                parseOutputType(outputType);   // validate the VALUE first (exit 2 on garbage too)
+                throw new InvalidArgsException("--output-type is meaningless with a stdout destination "
+                        + "(no -o, or -o -) -- there is no file-vs-directory choice to override; drop "
+                        + "--output-type, or pass a real -o PATH");
+            }
+            resolvedKind = DestinationKind.STDOUT;
+            resolvedFormat = selected;
+            return new Resolved(selected, resolvedKind);
+        }
+        String ext = extensionOf(destination);
+        OutputFormat fromExtension = formatFromExtension(destination);
+        DestinationKind kind = resolveOutputTypeOverride(
+                fromExtension != null ? DestinationKind.FILE : DestinationKind.DIRECTORY);
+        OutputFormat resolved;
+        if (explicitFormat) {
+            if (fromExtension != null && fromExtension != selected) {
+                throw new InvalidArgsException("--format " + (format == null ? "auto (resolved to "
+                        + token(selected) + ")" : token(selected)) + " conflicts with the '"
+                        + ext + "' extension of -o " + destination + " (which implies --format "
+                        + token(fromExtension) + "); match the extension, drop --format, or use a "
+                        + "path without a recognized extension");
+            }
+            resolved = selected;
+        } else if (fromExtension != null) {
+            resolved = fromExtension;
+        } else if (outputType != null) {
+            // --output-type was already applied above (it forced `kind`); the extension can't
+            // supply a format under it, so name what's ACTUALLY missing rather than re-suggesting
+            // the flag the caller already passed (the old message's bug: it recommended
+            // --output-type file even when --output-type was already set).
+            throw new InvalidArgsException("-o " + destination + " has no recognized extension "
+                    + "(.tsv/.jsonl/.parquet) and no --format was given; --output-type " + outputType
+                    + " chose the destination kind, but only --format can supply the format itself "
+                    + "-- pass --format explicitly");
+        } else {
+            throw new InvalidArgsException("-o " + destination + " has no recognized extension "
+                    + "(.tsv/.jsonl/.parquet) and no --format was given; pass --format explicitly, "
+                    + "use a file path with a known extension, or --output-type file to force a "
+                    + "single-file destination without a matching extension");
+        }
+        if (kind == DestinationKind.DIRECTORY && resolved != OutputFormat.PARQUET) {
+            // DEFERRED: text-format directory datasets need a multi-writer
+            // text framework that does not exist in swath-core today -- this guard is permanent
+            // until that framework lands, not a placeholder. No promise of future support here.
+            String correction = resolved == OutputFormat.TABLE
+                    ? "pass --output-type file, or choose a recognized-extension path "
+                            + "(.tsv/.jsonl/.parquet) with its matching --format"
+                    : "use a ." + token(resolved) + " file path, or --output-type file";
+            throw new InvalidArgsException("directory dataset output (-o " + destination + ") is "
+                    + "supported for --format parquet only today; " + correction);
+        }
+        resolvedKind = kind;
+        resolvedFormat = resolved;
+        return new Resolved(resolved, kind);
+    }
+
+    /**
+     * Re-derive {@link #resolvedKind} from the (possibly restored) {@link #destination} after
+     * resume-context restore ({@link ListCommand#restoreRunContext}) — a bare {@code swath resume}
+     * with no explicit {@code -o} restores the checkpointed destination AFTER {@link
+     * #resolveOutput} already ran against the pre-restore (often stdout) destination. Valid swath
+     * checkpoints can now record only stdout or directory-dataset destinations: FILE-kind runs
+     * require {@code --checkpoint none}. A restored {@code .parquet} path is therefore a directory
+     * dataset even though fresh path inference would call it FILE: the creating invocation may
+     * have used {@code --output-type dir}, and the checkpoint schema does not record that override.
+     * The caller first rejects recognized text extensions and ambiguous non-directory
+     * {@code .parquet} paths against the checkpoint's recorded value. Anything reaching this method
+     * is therefore stdout or a directory dataset, even when the directory has a recognized
+     * {@code .parquet} suffix.
+     */
+    void recomputeKindAfterRestore() {
+        if (isStdoutDestination()) {
+            resolvedKind = DestinationKind.STDOUT;
+            return;
+        }
+        resolvedKind = DestinationKind.DIRECTORY;
+    }
+
+    /**
+     * Startup echo of the resolved destination -- the resolved choice is echoed at
+     * startup so inference is never silent -- skipped for stdout (the common default has nothing
+     * to confirm) and under {@code -q}/{@code --quiet}.
+     */
+    void echoResolvedOutput(Resolved resolved, PrintStream err, boolean quiet) {
+        if (quiet || resolvedKind == DestinationKind.STDOUT) {
+            return;
+        }
+        String what = resolvedKind == DestinationKind.DIRECTORY
+                ? token(resolved.format()) + " dataset" : token(resolved.format());
+        err.println("→ writing " + what + " to " + destination);
+    }
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--parquet-part-size", paramLabel = "SIZE", description = "Target Parquet part size (default: 256mb).")
+    String partSize;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--part-rotation-interval", paramLabel = "DURATION",
+            description = "Rotate Parquet parts by age (default: 30s; 0/none disables).")
+    String partRotationInterval;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--part-rotation-max-rows", paramLabel = "N",
+            description = "Rotate Parquet parts by row count (default: 2000000; 0 disables).")
+    Long partRotationMaxRows;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--report", paramLabel = "PATH",
+            description = "Write the machine-readable run report to PATH.")
+    String summaryJson;
+
+    boolean noSummaryJson;
+
+    String summaryJsonInterval;
+
+    /** Contract §4.1 / §7 memory model: 2–4 decoupled Parquet writers (default 3). */
+    static final int MIN_PARQUET_WRITERS = 2;
+    static final int MAX_PARQUET_WRITERS = 4;
+
+    /**
+     * Rotation cadence defaults: bound the resume {@code durable_cursor} lag to a small
+     * fraction of a long run without materially raising peak writer-buffer memory. 30 s keeps the
+     * at-risk (non-durable) window short even on a slow/sparse listing; 2M rows caps the same window
+     * during bursts fast enough to write 2M small entries well inside 30 s, while staying far above
+     * normal per-part row counts so typical runs still rotate on size/time, not rows.
+     */
+    static final Duration DEFAULT_PART_ROTATION_INTERVAL = Duration.ofSeconds(30);
+    static final long DEFAULT_PART_ROTATION_MAX_ROWS = 2_000_000L;
+
+    /**
+     * Floor for a positive {@code --part-rotation-interval} (spin-storm defect):
+     * the value feeds {@code lane.queue.poll(interval, NANOSECONDS)} in the writer pool's lane loop,
+     * so an arbitrarily small positive duration timed out and immediately re-polled — a tight CPU
+     * wakeup storm across every lane. {@code 0}/{@code none}/{@code off} still mean "disabled"; only
+     * the {@code (0, MIN_PART_ROTATION_INTERVAL)} range is rejected. 100&nbsp;ms bounds an idle lane
+     * to at most 10 wakeups/sec (40/sec across the 4-lane max) while staying at or below every
+     * rotation-cadence value already exercised as legitimate.
+     */
+    static final Duration MIN_PART_ROTATION_INTERVAL = Duration.ofMillis(100);
+
+    /**
+     * Resolve the Parquet writer-pool size, enforcing the contract's bounded memory model
+     * (contract §4.1 "2–4 writers", I11). A {@code -o path.parquet} single-file destination
+     * -- replacing the old {@code --single-file} flag -- collapses to one lane; otherwise
+     * {@code --tune parquet.writers=N} must be in {@code [2,4]} — an out-of-range value would create that
+     * many row-group buffers and blow the heap budget, and {@code 1} for a directory dataset is the
+     * single-file model requested implicitly, which we reject so intent is explicit.
+     */
+    static int resolveParquetWriters(DestinationKind kind, int parquetWriters) throws InvalidConfigException {
+        if (kind == DestinationKind.FILE) {
+            return 1;
+        }
+        if (parquetWriters < MIN_PARQUET_WRITERS || parquetWriters > MAX_PARQUET_WRITERS) {
+            throw new InvalidConfigException("--tune parquet.writers must be between " + MIN_PARQUET_WRITERS
+                    + " and " + MAX_PARQUET_WRITERS + " (got " + parquetWriters
+                    + "); use -o <path>.parquet for a single output part");
+        }
+        return parquetWriters;
+    }
+
+    /** The Parquet part rotation target in bytes: {@code --parquet-part-size} if set, else 256 MB. */
+    long partSizeBytes() throws InvalidConfigException, InvalidArgsException {
+        return partSize != null ? SizeParser.parse(partSize)
+                : PartWriter.ROW_GROUP_BYTES * 4;
+    }
+
+    Duration resolvePartRotationInterval() throws InvalidConfigException {
+        return partRotationInterval == null ? DEFAULT_PART_ROTATION_INTERVAL
+                : parsePartRotationInterval(partRotationInterval);
+    }
+
+    static Duration parsePartRotationInterval(String raw) throws InvalidConfigException {
+        Duration parsed = DurationParser.parse(raw, "part-rotation-interval", true);
+        if (!parsed.isZero() && parsed.compareTo(MIN_PART_ROTATION_INTERVAL) < 0) {
+            throw new InvalidConfigException("--part-rotation-interval must be >= "
+                    + MIN_PART_ROTATION_INTERVAL + " (got " + raw
+                    + "); use 0/none/off to disable the trigger instead of a near-zero value");
+        }
+        return parsed;
+    }
+
+    long resolvePartRotationMaxRows() throws InvalidConfigException {
+        if (partRotationMaxRows == null) {
+            return DEFAULT_PART_ROTATION_MAX_ROWS;
+        }
+        if (partRotationMaxRows < 0) {
+            throw new InvalidConfigException(
+                    "--part-rotation-max-rows must be >= 0 (got " + partRotationMaxRows + "); 0 disables it");
+        }
+        return partRotationMaxRows;
+    }
+
+    Path openParquetDir() throws InvalidConfigException, IOException {
+        if (isStdoutDestination()) {
+            throw new InvalidConfigException("Parquet output requires -o <dir> (a directory for the part files)");
+        }
+        Path dir = Path.of(destination);
+        Files.createDirectories(dir);
+        return dir;
+    }
+
+    /** The temp-sibling path {@link #openSink} stages a FILE-kind destination through; not committed
+     * until {@link #commitFileSink()} runs, so a crash mid-run never leaves a partial file at the
+     * REAL destination path -- single files are published atomically. */
+    private Path pendingTempPath;
+    private Path pendingRealPath;
+
+    /**
+     * Open the text output sink. Stdout is opened directly (fd 1). A real {@code -o} destination is
+     * always FILE-kind for text formats (a directory dataset is rejected upstream in {@link
+     * #resolveOutput}) and is staged through a hidden temp sibling — {@link #commitFileSink()}
+     * atomically renames it into place, and MUST be called by the caller only after a successful
+     * run (never on a crash/exception path), so an interrupted run leaves no partial file at the
+     * real destination. Single-file destinations are non-resumable (refused in {@link
+     * ListCommand#runWithCheckpoint}), so there is no append mode to support here.
+     */
+    Writer openSink() throws IOException {
+        OutputStream os;
+        if (isStdoutDestination()) {
+            os = new FileOutputStream(FileDescriptor.out);   // raw fd → broken pipe throws (INT-12)
+        } else {
+            Path real = Path.of(destination);
+            Path name = real.getFileName();
+            String prefix = "." + (name == null ? "swath-out" : name.toString()) + ".swath.";
+            Path parent = real.getParent();
+            Path temp = Files.createTempFile(parent == null ? Path.of(".") : parent, prefix, ".tmp");
+            pendingTempPath = temp;
+            pendingRealPath = real;
+            try {
+                os = Files.newOutputStream(temp, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            } catch (IOException | RuntimeException | Error e) {
+                // createTempFile succeeded, so make an open failure obey the same zero-litter
+                // contract as a later listing/write failure. cleanupFileSink is best-effort and
+                // therefore cannot mask the primary open exception.
+                cleanupFileSink();
+                throw e;
+            }
+        }
+        return new BufferedWriter(new OutputStreamWriter(new BufferedOutputStream(os), StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Publish a FILE-kind single-file sink opened by {@link #openSink} — atomically renames the temp
+     * sibling into place. Call ONLY after the writer has been closed following a run that completed
+     * without throwing; a mid-run exception must skip this call so the real destination path is
+     * simply never created. No-op for stdout or when no FILE-kind sink was opened.
+     */
+    void commitFileSink() throws IOException {
+        if (pendingTempPath == null) {
+            return;
+        }
+        try {
+            try {
+                Files.move(pendingTempPath, pendingRealPath,
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                // Same-directory rename: the temp is fully closed before publication, so readers
+                // never observe the partially-written staging contents.
+                Files.move(pendingTempPath, pendingRealPath, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            cleanupFileSink();
+        }
+    }
+
+    /** Best-effort cleanup for every failed FILE-kind attempt. Never masks the run's real failure. */
+    void cleanupFileSink() {
+        Path temp = pendingTempPath;
+        pendingTempPath = null;
+        pendingRealPath = null;
+        if (temp != null) {
+            try {
+                Files.deleteIfExists(temp);
+            } catch (IOException ignored) {
+                // Preserve the primary listing/output exception, matching other atomic writers.
+            }
+        }
+    }
+
+    /**
+     * An explicit report path always wins; the internal suppression seam
+     * disables the default sidecar; otherwise a directory output (parquet {@code -o <dir>}) gets one
+     * next to the part files, and a stdout/single-file text run gets none.
+     */
+    Path resolveSummaryJsonPath(OutputFormat resolved) throws InvalidConfigException {
+        if (summaryJson != null && noSummaryJson) {
+            throw new InvalidConfigException("an explicit --report cannot be combined with sidecar suppression");
+        }
+        if (noSummaryJson) {
+            return null;
+        }
+        if (summaryJson != null) {
+            return Path.of(summaryJson);
+        }
+        if (resolved == OutputFormat.PARQUET && !isStdoutDestination()) {
+            return Path.of(destination, DEFAULT_SUMMARY_JSON_NAME);
+        }
+        return null;
+    }
+}

@@ -1,0 +1,50 @@
+name: Bug report
+description: Report something that swath does wrong or unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. For anything
+        security-sensitive, please follow [SECURITY.md](../blob/main/SECURITY.md)
+        and report privately instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+      placeholder: swath exited with … but I expected …
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command line and, if possible, the bucket shape or a minimal fixture.
+      placeholder: |
+        swath ls s3://… --format parquet …
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: swath version
+      description: Output of `swath --version` (or the commit SHA if built from source).
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture (e.g. Linux x86_64, macOS arm64).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Any error output. Redact bucket names or keys if they are sensitive.
+      render: shell
+    validations:
+      required: false

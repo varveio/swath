@@ -1,0 +1,5 @@
+# Steer reporters away from public issues for security reports.
+# The security-advisory and discussions contact links are added once the final
+# public repository slug is fixed — hardcoding the current org/repo here would
+# pin a slug that the cutover rewrites.
+blank_issues_enabled: false

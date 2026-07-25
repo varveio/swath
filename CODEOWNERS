@@ -1,0 +1,12 @@
+# Code owners for swath.
+# Ordered by specificity — the last matching pattern wins for a given path.
+# See https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repo.
+*                       @sagiba
+
+# Build and release machinery.
+/build-logic/           @sagiba
+/gradle/                @sagiba
+/.github/               @sagiba
+/config/                @sagiba

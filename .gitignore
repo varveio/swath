@@ -1,0 +1,52 @@
+# Java / Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+bin/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# Test artifacts
+.jqwik-database
+
+# OS / scratch
+.DS_Store
+*.log
+*.swp
+
+# Tool artifacts (never commit listing output or checkpoints)
+*.parquet
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.swath-checkpoint/
+/tmp-fixtures/
+
+# Autonomous-build working state (local; durable record is git commits + PRs).
+# A committed STOP/.started/DONE would mis-trigger the supervisor on a clone.
+.agent/
+
+# Private development material is never part of the public working surface.
+private/
+
+# Python bytecode cache (scripts/ci/*.py is invoked directly via python3).
+__pycache__/
+*.pyc
+
+# Python virtualenvs + tool caches — build products, never durable state.
+# `uv` writes its own `.venv/.gitignore` containing `*`, so a uv-made venv is
+# self-ignoring; do not rely on that — a venv made any other way must be ignored
+# by OUR rule, not by a third-party tool's artifact.
+.venv/
+**/.venv/
+.pytest_cache/
+**/.pytest_cache/
+*.egg-info/
