@@ -90,8 +90,8 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = "--color", paramLabel = "MODE",
-                description = "Color the end-of-run summary: auto, always, or never "
-                        + "(default: auto).")
+                description = "Color the progress line and end-of-run summary: auto, "
+                        + "always, or never (default: auto).")
         void color(AnsiPalette.Mode value) {
             global.color = value;
         }

@@ -3,8 +3,8 @@ Usage: swath resume [-hVqv] [--[no-]progress] [--[no-]stats] [--color=MODE]
 Resume a run by its output directory: swath resume <dir>.
       [<dir>]            The directory-dataset run handle to resume (opens
                            <dir>/.swath/checkpoint.sqlite).
-      --color=MODE       Color the end-of-run summary: auto, always, or never
-                           (default: auto).
+      --color=MODE       Color the progress line and end-of-run summary: auto,
+                           always, or never (default: auto).
   -h, --help             Show this help message and exit.
       --[no-]progress    Print live progress records to stderr (default: on
                            when stderr is a terminal and neither -q nor -v was

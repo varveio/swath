@@ -104,8 +104,8 @@ Resume:
       --restart              Discard any prior checkpoint and start fresh.
 
 Diagnostics:
-      --color=MODE           Color the end-of-run summary: auto, always, or
-                               never (default: auto).
+      --color=MODE           Color the progress line and end-of-run summary:
+                               auto, always, or never (default: auto).
       --engine-toggle=NAME=on|off
                              Set a diagnostic engine ablation (repeatable; see
                                docs/usage.md).

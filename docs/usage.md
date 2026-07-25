@@ -602,7 +602,7 @@ though the checkpoint is gone.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-q, --quiet` | off | Lowers the log level (see above) and suppresses the startup destination echo. `-qq` silences logging, but not the terminal `swath: …` error line printed on failure — that goes straight to the CLI's error stream, not through the logger |
-| `--color` | `auto` | Colors the end-of-run summary block: `auto` (color only when stderr is a terminal), `always`, or `never`. See [Color](#color) below |
+| `--color` | `auto` | Colors the live progress line and the end-of-run summary block: `auto` (color only when stderr is a terminal), `always`, or `never`. See [Color](#color) below |
 
 ---
 
@@ -880,7 +880,9 @@ meters.
 
 ### Color
 
-`--color=auto|always|never` (default `auto`) governs only the end-of-run summary block above — dim
+`--color=auto|always|never` (default `auto`) governs swath's two operator surfaces on stderr — the
+live progress line and the end-of-run summary block. Both draw from one palette, so a run cannot dim
+and accent by different rules in flight than it does at the end — dim
 labels/units, one accent for the headline figures (objects/elapsed/rate), red for the `INCOMPLETE`
 marker. This is purely cosmetic: as with terminal detection generally (see above), it decides *form*,
 never *whether* the block prints.

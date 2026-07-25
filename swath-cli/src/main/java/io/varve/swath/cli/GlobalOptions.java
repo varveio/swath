@@ -39,7 +39,8 @@ final class GlobalOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--color", paramLabel = "MODE",
-            description = "Color the end-of-run summary: auto, always, or never (default: auto).")
+            description = "Color the progress line and end-of-run summary: auto, always, "
+                    + "or never (default: auto).")
     AnsiPalette.Mode color = AnsiPalette.Mode.AUTO;
 
     /** A command whose CLI surface carries a {@link GlobalOptions} mixin. */
