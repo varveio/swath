@@ -59,6 +59,7 @@ final class IdleStealProbeConcurrencyTest {
     private static final int KEYS = 4_000;
     /** Long enough that a handed-away slot produces an overlap, short enough to keep the run brisk. */
     private static final long PROBE_HOLD_MILLIS = 25L;
+    private static final String INJECTED_FAULT = "injected unchecked fault inside the steal attempt";
 
     private static RunKey key() {
         return new RunKey("s3", null, "bucket", new byte[0], "probe-concurrency-hash",
@@ -137,7 +138,13 @@ final class IdleStealProbeConcurrencyTest {
      *
      * <p>Fails against a release wired only to the productive {@code CHILD_CREATED} path (the shape
      * the prototype for #3 had): there the throw skips the release entirely and the slot stays
-     * owned by a worker that no longer exists. Fast and deterministic, so it stays per-commit.
+     * owned by a worker that no longer exists.
+     *
+     * <p>Per-commit, not {@code deep}: it injects no latency and aborts at the first probe. It does
+     * depend on some idle worker reaching the steal path before the owner drains the keyspace — a
+     * window {@code KEYS / MAX_KEYS} pages wide against {@code WORKERS - 1} idle thieves — and if
+     * that ever failed to happen the run would complete normally and this method would fail loudly
+     * on the missing throw, never pass vacuously.
      */
     @Test
     @Timeout(60)
@@ -153,9 +160,8 @@ final class IdleStealProbeConcurrencyTest {
                 .interceptor((req, idx, page) -> {
                     if (isProbe(req)) {
                         probesThrown.incrementAndGet();
-                        throw new IllegalStateException("injected unchecked fault inside the steal attempt");
+                        throw new IllegalStateException(INJECTED_FAULT);
                     }
-                    Thread.sleep(1);   // keep workers committing, so someone reaches the steal path
                     return page;
                 })
                 .build();
@@ -172,8 +178,8 @@ final class IdleStealProbeConcurrencyTest {
             StringWriter out = new StringWriter();
             OutputStage output = new OutputStage(new JsonlFormatter(out));
             assertThatThrownBy(() -> new Pipeline<PageBatch>(1000).run(ctx, engine, output))
-                    .as("the injected fault is not swallowed — the scan aborts, as Scope requires")
-                    .isInstanceOf(Throwable.class);
+                    .as("the abort is THIS fault surfacing, not any failure that happens to end the run")
+                    .hasStackTraceContaining(INJECTED_FAULT);
 
             assertThat(probesThrown.get())
                     .as("the fixture must reach the steal path, or nothing was injected into the region")

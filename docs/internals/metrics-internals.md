@@ -557,6 +557,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `CHILD_MASS` | `large` | emitted more than 10,000 keys | |
 | `STEAL` | `attempted` | one real thief steal attempt (after the idle-backoff slot is acquired), regardless of outcome | |
 | `STEAL` | `futility_paced` | a victim was skipped this steal attempt because it is in a per-victim futility cooldown | |
+| `IDLE_SLOT` | `in_flight` | an idle worker was refused a steal attempt because **another worker owns the sole in-flight slot** — the fleet-wide one-attempt bound holding. The worker then waits on the release broadcast (the seconds-scale in-flight park backstop), so a high count against few `STEAL.attempted` is the expected shape of a slow probe, not a fault. Splits the aggregate `swath.idle_backoff.slot_denied`, which cannot tell this from `paced` | |
+| `IDLE_SLOT` | `paced` | an idle worker was refused a steal attempt because the **fleet is in exponential idle backoff** after consecutive non-productive outcomes — the slot itself is FREE. The opposite situation from `in_flight` (nothing to wait for; the pacing window has to elapse), which is why the two are separable here. Read with `swath.idle_backoff.level`: `paced` denials rising with a level pinned high means the fleet has stopped finding splittable victims | |
 | `THROTTLE` | `slowdown` | a 503 `SlowDown`/throttle **service** response (votes AIMD down) | |
 | `THROTTLE` | `server5xx` | an S3-side (or intermediary) 5xx server error — e.g. 500 InternalError — after retry exhaustion (votes AIMD down) | |
 | `THROTTLE` | `attempt_timeout` | REMOVED 2026-07-07 — reclassified to `TRANSIENT.attempt_timeout`: a client attempt-timeout is self-inflicted, not S3 backpressure, and must not vote AIMD down | removed |
