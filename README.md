@@ -120,6 +120,16 @@ without their credentials or their bill, testing your own tooling against a
 listing that would otherwise cost money to enumerate every run, and pinning
 listing behaviour in regression tests.
 
+It also works as a **listing cache**. A listing you have already paid to produce
+can be served back through the same API your tools already speak: list the bucket
+once with swath, then point everything that would otherwise re-list it at the
+replay server instead — local speed, no per-request S3 charge, and no load on the
+real bucket. Two things to weigh first. It serves a **point-in-time snapshot**,
+not live bucket state, so it fits workloads that can tolerate a listing as fresh
+as its last capture. And it has **no authentication**, so it belongs inside a
+trust boundary you already control. The operational surface is still being
+smoothed — see the scope note below.
+
 Scope: path-style `ListObjectsV2` over an existing listing fixture — no object
 data, no authentication, not a general S3 emulator. It is built by this repo but
 is not part of the swath CLI distribution. See
