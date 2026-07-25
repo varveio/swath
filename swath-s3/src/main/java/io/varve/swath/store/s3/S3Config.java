@@ -37,14 +37,20 @@ public record S3Config(
      */
     public static final Duration DEFAULT_ATTEMPT_TIMEOUT = Duration.ofSeconds(10);
     /**
-     * The per-attempt budget for a PROBE call class (thief 1-key pivot probe /
-     * delimiter=/ structure probe — {@code S3PageFetcher#callClass}), applied as a per-request {@code
-     * apiCallAttemptTimeout} override on top of the {@link #DEFAULT_ATTEMPT_TIMEOUT} client-level
-     * default. A probe carries no S3-backpressure signal and already caps its transient retries
-     * ({@code PROBE_TRANSIENT_RETRY_CAP=1}), so a stuck probe should be abandoned and retried quickly
-     * rather than holding an attempt open for the full 10 s WORKER-page budget — the long fuse behind
-     * a probe-timeout spiral. Worker pages are unaffected: they keep the 10 s client-level
-     * budget with no per-request override.
+     * The per-attempt budget for the POINT-probe call class (thief 1-key pivot probe —
+     * {@code S3PageFetcher#callClass}), applied as a per-request {@code apiCallAttemptTimeout}
+     * override on top of the {@link #DEFAULT_ATTEMPT_TIMEOUT} client-level default. A pivot probe
+     * carries no S3-backpressure signal, is answered from the first key at/after the cursor (so it is
+     * cheap and near-constant), and already caps its transient retries
+     * ({@code PROBE_TRANSIENT_RETRY_CAP=1}) — so a stuck one should be abandoned and retried quickly
+     * rather than holding an attempt open for the full scan budget.
+     *
+     * <p><b>Scope: pivot probes only.</b> This budget deliberately does NOT cover {@code delimiter=/}
+     * structure probes. Those are scan-class calls whose cost tracks the keyspace crossed, they
+     * measured ~10x a pivot probe on a real bucket, and putting them behind this 3 s fuse produced the
+     * probe-timeout storm documented in {@code docs/internals/probe-budgets.md}. Structure probes and
+     * worker pages both keep the {@link #DEFAULT_ATTEMPT_TIMEOUT} client-level budget with no
+     * per-request override.
      */
     public static final Duration DEFAULT_PROBE_ATTEMPT_TIMEOUT = Duration.ofSeconds(3);
     /**

@@ -64,13 +64,13 @@ public final class S3PageFetcher implements PageFetcher {
     private final RunMetrics metrics;
     private final S3FaultClassifier faultClassifier;
     /**
-     * Per-request {@code apiCallAttemptTimeout} override applied to a probe call
-     * class (pivot or structure — see {@link #callClass}), unless the request already carries an
-     * explicit {@link PageRequest#apiCallAttemptTimeoutOverride()} (the escalation path, which
-     * always wins). Worker pages are never touched — they keep the client-level {@link
-     * S3Config#DEFAULT_ATTEMPT_TIMEOUT} budget with no per-request override. Defaults to {@link
-     * S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT} for every constructor that does not thread an explicit
-     * {@link S3Config}.
+     * Per-request {@code apiCallAttemptTimeout} override applied to the POINT-probe call
+     * class ({@code pivot_probe} — see {@link #usesShortProbeBudget}), unless the request already
+     * carries an explicit {@link PageRequest#apiCallAttemptTimeoutOverride()} (the escalation path,
+     * which always wins). Worker pages and {@code delimiter=/} structure probes are never touched —
+     * both are scan-class calls and keep the client-level {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT}
+     * budget with no per-request override. Defaults to {@link S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT}
+     * for every constructor that does not thread an explicit {@link S3Config}.
      */
     private final Duration probeApiCallAttemptTimeout;
     private final AtomicLong apiCalls = new AtomicLong();
@@ -166,9 +166,11 @@ public final class S3PageFetcher implements PageFetcher {
             // always wins over the probe default immediately below.
             Duration override = req.apiCallAttemptTimeoutOverride();
             b.overrideConfiguration(o -> o.apiCallAttemptTimeout(override));
-        } else if (isProbeCallClass(callClass)) {
-            // A probe (pivot or structure) gets its own short per-attempt budget instead of the
-            // WORKER-page client-level default -- see S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT for why.
+        } else if (usesShortProbeBudget(callClass)) {
+            // A POINT probe (pivot) gets its own short per-attempt budget instead of the client-level
+            // scan budget -- see S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT for why. A delimiter=/ structure
+            // probe deliberately does NOT: it is a scan-class call and keeps the client-level budget
+            // (see #usesShortProbeBudget).
             Duration probeOverride = probeApiCallAttemptTimeout;
             b.overrideConfiguration(o -> o.apiCallAttemptTimeout(probeOverride));
         }
@@ -428,13 +430,22 @@ public final class S3PageFetcher implements PageFetcher {
     }
 
     /**
-     * True for either probe call class (pivot or structure) — the set of call
-     * classes that get the short {@link #probeApiCallAttemptTimeout} per-request override instead of
-     * the 10 s WORKER-page client-level budget. See {@link #callClass}.
+     * True for the POINT-probe call class only — the set of call classes that get the short
+     * {@link #probeApiCallAttemptTimeout} per-request override instead of the client-level
+     * {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} scan budget. See {@link #callClass}.
+     *
+     * <p><b>Why {@code structure_probe} is deliberately NOT in this set.</b> A {@code max_keys<=1}
+     * pivot probe is a point lookup: S3 answers it from the first key at/after the cursor, so it is
+     * cheap and near-constant (a genomeark run measured p50 103 ms / p99 300 ms over 3169 calls, with
+     * ZERO attempt timeouts under the 3 s budget). A {@code delimiter=/} structure probe is the
+     * opposite: S3 must SCAN forward, rolling keys up into {@code CommonPrefixes}, so its cost tracks
+     * the keyspace it crosses — the same run measured p50 1.15 s standalone and 5.4 s at the run's own
+     * 64-way concurrency. Sharing the point-probe budget put a scan-class call behind a 3 s fuse, and
+     * roughly half of all structure-probe attempts (1308 of 2612) tripped it. That storm is what
+     * starved the thief of pivots; see {@code docs/internals/probe-budgets.md} §2.
      */
-    private static boolean isProbeCallClass(String callClass) {
-        return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass)
-                || RunMetrics.CALL_CLASS_STRUCTURE_PROBE.equals(callClass);
+    private static boolean usesShortProbeBudget(String callClass) {
+        return RunMetrics.CALL_CLASS_PIVOT_PROBE.equals(callClass);
     }
 
     /**

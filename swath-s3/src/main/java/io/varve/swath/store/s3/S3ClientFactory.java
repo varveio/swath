@@ -30,12 +30,12 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
  * {@link S3Config#DEFAULT_API_CALL_TIMEOUT} for why it is sized as it is.
  *
  * <p>The client-level {@code apiCallAttemptTimeout} configured here ({@link
- * S3Config#DEFAULT_ATTEMPT_TIMEOUT}, 10 s) is the WORKER-page budget. A probe
- * call class (pivot/structure) gets a SHORTER per-request
- * override applied by {@link S3PageFetcher} directly ({@link
- * S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT}, 3 s) — this factory/client-level value
- * is never overridden for that; only the per-request override on the outgoing
- * {@code ListObjectsV2Request} differs.
+ * S3Config#DEFAULT_ATTEMPT_TIMEOUT}, 10 s) is the SCAN-class budget — worker pages AND
+ * {@code delimiter=/} structure probes, both of whose cost tracks the keyspace they cross. The
+ * POINT-probe call class (pivot) gets a SHORTER per-request override applied by
+ * {@link S3PageFetcher} directly ({@link S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT}, 3 s) — this
+ * factory/client-level value is never overridden for that; only the per-request override on the
+ * outgoing {@code ListObjectsV2Request} differs.
  */
 public final class S3ClientFactory {
 
