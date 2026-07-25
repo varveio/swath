@@ -176,4 +176,51 @@ final class StructureProbeTimeoutSuppressionTest {
                 .as("a 503 IS store backpressure -- a different signal, deliberately not suppression evidence")
                 .isTrue();
     }
+
+    /**
+     * INTEGRATION companion to {@link #aTimingOutStructureProbeRecordsAgainstTheVictimThroughTheThief}:
+     * a delimiter probe that faults with {@code SLOWDOWN} (a 503, store backpressure) instead of
+     * {@code ATTEMPT_TIMEOUT} must NOT move the timeout-suppression counters through the real
+     * {@link Thief#probeStructure}, not just at the {@code Kind.votesAimdDown()} unit level above.
+     *
+     * <p>Drives the fetcher directly (not {@link GaugedFetcher}-wrapped): {@code
+     * Kind#votesAimdDown()} faults are a deliberately UNBOUNDED ride-out in {@code GaugedFetcher}
+     * (AIMD paces them, not a retry cap — see its {@code fetchPage} javadoc), so a mock that always
+     * answers with {@code SLOWDOWN} would spin forever behind that wrapper. What this test isolates
+     * is {@code Thief}'s own kind check, which is exactly what a SLOWDOWN would still have to clear
+     * if it ever did reach {@code probeStructure} (e.g. once cap-exhaustion unwinds one).
+     */
+    @Test
+    void aSlowdownFaultedStructureProbeDoesNotRecordAgainstTheVictimThroughTheThief() throws Exception {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        AtomicInteger delimiterProbes = new AtomicInteger();
+        List<byte[]> siblingDirs = new ArrayList<>();
+        for (int i = 0; i <= 199; i++) {
+            siblingDirs.add(b("led/%04d/obj".formatted(i)));
+        }
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(siblingDirs)
+                .interceptor((req, idx, page) -> {
+                    if (req.delimiter() != null && req.delimiter().length > 0) {
+                        delimiterProbes.incrementAndGet();
+                        throw ThrottleException.slowDown("wedged structure probe, 503");
+                    }
+                    return page;
+                })
+                .build();
+        WorkerState victim = WorkerStates.of(1, b("led/0100/"), b("led/0100/obj"), b("led/02"));
+        victim.addKeysEmitted(100);
+        Thief thief = Thiefs.of(StubCheckpointStore.returning(42L), delegate, 1L, new byte[0],
+                ListingMode.OBJECTS, (childNodeId, childLo, childHi) -> { }, metrics);
+
+        thief.steal(List.of(victim));
+
+        assertThat(delimiterProbes.get())
+                .as("the structure probe path was actually exercised").isPositive();
+        assertThat(victim.consecutiveTimedOutStructureProbes())
+                .as("SLOWDOWN is store backpressure, not evidence about this keyspace's shape")
+                .isZero();
+        assertThat(counter(metrics, "STRUCTURE", "probe_timed_out"))
+                .as("the timeout-suppression metric must stay silent on a non-timeout fault").isZero();
+    }
 }

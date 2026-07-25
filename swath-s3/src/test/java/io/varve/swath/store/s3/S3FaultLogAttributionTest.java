@@ -40,12 +40,14 @@ class S3FaultLogAttributionTest {
     private static final Logger FAULT_LOGGER = (Logger) LoggerFactory.getLogger(S3PageFetcher.class);
 
     private ListAppender<ILoggingEvent> appender;
+    private Level previousLevel;
 
     @BeforeEach
     void attachAppender() {
         appender = new ListAppender<>();
         appender.start();
         FAULT_LOGGER.addAppender(appender);
+        previousLevel = FAULT_LOGGER.getLevel();
         FAULT_LOGGER.setLevel(Level.WARN);
     }
 
@@ -53,6 +55,7 @@ class S3FaultLogAttributionTest {
     void detachAppender() {
         FAULT_LOGGER.detachAppender(appender);
         appender.stop();
+        FAULT_LOGGER.setLevel(previousLevel);
     }
 
     /**

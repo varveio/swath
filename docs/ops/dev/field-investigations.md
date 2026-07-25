@@ -17,7 +17,7 @@ before/after numbers: the point of this file is that someone can re-run it.
 
 **Command:**
 
-```
+```bash
 swath list s3://genomeark/ --region us-east-1 --no-sign-request --format parquet -o <dir>
 ```
 

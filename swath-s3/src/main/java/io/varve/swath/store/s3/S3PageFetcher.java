@@ -485,9 +485,18 @@ public final class S3PageFetcher implements PageFetcher {
      * had the engine author absolute durations against one assumed base and had to divide them back
      * out here, which needed an explicit floor to stop a large configured base from letting
      * "escalation" shrink the budget. See {@code docs/internals/probe-budgets.md} §3.
+     *
+     * <p>{@code level} is also capped at {@link #MAX_ESCALATION_SHIFT} — the engine itself never
+     * asks for more than {@code TransientRetryFetcher.MAX_ATTEMPT_TIMEOUT_ESCALATION_LEVEL}, but
+     * this is the store's own boundary, so it must not trust an out-of-tree caller's level:
+     * {@code 1L << level} is a Java shift, not arithmetic, so it silently wraps (not overflows) once
+     * {@code level >= 64} -- e.g. {@code level=64} wraps back to a shift of 0, i.e. the UNESCALATED
+     * base budget, which is the opposite of what an "escalated" request asked for.
      */
+    private static final int MAX_ESCALATION_SHIFT = 30;
+
     Duration attemptTimeoutForLevel(String callClass, int level) {
-        int clamped = Math.max(level, 0);
+        int clamped = Math.min(Math.max(level, 0), MAX_ESCALATION_SHIFT);
         return baseAttemptTimeoutFor(callClass).multipliedBy(1L << clamped);
     }
 

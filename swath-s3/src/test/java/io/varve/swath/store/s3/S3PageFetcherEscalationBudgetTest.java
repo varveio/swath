@@ -114,4 +114,26 @@ class S3PageFetcherEscalationBudgetTest {
         assertThat(fetcher.attemptTimeoutForLevel(io.varve.swath.observability.RunMetrics.CALL_CLASS_PIVOT_PROBE, -3))
                 .isEqualTo(Duration.ofSeconds(3));
     }
+
+    /**
+     * A level far beyond anything the engine ever asks for must not overflow or wrap {@code 1L <<
+     * level} back to a smaller budget -- {@code level=64} in particular wraps a raw shift to 0,
+     * which would silently hand the request the UNESCALATED base instead of more room.
+     */
+    @Test
+    void runawayLevelIsClampedRatherThanOverflowingOrWrappingTheShift() {
+        FakeS3Client client = FakeS3Client.captureOnly();
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket");
+
+        Duration atCap = fetcher.attemptTimeoutForLevel(
+                io.varve.swath.observability.RunMetrics.CALL_CLASS_PIVOT_PROBE, 64);
+
+        assertThat(atCap)
+                .as("a runaway level must still buy MORE room than the base, never wrap back to it")
+                .isGreaterThan(Duration.ofSeconds(3));
+        assertThat(fetcher.attemptTimeoutForLevel(
+                        io.varve.swath.observability.RunMetrics.CALL_CLASS_PIVOT_PROBE, Integer.MAX_VALUE))
+                .as("clamping saturates rather than throwing on extreme input")
+                .isEqualTo(atCap);
+    }
 }
