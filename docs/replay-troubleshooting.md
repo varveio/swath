@@ -62,9 +62,8 @@ parts), run it through `sort-fixture` first — see
 The full fixture reproduces the collapse, but may take a long time to walk into
 its own tail. Cutting the fixture down to just the region that stalled shortens
 that loop without changing the failure: the sick run's own progress line and JSON summary name the
-region — `oldest_pending_range` (progress line) or `slow_ranges[].lo`/`.hi`
-(summary) tell you which key prefixes were still draining when things went
-bad. Keep only those prefixes, then re-sort:
+region — `slow_ranges[].lo`/`.hi` (summary) tells you which key prefixes were
+still draining when things went bad. Keep only those prefixes, then re-sort:
 
 ```bash
 duckdb -c "copy (select * from read_parquet('<fixture>/data/part-00000.parquet')
@@ -181,8 +180,8 @@ Four outputs, read together, tell the whole story without a debugger.
 actually busy; `live_rate` — the windowed keys/sec, so a stall shows up
 immediately rather than being smoothed into `avg_rate`; `steals` vs `splits` —
 climbing steals with flat splits is the probe-storm signature (a lot of
-attempts, nothing committing); `oldest_pending_range` / `cursor` — a frozen
-cursor with climbing `splits`/`api_calls` is the livelock signature.
+attempts, nothing committing), and flat `objects` with climbing
+`splits`/`api_calls` is the livelock signature.
 
 **The summary's `trajectory` block** (end-of-run JSON): `serial_frac` — the
 fraction of wall time spent at `<= 2` in-flight; `collapse_at_frac` — the

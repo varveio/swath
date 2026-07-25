@@ -30,7 +30,6 @@ import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.observability.RunSummary;
-import io.varve.swath.observability.SortMergeHeartbeat;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.BrokenPipe;
@@ -592,8 +591,8 @@ public final class ListRunner {
      * leftover {@code seg-*}/{@code merge-*.parquet}, if any) is swept before listing begins, so the
      * staging dir is always clean before a fresh run's segments land in it.
      *
-     * <p>On a reattach resume this method re-lists only the non-durable tail, so before the
-     * terminal summary it back-fills the pre-crash durable segments' objects/segment-count into this
+     * <p>On a reattach resume this method re-lists only the non-durable tail, so as soon as the
+     * durable set is read back it back-fills those segments' objects/segment-count into this
      * fresh run's counters ({@link io.varve.swath.observability.RunMetrics#recordRecoveredObjects}
      * + {@link io.varve.swath.observability.RunMetrics#recordRecoveredSortSegments}) — the
      * reattach/partial-relist sibling of {@link #runSortMergeOnly}'s backfill.
@@ -630,8 +629,6 @@ public final class ListRunner {
         producer.enableSortPacking(new SortPagePacker(comparator, sortConfig));
         SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
 
-        final long recoveredSortedRows;
-        final int recoveredSegments;
         if (reattach) {
             List<PartRef> segmentRows = sortedSegmentRows(store, runId);
             Set<String> keep = segmentRows.stream().map(PartRef::path).collect(Collectors.toSet());
@@ -643,8 +640,18 @@ public final class ListRunner {
             if (!segmentRows.isEmpty()) {
                 ctx.metrics().recordStealReason("SORT", "resume_reattached");
             }
-            recoveredSortedRows = segmentRows.stream().mapToLong(PartRef::rows).sum();
-            recoveredSegments = segmentRows.size();
+            // Backfill the pre-crash durable segments' rows/count HERE — the moment they become
+            // known, before this process lists anything — rather than once the merge is done. This
+            // fresh RunMetrics only ever sees the relisted TAIL in-process, so without the backfill
+            // objects/sort.segments under-report the whole run; recording it late additionally cost
+            // every live progress event of the listing phase its recovered_objects (they all
+            // reported 0, and the tally landed when the phase was already WRITING). The figures are
+            // read back from the checkpoint and never change afterwards. Nothing to do on a fresh
+            // or --restart run.
+            if (!segmentRows.isEmpty()) {
+                ctx.metrics().recordRecoveredObjects(segmentRows.stream().mapToLong(PartRef::rows).sum());
+                ctx.metrics().recordRecoveredSortSegments(segmentRows.size());
+            }
         } else {
             // A FRESH or --restart sorted run
             // starts this run_id at zero finalized segments, so anything already sitting in the
@@ -661,8 +668,6 @@ public final class ListRunner {
             } catch (IOException e) {
                 throw new OutputException("failed to sweep abandoned sort staging on fresh run", e);
             }
-            recoveredSortedRows = 0L;
-            recoveredSegments = 0;
         }
 
         SegmentSink sink = result -> {
@@ -705,20 +710,10 @@ public final class ListRunner {
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
                     merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                            sortedSegmentPaths(store, runId, stagingDir), sortConfig, mode, spec.bucket(),
+                            sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                             spec.argsHash(), runId, spec.progressInterval(), false);
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
-
-                    // A reattach resume re-lists only the non-durable tail (this method's javadoc), so
-                    // this fresh RunMetrics only saw the tail's entries/segments in-process. Back-fill the
-                    // pre-crash durable segments' rows/count captured above (before this process listed
-                    // anything) so objects/sort.segments in the terminal summary count the WHOLE run, not
-                    // just the tail. No-op (both locals stay 0) on a fresh or --restart run.
-                    if (recoveredSegments > 0) {
-                        ctx.metrics().recordRecoveredObjects(recoveredSortedRows);
-                        ctx.metrics().recordRecoveredSortSegments(recoveredSegments);
-                    }
                 })
                 // The sort path's final published output is itself Parquet (SortedParquetWriterFactory) —
                 // labelled "parquet" here, not a distinct "sort" tag, so it lands on the SAME
@@ -746,18 +741,22 @@ public final class ListRunner {
         ctx.metrics().setPrefix(spec.prefix());
         ctx.metrics().setPhase(Phase.LISTING);
         ctx.metrics().recordStealReason("SORT", "merge_redone");
-        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(),
-                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L));
+        Supplier<RunSummary> snapshot =
+                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
+        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(), snapshot);
         log.info("list_sort_merge_resume run_id={} (re-running merge from staging, zero LIST fetches)", runId);
+        // The sink is contracted to observe every run exactly once, the unwound ones included: a
+        // merge that throws still writes a CRASH partial to the sidecar, and the operator-facing
+        // block must not be the one surface that goes silent on it.
+        boolean summaryEmitted = false;
         try {
             store.setSortPhase(runId, SortPhase.MERGING);
             ctx.metrics().setPhase(Phase.MERGING);
             List<PartRef> segRows = sortedSegmentRows(store, runId);
-            List<Path> segments = segRows.stream().map(p -> stagingDir.resolve(p.path())).toList();
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
             SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                    segments, sortConfig, mode, spec.bucket(),
+                    segRows, sortConfig, mode, spec.bucket(),
                     spec.argsHash(), runId, spec.progressInterval(), true);
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
@@ -769,6 +768,9 @@ public final class ListRunner {
             // this is NOT a blind counter replay (progress.units/entries are deliberately untouched).
             ctx.metrics().recordRecoveredSortSegments(segRows.size());
 
+            // Progress ends before the first terminal record, exactly as in runLifecycle's epilogue:
+            // the reporter this method's merge started is closed, but the CLI's session reporter is not.
+            ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = ctx.metrics().summary(elapsed, "WORK_STEALING",
                     result.finalFiles().size(), sortedOutputBytes(result.finalFiles()), result.totalRows());
@@ -777,9 +779,22 @@ public final class ListRunner {
             ctx.metrics().recordOutput("parquet", "written",
                     result.finalFiles().size(), sortedOutputBytes(result.finalFiles()));
             logSummary(summary);
+            summaryEmitted = true;
+            emitQuietly(() -> ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
+                    completionStatus(ctx, null)));
             finish(jsonWriter, summary);
             return new ListingStatistics(result.totalRows(), 0L, 0L, 0L, summary.apiCalls(), elapsed);
         } finally {
+            if (!summaryEmitted) {
+                emitQuietly(() -> {
+                    ctx.metrics().finishProgress();   // before the pinned record, same rule as above
+                    Duration unwound = elapsedSince(startedNs);
+                    RunSummary partial = snapshot.get();
+                    JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, null);
+                    pin(jsonWriter, partial, status);
+                    ctx.metrics().emitSummary(partial, ctx.metrics().diagnostics(unwound), status);
+                });
+            }
             closeQuietly(jsonWriter);
         }
     }
@@ -801,8 +816,14 @@ public final class ListRunner {
      *         {@code false}: it has no such identity guarantee.
      */
     private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
-            List<Path> segments, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
+            List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
             Duration progressInterval, boolean identityVerifiedWideSweep) throws SwathException {
+        // The exact merge denominator, recorded HERE because this is the one point both merge
+        // callers pass through with the staged parts in hand: rows merged is measured against the
+        // rows those very segments hold (see RunMetrics#recordSortStaged).
+        ctx.metrics().recordSortStaged(stagedParts.size(),
+                stagedParts.stream().mapToLong(PartRef::rows).sum());
+        List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
         Comparator<ListEntry> comparator = new ListEntryComparator();
         SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
         // Wrap the final-file writer factory so each row streamed into the merged output marks
@@ -826,25 +847,24 @@ public final class ListRunner {
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).
         ctx.metrics().markProgress();
         Timer.Sample mergeSample = ctx.metrics().startSortMergeTimer();
-        // The merge/publish tail runs OUTSIDE RunProgressReporter's LISTING-only
-        // try-with-resources scope (ListRunner#run), so without a dedicated heartbeat here a
-        // fully-enumerated run is silent on every external channel for the whole merge, even
-        // though it is genuinely advancing (swath.progress.units, fed by KWayMerge's per-pass
-        // callback above). Started at merge kickoff, stopped on both the success and exception
-        // path via try-with-resources. Honors the SAME configured
-        // --progress-interval the listing phase's RunProgressReporter uses (startProgress), not a
-        // hardcoded default — a short merge under a tight external watchdog + short
-        // --progress-interval must still see periodic ticks, not just the final close() line.
-        try (SortMergeHeartbeat heartbeat = startSortMergeHeartbeat(ctx.metrics(), progressInterval)) {
+        // The merge/publish tail must keep reporting: it is genuinely advancing (swath.progress.units,
+        // fed by KWayMerge's per-pass callback below) and an external supervisor reading only the log
+        // tail would otherwise see silence and kill a healthy, still-merging run. Normally the run's
+        // session reporter is already ticking and this start JOINS it (see RunProgressReporter); on
+        // the merge-only resume path, where no listing ever ran, this IS the owner. Either way it
+        // honors the same configured --progress-interval, and stops on both the success and the
+        // exception path.
+        try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
             SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
                     (finalFiles, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
                             finalFiles, ctx.metrics()),
                     ctx.metrics()::recordProgress,
                     // WRITING becomes reachable here — the cascade passes above stay MERGING;
-                    // once they're done and only the final streaming pass + publish remain, the
-                    // swath.phase gauge advances instead of folding both into MERGING.
-                    () -> ctx.metrics().setPhase(Phase.WRITING));
+                    // once only the output-writing work + publish remain, the swath.phase gauge
+                    // advances instead of folding both into MERGING. The flag is whether that
+                    // remaining work has an honest completion denominator (see FinalPassListener).
+                    ctx.metrics()::startFinalMergePass);
             ctx.metrics().recordSortMerge(mergeSample);
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             return result;
@@ -977,12 +997,6 @@ public final class ListRunner {
     private static List<PartRef> sortedSegmentRows(CheckpointStore store, long runId) throws CheckpointException {
         return store.finalizedParts(runId).stream()
                 .filter(p -> SORT_SEGMENT_FORMAT.equals(p.format())).toList();
-    }
-
-    private static List<Path> sortedSegmentPaths(CheckpointStore store, long runId, Path stagingDir)
-            throws CheckpointException {
-        return sortedSegmentRows(store, runId).stream()
-                .map(p -> stagingDir.resolve(p.path())).toList();
     }
 
     /**
@@ -1141,26 +1155,16 @@ public final class ListRunner {
                 .build());
     }
 
-    private static RunProgressReporter startProgress(RunContext ctx, Duration interval) {
-        // Engine-internal caller: no ambient terminal knowledge exists this deep in swath-core (the
-        // CLI is the one layer that probes it, via LivenessOptions#startProgressReporter for the
-        // seed-phase heartbeat) -- false preserves the exact prior behavior, since this value was
-        // never functionally consumed anyway (see RunProgressReporter's still-pending JLine TODO).
-        return interval == null ? RunProgressReporter.start(ctx.metrics(), false)
-                : RunProgressReporter.start(ctx.metrics(), interval);
-    }
-
     /**
-     * Mirrors {@link #startProgress}'s null-default resolution so the merge-phase
-     * heartbeat honors the SAME configured {@code --progress-interval} the listing phase's {@link
-     * RunProgressReporter} uses — unset ({@code null}) still resolves to {@link
-     * SortMergeHeartbeat}'s own non-TTY default, so default behavior is unchanged. Package-private
-     * (not {@code private}) so {@code ListRunnerSortMergeHeartbeatWiringTest} can pin this exact
-     * resolution without reflection.
+     * Starts the run's progress reporter at the configured {@code --progress-interval}, or the
+     * default cadence when unset. Package-private (not {@code private}) so {@code
+     * ListRunnerProgressWiringTest} can pin this resolution without reflection. When the CLI has
+     * already started the session reporter (it spans the seed step too), this returns a joined
+     * handle — see {@link RunProgressReporter}.
      */
-    static SortMergeHeartbeat startSortMergeHeartbeat(RunMetrics metrics, Duration interval) {
-        return interval == null ? SortMergeHeartbeat.start(metrics)
-                : SortMergeHeartbeat.start(metrics, interval);
+    static RunProgressReporter startProgress(RunContext ctx, Duration interval) {
+        return RunProgressReporter.start(ctx.metrics(),
+                interval == null ? RunProgressReporter.nonTtyInterval() : interval);
     }
 
     /** No-op (returns {@code null}) unless the CLI configured a JSON run-summary sidecar. */
@@ -1188,20 +1192,9 @@ public final class ListRunner {
     }
 
     private static JsonRunSummaryWriter.TerminalStatus terminalStatus(RunContext ctx, OutputStage outputStage) {
-        StopReason attributed = ctx.cancellation().stopReason();
-        if (attributed == StopReason.MAX_DURATION && ctx.metrics().objectsEmitted() == 0L) {
-            // The whole timebox burned with zero objects emitted (a pathological/slow
-            // bucket, or a node that only ever attempt-times-out/gets throttled) — distinct from
-            // a legit large timeboxed partial that actually made headway. Exit code is unaffected:
-            // ListCommand#timeboxExitOrRethrow keys off the CancellationToken's own MAX_DURATION
-            // attribution, not this refined summary value.
-            return new JsonRunSummaryWriter.TerminalStatus(StopReason.MAX_DURATION_NO_PROGRESS);
-        }
-        if (attributed == StopReason.STUCK) {
-            return stuckTerminalStatus(ctx);
-        }
+        JsonRunSummaryWriter.TerminalStatus attributed = attributedStatus(ctx);
         if (attributed != null) {
-            return new JsonRunSummaryWriter.TerminalStatus(attributed);   // max_duration / signal
+            return attributed;
         }
         if (outputStage != null && outputStage.wasBrokenPipe()) {
             return new JsonRunSummaryWriter.TerminalStatus(null);   // clean broken pipe — not a crash/signal
@@ -1219,6 +1212,33 @@ public final class ListRunner {
         return new JsonRunSummaryWriter.TerminalStatus(
                 StopReason.CRASH, null, fatalErrorClass,
                 fatalErrorClass == null ? null : CLASSIFIED_FATAL_EXIT_CODE);
+    }
+
+    /**
+     * The attributed stop reason, refined, or {@code null} when nothing ever cancelled this run.
+     * Both terminal classifiers consult this FIRST and a broken pipe second, so the two can never
+     * disagree about a run that suffered both: a downstream close during an already-cancelling run
+     * is a consequence of the cancel, and reporting it as the neutral broken-pipe stop would let
+     * the summary block claim a clean early exit while the report recorded {@code
+     * stop_reason=signal}.
+     */
+    private static JsonRunSummaryWriter.TerminalStatus attributedStatus(RunContext ctx) {
+        StopReason attributed = ctx.cancellation().stopReason();
+        if (attributed == null) {
+            return null;
+        }
+        if (attributed == StopReason.MAX_DURATION && ctx.metrics().sessionObjectsEmitted() == 0L) {
+            // The whole timebox burned with zero objects emitted THIS session (a pathological/slow
+            // bucket, or a node that only ever attempt-times-out/gets throttled) — distinct from
+            // a legit large timeboxed partial that actually made headway. Exit code is unaffected:
+            // ListCommand#timeboxExitOrRethrow keys off the CancellationToken's own MAX_DURATION
+            // attribution, not this refined summary value.
+            return new JsonRunSummaryWriter.TerminalStatus(StopReason.MAX_DURATION_NO_PROGRESS);
+        }
+        if (attributed == StopReason.STUCK) {
+            return stuckTerminalStatus(ctx);
+        }
+        return new JsonRunSummaryWriter.TerminalStatus(attributed);   // max_duration / signal
     }
 
     /**
@@ -1244,23 +1264,99 @@ public final class ListRunner {
     }
 
     /**
-     * Terminal write of the JSON sidecar, skipped on broken pipe: stdout was truncated, so the
-     * run is not actually complete and the sidecar must not claim {@code completed:true}. Mirrors
-     * the {@code store.markRunFinished(..., FAILED)} treatment for the checkpoint DB. On broken
-     * pipe the sidecar is left as last flushed (or never written); the outer {@code finally}
-     * closes it without a final {@code completed:true} write, so a resume sees a stale/absent
-     * sidecar with no false "done" signal.
+     * The epilogue's terminal sidecar write, given the disposition the summary block was just
+     * rendered from. A broken pipe truncated stdout, so the run is not actually complete and the
+     * sidecar must not claim {@code completed:true} (mirroring the {@code
+     * store.markRunFinished(..., FAILED)} treatment for the checkpoint DB): the decided pair is
+     * pinned instead, and the outer {@code finally}'s {@code close()} writes exactly it — the same
+     * numbers and the same disposition the operator was shown, rather than a re-snapshot taken a
+     * moment later. Every other epilogue takes the ordinary {@code completed:true} write.
      */
-    private static void finishUnlessBrokenPipe(JsonRunSummaryWriter jsonWriter, RunSummary summary,
-                                                OutputStage outputStage) {
-        if (!outputStage.wasBrokenPipe()) {
+    private static void finishOrPin(JsonRunSummaryWriter jsonWriter, RunSummary summary,
+                                     JsonRunSummaryWriter.TerminalStatus status, OutputStage outputStage) {
+        if (outputStage != null && outputStage.wasBrokenPipe()) {
+            pin(jsonWriter, summary, status);
+        } else {
             finish(jsonWriter, summary);
         }
     }
 
+    /** Hand the sidecar the terminal pair the sink was given; a no-op when no sidecar was configured. */
+    private static void pin(JsonRunSummaryWriter jsonWriter, RunSummary summary,
+                            JsonRunSummaryWriter.TerminalStatus status) {
+        if (jsonWriter != null) {
+            jsonWriter.pinTerminal(summary, status);
+        }
+    }
+
+    /**
+     * Terminal-summary emit for a run that unwound before its epilogue (a cancel or a fatal): the
+     * snapshot and the {@link #terminalStatus} attribution are taken ONCE and pinned into the JSON
+     * sidecar before being rendered, so the {@code close()}-time partial record and the
+     * operator-facing block are the same terminal record — one {@code duration_ms}, one
+     * disposition — and the sink observes exactly the runs the report does, not only the ones that
+     * finished.
+     *
+     * <p>If building that snapshot throws, {@link #emitQuietly} swallows it with nothing pinned,
+     * and the sidecar falls back to its own suppliers exactly as before.
+     */
+    private static <E extends Exception> void emitUnwoundSummary(RunContext ctx, LifecyclePlan<E> plan,
+                                                                  JsonRunSummaryWriter jsonWriter, long startedNs) {
+        emitQuietly(() -> {
+            ctx.metrics().finishProgress();   // before the pinned record, same rule as the epilogue
+            Duration elapsed = elapsedSince(startedNs);
+            RunSummary summary = plan.snapshotSummary.apply(elapsed);
+            JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, plan.outputStage);
+            pin(jsonWriter, summary, status);
+            ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed), status);
+        });
+    }
+
+    /**
+     * Run a terminal-summary emit so it can never end the run: the sink is presentation, and a
+     * rendering fault must cost the operator the block, not turn a successful run into a failure
+     * (nor a different exit code) on its way out.
+     */
+    private static void emitQuietly(Runnable emit) {
+        try {
+            emit.run();
+        } catch (RuntimeException e) {
+            log.debug("list_run_summary_emit_failed message={}", e.getMessage());
+        }
+    }
+
+    /**
+     * The ONE terminal disposition of a run that reached its epilogue — rendered to the summary
+     * sink and, on the broken-pipe branch, pinned into the JSON sidecar, so neither surface can
+     * name a disposition the other contradicts.
+     *
+     * <p>A run that got here drained its pipeline and committed its completion chain, so it is
+     * {@link StopReason#COMPLETED} even if a signal or a {@code --max-duration} deadline trips the
+     * cancellation token between that point and this one. That is not leniency: {@link
+     * #finish}'s {@code complete()} writes {@code completed:true} for exactly this run, and it
+     * returns normally, so the process exits 0. A cancel that arrived in time to cost the run
+     * anything never reaches here at all — it unwinds as a {@code CancelledException} through
+     * {@link #emitUnwoundSummary}, which is where an attributed stop reason genuinely IS the
+     * disposition. Consulting the live token here instead would let a cancel landing microseconds
+     * after the last object was published print {@code INCOMPLETE} over a report that says
+     * completed.
+     *
+     * <p>A broken pipe is the one epilogue the sidecar does not complete, so this defers to {@link
+     * #terminalStatus(RunContext, OutputStage)} — the value {@code close()} would otherwise
+     * compute for itself, {@link #attributedStatus} first and then the neutral {@code null} reason
+     * that says a downstream close is a clean stop, never a failure.
+     */
+    private static JsonRunSummaryWriter.TerminalStatus completionStatus(RunContext ctx, OutputStage outputStage) {
+        if (outputStage != null && outputStage.wasBrokenPipe()) {
+            return terminalStatus(ctx, outputStage);
+        }
+        return new JsonRunSummaryWriter.TerminalStatus(StopReason.COMPLETED);
+    }
+
     private static void logSummary(RunSummary summary) {
-        log.info("list_run_summary run_id={} objects={} duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
-                summary.runId(), summary.objects(), summary.duration().toMillis(), summary.strategy(),
+        log.info("list_run_summary run_id={} objects={} duration_ms={} session_duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
+                summary.runId(), summary.objects(), summary.duration().toMillis(),
+                summary.sessionDuration().toMillis(), summary.strategy(),
                 summary.apiCalls(), summary.costUsd(), summary.outputFiles(), summary.compressedBytes(),
                 summary.keys(), summary.pages(), summary.peakInFlight(), summary.steals(), summary.splits(),
                 summary.errors(), summary.keysPerSecond(), summary.apiCallsPer1kObjects(),
@@ -1379,33 +1475,38 @@ public final class ListRunner {
         JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, plan.jsonSummaryConfig,
                 () -> plan.snapshotSummary.apply(elapsedSince(startedNs)), plan.outputStage);
         plan.startLog.run();
+        boolean summaryEmitted = false;
         try {
-            // Slot 1 — drain: run the pipeline (bound to the run id when checkpointed), then the sink's
-            // success verb; teardown always fires in the finally.
-            boolean drained = false;
-            try {
-                if (plan.runId != null) {
-                    runWithRunId(ctx, plan.runId, () -> {
-                        try (RunProgressReporter ignored = startProgress(ctx, plan.progressInterval)) {
+            // Progress spans BOTH slots, not just the drain: the sort path's whole merge/publish tail
+            // runs inside complete(), and scoping the reporter to the pipeline alone is what left a
+            // fully-enumerated run reporting nothing for its entire merge. close() only stops daemon
+            // schedulers and never throws, so the drained flag below stays accurate.
+            try (RunProgressReporter progress = startProgress(ctx, plan.progressInterval)) {
+                // Slot 1 — drain: run the pipeline (bound to the run id when checkpointed), then the sink's
+                // success verb; teardown always fires in the finally.
+                boolean drained = false;
+                try {
+                    if (plan.runId != null) {
+                        runWithRunId(ctx, plan.runId, () -> {
                             pipeline.run(ctx, plan.producer, plan.consumerStage);
                             plan.drain.onDrained();
-                        }
-                    });
-                } else {
-                    try (RunProgressReporter ignored = startProgress(ctx, plan.progressInterval)) {
+                        });
+                    } else {
                         pipeline.run(ctx, plan.producer, plan.consumerStage);
                         plan.drain.onDrained();
                     }
+                    drained = true;
+                } finally {
+                    plan.drain.onFinally(drained);
                 }
-                // Set AFTER the progress reporter closes: its close() must never throw (it only
-                // stops daemon schedulers), or a cleanly-drained sink would be aborted below.
-                drained = true;
-            } finally {
-                plan.drain.onFinally(drained);
+                // Slot 2 — complete: the per-path ordered store-mutation chain, before the terminal summary.
+                plan.complete.commit();
             }
-            // Slot 2 — complete: the per-path ordered store-mutation chain, before the terminal summary.
-            plan.complete.commit();
-            // Slot 3 — epilogue.
+            // Slot 3 — epilogue. Progress ends HERE, before the first terminal record is written:
+            // the reporter closed above is only this method's scope, while the CLI's session
+            // reporter spans the whole command, so a scheduled tick would otherwise still be able
+            // to land between the list_run_summary line and the emit that ends progress.
+            ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = plan.terminalSummary.apply(elapsed);
             ctx.metrics().setPhase(Phase.COMPLETE);
@@ -1413,15 +1514,21 @@ public final class ListRunner {
                 ctx.metrics().recordRunCompletion(elapsed, summary.keysPerSecond());
             }
             plan.epilogue.recordOutput();
+            RunMetrics.RunDiagnostics diagnostics = ctx.metrics().diagnostics(elapsed);
             logSummary(summary);
-            logDiagnostics(ctx.metrics().diagnostics(elapsed));
-            if (plan.outputStage == null) {
-                finish(jsonWriter, summary);
-            } else {
-                finishUnlessBrokenPipe(jsonWriter, summary, plan.outputStage);
-            }
+            logDiagnostics(diagnostics);
+            // Claimed BEFORE the emit, and the emit cannot throw: a sink that failed here would
+            // otherwise both escape this method (failing a run that succeeded) and be re-emitted
+            // by the finally below, attributed CRASH.
+            summaryEmitted = true;
+            JsonRunSummaryWriter.TerminalStatus terminal = completionStatus(ctx, plan.outputStage);
+            emitQuietly(() -> ctx.metrics().emitSummary(summary, diagnostics, terminal));
+            finishOrPin(jsonWriter, summary, terminal, plan.outputStage);
             return plan.statistics.compute(summary.apiCalls(), elapsed);
         } finally {
+            if (!summaryEmitted) {
+                emitUnwoundSummary(ctx, plan, jsonWriter, startedNs);
+            }
             closeQuietly(jsonWriter);
         }
     }

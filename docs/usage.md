@@ -98,7 +98,7 @@ the registry, or `--tune KEY=?` for one key's accepted values.
 | `engine.readahead` | `on` or `off` | `off` | experimental | free | fresh `list` | Enable speculative dense-tail readahead. This can trade more API calls and memory for lower wall time. |
 | `seed.mode` | `shallow`, `none`, or `hints` | `shallow` | stable (`hints` reserved) | identity | fresh `list` | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
 | `parquet.writers` | integer `2..4` | `3` | stable | free | fresh `list` | Set the bounded Parquet writer pool. A file-shaped Parquet destination still resolves to one writer. |
-| `summary.interval` | positive duration | `--progress-interval` | stable | free | fresh `list` | Set report heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
+| `summary.interval` | positive duration | `--progress-interval` when given, else `30s` | stable | free | fresh `list` | Set report heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.ignore-disk-check` | `on` or `off` | `off` | diagnostic | free | fresh `list` and `resume` | Skip the pre-run and periodic sort disk-space guard. Use only after sizing the staging volume independently. |
 
 These settings feed the same resolved fields as the engine, Parquet, report,
@@ -354,12 +354,10 @@ after the whole merge finishes — a mid-merge `_swath_summary.json` snapshot le
 shows them flat/zero for the whole (potentially multi-minute) merge. Watch
 `sort.merge_progress_units` instead to confirm a merge is genuinely advancing
 (the SAME `swath.progress.units` tally the in-JVM liveness watchdog trusts), or
-tail the log for the periodic `sort_merge_progress passes=<n> progress_units=<n>
-elapsed_ms=<n>` heartbeat line, emitted at the SAME `--progress-interval`
-cadence as the listing-phase progress line (default: 30 s when
-`--progress-interval` is not passed) — so a short `--sort` merge run with a
-tight `--progress-interval` gets periodic ticks too, not just the one line at
-merge end.
+tail the log for the periodic `progress … phase=merging` record, emitted by the
+run's single progress reporter at the `--progress-interval` cadence (default:
+30 s) — its `rows_merged` field counts the rows the merge itself has moved,
+against the exact staged-row total it was handed.
 
 **Finalize/publish liveness.** The tail AFTER the merge — footer-fsyncing
 each final part and streaming every part through MD5 to build `manifest.json` —
@@ -428,7 +426,7 @@ network-, API-, and bucket-shape-dependent.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--report PATH` | `<output>/_swath_summary.json` for every non-stdout Parquet destination, including FILE-kind `*.parquet`; otherwise none | Write a machine-readable JSON run-summary to `PATH` |
-| `--tune summary.interval=DURATION` | `--progress-interval` | JSON run-summary flush cadence, e.g. `2s` or `500ms` |
+| `--tune summary.interval=DURATION` | `--progress-interval` when given, else `30s` | JSON run-summary flush cadence, e.g. `2s` or `500ms` |
 
 The summary is operational data, not a sanitized telemetry envelope. It records
 the target and raw arguments and can include filters, seed prefixes, slow-range
@@ -465,7 +463,7 @@ listing.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--concurrency N` | `64` | Target (ceiling) concurrency `T` for the work-stealing engine. Live concurrency is adjusted adaptively (AIMD) within `[1, T]`. |
-| `--progress-interval DURATION` | `30s` | Override progress log cadence (see §Observability), e.g. `2s` or `500ms`. |
+| `--progress-interval DURATION` | `1s` redrawing, `30s` appended | Override the progress cadence (see §Progress) and opt into progress, e.g. `2s`; `1s` is the supported floor. |
 | `--object-listing-queue-size N` | `50000` | In-flight entry budget for the listing queue |
 | `--request-rate N` | unset | Cap aggregate S3 API requests per second; `0` also disables the cap |
 | `--engine-toggle owner_split=off` | on | Diagnostic owner-side self-splitting ablation; the default keeps the optimization enabled |
@@ -585,20 +583,26 @@ bookkeeping. A fresh `swath list -o <dir>` over a **completed** dataset is refus
 (steering to `--overwrite`) purely from the on-disk markers, so the guard holds even
 though the checkpoint is gone.
 
-#### Global flags (`-v`/`-q`, applies to every command)
+#### Global flags (`-v`/`-q`/`--color`, applies to every command)
 
-`-v` and `-q` are accepted **before or after** the verb — both
-`swath -v list …` and `swath list -v …` work.
+`-v`, `-q`, and `--color` are accepted **before or after** the verb — both
+`swath -v list …` and `swath list -v …` work. Occurrences on the two sides add up, so
+`swath -v list … -v` is `-vv` (DEBUG), exactly as if you had written it on one side.
 
 | Flag | Level |
 | --- | --- |
 | `-v` | INFO |
 | `-vv` | DEBUG |
 | `-vvv` | TRACE |
+| `-q` | ERROR |
+| `-qq` | off (logging silenced entirely) |
+
+`-q` wins over `-v` when both are given — e.g. `-vvv -q` still logs at ERROR.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-q, --quiet` | off | Suppress the startup destination echo |
+| `-q, --quiet` | off | Lowers the log level (see above) and suppresses the startup destination echo. `-qq` silences logging, but not the terminal `swath: …` error line printed on failure — that goes straight to the CLI's error stream, not through the logger |
+| `--color` | `auto` | Colors the live progress line and the end-of-run summary block: `auto` (color only when stderr is a terminal), `always`, or `never`. See [Color](#color) below |
 
 ---
 
@@ -723,18 +727,142 @@ parts in name order reads the dataset in key order — once the output crosses t
 
 ### Progress
 
-Progress is logged to stderr at INFO every 30 seconds with strategy, active/target
-worker count, instantaneous `in_flight` ranges, live and average object rate, total
-emitted, API call count with estimated cost, oldest pending range, and ETA. Use
-`--progress-interval` to override the cadence (e.g. `2s` for dense sampling
-on short runs).
+One reporter covers the whole run — the seed step, listing, the sort merge and the final write —
+and emits one record per tick on **stderr** (stdout stays data). It takes one of two forms, never
+both at once: the operator-facing line when a display is wanted, and the structured `progress` log
+record otherwise. Whichever is installed, a tick renders exactly once — and `--no-progress` installs
+neither, so it silences the log record as well as the display.
+
+The operator line takes one of two **forms**, carrying identical content either way. On a terminal
+it redraws in place — each tick overwrites the last, so an hour-long run occupies a single line
+instead of scrolling the session away. Anywhere else it is one plain, newline-terminated record per
+tick: no carriage returns, no escape sequences, so a redirected stderr stays readable as-is and a
+captured log never fills with control characters. Only the framing differs; no field appears in one
+form and not the other, so a run's captured output says exactly what its terminal showed.
+
+```
+  seeding · 12/64 probes (19%) · last probe 3.1s ago · 21.7s elapsed · 64 API calls · <$0.001 (est. @ $0.005/1k LIST)
+  listing · 4,231,000 objects · 128,000 keys/s (avg 96,000) · 4,231 pages · 512 in flight · 1m12s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+  merging · 24,000,000 rows merged · 24 segments · 2m05s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+  writing · 3,100,000/12,000,000 rows (26%) · 24 segments · 2m28s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+```
+
+Each phase shows what it actually has. Seeding reports probes completed against the seed's probe
+budget and the age of the last completed probe — the signal that tells a healthy seed from a hung
+one, since a seeding run emits no objects, fetches no pages and holds no workers. Listing reports
+objects emitted this session (recovered rows from a resume are shown separately as `(+N
+recovered)`, so a resumed run neither displays a zero it did not earn nor jumps by billions at the
+end), live and average object rate, pages and in-flight ranges. A merge reports the rows it has
+moved, and a percentage only for its final pass (`writing`): a cascading merge rewrites every staged
+row once per pass, so work done legitimately exceeds the staged rows until then. Every line then carries session elapsed, API calls, and the estimated spend
+with the rate it assumed — withheld entirely under `--endpoint-url`, where the provider's LIST
+pricing is unknowable, exactly as the end-of-run block withholds it. **No key text ever appears**:
+keys can carry arbitrary bytes, and a line that echoed them could be made to forge one.
+
+There is deliberately **no ETA and no percentage for listing**: an unsorted scan has no honest
+denominator — the object total is not known until the run ends. Seeding and the merge's final pass
+do have exact ones (the probe budget; the staged rows), so those carry a completion figure and
+listing does not.
+
+Whether the line appears:
+
+| situation | progress |
+| --- | --- |
+| stderr is a terminal, no `-q`, no `-v` | on (the default) |
+| stderr is a file or a pipe | off — a summary prints once, progress repeats |
+| `-q` / `-qq` | off, unless `--progress` |
+| `-v` or higher | off — INFO logging is on, so the structured `progress` record is the surface |
+| `--progress` | on, past every gate above, including off a terminal and under `-q` |
+| `--no-progress` | off, everywhere — display and structured record alike, including with an explicit `--progress-interval` |
+| `--progress-interval DURATION` | on — asking for a cadence is asking for progress |
+
+A redrawing line is also bounded to the terminal's width, dropping whole trailing fields rather
+than cutting through one — the fields are ordered most-important-first for exactly that reason. The
+width is re-read every tick, so a window resized mid-run is honoured by the next frame. A terminal
+that will not report its width, or one under 24 columns, keeps the plain records instead: an erase
+whose reach cannot be predicted is worse than a line that scrolls. `TERM=dumb` does the same.
+
+The default cadence depends on the form, because the cost of a tick does. A redrawn frame replaces
+the one before it and leaves nothing behind, so it ticks **every second** — a counter that only
+moved every 30 s would read as a hung run, which is the misreading this display exists to prevent.
+An appended record is a line in a captured log forever, so it stays at **30 s**. Either way the
+first record lands a couple of seconds in rather than a whole cadence later, so a run that finishes
+in 22 seconds is not silent.
+
+`--progress-interval` overrides both (e.g. `2s` for dense sampling on short runs); **`1s` is the
+supported floor** and anything faster is rejected rather than clamped — a ten-hour run at `1ms`
+would attempt some 36 million records, and a cadence below one a second outruns both a reader and a
+captured log. Note that `--tune summary.interval` keeps following the *configured* interval (30 s
+unless you pass one), not the display's faster tick: a JSON sidecar flush is an atomic file rewrite,
+where a repaint costs nothing.
+
+Under `-v`, the same tick is logged instead as one structured `progress` record — run id, phase,
+session and phase elapsed, API calls, retries and (where the provider's pricing is knowable) cost,
+with the same phase-shaped tail — which is what an external supervisor tailing the log reads. See
+[`metrics-and-observability.md`](metrics-and-observability.md#4--v-progress-record-30-s-default---progress-interval)
+for its field list.
 
 ### End-of-run summary
 
-At the end of every run swath prints a `list_run_summary` log line with:
-total objects, elapsed time, chosen strategy, API call count (LIST + probes)
-and estimated cost at $0.005/1000 LIST requests, output file count with
-compressed size, and the following efficiency/resource fields:
+When a run ends, swath prints a short summary block to **stderr** (stdout stays data):
+
+```
+  1,204,993 objects in 4m12s · 4,781 keys/s
+  1,208 API calls · 1.00 per 1k objects · in flight avg 52.00 · peak 64
+  ~$0.006 (est. @ $0.005/1k LIST)
+  12 files · 84.0 MB written · peak RSS 512.0 MB
+```
+
+The headline's elapsed figure is the **listing clock** — the same one `keys/s` divides
+by — which starts only AFTER a fresh run's seed step (probing the bucket's shape to tile the
+initial worklist). On a run whose seed step took a while, the headline instead carries a second
+figure, the whole session (seeding included — the same span the live progress line already
+reports), clearly labeled so which one the rate is keyed to is never ambiguous:
+
+```
+  3,270,132 objects in 1m43s listing · 31,750 keys/s · 2m22s total
+```
+
+That second figure only appears when it would actually differ from the listing one by more than
+about a second (`SummaryRenderer.SESSION_DELTA_MIN`) — a resumed run, or any run whose seed step was
+cheap, keeps the single-figure form above rather than printing two near-identical numbers. `--report`
+carries both unconditionally: `duration_ms` (listing, unchanged) and the additive `session_duration_ms`
+(the whole invocation) — see
+[`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end).
+
+A **faults line** — `throttled N · retried M · errors K` — is inserted only when one of those
+counts is non-zero, so its presence is itself the signal: `throttled` counts real S3 backpressure
+(503 SlowDown / transient 5xx), `retried` counts client-side transients that were retried and
+recovered, and the two are deliberately never folded together. A run that stopped short leads with
+`INCOMPLETE (<reason>)`, plus `— resume: swath resume <dir>` when the run left something resumable
+and resuming could actually help — a crash is a deterministic failure a resume would hit again, and
+a seed failure marks the run so a resume is refused outright, so both get the marker without the
+invitation. Runs that stop before the engine starts (a failed seed probe, for instance) get the
+block too, from the same numbers the report records.
+A run stopped by a closed downstream (`swath list | head`) is not an incident: it prints nothing by
+default, and reads `stopped early — downstream closed` if you asked for the block explicitly.
+
+The block prints when the run **earned** it: the operator's whole wait — seeding included — was
+longer than 1.5 s, it produced durable output, or it stopped for any reason other than finishing —
+and not under `-q`. Terminal detection does not
+enter into it: a summary redirected into `2> run.log` carries the same content it would on a
+terminal, because for an overnight or fleet run the captured log is the artifact. `--stats` forces
+the block past every one of those gates (short run, `-q`, redirected stderr alike), `--no-stats`
+suppresses it everywhere.
+
+| you want | use |
+| --- | --- |
+| the numbers, machine-readable | `--report PATH` (or the default `_swath_summary.json` sidecar) |
+| the numbers on a fast run, or under `-q` | `--stats` |
+| nothing at all on stderr | `--no-stats` |
+
+Automation should read `--report`, not scrape the block: it is a stable JSON document, and it
+carries strictly more than the human block does.
+
+With `-v`, the same figures are also logged as the `list_run_summary` line — a fuller field dump,
+kept because existing tooling scrapes it — carrying total objects, elapsed time, chosen strategy,
+API call count (LIST + probes) and estimated cost at $0.005/1000 LIST requests, output file count
+with compressed size, and the following efficiency/resource fields:
 
 | Field | Description |
 | --- | --- |
@@ -749,6 +877,28 @@ A separate `list_run_diagnostics` INFO line carries internal counters:
 `splits_committed`, `unsplittable_victims`, `peak_in_flight`, page-shape
 fields, and throttle fields. These are diagnostics only, not Micrometer
 meters.
+
+### Color
+
+`--color=auto|always|never` (default `auto`) governs swath's two operator surfaces on stderr — the
+live progress line and the end-of-run summary block. Both draw from one palette, so a run cannot dim
+and accent by different rules in flight than it does at the end — dim
+labels/units, one accent for the headline figures (objects/elapsed/rate), red for the `INCOMPLETE`
+marker. This is purely cosmetic: as with terminal detection generally (see above), it decides *form*,
+never *whether* the block prints.
+
+`auto` colors only when **stderr** is a terminal (stdout's tty-ness, used for `--format auto`, is a
+separate question — see [Output](#output)); it also respects the same conventions other CLIs do:
+
+| Signal | Effect |
+| --- | --- |
+| `NO_COLOR` set to any value | disables color |
+| `TERM=dumb` | disables color |
+| `CLICOLOR_FORCE` set to any value | forces color even off a terminal (the `gh` convention) |
+
+An explicit `--color=always`/`--color=never` wins over **all** of the above, `NO_COLOR` included —
+per [no-color.org](https://no-color.org), a command-line argument overrides the environment variable.
+swath does not honor `FORCE_COLOR`; that convention is JS-ecosystem, with no CLI-native precedent.
 
 ### Metrics (Micrometer)
 
@@ -774,7 +924,7 @@ A Prometheus scrape endpoint (`--metrics-port`) is planned for v1.1.
 
 SLF4J + Logback; structured fields in `snake_case`. The run's `args_hash`,
 strategy, and checkpoint path are logged at startup. Use `-v` / `-vv` / `-vvv`
-to raise the log level.
+to raise the log level, or `-q` / `-qq` to lower it (`-q` wins if both are given).
 
 ---
 

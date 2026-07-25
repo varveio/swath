@@ -21,6 +21,23 @@ import java.util.List;
  * compressionRatio} instead render {@code 0.0} on a zero denominator, since they are always
  * computable from existing counters (no hot-path cost), just possibly vacuous on a tiny run.
  *
+ * <p>{@code duration} is the LISTING clock — the same one {@code keysPerSecond} and every other
+ * per-second/per-API-call figure divides by — {@code RunMetrics#markRunStarted()}'s zero point,
+ * which a fresh run resets to AFTER seeding. {@code sessionDuration} is the whole CLI invocation's
+ * own clock instead, seeding included — the same span the live progress line already reports. The
+ * two agree exactly on a resumed or seed-skipped run; a fresh run's seed step is the gap between
+ * them. Neither is wrong: {@code duration} is the honest throughput denominator (seeding fetches no
+ * object), {@code sessionDuration} is what the operator actually waited on. {@code sessionDuration}
+ * equals {@code duration} (never garbage) on any snapshot taken before the session-wide progress
+ * reporter has claimed its start — a pre-seed early exit, or a caller that builds a summary directly
+ * without ever starting one.
+ *
+ * <p>{@code timeToFirstStealMs} and {@code timeToPeakInFlightMs} are the run's ramp-up timings —
+ * milliseconds from run start to the first work steal / to the instant peak concurrency was first
+ * reached, {@code -1} when the event never happened (no steal, or a run that never started). They
+ * are the same values {@code list_run_diagnostics} prints, carried here so the JSON report has them
+ * too rather than leaving them log-only.
+ *
  * <p>{@code avgInFlight} is the time-weighted average in-flight listing count over the run
  * (sampled on every in-flight transition, no polling thread), {@code 0.0} before the run starts.
  * {@code peakInFlight} saturates once the concurrency ceiling is hit, so {@code avgInFlight} is the
@@ -36,6 +53,7 @@ public record RunSummary(
         long runId,
         long objects,
         Duration duration,
+        Duration sessionDuration,
         String strategy,
         long apiCalls,
         double costUsd,
@@ -45,6 +63,8 @@ public record RunSummary(
         long pages,
         long peakInFlight,
         double avgInFlight,
+        long timeToFirstStealMs,
+        long timeToPeakInFlightMs,
         long steals,
         long splits,
         long errors,

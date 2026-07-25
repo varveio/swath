@@ -351,6 +351,32 @@ final class OutputOptions {
             description = "Write the machine-readable run report to PATH.")
     String summaryJson;
 
+    /**
+     * {@code null} (unset) is the auto rule in {@link SummaryRenderer#shouldRender}; {@code
+     * --stats} forces the block on a short run and under {@code -q}, {@code --no-stats} is the
+     * true-silence switch. Not a tri-state option: nobody types {@code =auto}, and the negatable
+     * pair spells the only two values a user ever needs (the shape {@code rg --stats} uses).
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--stats", negatable = true,
+            description = "Print the end-of-run summary to stderr (default: on for runs over "
+                    + "1.5s, runs that produce output, and runs that stop short of finishing; "
+                    + "a closed downstream pipe stays silent).")
+    Boolean stats;
+
+    /**
+     * {@code null} (unset) is the auto rule in {@link ProgressDisplay#shouldDisplay}; {@code
+     * --progress} forces the live record on off a terminal and under {@code -q}, {@code
+     * --no-progress} suppresses it everywhere. The negatable pair, and the Output heading, are
+     * {@code --stats}'s: whether an operator surface prints is an output decision, while
+     * {@code --progress-interval} — how often the run samples ITSELF — stays with the run controls.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--progress", negatable = true,
+            description = "Print live progress records to stderr (default: on when stderr is a "
+                    + "terminal and neither -q nor -v was given; --progress-interval implies it).")
+    Boolean progress;
+
     boolean noSummaryJson;
 
     String summaryJsonInterval;

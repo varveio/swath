@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -88,6 +89,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final ReentrantLock writeLock = new ReentrantLock();
     private final AtomicBoolean completedCalled = new AtomicBoolean(false);
+    /** The pair {@link #pinTerminal} decided, or {@code null} while the suppliers still own it. */
+    private final AtomicReference<Terminal> pinnedTerminal = new AtomicReference<>();
     private final Path parent;
     private final WriteSink sink;
 
@@ -212,6 +215,22 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         }
     }
 
+    /** One terminal decision, shared by the run's summary sink and this writer's final record. */
+    private record Terminal(RunSummary summary, TerminalStatus status) {
+    }
+
+    /**
+     * Pin the exact {@code (summary, status)} pair {@link #close()} will write, instead of letting
+     * it re-read {@link #snapshotSupplier}/{@link #terminalStatusSupplier} a moment later. The
+     * caller renders that same pair to the run's {@link RunSummarySink}, so the human block and
+     * this partial record cannot report a different {@code duration_ms} — nor, on a run that gets
+     * cancelled between the two reads, a different disposition. Irrelevant once {@link
+     * #complete(RunSummary)} has run: its terminal record is already the one decision.
+     */
+    public void pinTerminal(RunSummary summary, TerminalStatus status) {
+        pinnedTerminal.set(new Terminal(summary, status));
+    }
+
     @Override
     public void close() {
         DaemonSchedulers.stop(executor, log, "summary_json_writer_stop_timeout");
@@ -241,7 +260,9 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
      * (deliberately read HERE, inside this method's own try, rather than by {@link #close()}
      * passing already-evaluated arguments — a supplier built from partially-initialized state
      * mid-abort is exactly the kind of edge case that bites, and evaluating it in the caller's
-     * frame would let it escape uncaught before this method's ladder even starts).
+     * frame would let it escape uncaught before this method's ladder even starts). A run whose
+     * terminal path already decided the pair ({@link #pinTerminal}) skips the suppliers entirely
+     * and writes that decision, which is also what the operator-facing block reported.
      *
      * <ol>
      *   <li>build the snapshot: if either supplier itself throws, there is no summary to write at
@@ -264,9 +285,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private void writeFinalPartialWithResilience() {
         RunSummary summary;
         TerminalStatus status;
+        Terminal pinned = pinnedTerminal.get();
         try {
-            summary = snapshotSupplier.get();
-            status = terminalStatusSupplier.get();
+            summary = pinned != null ? pinned.summary() : snapshotSupplier.get();
+            status = pinned != null ? pinned.status() : terminalStatusSupplier.get();
         } catch (RuntimeException e) {
             // No summary was ever built, so there is nothing for the retry/degrade ladder below to
             // even attempt — a DISTINCT marker from summary_json_final_write_failed (that one means
@@ -291,7 +313,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             try {
                 write(summary, false, status.exitCode(), status.reason(), status.stopSource(), status.errorClass());
                 if (attempt > 1) {
-                    log.warn("summary_json_final_write_recovered path={} attempt={} of={}",
+                    log.debug("summary_json_final_write_recovered path={} attempt={} of={}",
                             config.path(), attempt, FINAL_WRITE_ATTEMPTS);
                 }
                 return;
@@ -428,6 +450,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // produced the file, and regardless of whether a later write attempt silently failed.
         root.put("as_of", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
         root.put("duration_ms", summary.duration().toMillis());
+        // The whole-invocation session clock, seeding included -- the SAME span the live progress
+        // line reports, unlike duration_ms above (the listing-only clock keys_per_sec divides by,
+        // which keeps its meaning unchanged here). Additive under schema v2 -- NOT a v3 bump.
+        root.put("session_duration_ms", summary.sessionDuration().toMillis());
         root.put("objects", summary.objects());
 
         RunConfig rc = config.runConfig();
@@ -553,6 +579,13 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private void writeCost(ObjectNode costNode, RunSummary summary) {
         costNode.put("api_calls", summary.apiCalls());
         costNode.put("cost_usd", summary.costUsd());
+        // The rate cost_usd was derived from, named rather than implied: it is a single-region
+        // reference rate, so a reader in another region (or on another provider) can rescale
+        // instead of trusting a number swath cannot know. Same constant the terminal summary
+        // block labels its figure with. Additive under schema v2 — NOT a v3 bump.
+        ObjectNode basisNode = costNode.putObject("basis");
+        basisNode.put("rate_per_1k_usd", RunMetrics.LIST_COST_PER_1K_USD);
+        basisNode.put("source", RunMetrics.LIST_COST_SOURCE);
     }
 
     private void writeEfficiency(ObjectNode efficiencyNode, RunSummary summary) {
@@ -578,6 +611,12 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // Time-weighted average in-flight listing count — peak_in_flight saturates once
         // the concurrency ceiling is hit; avg_in_flight is the metric a sustained-parallelism fix moves.
         engineNode.put("avg_in_flight", summary.avgInFlight());
+        // Ramp-up timings: how long the run took to reach its first steal and its peak
+        // concurrency. Both were previously readable only off the -v list_run_diagnostics line,
+        // unlike every other field on it; -1 when the event never happened. Additive under
+        // schema v2 — NOT a v3 bump.
+        putLongOrNull(engineNode, "time_to_first_steal_ms", summary.timeToFirstStealMs());
+        putLongOrNull(engineNode, "time_to_peak_in_flight_ms", summary.timeToPeakInFlightMs());
         engineNode.put("steals", summary.steals());
         engineNode.put("splits", summary.splits());
         engineNode.put("errors", summary.errors());

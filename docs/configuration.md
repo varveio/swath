@@ -29,6 +29,18 @@ it honors the same environment variables any AWS SDK v2 client does.
 | `SWATH_OPTS`, `JAVA_OPTS` | unset | Extra JVM flags for the `installDist` launcher script only (no effect on the uber-jar or Docker image) | — |
 | `JAVA_TOOL_OPTIONS` | unset | Extra JVM flags read by the JVM itself (works for the uber-jar, `installDist`, and Docker) | — |
 
+### Terminal / color (cross-tool convention, not swath-specific)
+
+Affects only the end-of-run summary block under `--color=auto` (the default);
+irrelevant with an explicit `--color=always`/`--color=never`, which wins over
+all of these.
+
+| Variable | Effect | Overridden by |
+| --- | --- | --- |
+| `NO_COLOR` | Set to *any* value (even empty) — disables color, per [no-color.org](https://no-color.org) | `--color=always`/`--color=never` |
+| `TERM=dumb` | Disables color | `--color=always`/`--color=never` |
+| `CLICOLOR_FORCE` | Set to any value — forces color even off a terminal (the `gh` convention) | `NO_COLOR`, `TERM=dumb`, `--color=always`/`--color=never` |
+
 ## Flags and defaults
 
 ### S3 connection
@@ -55,6 +67,8 @@ it honors the same environment variables any AWS SDK v2 client does.
 | `--part-rotation-max-rows` | `2000000` |
 | `--sort` / `--no-sort` | `--no-sort` |
 | `--report` | `<output>/_swath_summary.json` for every non-stdout Parquet destination (including FILE-kind `*.parquet`), else none |
+| `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops short of finishing, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
+| `--progress` / `--no-progress` | auto — the live **display** prints when stderr is a terminal and neither `-q` nor `-v` was given; `--progress` forces it past every gate (a non-terminal stderr and `-q` alike), `--no-progress` suppresses both surfaces, and an explicit `--progress-interval` opts in on its own. Where the display stands down, progress falls back to the structured INFO `progress` log record — which, being a log record, prints only under `-v`; at the default WARN level a run without the display shows no progress at all |
 
 ### Filters
 
@@ -89,7 +103,7 @@ row — an object whose storage class the listing did not return is **dropped** 
 | `--concurrency` | `64` (AIMD ceiling; live value adapts within `[1, T]`) |
 | `--object-listing-queue-size` | `50000` |
 | `--request-rate` | unset (uncapped) |
-| `--progress-interval` | `30s` |
+| `--progress-interval` | `1s` when the progress line redraws on a terminal, `30s` for appended records (floor `1s`; a faster value is rejected, not clamped) |
 | `--max-duration` | unset (no timebox) |
 | `--idle-timeout` | `120s` |
 | `--no-progress-timeout` | `10m` |
@@ -128,7 +142,8 @@ both as sensitive run artifacts.
 | Flag | Default |
 | --- | --- |
 | `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
-| `-q, --quiet` | off |
+| `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
+| `--color` | `auto` — colors the end-of-run summary block only when stderr is a terminal, unless `NO_COLOR`/`TERM=dumb` disables it or `CLICOLOR_FORCE` forces it; `always`/`never` win over all of that, including `NO_COLOR` |
 | `-h, --help` | — (prints help and exits) |
 | `-V, --version` | — (prints version and exits) |
 
@@ -142,7 +157,7 @@ both as sensitive run artifacts.
 | `engine.readahead` | `off` | Speculative dense-tail readahead |
 | `seed.mode` | `shallow` | Initial keyspace discovery strategy (`shallow`, `none`, `hints` reserved) |
 | `parquet.writers` | `3` | Bounded Parquet writer pool size (`2..4`) |
-| `summary.interval` | `--progress-interval` | JSON run-summary flush cadence |
+| `summary.interval` | `--progress-interval` when given, else `30s` | JSON run-summary flush cadence — it follows the *configured* interval, never the redrawing display's faster tick |
 | `sort.ignore-disk-check` | `off` | Skip `--sort`'s pre-run and periodic disk-space guard |
 
 See [`usage.md`](usage.md#tuning---tune) for what each knob actually changes and

@@ -64,8 +64,9 @@ final class MergeFdBudget {
     /**
      * This process's SOFT open-file limit, parsed from {@code /proc/self/limits} (line
      * {@code "Max open files"}, first numeric column). Returns {@code -1} for an {@code unlimited} soft
-     * limit, and {@link #FALLBACK_SOFT_FD_LIMIT} (with a warn) when the file is absent or unparseable
-     * (non-Linux, a locked-down container) so the clamp still applies a conservative ceiling.
+     * limit, and {@link #FALLBACK_SOFT_FD_LIMIT} (with a debug log) when the file is absent or
+     * unparseable (non-Linux, a locked-down container) so the clamp still applies a conservative
+     * ceiling.
      */
     static int softOpenFileLimit() {
         Path limits = Path.of("/proc/self/limits");
@@ -87,12 +88,12 @@ final class MergeFdBudget {
                 return Integer.parseInt(cols[0]);
             }
         } catch (IOException | RuntimeException e) {
-            log.warn("could not read soft open-file limit from {} — falling back to a conservative {}; "
+            log.debug("could not read soft open-file limit from {} — falling back to a conservative {}; "
                     + "a single-pass merge fan-in will be clamped to {} - {} to avoid EMFILE",
                     limits, FALLBACK_SOFT_FD_LIMIT, FALLBACK_SOFT_FD_LIMIT, FD_HEADROOM, e);
             return FALLBACK_SOFT_FD_LIMIT;
         }
-        log.warn("no 'Max open files' line in {} — falling back to a conservative soft fd limit of {}",
+        log.debug("no 'Max open files' line in {} — falling back to a conservative soft fd limit of {}",
                 limits, FALLBACK_SOFT_FD_LIMIT);
         return FALLBACK_SOFT_FD_LIMIT;
     }

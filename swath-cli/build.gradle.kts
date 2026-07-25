@@ -24,6 +24,17 @@ dependencies {
     // transitively, via hadoop-common), so it doesn't cross the module boundary on its
     // own; ListCommand's resume path recomputes a finalized part's MD5 directly.
     implementation(libs.commons.codec)
+    // Terminal geometry for ProgressDisplay's in-place redraw (TerminalGeometry). JLine is used for
+    // the size query alone: it never receives this process's stderr, its streams or its signals.
+    // jline-native is the JNI provider's bundled natives, dead weight next to the FFM provider a
+    // JDK-25 toolchain always selects — and dropping it keeps platform .so/.dll files out of the
+    // shaded jar and out of the third-party notices.
+    implementation(libs.jline.terminal) {
+        exclude(group = "org.jline", module = "jline-native")
+    }
+    runtimeOnly(libs.jline.terminal.ffm) {
+        exclude(group = "org.jline", module = "jline-native")
+    }
     runtimeOnly(libs.logback.classic)
 
     // ITs (HardCrashSigkillResumeProcessIT, Int12BrokenPipeProcessIT, ...) drive the

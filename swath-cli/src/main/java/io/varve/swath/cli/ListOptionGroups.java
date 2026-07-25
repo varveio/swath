@@ -38,7 +38,9 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = "--progress-interval", paramLabel = "DURATION",
-                description = "Set the progress reporting interval.")
+                description = "Set the progress reporting interval (default: 1s while the "
+                        + "progress line redraws on a terminal, 30s for appended records; "
+                        + "floor 1s).")
         void progressInterval(String value) {
             liveness.progressInterval = value;
         }
@@ -87,6 +89,14 @@ final class ListOptionGroups {
         }
 
         @Resume(ResumeClass.FREE)
+        @Option(names = "--color", paramLabel = "MODE",
+                description = "Color the progress line and end-of-run summary: auto, "
+                        + "always, or never (default: auto).")
+        void color(AnsiPalette.Mode value) {
+            global.color = value;
+        }
+
+        @Resume(ResumeClass.FREE)
         @Option(names = "--engine-toggle", paramLabel = "NAME=on|off",
                 description = "Set a diagnostic engine ablation (repeatable; see docs/usage.md).")
         void engineToggle(String[] values) {
@@ -128,9 +138,11 @@ final class ListOptionGroups {
         }
 
         @Resume(ResumeClass.FREE)
-        @Option(names = {"-q", "--quiet"}, description = "Suppress the startup destination echo.")
-        void quiet(boolean value) {
-            global.quiet = value;
+        @Option(names = {"-q", "--quiet"},
+                description = "Decrease verbosity (-q ERROR, -qq silent); suppresses the startup "
+                        + "destination echo.")
+        void quiet(boolean[] values) {
+            global.quiet = values;
         }
 
     }

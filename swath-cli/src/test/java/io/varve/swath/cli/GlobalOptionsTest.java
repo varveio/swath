@@ -58,13 +58,85 @@ class GlobalOptionsTest {
         before.parseArgs("-q", "list", "s3://bucket/prefix");
         CommandLine beforeList = before.getSubcommands().get("list");
         ListCommand listBefore = (ListCommand) beforeList.getCommand();
-        assertThat(listBefore.global.quiet).isFalse();   // set on the ROOT App's mixin, not list's own
-        assertThat(GlobalOptions.effectiveQuiet(beforeList)).isTrue();
+        assertThat(listBefore.global.quiet).isEmpty();   // set on the ROOT App's mixin, not list's own
+        assertThat(GlobalOptions.effectiveQuietLevel(beforeList)).isEqualTo(1);
 
         CommandLine after = App.commandLine();
         after.parseArgs("list", "s3://bucket/prefix", "-q");
         ListCommand listAfter = (ListCommand) after.getSubcommands().get("list").getCommand();
-        assertThat(listAfter.globalOptions().quiet).isTrue();
+        assertThat(listAfter.globalOptions().quiet).hasSize(1);
+    }
+
+    @Test
+    void repeatedQFlagsStack() {
+        CommandLine longForm = App.commandLine();
+        longForm.parseArgs("list", "s3://bucket/prefix", "--quiet", "--quiet");
+        CommandLine longList = longForm.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(longList)).isEqualTo(2);
+
+        CommandLine shortForm = App.commandLine();
+        shortForm.parseArgs("list", "s3://bucket/prefix", "-qq");
+        CommandLine shortList = shortForm.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(shortList)).isEqualTo(2);
+    }
+
+    @Test
+    void quietSplitAcrossTheVerbStacksLikeARepeatedFlag() {
+        // Both sides of the verb accept -q, so both mixins really are populated in one invocation:
+        // the two occurrences must add up to -qq (OFF), not collapse to a single ERROR level.
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("-q", "list", "s3://bucket/prefix", "-q");
+        CommandLine list = cmd.getSubcommands().get("list");
+        ListCommand leaf = (ListCommand) list.getCommand();
+        App root = (App) cmd.getCommand();
+
+        assertThat(leaf.globalOptions().quiet).hasSize(1);
+        assertThat(root.globalOptions().quiet).hasSize(1);
+        assertThat(GlobalOptions.effectiveQuietLevel(list)).isEqualTo(2);
+    }
+
+    @Test
+    void verbositySplitAcrossTheVerbStacksLikeARepeatedFlag() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("-v", "list", "s3://bucket/prefix", "-v");
+        CommandLine list = cmd.getSubcommands().get("list");
+        ListCommand leaf = (ListCommand) list.getCommand();
+        App root = (App) cmd.getCommand();
+
+        assertThat(leaf.globalOptions().verbosity).hasSize(1);
+        assertThat(root.globalOptions().verbosity).hasSize(1);
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isEqualTo(2);   // DEBUG, as `-vv` would
+    }
+
+    @Test
+    void noQuietFlagIsZero() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(list)).isZero();
+    }
+
+    @Test
+    void colorBeforeOrAfterTheVerbResolvesIdentically() {
+        CommandLine before = App.commandLine();
+        before.parseArgs("--color=never", "list", "s3://bucket/prefix");
+        CommandLine beforeList = before.getSubcommands().get("list");
+
+        CommandLine after = App.commandLine();
+        after.parseArgs("list", "s3://bucket/prefix", "--color=never");
+        CommandLine afterList = after.getSubcommands().get("list");
+
+        assertThat(GlobalOptions.effectiveColor(beforeList)).isEqualTo(AnsiPalette.Mode.NEVER);
+        assertThat(GlobalOptions.effectiveColor(afterList))
+                .isEqualTo(GlobalOptions.effectiveColor(beforeList));
+    }
+
+    @Test
+    void noColorFlagIsAuto() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveColor(list)).isEqualTo(AnsiPalette.Mode.AUTO);
     }
 
     @Test

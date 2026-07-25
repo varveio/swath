@@ -92,6 +92,24 @@ class AppThrowableBackstopTest {
                 .doesNotContain(OutputException.class.getName());
     }
 
+    /**
+     * {@code -qq} silences logging (down to {@code OFF}, per {@link CliLoggingTest}) but must NOT
+     * silence the {@code swath: …} terminal error line — that line goes through {@code
+     * cmd.getErr()} in {@link App#handleExecutionException}, bypassing SLF4J entirely.
+     */
+    @Test
+    void quietQqDoesNotSuppressTheTerminalErrorLine() {
+        StringWriter err = new StringWriter();
+        CommandLine cmd = App.commandLine();
+        cmd.addSubcommand("domain-failure", new ThrowingDomainFailureCommand());
+        cmd.setErr(new PrintWriter(err));
+
+        int exit = cmd.execute("-qq", "domain-failure");
+
+        assertThat(exit).isEqualTo(ExitCodes.UNEXPECTED);
+        assertThat(err.toString()).contains("swath: disk is full");
+    }
+
     @Test
     void wrappedDomainFailureWithExitOneIsAlsoRenderedAsADomainError() {
         StringWriter err = new StringWriter();

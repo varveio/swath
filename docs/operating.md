@@ -133,9 +133,23 @@ buffered at the moment of the crash, not by how far the run had got:
 
 ### Reading the cost from a run summary
 
-Every run writes a machine-readable summary (by default `_swath_summary.json` in
-the output directory, or to a path you set with `--report`). Its cost is
-reported directly:
+The terminal tells you first. Any run that earns an end-of-run block (see
+[`usage.md`](usage.md#end-of-run-summary)) prints its estimated LIST spend on stderr, labeled with
+the rate it assumed:
+
+```
+  ~$0.006 (est. @ $0.005/1k LIST)
+```
+
+Stating the rate is the point: `$0.005/1k` is a single-region AWS reference price, and LIST pricing
+varies by region and over time, so the label is what lets you rescale honestly from your own rate
+rather than trusting a figure swath cannot verify. When the provider is unknown — any run with
+`--endpoint-url` (MinIO, R2, LocalStack, self-hosted) — **no dollar figure is printed at all**: the
+call count is still yours to price, but swath will not guess someone else's tariff.
+
+The machine-readable summary (by default `_swath_summary.json` in the output directory, or a path
+you set with `--report`) carries the same cost, always — including under `--endpoint-url`, where
+`cost.basis` names exactly what was assumed so a consumer can discard or recompute it:
 
 - `cost.api_calls` — the total number of `ListObjectsV2` calls the run issued.
   Divide this count by 1,000 to obtain billable price units, then multiply by
@@ -144,9 +158,32 @@ reported directly:
   `api_calls × $0.005 / 1000`. The rate is a built-in `us-east-1` reference
   price; if your region or the current price differs, recompute from
   `cost.api_calls` and your own rate.
+- `cost.basis` — that assumption, named: `rate_per_1k_usd` (the numeric rate `cost_usd` was derived
+  from) and `source` (`aws-list-reference-rate`).
 - `efficiency.api_calls_per_1k_objects` — LIST calls per 1,000 objects listed.
   For a well-behaved run this sits near the ideal of ~1.0; a materially higher
   value means the probe/split overhead was significant for this bucket shape.
 
 The same fields appear on the `list_run_summary` log line at the end of a run
-(`api_calls`, `cost_usd`, `api_calls_per_1k_objects`).
+(`api_calls`, `cost_usd`, `api_calls_per_1k_objects`), which `-v` enables.
+
+### Why the summary is on by default
+
+swath's default is inverted from most CLIs, deliberately: the machine-readable report has always
+been written by default, while the person who ran the command was told nothing. For an hour-long
+enumeration that is backwards — the operator is the one who waited. So a run that earns a summary
+(over 1.5 s, durable output produced, or an early stop) prints one, and a run that does not stays
+silent. What the block means, line by line:
+
+- **objects, elapsed, keys/s** — what the run listed and how fast.
+- **API calls and `per 1k objects`** — the bill's shape. swath is billed per request, so `1.00 per
+  1k` versus `38 per 1k` is the is-this-bucket-pathological signal, in one token.
+- **`in flight avg` and `peak`** — sustained parallelism versus a brief spike. Peak saturates at the
+  concurrency ceiling; the average is the number a tuning change actually moves.
+- **the faults line** (only when non-zero) — recovered backpressure and retries. These are normal in
+  small numbers on a large bucket; they are logged nowhere else at the default level, which is why
+  the line exists.
+- **cost** — as above, absent when the provider is unknown.
+
+If you want none of it, `--no-stats`. If you want it on every run however short, `--stats`. If you
+want it parsed rather than read, `--report`.

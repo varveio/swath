@@ -11,6 +11,7 @@ import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import picocli.AutoComplete;
 import picocli.CommandLine;
@@ -73,7 +74,16 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
                 .setCaseInsensitiveEnumValuesAllowed(true);
         CommandLine.IExecutionStrategy runLast = new CommandLine.RunLast();
         cmd.setExecutionStrategy(parseResult -> {
-            CliLogging.configure(GlobalOptions.effectiveVerbosity(parseResult.commandSpec().commandLine()));
+            // The deepest parsed level, not parseResult.commandSpec().commandLine() (always the
+            // root): a leaf-placed -v/-q (`swath list -vv …`) must be visible here too, and
+            // GlobalOptions.mergedLevel needs the genuine leaf to sum root+leaf without double
+            // counting when there is no subcommand at all (`swath -vv --help`).
+            List<CommandLine> parsedLevels = parseResult.asCommandLineList();
+            CommandLine leaf = parsedLevels.get(parsedLevels.size() - 1);
+            CliLogging.configure(GlobalOptions.effectiveVerbosity(leaf), GlobalOptions.effectiveQuietLevel(leaf));
+            // Log events share stderr with the live progress record and the summary block, so the
+            // console appender writes through the one coordinator that serializes all of them.
+            CliLogging.serializeThrough(StderrCoordinator.shared());
             return runLast.execute(parseResult);
         });
         CommandLine completion = new CommandLine(new AutoComplete.GenerateCompletion());
@@ -110,20 +120,38 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
 
     private static int handleExecutionException(Exception ex, CommandLine cmd,
                                                 CommandLine.ParseResult parseResult) {
+        // A terminal error line is the run's last word on stderr: end live progress permanently
+        // first, so no frame still being formatted can land after it — then write the whole record
+        // under the coordinator's lock, so a log event cannot splice a multi-line stack trace or
+        // land after the error either. picocli's own writer keeps doing the writing: an embedding
+        // application may have redirected it.
+        StderrCoordinator coordinator = StderrCoordinator.shared();
+        coordinator.finishProgress();
         int code = ExitCodes.forThrowable(ex);
         SwathException domain = domainException(ex);
         if (domain != null) {
-            cmd.getErr().println("swath: " + domain.getMessage());
+            recordError(coordinator, cmd, err -> err.println("swath: " + domain.getMessage()));
         } else if (code == ExitCodes.UNEXPECTED) {
-            PrintWriter err = cmd.getErr();
-            err.println("swath: unexpected error: " + ex);
-            if (GlobalOptions.effectiveVerbosity(cmd) > 0) {
-                ex.printStackTrace(err);
-            }
+            recordError(coordinator, cmd, err -> {
+                err.println("swath: unexpected error: " + ex);
+                if (GlobalOptions.effectiveVerbosity(cmd) > 0) {
+                    ex.printStackTrace(err);
+                }
+            });
         } else if (code != ExitCodes.SUCCESS) {
-            cmd.getErr().println("swath: " + ex.getMessage());
+            recordError(coordinator, cmd, err -> err.println("swath: " + ex.getMessage()));
         }
         return code;
+    }
+
+    /** One error record on picocli's writer, complete and flushed, under the stderr coordinator's lock. */
+    private static void recordError(StderrCoordinator coordinator, CommandLine cmd,
+            Consumer<PrintWriter> body) {
+        coordinator.record(() -> {
+            PrintWriter err = cmd.getErr();
+            body.accept(err);
+            err.flush();
+        });
     }
 
     private static SwathException domainException(Throwable throwable) {
@@ -160,6 +188,7 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
         try {
             return cmd.execute(args);
         } catch (Throwable t) {
+            StderrCoordinator.shared().finishProgress();
             err.println("swath: unexpected error: " + t);
             return ExitCodes.UNEXPECTED;
         }

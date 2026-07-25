@@ -22,6 +22,10 @@ duckdbjdbc = "1.5.4.0"
 jmh = "1.37"
 jmhplugin = "0.7.3"
 jackson = "2.22.0"
+# Terminal geometry for the live progress display's in-place redraw, and nothing else — see
+# TerminalGeometry. The 3.x line is not the superseded one: 3.30.16 postdates 4.3.1, and it is what
+# the ecosystem's shaded consumers ship against.
+jline = "3.30.16"
 bucket4j = "8.10.1"
 commonscodec = "1.16.1"
 shadowplugin = "8.3.9"
@@ -52,6 +56,12 @@ jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
 jetty-server = { module = "org.eclipse.jetty:jetty-server" }
 duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version.ref = "duckdbjdbc" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+# jline-terminal carries the Terminal API and the `exec` fallback provider; jline-terminal-ffm is
+# the JDK-22+ provider that answers a size query with an ioctl instead of forking `stty`. The JNI
+# provider (jline-native, ~185 KB of bundled .so/.dll) is excluded at the usage site: on a JDK-25
+# toolchain the FFM provider always wins the selection, so its natives would ship unused.
+jline-terminal = { module = "org.jline:jline-terminal", version.ref = "jline" }
+jline-terminal-ffm = { module = "org.jline:jline-terminal-ffm", version.ref = "jline" }
 bucket4j-core = { module = "com.bucket4j:bucket4j-core", version.ref = "bucket4j" }
 commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonscodec" }
 

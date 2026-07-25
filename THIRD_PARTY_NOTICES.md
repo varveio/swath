@@ -83,6 +83,8 @@ resources.
 - `org.codehaus.mojo:animal-sniffer-annotations:1.17` — Apache License, Version 2.0; MIT License
 - `org.codehaus.woodstox:stax2-api:4.2.1` — Apache License, Version 2.0; The 2-Clause BSD License
 - `org.hdrhistogram:HdrHistogram:2.2.2` — Creative Commons Legal Code; PUBLIC DOMAIN; The 2-Clause BSD License
+- `org.jline:jline-terminal:3.30.16` — Apache License, Version 2.0; The 3-Clause BSD License
+- `org.jline:jline-terminal-ffm:3.30.16` — The 3-Clause BSD License
 - `org.jspecify:jspecify:1.0.0` — Apache License, Version 2.0
 - `org.reactivestreams:reactive-streams:1.0.4` — MIT-0
 - `org.slf4j:slf4j-api:2.0.17` — No license declared in resolved metadata; MIT License

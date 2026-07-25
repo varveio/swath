@@ -33,6 +33,14 @@ import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
  * worker pages), but that could only be recovered from the JSON run summary's per-call-class
  * histograms. Against the un-attributed line {@link #retryableTimeoutLineNamesTheCallClassAndRange}
  * fails. See {@code docs/ops/dev/field-investigations.md}.
+ *
+ * <p><b>Asserted at DEBUG, which is the tier these lines ship at.</b> The retryable fault family is
+ * auto-retried and each line duplicates a counter recorded immediately beside it, so emitting one
+ * per fault at WARN put a healthy run's ordinary transients on the operator's stderr. The aggregate
+ * reaches the operator instead as the run summary's {@code throttled}/{@code retried}/{@code
+ * errors} line — a storm is one line there rather than ~1300 here. What survives that move, and is
+ * what this test guards, is the ATTRIBUTION: whoever turns these lines on to diagnose a storm must
+ * be able to read the faulting call class and key range off them.
  */
 class S3FaultLogAttributionTest {
 
@@ -48,7 +56,7 @@ class S3FaultLogAttributionTest {
         appender.start();
         FAULT_LOGGER.addAppender(appender);
         previousLevel = FAULT_LOGGER.getLevel();
-        FAULT_LOGGER.setLevel(Level.WARN);
+        FAULT_LOGGER.setLevel(Level.DEBUG);
     }
 
     @AfterEach
@@ -59,13 +67,13 @@ class S3FaultLogAttributionTest {
     }
 
     /**
-     * The single WARN line starting with {@code tag}. A faulting PROBE fetch legitimately emits two
-     * WARN lines — the fault line itself plus {@code slow_probe_exemplar} (any exception path is an
+     * The single DEBUG line starting with {@code tag}. A faulting PROBE fetch legitimately emits two
+     * lines — the fault line itself plus {@code slow_probe_exemplar} (any exception path is an
      * unconditional exemplar candidate) — so the assertion selects by tag rather than by count.
      */
-    private String warnLine(String tag) {
+    private String faultLine(String tag) {
         List<String> matching = appender.list.stream()
-                .filter(e -> e.getLevel() == Level.WARN)
+                .filter(e -> e.getLevel() == Level.DEBUG)
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(m -> m.startsWith(tag))
                 .toList();
@@ -91,7 +99,7 @@ class S3FaultLogAttributionTest {
                         new String(structureProbe.prefix(), StandardCharsets.UTF_8),
                         new String(structureProbe.startAfter(), StandardCharsets.UTF_8)));
 
-        assertThat(warnLine("s3_timeout"))
+        assertThat(faultLine("s3_timeout"))
                 .as("a storm of these must be attributable to a call class and a key range")
                 .contains("call_class=" + RunMetrics.CALL_CLASS_STRUCTURE_PROBE)
                 .contains("prefix=corpus/")
@@ -109,7 +117,7 @@ class S3FaultLogAttributionTest {
         assertThatThrownBy(() -> new S3PageFetcher(client, "bucket").fetchPage(pivotProbe))
                 .isInstanceOf(Exception.class);
 
-        assertThat(warnLine("s3_timeout"))
+        assertThat(faultLine("s3_timeout"))
                 .contains("call_class=" + RunMetrics.CALL_CLASS_PIVOT_PROBE)
                 .contains("prefix=data/");
     }

@@ -19,7 +19,8 @@ import io.varve.swath.checkpoint.RunMeta;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
-import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.observability.Phase;
+import io.varve.swath.observability.ProgressEvent;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageRequest;
@@ -96,7 +97,7 @@ final class ListRunnerObservabilityTest {
     }
 
     @Test
-    void sequentialProgressCursorAdvances() throws Exception {
+    void completedRunReportsNoPhaseShapedProgress() throws Exception {
         RunContext ctx = RunContext.create();
         MockPageFetcher fetcher = MockPageFetcher.builder()
                 .keys(List.of(b("a"), b("b"), b("c")))
@@ -104,28 +105,32 @@ final class ListRunnerObservabilityTest {
 
         new ListRunner().run(ctx, fetcher, new StringWriter(), jsonl(2));
 
-        RunMetrics.ProgressSnapshot snapshot = ctx.metrics().snapshot(Duration.ofSeconds(1));
-        assertThat(snapshot.cursor()).isEqualTo("c");
-        assertThat(snapshot.concurrencyTarget()).isEqualTo(1L);
-        assertThat(snapshot.inFlight()).isZero();
+        // A finished run offers no phase-shaped progress: the terminal summary owns that surface,
+        // and a display must not keep painting listing counters over it. The run-level fields stay
+        // valid in every phase.
+        ProgressEvent event = ctx.metrics().progressEvent(Duration.ofSeconds(1));
+        assertThat(event.phase()).isEqualTo(Phase.COMPLETE);
+        assertThat(event.listing()).isNull();
+        assertThat(event.completion()).isNull();
+        assertThat(event.sessionElapsed()).isEqualTo(Duration.ofSeconds(1));
     }
 
     @Test
     void sequentialProgressReportsOneWorkerWhileFetchIsInFlight() throws Exception {
         RunContext ctx = RunContext.create();
-        AtomicReference<RunMetrics.ProgressSnapshot> observed = new AtomicReference<>();
+        AtomicReference<ProgressEvent> observed = new AtomicReference<>();
         MockPageFetcher fetcher = MockPageFetcher.builder()
                 .keys(List.of(b("a"), b("b")))
                 .interceptor((PageRequest req, int callIndex, ListPage computed) -> {
-                    observed.set(ctx.metrics().snapshot(Duration.ofMillis(1)));
+                    observed.set(ctx.metrics().progressEvent(Duration.ofMillis(1)));
                     return computed;
                 })
                 .build();
 
         new ListRunner().run(ctx, fetcher, new StringWriter(), jsonl(2));
 
-        assertThat(observed.get().concurrencyTarget()).isEqualTo(1L);
-        assertThat(observed.get().inFlight()).isEqualTo(1L);
+        assertThat(observed.get().listing().concurrencyTarget()).isEqualTo(1L);
+        assertThat(observed.get().listing().inFlight()).isEqualTo(1L);
     }
 
     @Test
@@ -158,6 +163,11 @@ final class ListRunnerObservabilityTest {
                 .orElseThrow(() -> new AssertionError("no list_run_diagnostics log line emitted"));
 
         assertThat(summaryLine)
+                .as("the -v line must carry both clocks, same as the JSON report and the "
+                        + "stderr summary, so a machine consumer scraping this line never disagrees "
+                        + "with the other two surfaces about the session's actual wall clock")
+                .contains("duration_ms=")
+                .contains("session_duration_ms=")
                 .contains("api_calls_per_1k_objects=")
                 .contains("peak_rss_bytes=")
                 .contains("peak_heap_bytes=")

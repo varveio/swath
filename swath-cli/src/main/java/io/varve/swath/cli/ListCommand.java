@@ -34,6 +34,8 @@ import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.MeterRegistries;
+import io.varve.swath.observability.Phase;
+import io.varve.swath.observability.ProgressSink;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.observability.RunSummary;
@@ -81,8 +83,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -193,12 +195,27 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     TerminalCapabilities terminalOverride;
 
+    /**
+     * Test-only seam (package-private, null in production): when set, {@code call()}'s {@code
+     * --color} resolution reads {@code NO_COLOR}/{@code TERM}/{@code CLICOLOR_FORCE} through this
+     * instead of {@code System.getenv}, so a test can pin them deterministically regardless of the
+     * real process environment. Mirrors {@link #terminalOverride}.
+     */
+    UnaryOperator<String> envOverride;
+
     /** Resolved once at the top of {@link #call()} from {@link #terminalOverride}/{@link
      * TerminalCapabilities} -- threaded into {@link LivenessOptions#startProgressReporter} so the
      * swath-core {@link io.varve.swath.observability.RunProgressReporter} never calls {@code
      * System.console()} itself (core has no ambient terminal knowledge; the CLI is the one layer
      * that does). */
     private boolean stdoutIsTerminal;
+
+    /**
+     * Whether the installed progress surface redraws in place — settled when the sink is chosen and
+     * read again when the reporter starts, which is the only thing that decides this run's tick
+     * cadence. False for every run without a live display, which is also the cadence they want.
+     */
+    private boolean progressRedraw;
 
     /**
      * Test-only seam (package-private, null in production): when set, {@link
@@ -320,6 +337,16 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // stdin was wrongly classified non-terminal. TerminalCapabilities probes fd 1 independently.
         TerminalCapabilities terminal = terminalOverride != null ? terminalOverride : new TerminalCapabilities();
         stdoutIsTerminal = terminal.stdoutIsTerminal();
+        // --color resolution (§4.9): an explicit flag decides on its own; auto consults NO_COLOR/
+        // TERM=dumb/CLICOLOR_FORCE, then falls back to stderr's own terminal-ness -- the fd this
+        // decision is actually about, since it governs only the summary block, never whether it
+        // prints (that's shouldRender's job, never TTY-gated -- see SummaryRenderer). Root-vs-leaf
+        // merges the same way -v/-q do; env is read through envOverride so a test can pin it.
+        AnsiPalette.Mode colorMode = spec != null
+                ? GlobalOptions.effectiveColor(spec.commandLine()) : global.color;
+        UnaryOperator<String> env = envOverride != null ? envOverride : System::getenv;
+        boolean colorEnabled = AnsiPalette.resolveEnabled(colorMode, env.apply("NO_COLOR"),
+                env.apply("TERM"), env.apply("CLICOLOR_FORCE"), terminal.stderrIsTerminal());
         boolean deferredResumeFormat = resumeCommandCheckpoint != null;
         OutputOptions.Resolved resolvedOutput = deferredResumeFormat
                 ? output.resolveDeferredResumeOutput(stdoutIsTerminal)
@@ -352,9 +379,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // directly and call call() without ever going through picocli parsing, leaving @Spec spec
         // null -- exactly like openSink()'s raw FileDescriptor.out, this stays independent of picocli.
         // -q consults the MERGED root+leaf quiet: a root-level `swath -q list …`
-        // must suppress this too, not just a leaf `swath list -q …` (GlobalOptions.effectiveQuiet
+        // must suppress this too, not just a leaf `swath list -q …` (GlobalOptions.effectiveQuietLevel
         // degrades to the leaf's own mixin when spec is null -- direct-construction unit tests).
-        boolean quiet = spec != null ? GlobalOptions.effectiveQuiet(spec.commandLine()) : global.quiet;
+        boolean quiet = spec != null
+                ? GlobalOptions.effectiveQuietLevel(spec.commandLine()) > 0 : global.quiet.length > 0;
         if (!deferredResumeFormat) {
             output.echoResolvedOutput(resolvedOutput, System.err, quiet);   // never silent
         }
@@ -388,6 +416,39 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 .fromCliConfig(otlp.resolvedExportMode(), otlp.metricsEndpoint,
                         metricsIntervalDuration, runResourceAttrs);
         RunContext ctx = RunContext.create(meterRegistry);
+        // The operator-facing end-of-run block, rendered from the same terminal RunSummary the
+        // --report JSON and the -v log line are built from (§ RunSummarySink). System.err for the
+        // same reason the destination echo uses it: a directly-constructed ListCommand has no
+        // picocli spec. Cost is withheld under --endpoint-url, where the provider's LIST pricing
+        // is unknowable.
+        // The preferences are read at EMIT time, not here: a bare `swath resume <dir>` only learns
+        // its destination from the checkpoint's restored run context (restoreRunContext /
+        // recomputeKindAfterRestore), long after the sink is installed, so capturing them now
+        // would render every resume as a non-durable, non-resumable stdout run.
+        // Every writer of this one fd goes through the CLI's stderr coordinator: the summary block,
+        // the live progress record, the log, and picocli's own error lines (App). It is what stops
+        // them splicing each other, and what lets the block permanently end progress before it
+        // writes its first line.
+        StderrCoordinator stderr = StderrCoordinator.shared();
+        boolean costKnown = connection.endpointUrl == null;
+        ctx.metrics().setSummarySink(new SummaryRenderer(stderr, () -> new SummaryRenderer.Preferences(
+                output.stats, quiet, output.resolvedKind != OutputOptions.DestinationKind.STDOUT,
+                costKnown, resumeDestination(mode), colorEnabled)));
+        // Live progress is the CLI's call for the same reason: swath-core knows WHAT the run is
+        // doing, not whether this stderr wants to be told. So the CLI always installs the sink it
+        // chose — the display, the structured log record, or none at all — rather than leaving a
+        // default in place for the cases it declined to display (see ProgressDisplay#sinkFor).
+        ProgressSink progressSink = ProgressDisplay.sinkFor(new ProgressDisplay.Preferences(
+                output.progress, quiet, verbosity > 0, liveness.progressInterval != null,
+                terminal.stderrIsTerminal(), env.apply("TERM")), stderr, new AnsiPalette(colorEnabled));
+        // The tick cadence is read off the surface that was actually installed, not recomputed:
+        // only a display that redraws can afford — and needs — the faster default (§
+        // LivenessOptions#resolveDisplayProgressInterval).
+        progressRedraw = progressSink instanceof ProgressDisplay display && display.redraws();
+        ctx.metrics().setProgressSink(progressSink);
+        // Whether a $ figure can exist at all is a fact about the provider, not about this terminal,
+        // so it rides on the event and no progress surface has to remember to withhold it.
+        ctx.metrics().setListCostKnown(costKnown);
 
         // A SIGTERM/SIGINT flips the cancellation flag (stop_reason=signal); the --max-duration
         // deadline flips it with stop_reason=max_duration. Either way the run thread observes the
@@ -418,6 +479,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         } catch (CancelledException e) {
             return timeboxExitOrRethrow(ctx.cancellation(), ctx.metrics(), e, argsHash);
         } finally {
+            // The backstop for a run that never reached its summary (which ends progress itself):
+            // DaemonSchedulers.stop() can return while a tick is still formatting, so progress is
+            // ended for whichever sink is installed, and the stderr generation with it — any frame
+            // still in flight is dropped when it reaches the coordinator.
+            ctx.metrics().finishProgress();
+            stderr.finishProgress();
             SignalHandlers.unregister(ctx.cancellation());
         }
     }
@@ -614,7 +681,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // so a bare resume from a DB with a stored region (and no --region/--endpoint-url/env
                 // region) resolves region from the checkpoint instead of failing region resolution.
                 // Region is deliberately excluded from args_hash.
-                restoreRunContext(run);
+                restoreRunContext(run, ctx.metrics());
                 OutputOptions.DestinationKind preRestoreKind = output.resolvedKind;
                 // A bare swath resume with no explicit -o only learns its destination here. Valid
                 // checkpoints restore a directory dataset, including a recognized .parquet path
@@ -679,7 +746,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // resumable, regardless of checkpoint status: COMPLETED can precede a failed final
                 // publication, so treating it as a harmless no-op would report false success.
                 if (output.resolvedKind == OutputOptions.DestinationKind.FILE) {
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: checkpoint destination -o "
                             + output.destination + " is recorded as FILE kind, which is non-resumable; "
@@ -699,7 +766,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // the CLI's fatal-error guard itself marked (runEngineGuarded / the seed-probe catch
                 // below) carries fatalError()==true.
                 if (run.status() == RunStatus.FAILED && run.fatalError()) {
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: run " + run.id() + " for "
                             + s3uri.bucket() + "/" + s3uri.prefixAsString() + " is recorded FAILED "
@@ -712,7 +779,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // or --sort/--no-sort mode changed", which made the user guess.
                 if (!changedIdentity.isEmpty()) {
                     // Even a pre-run refusal writes a summary so a consumer always finds one.
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                     throw new InvalidArgsException("swath resume refused: "
                             + String.join(", ", changedIdentity)
@@ -736,7 +803,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             .filter(f -> !ListRunner.SORT_SEGMENT_FORMAT.equals(f))
                             .toList();
                     if (!staleFormats.isEmpty()) {
-                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                                 false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
                         throw new InvalidArgsException("swath resume refused: the sort staging format "
                                 + "changed since the checkpointed run (checkpoint records "
@@ -771,7 +838,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // The fetcher is created once and shared by the seed probe and the engine, so a
             // fresh run pays a single S3 client setup. Resume reloads existing nodes (it never
             // re-seeds); a fresh run seeds the worklist before loading the resumable set.
-            try (S3Client s3 = S3ClientFactory.create(config, ctx.metrics())) {
+            //
+            // The session progress reporter opens here, around EVERYTHING the run does: the seed
+            // step, the engine, and the sort merge/publish tail. It is the CLI's to start because
+            // this is the only scope that spans all three — the engine's own start joins this one
+            // instead of running a second ticker (RunProgressReporter), and it closes first (before
+            // the S3 client) so no frame can land after the run is over.
+            try (S3Client s3 = S3ClientFactory.create(config, ctx.metrics());
+                    RunProgressReporter progress = liveness.startProgressReporter(ctx, progressRedraw)) {
                 PageFetcher rawFetcher = fetcherOverride != null
                         ? fetcherOverride
                         : connection.maybeRateLimited(new S3PageFetcher(s3, s3uri.bucket(),
@@ -799,15 +873,17 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // "empty ⇒ done" determinations, so a re-seeded resume proceeds normally in either
                 // mode; a normal partial resume (nodes present) is unaffected.
                 if (!run.resumed() || store.countNodes(run.id()) == 0) {
-                    // A zero-progress heartbeat for the seed window specifically — the gap the
-                    // issue evidenced (a hung seed produced zero log lines for hours, since
-                    // RunProgressReporter only starts once ListRunner's engine dispatch is entered,
-                    // well after seeding). Piggybacks on the EXISTING RunProgressReporter/--progress-
-                    // interval cadence rather than new scheduling infra; on the common fast-seed path
-                    // it ticks zero times (seeding finishes in milliseconds) and costs nothing beyond
-                    // starting/stopping one daemon thread.
-                    try (RunProgressReporter seedHeartbeat =
-                                 liveness.startProgressReporter(ctx, stdoutIsTerminal)) {
+                    // Bind the metrics run id before the first probe, so the progress reporter
+                    // already ticking reports the real run id instead of RunMetrics' unset default
+                    // (-1) — run.id() is already known (openRun assigned it above);
+                    // writeEarlyExitSummary/ListRunner re-set the same value later, a harmless
+                    // idempotent re-assignment. The phase is set here, strictly before the seed's
+                    // first probe, so a run that hangs in seeding reports SEEDING (probes against
+                    // their budget, age of the last completed one) instead of a listing shape whose
+                    // every field is zero by construction — the case the issue evidenced.
+                    ctx.metrics().setRunId(run.id());
+                    ctx.metrics().setPhase(Phase.SEEDING);
+                    try {
                         seedFreshRun(store, run.id(), fetcher, s3uri, ctx);
                     } catch (Exception e) {
                         // A seed-time InterruptedException is a LIVENESS signal,
@@ -849,7 +925,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             }
                             StopReason reason = ctx.cancellation().stopReason();
                             writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, run.id(),
-                                    false, reason != null ? reason : StopReason.STUCK,
+                                    runStartedNs, false, reason != null ? reason : StopReason.STUCK,
                                     STRATEGY_WORK_STEALING);
                             throw new CancelledException(
                                     "seed aborted: run cancelled (stop_reason=" + reason + ")", e);
@@ -865,7 +941,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         // generic seed failure) so a supervisor can tell a permissions/config problem
                         // apart from an unclassified crash.
                         writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, run.id(),
-                                false, StopReason.SEED_FAILURE, STRATEGY_WORK_STEALING,
+                                runStartedNs, false, StopReason.SEED_FAILURE, STRATEGY_WORK_STEALING,
                                 ExitCodes.forThrowable(e), seedErrorClass(e));
                         // A fatal seed failure inserts ZERO nodes, so without this
                         // the run stays RUNNING and a later bare swath resume would find nodes.isEmpty()
@@ -895,13 +971,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     // may still be pending (contract §6 state machine); runSortedParquet owns that.
                     try (TraceSink traceSink = engine.openTraceSink()) {
                         return runEngineGuarded(store, run.id(), () -> runSortedParquet(s3uri, channelCapacity,
-                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink));
+                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink,
+                                runStartedNs));
                     }
                 }
 
                 if (nodes.isEmpty()) {
                     // A resume with nothing left genuinely finished — a completed summary.
-                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                    writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
                     return ExitCodes.SUCCESS;   // resume of an already-complete run: nothing to do
                 }
@@ -1120,6 +1197,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 .map(PartRef::path).collect(Collectors.toSet());
         if (run.resumed()) {
             ParquetResume.discardNonFinalized(dir, finalizedNames);
+            // Those carried-over parts are rows this dataset holds, listed by a previous attempt that
+            // this fresh RunMetrics never saw: without the backfill the summary's objects (and the
+            // ratios derived from it) describe only the relisted tail, while output_files/
+            // compressed_size_bytes — computed from the very same carried-over parts — already
+            // describe the whole dataset, so the summary contradicts the manifest it just published.
+            // The same backfill the --sort reattach resume does with its durable segments; the
+            // session/recovered split is what keeps live rates measuring THIS process's work.
+            ctx.metrics().recordRecoveredObjects(finalized.stream().mapToLong(PartRef::rows).sum());
         }
         // The consumer manifest needs an MD5 per part. The checkpoint doesn't persist it, so a
         // resumed run recomputes the MD5 of each carried-over finalized part ONCE here (finalized
@@ -1236,7 +1321,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      RunMeta run,
                                      List<Node> nodes,
                                      PageFetcher fetcher, S3Config config,
-                                     TraceSink traceSink) throws Exception {
+                                     TraceSink traceSink, long runStartedNs) throws Exception {
         Path outputDir = output.openParquetDir();
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
@@ -1263,7 +1348,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 cleanSortStagingAndStaleTmp(outputDir, stagingDir);
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
-                writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(),
+                writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
                         true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
                 return ExitCodes.SUCCESS;
             }
@@ -1552,9 +1637,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
-     * The pre-run early-exit paths (no-op resume, seed-probe failure, resume refusal) each
+     * The early-exit paths (no-op resume, seed-probe failure, resume refusal) each
      * leave a JSON run-summary behind so a batch/orchestrator always finds one, with a {@code
-     * stop_reason} that names the category. A completed no-op resume writes {@code
+     * stop_reason} that names the category. Only a resume refusal is genuinely pre-run (it exits
+     * before the S3 client is even built); a seed-probe failure or seed-time {@code STUCK} can have
+     * issued real API calls over real wall time, which {@code startedNs} lets this carry honestly.
+     * A completed no-op resume writes {@code
      * completed:true}; the failure paths write a {@code completed:false} terminal record whose
      * {@code exit_code} is {@code null} (the writer never learns the process code) while {@code
      * stop_reason} carries {@code seed_failure}/{@code resume_refused}. Respects {@code
@@ -1563,17 +1651,22 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * {@code strategy} is the actual strategy the invocation would have used (the caller knows
      * this — every current early-exit path is inside the checkpointed/WORK_STEALING branch; a
      * hardcoded literal here would mislabel a future non-WORK_STEALING early-exit caller).
+     * {@code startedNs} is the {@link System#nanoTime()} the caller's attempt actually began at
+     * (the same source {@code runWithCheckpoint}'s {@code runStartedNs} threads into {@link
+     * io.varve.swath.store.FirstRequestMarkerFetcher}) — a seed failure or seed-time {@code STUCK}
+     * can carry real elapsed time and a real API-call count, so the block must not report a
+     * duration of zero next to them.
      */
     void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
-                               RunContext ctx, long runId, boolean completed, StopReason reason,
-                               String strategy)
+                               RunContext ctx, long runId, long startedNs, boolean completed,
+                               StopReason reason, String strategy)
             throws InvalidConfigException {
-        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, completed, reason, strategy,
-                null, null);
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, null, null);
     }
 
     /**
-     * As the 8-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
+     * As the 9-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
      * resolved process {@code exitCode} (so the summary reports the true exit 1, not {@code null})
      * and a classified {@code errorClass} (e.g. {@code access_denied}/{@code no_such_bucket}) so a
      * supervisor can tell a permissions/config failure apart from an unclassified crash. Both are
@@ -1582,29 +1675,29 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * ignores both and defers to {@link ListRunner#stuckTerminalStatus} as before.
      */
     void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
-                               RunContext ctx, long runId, boolean completed, StopReason reason,
-                               String strategy, Integer exitCode, String errorClass)
+                               RunContext ctx, long runId, long startedNs, boolean completed,
+                               StopReason reason, String strategy, Integer exitCode, String errorClass)
             throws InvalidConfigException {
         JsonRunSummaryWriter.Config summaryConfig =
                 buildJsonSummaryConfig(resolved, config, argsHash);
-        if (summaryConfig == null) {
-            return;   // stdout/single-file text or internal suppression: no sidecar
-        }
         ctx.metrics().setRunId(runId);
         RunSummary summary =
-                ctx.metrics().summary(Duration.ZERO, strategy, 0L, 0L);
+                ctx.metrics().summary(elapsedSince(startedNs), strategy, 0L, 0L);
         // A seed-time retry-cap STUCK must carry the same
         // stop_source/error_class the normal-run summary path derives — reuse ListRunner's shared
         // helper rather than duplicating the source-tag -> RunMetrics#stuckErrorClass routing here.
-        Supplier<JsonRunSummaryWriter.TerminalStatus> terminalStatus =
+        JsonRunSummaryWriter.TerminalStatus terminalStatus =
                 reason == StopReason.STUCK
-                        ? () -> ListRunner.stuckTerminalStatus(ctx)
-                        : () -> new JsonRunSummaryWriter.TerminalStatus(
-                                reason, null, errorClass, exitCode);
+                        ? ListRunner.stuckTerminalStatus(ctx)
+                        : new JsonRunSummaryWriter.TerminalStatus(reason, null, errorClass, exitCode);
+        emitEarlyExitBlock(ctx, summary, terminalStatus);
+        if (summaryConfig == null) {
+            return;   // stdout/single-file text or internal suppression: no sidecar
+        }
         JsonRunSummaryWriter writer =
                 JsonRunSummaryWriter.start(summaryConfig,
                         ctx.metrics().registry(), Instant.now(), () -> summary,
-                        terminalStatus);
+                        () -> terminalStatus);
         try {
             if (completed) {
                 writer.complete(summary);
@@ -1616,6 +1709,33 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
+     * Render a pre-engine early exit to the operator-facing summary block, from the very {@link
+     * RunSummary}/{@link JsonRunSummaryWriter.TerminalStatus} pair the sidecar records — so a run
+     * that failed before the engine ever started reaches the block's abnormal-stop clause and
+     * {@code --stats}, instead of being reported by the JSON alone. Emitted even when no sidecar
+     * was configured, since a stdout run has no report to read instead.
+     *
+     * <p>A resume REFUSAL is the one early exit the AUTO gate does not earn: nothing ran, and the
+     * refusal throws an {@code InvalidArgsException} whose {@code swath: …} line already names the
+     * problem AND the fix, so an unrequested block would add only a marker. An explicitly passed
+     * {@code --stats} is a different question — it promises a record of every terminal path, and
+     * the sidecar writes the refusal for a machine consumer either way — so it reaches the sink
+     * (as the one-line disposition {@link SummaryRenderer} renders for a run that never started).
+     * Every other early exit — a seed failure, a seed-time {@code STUCK}, a completed no-op resume
+     * — has a disposition worth reporting (the completed one only under {@code --stats}, since a
+     * zero-length clean run earns nothing automatically).
+     */
+    private void emitEarlyExitBlock(RunContext ctx, RunSummary summary,
+                                    JsonRunSummaryWriter.TerminalStatus status) {
+        if (status.reason() == StopReason.RESUME_REFUSED && !Boolean.TRUE.equals(output.stats)) {
+            return;
+        }
+        // summary already carries the real elapsed time (see writeEarlyExitSummary above); reuse
+        // it here too, rather than diagnostics() computing its own duration_ms of zero.
+        ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(summary.duration()), status);
+    }
+
+    /**
      * Best-effort {@link #writeEarlyExitSummary}: a sidecar-write failure in the seed-abort catch
      * is logged and swallowed, never masking the real seed exception nor diverting the
      * intended resumable disposition (a STUCK seed's {@link CancelledException}, or the fatal-mark +
@@ -1623,10 +1743,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * run escaping RUNNING-unseeded by the wrong path. Mirrors {@link #markBestEffort}.
      */
     private void writeEarlyExitSummaryBestEffort(OutputFormat resolved, S3Config config, String argsHash,
-                                                 RunContext ctx, long runId, boolean completed,
+                                                 RunContext ctx, long runId, long startedNs, boolean completed,
                                                  StopReason reason, String strategy) {
-        writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, runId, completed, reason,
-                strategy, null, null);
+        writeEarlyExitSummaryBestEffort(resolved, config, argsHash, ctx, runId, startedNs, completed,
+                reason, strategy, null, null);
     }
 
     /**
@@ -1634,16 +1754,46 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * errorClass} for the classified seed-failure path.
      */
     private void writeEarlyExitSummaryBestEffort(OutputFormat resolved, S3Config config, String argsHash,
-                                                 RunContext ctx, long runId, boolean completed,
+                                                 RunContext ctx, long runId, long startedNs, boolean completed,
                                                  StopReason reason, String strategy,
                                                  Integer exitCode, String errorClass) {
         try {
-            writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, completed, reason, strategy,
-                    exitCode, errorClass);
+            writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                    strategy, exitCode, errorClass);
         } catch (Exception summaryEx) {
             log.warn("list_seed_early_exit_summary_write_failed run_id={} message={}",
                     runId, summaryEx.getMessage());
         }
+    }
+
+    /** Wall-clock elapsed since {@code startedNs}, as {@link ListRunner}'s private helper of the same name. */
+    private static Duration elapsedSince(long startedNs) {
+        return Duration.ofNanos(System.nanoTime() - startedNs);
+    }
+
+    /**
+     * The destination {@code swath resume} can pick this run back up from, or {@code null} when a
+     * partial leaves nothing to resume — so the summary block only ever offers a resume that will
+     * actually work. That is the directory-dataset destination whose co-located run handle {@code
+     * swath resume <dir>} opens: {@code --checkpoint none} keeps no durable state, a stdout or
+     * single-file destination has no run handle to reopen, and an explicit {@code --checkpoint
+     * PATH} is not where the resume verb looks.
+     *
+     * <p>A run that {@code swath resume} itself started is the exception: {@link ResumeCommand}
+     * hands the checkpoint over as an explicit {@code --checkpoint} location, so the mode is not
+     * auto, yet the run handle it was invoked on is exactly what a further resume takes — and an
+     * already-interrupted resume is the run most likely to be interrupted again.
+     *
+     * <p>Called at emit time (see the sink installed in {@link #call()}), so the destination it
+     * reads is the one a resume restored, not the pre-restore placeholder.
+     */
+    private String resumeDestination(CheckpointOptions.CheckpointMode mode) {
+        if (resumeCommandRunHandle != null) {
+            return resumeCommandRunHandle.toString();
+        }
+        return mode.isAuto() && output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
+                ? output.destination
+                : null;
     }
 
     /**
@@ -1711,19 +1861,19 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 engine.toggles.fanoutTiling(), engine.toggles.massAwareSeed(), engine.toggles.readahead());
     }
 
-    private void restoreRunContext(RunMeta run) {
+    private void restoreRunContext(RunMeta run, RunMetrics metrics) {
         SoftRestoreContext restored = run.context();
-        connection.noSignRequest = restoreBoolean("no_sign_request", connection.noSignRequest, restored.noSignRequest());
-        connection.profile = restoreString("profile", connection.profile, restored.profile());
-        connection.region = restoreString("region", connection.region, restored.region());
-        connection.fetchOwner = restoreBoolean("fetch_owner", connection.fetchOwner, restored.fetchOwner());
-        output.rawOutput = restoreBoolean("raw_output", output.rawOutput, restored.rawOutput());
-        output.destination = restoreString("output", output.destination, restored.outputPath());
+        connection.noSignRequest = restoreBoolean(metrics, "no_sign_request", connection.noSignRequest, restored.noSignRequest());
+        connection.profile = restoreString(metrics, "profile", connection.profile, restored.profile());
+        connection.region = restoreString(metrics, "region", connection.region, restored.region());
+        connection.fetchOwner = restoreBoolean(metrics, "fetch_owner", connection.fetchOwner, restored.fetchOwner());
+        output.rawOutput = restoreBoolean(metrics, "raw_output", output.rawOutput, restored.rawOutput());
+        output.destination = restoreString(metrics, "output", output.destination, restored.outputPath());
         // --output-type is an IDENTITY option restored=true — a bare resume restores it so its
         // identity_spec reproduces (destination kind is recomputed from the path; this is the raw
         // override behind it). A re-passed differing value survives (cli-wins) and is then refused.
-        output.outputType = restoreString("output_type", output.outputType, restored.outputType());
-        connection.requestPayerEnabled = restoreBoolean("request_payer", connection.requestPayerEnabled, restored.requestPayer());
+        output.outputType = restoreString(metrics, "output_type", output.outputType, restored.outputType());
+        connection.requestPayerEnabled = restoreBoolean(metrics, "request_payer", connection.requestPayerEnabled, restored.requestPayer());
     }
 
     private OutputFormat recordedOutputFormat(RunMeta run)
@@ -1860,25 +2010,42 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         }
     }
 
-    private boolean restoreBoolean(String field, boolean cliValue, boolean storedValue) {
+    private boolean restoreBoolean(RunMetrics metrics, String field, boolean cliValue, boolean storedValue) {
         if (cliValue) {
             if (!storedValue) {
-                log.warn("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
-                        field, storedValue, cliValue);
+                recordContextMismatch(metrics, field, String.valueOf(storedValue), String.valueOf(cliValue));
             }
             return true;
         }
         return storedValue;
     }
 
-    private String restoreString(String field, String cliValue, String storedValue) {
+    private String restoreString(RunMetrics metrics, String field, String cliValue, String storedValue) {
         if (cliValue != null) {
             if (storedValue != null && !storedValue.equals(cliValue)) {
-                log.warn("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
-                        field, storedValue, cliValue);
+                recordContextMismatch(metrics, field, storedValue, cliValue);
             }
             return cliValue;
         }
         return storedValue;
+    }
+
+    /**
+     * A resumed run's CLI value overrode the connection/output context its checkpoint recorded.
+     * The line is DEBUG — it fires on any resume that legitimately re-passes a differing flag, so
+     * it is not a default-tier fault — but the fact that a resume silently changed context is worth
+     * more than one log tier, so it also counts {@code RESUME.context_mismatch_<field>}: the
+     * counter reaches the {@code --report} JSON and {@code list_run_diagnostics}, where a post-hoc
+     * consumer can see WHICH fields were overridden on a run it is holding the report for. The
+     * overridden value itself stays log-only — a checkpointed region/profile/path is unbounded
+     * text, which a metric tag must never carry — while the report already records the effective
+     * one, so the pair reads as "this field was changed, from what the log says, to what the report
+     * says".
+     */
+    private static void recordContextMismatch(RunMetrics metrics, String field,
+                                              String checkpointValue, String cliValue) {
+        metrics.recordStealReason("RESUME", "context_mismatch_" + field);
+        log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
+                field, checkpointValue, cliValue);
     }
 }

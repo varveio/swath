@@ -60,6 +60,32 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         tune.entries = new ArrayList<>(List.of(values));
     }
 
+    /**
+     * The {@code --stats}/{@code --no-stats} lever, forwarded to the delegated {@link ListCommand}
+     * exactly as {@code -v}/{@code -q}/{@code --color} are: a resumed run renders the same
+     * end-of-run block a fresh one does, so it must accept the same switch for forcing or silencing
+     * it. Declared here rather than mixed in from {@link OutputOptions}, whose other flags
+     * ({@code --format}, {@code -o}, the Parquet knobs) are all restored from the checkpoint and
+     * must NOT be settable on a resume.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--stats", negatable = true,
+            description = "Print the end-of-run summary to stderr (default: on for runs over "
+                    + "1.5s, runs that produce output, and runs that stop short of finishing; "
+                    + "a closed downstream pipe stays silent).")
+    Boolean stats;
+
+    /**
+     * The {@code --progress}/{@code --no-progress} lever, forwarded like {@code --stats} and for the
+     * same reason: a resumed run is a run, and its merge or re-listing is exactly the long, silent
+     * stretch an operator wants to watch.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--progress", negatable = true,
+            description = "Print live progress records to stderr (default: on when stderr is a "
+                    + "terminal and neither -q nor -v was given).")
+    Boolean progress;
+
     @Mixin
     final GlobalOptions global = new GlobalOptions();
 
@@ -120,7 +146,11 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         // merging root+leaf the same way ListCommand#call() does for its own invocation.
         int verbosity = spec != null ? GlobalOptions.effectiveVerbosity(spec.commandLine()) : global.verbosity.length;
         list.global.verbosity = new boolean[verbosity];
-        list.global.quiet = spec != null ? GlobalOptions.effectiveQuiet(spec.commandLine()) : global.quiet;
+        int quietLevel = spec != null ? GlobalOptions.effectiveQuietLevel(spec.commandLine()) : global.quiet.length;
+        list.global.quiet = new boolean[quietLevel];
+        list.global.color = spec != null ? GlobalOptions.effectiveColor(spec.commandLine()) : global.color;
+        list.output.stats = stats;
+        list.output.progress = progress;
         // Do not parse checkpoint output_format here: ListCommand must first classify the
         // checkpoint's recorded destination and let a FILE-origin refusal win with exit 2. The
         // checkpoint path is also the marker that preserves the ordinary malformed-format exit-1

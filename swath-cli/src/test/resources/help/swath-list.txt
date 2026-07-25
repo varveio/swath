@@ -1,8 +1,9 @@
-Usage: swath list [-hqVv] [--fetch-owner] [--force] [--[no-]force-path-style]
-                  [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
-                  [--checkpoint=PATH|none|auto] [--concurrency=N]
-                  [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
-                  [--idle-timeout=DURATION] [--include=REGEX]
+Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
+                  [--no-metrics] [--no-sign-request] [--[no-]progress]
+                  [--restart] [--[no-]sort] [--[no-]stats]
+                  [--checkpoint=PATH|none|auto] [--color=MODE]
+                  [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
+                  [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
                   [--metrics-endpoint=URL] [--min-size=SIZE]
                   [--modified-since=DATE] [--modified-until=DATE]
@@ -36,7 +37,14 @@ Output:
       --part-rotation-max-rows=N
                              Rotate Parquet parts by row count (default:
                                2000000; 0 disables).
+      --[no-]progress        Print live progress records to stderr (default: on
+                               when stderr is a terminal and neither -q nor -v
+                               was given; --progress-interval implies it).
       --report=PATH          Write the machine-readable run report to PATH.
+      --[no-]stats           Print the end-of-run summary to stderr (default:
+                               on for runs over 1.5s, runs that produce output,
+                               and runs that stop short of finishing; a closed
+                               downstream pipe stays silent).
 
 Connection:
       --concurrency=N        Maximum concurrent listing requests (default: 64).
@@ -80,7 +88,9 @@ Run control:
                              Abort after no committed progress (default: 10m;
                                0/none/off disables).
       --progress-interval=DURATION
-                             Set the progress reporting interval.
+                             Set the progress reporting interval (default: 1s
+                               while the progress line redraws on a terminal,
+                               30s for appended records; floor 1s).
       --[no-]sort            Globally sort a Parquet directory dataset by key.
 
 Resume:
@@ -94,6 +104,8 @@ Resume:
       --restart              Discard any prior checkpoint and start fresh.
 
 Diagnostics:
+      --color=MODE           Color the progress line and end-of-run summary:
+                               auto, always, or never (default: auto).
       --engine-toggle=NAME=on|off
                              Set a diagnostic engine ablation (repeatable; see
                                docs/usage.md).
@@ -101,7 +113,8 @@ Diagnostics:
                                SWATH_OTLP_ENDPOINT).
       --no-metrics           Disable metrics export, including environment
                                configuration.
-  -q, --quiet                Suppress the startup destination echo.
+  -q, --quiet                Decrease verbosity (-q ERROR, -qq silent);
+                               suppresses the startup destination echo.
       --trace=PATH           Write a diagnostic JSONL run trace to PATH.
       --tune=KEY=VALUE       Set a typed expert option (repeatable; use --tune
                                help).

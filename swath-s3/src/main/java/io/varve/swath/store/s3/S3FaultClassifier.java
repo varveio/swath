@@ -109,7 +109,7 @@ final class S3FaultClassifier {
             metrics.recordThrottleEvent(ThrottleType.ATTEMPT_TIMEOUT);
             metrics.recordStealReason("TRANSIENT", "aborted");
             metrics.recordConnectionAborted();
-            log.warn("s3_abort bucket={} call_class={} prefix={} start_after={} type={}",
+            log.debug("s3_abort bucket={} call_class={} prefix={} start_after={} type={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.attemptTimeout("S3 listObjectsV2 aborted for bucket=" + bucket, e);
         }
@@ -125,7 +125,7 @@ final class S3FaultClassifier {
             // (abortable.abort() -> ConnectionHolder.cancel() -> managedConn.shutdown()), never the
             // reusable-release path — a 1:1, SDK-source-confirmed connection-destroy tally.
             metrics.recordConnectionAborted();
-            log.warn("s3_timeout bucket={} call_class={} prefix={} start_after={} type={}",
+            log.debug("s3_timeout bucket={} call_class={} prefix={} start_after={} type={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.attemptTimeout("S3 listObjectsV2 attempt timed out for bucket=" + bucket, e);
         }
@@ -137,7 +137,7 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
             metrics.recordStealReason("THROTTLE", "slowdown");
-            log.warn("s3_throttle bucket={} call_class={} prefix={} start_after={} s3_code={}",
+            log.debug("s3_throttle bucket={} call_class={} prefix={} start_after={} s3_code={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.slowDown("S3 listObjectsV2 throttled (SlowDown) for bucket=" + bucket, e);
         }
@@ -157,7 +157,7 @@ final class S3FaultClassifier {
             // ATTEMPT_TIMEOUT above, though less tightly source-confirmed (a broader exception
             // family here).
             metrics.recordConnectionAborted();
-            log.warn("s3_network_error bucket={} call_class={} prefix={} start_after={} type={}",
+            log.debug("s3_network_error bucket={} call_class={} prefix={} start_after={} type={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.networkExhaustion(
                     "S3 listObjectsV2 network error (exhausted retries) for bucket=" + bucket, e);
@@ -169,7 +169,7 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SERVER_5XX);
             metrics.recordStealReason("THROTTLE", "server5xx");
-            log.warn("s3_server_error bucket={} call_class={} prefix={} start_after={} s3_code={}",
+            log.debug("s3_server_error bucket={} call_class={} prefix={} start_after={} s3_code={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.serverError("S3 listObjectsV2 server error (5xx) for bucket=" + bucket, e);
         }
@@ -191,7 +191,7 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
             metrics.recordStealReason("THROTTLE", "slowdown");
-            log.warn("s3_throttle bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
+            log.debug("s3_throttle bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
                             + "request_id={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), s3e.statusCode(), code, requestId);
             return ThrottleException.slowDown("S3 listObjectsV2 throttled (SlowDown) for bucket=" + bucket, s3e);
@@ -206,19 +206,21 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SERVER_5XX);
             metrics.recordStealReason("THROTTLE", "server5xx");
-            log.warn("s3_server_error bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
+            log.debug("s3_server_error bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
                             + "request_id={}",
                     bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), s3e.statusCode(), code, requestId);
             return ThrottleException.serverError("S3 listObjectsV2 server error (5xx) for bucket=" + bucket, s3e);
         }
         // A 301 PermanentRedirect. Unlike the throttle/5xx arms above, this is NOT retryable --
         // surface the typed RegionRedirectException; see its javadoc for why it's fatal, what it
-        // carries, and why auto-retargeting the client is out of scope.
+        // carries, and why auto-retargeting the client is out of scope. The log line is DEBUG, not
+        // WARN: App.java renders the thrown exception as a `swath: …` terminal error, so a WARN here
+        // would just double-report the same failure in log dress.
         if (isRegionRedirect(s3e)) {
             String correctRegion = redirectRegion(s3e);
             metrics.recordS3Error(code);
             metrics.recordStealReason("REDIRECT", "region");
-            log.warn("s3_region_redirect bucket={} status={} correct_region={} request_id={}",
+            log.debug("s3_region_redirect bucket={} status={} correct_region={} request_id={}",
                     bucket, s3e.statusCode(), correctRegion, requestId);
             return new RegionRedirectException(bucket, correctRegion, s3e);
         }
@@ -227,25 +229,26 @@ final class S3FaultClassifier {
         // is retried or AIMD-fed. See AccessDeniedException / UnauthorizedException /
         // NoSuchBucketException for why each is fatal and typed. Matched narrowly by (status,
         // error-code) so a sibling code on the same status (e.g. a 404 NoSuchKey, which is not a
-        // bucket-level failure) still takes the generic arm.
+        // bucket-level failure) still takes the generic arm. Each log line is DEBUG, not WARN, for the
+        // same reason as the redirect above: the thrown exception is already the user-facing artifact.
         if (isAccessDenied(s3e)) {
             metrics.recordS3Error(code);
             metrics.recordStealReason("FATAL", "access_denied");
-            log.warn("s3_access_denied bucket={} status={} s3_code={} request_id={}",
+            log.debug("s3_access_denied bucket={} status={} s3_code={} request_id={}",
                     bucket, s3e.statusCode(), code, requestId);
             return new AccessDeniedException(bucket, s3e);
         }
         if (isUnauthorized(s3e)) {
             metrics.recordS3Error(code);
             metrics.recordStealReason("FATAL", "unauthorized");
-            log.warn("s3_unauthorized bucket={} status={} s3_code={} request_id={}",
+            log.debug("s3_unauthorized bucket={} status={} s3_code={} request_id={}",
                     bucket, s3e.statusCode(), code, requestId);
             return new UnauthorizedException(bucket, s3e);
         }
         if (isNoSuchBucket(s3e)) {
             metrics.recordS3Error(code);
             metrics.recordStealReason("FATAL", "no_such_bucket");
-            log.warn("s3_no_such_bucket bucket={} status={} s3_code={} request_id={}",
+            log.debug("s3_no_such_bucket bucket={} status={} s3_code={} request_id={}",
                     bucket, s3e.statusCode(), code, requestId);
             return new NoSuchBucketException(bucket, s3e);
         }
@@ -269,7 +272,7 @@ final class S3FaultClassifier {
         metrics.recordStealReason("TRANSIENT", "socket_closure");
         metrics.recordConnectionAborted();
         metrics.recordSocketClosureRecovered();
-        log.warn("s3_socket_closure bucket={} call_class={} prefix={} start_after={} type={} cause={}",
+        log.debug("s3_socket_closure bucket={} call_class={} prefix={} start_after={} type={} cause={}",
                 bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(),
                 e.getClass().getSimpleName(), ioCauseName(e));
         return ThrottleException.networkExhaustion(

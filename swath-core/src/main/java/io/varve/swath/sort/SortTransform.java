@@ -134,7 +134,8 @@ public final class SortTransform {
      */
     public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
                                          PublishListener publishListener) throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, units -> { }, () -> { });
+        return transform(stagingSegments, outputDir, stagingDir, publishListener, units -> { },
+                FinalPassListener.NO_OP);
     }
 
     /**
@@ -152,19 +153,20 @@ public final class SortTransform {
     public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
                                          PublishListener publishListener, LongConsumer progressCallback)
             throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, progressCallback, () -> { });
+        return transform(stagingSegments, outputDir, stagingDir, publishListener, progressCallback,
+                FinalPassListener.NO_OP);
     }
 
     /**
      * Same as {@link #transform(List, Path, Path, PublishListener, LongConsumer)}, plus {@code
-     * onFinalPassStarting}: run once, all cascade passes already complete, right before the
-     * final streaming pass begins writing rolled output — {@code ListRunner} wires this to
-     * {@code RunMetrics.setPhase(Phase.WRITING)}, so the {@code swath.phase} gauge actually reaches
-     * {@code WRITING} instead of folding the whole merge+publish into {@code MERGING}.
+     * onFinalPassStarting} (see {@link FinalPassListener}): run once, right before the merge starts
+     * writing the output it will publish. On the serial path every cascade pass is complete by then,
+     * so the remaining work is one pass over the staged rows; on the parallel range-merge path it is
+     * only when no range has to cascade, which is what the listener's flag carries.
      */
     public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
                                          PublishListener publishListener, LongConsumer progressCallback,
-                                         Runnable onFinalPassStarting)
+                                         FinalPassListener onFinalPassStarting)
             throws IOException {
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
         // below for what each sweep removes and why; all four run before any new work below so a
@@ -209,8 +211,9 @@ public final class SortTransform {
         long totalRows;
         try (SortedCursor merged = merge.merge(stagingSegments, progressCallback)) {
             // merge() above already ran every cascade pass to completion before returning this
-            // cursor (see KWayMerge#merge) — so by this point only the final streaming pass remains.
-            onFinalPassStarting.run();
+            // cursor (see KWayMerge#merge) — so by this point only the final streaming pass remains,
+            // and it drains exactly the staged rows once: an honest completion denominator.
+            onFinalPassStarting.onFinalPassStarting(true);
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
                     () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles), true, progressCallback);
         }
@@ -255,16 +258,22 @@ public final class SortTransform {
      */
     private SortTransformResult tryTransformParallel(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
-            Runnable onFinalPassStarting) throws IOException {
+            FinalPassListener onFinalPassStarting) throws IOException {
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(stagingSegments, config.mergeParallelism());
         if (boundaries == null) {
             return null;   // keyspace unsplittable — use the serial path
         }
         fanInPlanner.warnIfCascadePredicted(stagingSegments.size(), config.effectiveFanIn());
-        // The whole parallel phase is merge-and-write; mark Phase.WRITING reachable once up front.
-        onFinalPassStarting.run();
         ParallelRangeMerge rangeMerge =
                 new ParallelRangeMerge(run, rangeTimer);
+        // The whole parallel phase is merge-and-write; mark Phase.WRITING reachable once up front.
+        // Unlike the serial path, the cascade passes are NOT behind us here: every range k-way-merges
+        // all the staged segments and cascades whenever they outnumber its own fan-in, rewriting its
+        // rows once per pass. So the staged rows are this phase's denominator only when no range can
+        // cascade; otherwise the parallel merge reports work and no percentage, exactly as the serial
+        // cascade does.
+        onFinalPassStarting.onFinalPassStarting(
+                stagingSegments.size() <= rangeMerge.perRangeFanIn(boundaries.size() + 1));
         List<ParallelRangeMerge.RangeResult> results =
                 rangeMerge.run(stagingSegments, stagingDir, boundaries, progressCallback);
 

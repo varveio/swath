@@ -50,30 +50,37 @@ final class RunMetricsContractTest {
     }
 
     @Test
-    void nonTtyProgressIntervalIsThirtySecondsAndSnapshotCarriesContractFields() {
+    void nonTtyProgressIntervalIsThirtySecondsAndListingEventCarriesContractFields() {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.setRunId(42L);
         metrics.setStrategy("WORK_STEALING");
+        metrics.setPhase(Phase.LISTING);
         metrics.setPrefix("p/".getBytes(StandardCharsets.UTF_8));
-        metrics.setCursor("p/k1".getBytes(StandardCharsets.UTF_8));
         metrics.setConcurrencyTarget(7);
         metrics.incrementInFlight();
         metrics.recordApiCall();
         metrics.recordPage();
         metrics.recordEntriesEmitted(3);
 
-        RunMetrics.ProgressSnapshot snapshot = metrics.snapshot(Duration.ofSeconds(2));
+        ProgressEvent event = metrics.progressEvent(Duration.ofSeconds(2));
 
         assertThat(RunProgressReporter.nonTtyInterval()).isEqualTo(Duration.ofSeconds(30));
-        assertThat(snapshot.strategy()).isEqualTo("WORK_STEALING");
-        assertThat(snapshot.inFlight()).isEqualTo(1L);
-        assertThat(snapshot.concurrencyTarget()).isEqualTo(7L);
-        assertThat(snapshot.liveKeysPerSecond()).isGreaterThan(0.0);
-        assertThat(snapshot.keys()).isEqualTo(3L);
-        assertThat(snapshot.apiCalls()).isEqualTo(1L);
-        assertThat(snapshot.estimatedCostUsd()).isCloseTo(0.000005, within(0.000000001));
-        assertThat(snapshot.oldestPendingRange()).contains("p/k1");
-        assertThat(snapshot.eta()).isEqualTo("unknown");
+        assertThat(event.phase()).isEqualTo(Phase.LISTING);
+        assertThat(event.runId()).isEqualTo(42L);
+        assertThat(event.strategy()).isEqualTo("WORK_STEALING");
+        assertThat(event.sessionElapsed()).isEqualTo(Duration.ofSeconds(2));
+        assertThat(event.apiCalls()).isEqualTo(1L);
+        assertThat(event.estimatedCostUsd()).isCloseTo(0.000005, within(0.000000001));
+        assertThat(event.listing().inFlight()).isEqualTo(1L);
+        assertThat(event.listing().concurrencyTarget()).isEqualTo(7L);
+        assertThat(event.listing().liveObjectsPerSecond()).isGreaterThan(0.0);
+        assertThat(event.listing().sessionObjects()).isEqualTo(3L);
+        assertThat(event.listing().pages()).isEqualTo(1L);
+        // No denominator exists for a listing scan, so no completion figure is offered at all —
+        // the deleted eta="unknown" placeholder is not replaced by a different fiction.
+        assertThat(event.completion()).isNull();
+        assertThat(event.seeding()).isNull();
+        assertThat(event.merging()).isNull();
     }
 
     @Test
@@ -389,6 +396,31 @@ final class RunMetricsContractTest {
         assertThat(registry.find("swath.progress.units").counter().count()).isEqualTo(0.0);
     }
 
+    /**
+     * The terminal summary splits the same way live progress does: {@code objects} describes the
+     * DATASET (recovered rows included, which is what the published manifest holds), while every
+     * figure measured against this session's clock or its API calls describes only the work this
+     * process did — a resume that recovered 4B rows did not list them in ten seconds, nor pay a
+     * single LIST call for them.
+     */
+    @Test
+    void summaryRatesDescribeSessionWorkWhileObjectsDescribeTheDataset() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.recordRecoveredObjects(4_000_000_000L);
+        metrics.recordEntriesEmitted(1_000);
+        for (int i = 0; i < 20; i++) {
+            metrics.recordApiCall();
+        }
+
+        RunSummary summary = metrics.summary(Duration.ofSeconds(10), "WORK_STEALING", 0L, 0L);
+
+        assertThat(summary.objects()).isEqualTo(4_000_001_000L);
+        assertThat(summary.keysPerSecond()).isCloseTo(100.0, within(1e-9));
+        assertThat(summary.apiCallsPer1kObjects())
+                .as("20 calls bought this session's 1,000 objects, not the whole dataset")
+                .isCloseTo(20.0, within(1e-9));
+    }
+
     @Test
     void recordRecoveredSortSegments_backfillsSegmentsWrittenOnly_neverEntriesOrProgressUnits() {
         // The merge-only-resume backfill must bump swath.sort.segments.written (so the
@@ -464,21 +496,22 @@ final class RunMetricsContractTest {
     }
 
     @Test
-    void liveRateIsWindowedAcrossSuccessiveSnapshots() {
+    void liveRateIsWindowedAcrossSuccessiveEvents() {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.setStrategy("WORK_STEALING");
 
+        metrics.setPhase(Phase.LISTING);
         metrics.recordEntriesEmitted(100);
-        // First snapshot: no prior sample -> live rate == cumulative average.
-        RunMetrics.ProgressSnapshot first = metrics.snapshot(Duration.ofSeconds(10));
-        assertThat(first.liveKeysPerSecond()).isCloseTo(10.0, within(1e-6));
+        // First sample: no prior one -> live rate == cumulative average.
+        ProgressEvent.Listing first = metrics.progressEvent(Duration.ofSeconds(10)).listing();
+        assertThat(first.liveObjectsPerSecond()).isCloseTo(10.0, within(1e-6));
 
         // 50 more keys over the next 1s window -> live rate reflects the window (50/s),
         // distinct from the cumulative average (150/11s ~= 13.6/s).
         metrics.recordEntriesEmitted(50);
-        RunMetrics.ProgressSnapshot second = metrics.snapshot(Duration.ofSeconds(11));
-        assertThat(second.liveKeysPerSecond()).isCloseTo(50.0, within(1e-6));
-        assertThat(second.keysPerSecond()).isCloseTo(150.0 / 11.0, within(1e-6));
+        ProgressEvent.Listing second = metrics.progressEvent(Duration.ofSeconds(11)).listing();
+        assertThat(second.liveObjectsPerSecond()).isCloseTo(50.0, within(1e-6));
+        assertThat(second.averageObjectsPerSecond()).isCloseTo(150.0 / 11.0, within(1e-6));
     }
 
     @Test
@@ -494,6 +527,7 @@ final class RunMetricsContractTest {
             RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
             metrics.setRunId(7L);
             metrics.setStrategy("WORK_STEALING");
+            metrics.setPhase(Phase.LISTING);   // in_flight is a LISTING-shaped field
             metrics.setConcurrencyTarget(4L);
             metrics.incrementInFlight();
             try (RunProgressReporter ignored = RunProgressReporter.start(metrics, Duration.ofMillis(5))) {

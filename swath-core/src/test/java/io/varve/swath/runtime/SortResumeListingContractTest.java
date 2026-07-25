@@ -26,6 +26,8 @@ import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
+import io.varve.swath.observability.Phase;
+import io.varve.swath.observability.ProgressEvent;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.PageRunReads;
@@ -40,6 +42,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -454,6 +458,84 @@ final class SortResumeListingContractTest {
         assertThat(counterTotal(resumeCtx, "swath.sort.segments.written"))
                 .as("swath.sort.segments.written totals all durable segments, not just the tail's")
                 .isEqualTo((double) totalSegments);
+    }
+
+    /**
+     * The same reattach dispatch, watched WHILE it lists: a resumed run's recovered rows are known
+     * before the first page of the tail is fetched, so every live progress event of the listing
+     * phase must already carry them. Recording the backfill after the merge instead left every real
+     * {@code phase=listing} event reporting {@code recovered_objects=0}, and landed the tally when
+     * the phase had already advanced — a shape no direct call to the recorder can expose.
+     */
+    @Test
+    @Timeout(120)
+    void reattachResume_liveProgressReportsRecoveredRowsThroughoutTheListing(@TempDir Path tmp) throws Exception {
+        List<byte[]> keyspace = Keyspaces.singlePrefixFlat(OBJECTS);
+        Path outputDir = Files.createDirectories(tmp.resolve("out"));
+        Path stagingDir = Files.createDirectories(outputDir.resolve("_staging"));
+        Path db = tmp.resolve("c.sqlite");
+
+        long preCrashRows;
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(sortKey(), false, false);
+            long runId = run.id();
+            store.insertNode(NodeSpec.rootRange(runId));
+            List<Node> seeds = store.loadResumable(runId, true);
+
+            AtomicBoolean killed = new AtomicBoolean();
+            MockPageFetcher crashing = MockPageFetcher.builder()
+                    .keys(keyspace)
+                    .maxKeysCap(MAX_KEYS)
+                    .interceptor((req, idx, page) -> {
+                        if (req.maxKeys() > 1 && idx >= 20 && durableSortSegments(store, runId) >= 2
+                                && killed.compareAndSet(false, true)) {
+                            throw new ListingException("injected crash mid-listing");
+                        }
+                        return page;
+                    })
+                    .build();
+
+            assertThatThrownBy(() -> new ListRunner().runToSortedParquetWorkStealing(
+                    RunContext.create(), crashing, outputDir, stagingDir, spec(), store, runId,
+                    WORKERS, seeds, smallSegments(), SortMode.OBJECTS,
+                    EngineToggles.DEFAULT, TraceSink.NONE, false))
+                    .isInstanceOf(SwathException.class);
+            preCrashRows = sortSegments(store, runId).stream().mapToLong(PartRef::rows).sum();
+            assertThat(preCrashRows).as("a durable pre-crash row prefix exists").isPositive();
+        }
+
+        RunContext resumeCtx = RunContext.create();
+        List<ProgressEvent> whileListing = Collections.synchronizedList(new ArrayList<>());
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, resumeCtx.metrics())) {
+            RunMeta resumed = store.openRun(sortKey(), true, false);
+            long resumedId = resumed.id();
+            List<Node> tail = store.loadResumable(resumedId, true);
+            assertThat(tail).isNotEmpty();
+
+            // Sample what a progress tick would render, from inside the tail's own listing.
+            MockPageFetcher resumeFetcher = MockPageFetcher.builder()
+                    .keys(keyspace).maxKeysCap(MAX_KEYS)
+                    .interceptor((req, idx, page) -> {
+                        whileListing.add(resumeCtx.metrics().progressEvent(Duration.ofSeconds(1)));
+                        return page;
+                    })
+                    .build();
+
+            new ListRunner().runToSortedParquetWorkStealing(resumeCtx, resumeFetcher, outputDir, stagingDir,
+                    spec(), store, resumedId, WORKERS, tail, smallSegments(), SortMode.OBJECTS,
+                    EngineToggles.DEFAULT, TraceSink.NONE, true);
+        }
+
+        assertThat(whileListing).isNotEmpty();
+        assertThat(whileListing).allSatisfy(event -> {
+            assertThat(event.phase()).isEqualTo(Phase.LISTING);
+            assertThat(event.listing().recoveredObjects())
+                    .as("recovered work is known before the tail is listed, not after the merge")
+                    .isEqualTo(preCrashRows);
+            assertThat(event.listing().sessionObjects())
+                    .as("session work stays this process's own, never folded in with the recovered rows")
+                    .isLessThan(keyspace.size());
+        });
     }
 
     private static double counterTotal(RunContext ctx, String name) {

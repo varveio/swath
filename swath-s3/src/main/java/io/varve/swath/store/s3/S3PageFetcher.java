@@ -307,7 +307,7 @@ public final class S3PageFetcher implements PageFetcher {
             // GaugedFetcher) only casts the AIMD vote and does not record the event.
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
-            log.warn("s3_throttle bucket={} status={} s3_code={}", bucketForLog, httpStatus, "SlowDown");
+            log.debug("s3_throttle bucket={} status={} s3_code={}", bucketForLog, httpStatus, "SlowDown");
         }
         if (log.isDebugEnabled()) {
             log.debug("s3_page_fetched run_id={} worker_id={} node_id={} bucket={} prefix={} start_after={} keys={} common_prefixes={} truncated={} status={} latency_ms={}",
@@ -526,6 +526,25 @@ public final class S3PageFetcher implements PageFetcher {
      * the AWS CLI (bucket/prefix/start-after/elapsed/phase breakdown/attempt-timeout escalation).
      * Worker-page fetches are never logged here -- this concerns probe pressure specifically.
      *
+     * <p>The line itself is DEBUG: it fires on a healthy run (a slow probe is ordinary tail
+     * behavior, not a fault), so it belongs in the {@code -vv} tier with the other retried
+     * transients rather than in the default WARN one. What it must NOT do is take its signal down
+     * with it, so every slow probe — not just the sampled ones the line survives to describe —
+     * counts a {@code PROBE.slow_<call_class>} engagement counter.
+     *
+     * <p><b>No dominant-phase counter.</b> Which half of the call was slow (connection-pool/TLS
+     * starvation vs the store being slow to first byte) is NOT classified here: {@code
+     * connect_acquire} and {@code ttfb} are independent best-effort SDK measurements that may
+     * partially overlap — the SDK does not say whether time-to-first-byte is measured from
+     * request-issue or from after the connection is already leased — so neither can be read as a
+     * share of the other, and any dominance test between them would be a systematically wrong
+     * label (see {@code docs/metrics-and-observability.md}'s {@code swath.fetch.latency.phase}
+     * row). Post-hoc reads the split off the per-call-class {@code
+     * swath.fetch.latency.phase{call_class,phase}} percentiles instead, with this call's own two
+     * raw phase timings on the exemplar line below. The exemplar's request identity
+     * (prefix/{@code start_after}) stays log-only, since an unbounded key as a metric tag is a
+     * cardinality explosion.
+     *
      * @param forceLog {@code true} on any exception path (always a candidate regardless of elapsed);
      *                 {@code false} on the success path (gated by {@link #SLOW_PROBE_THRESHOLD_MS})
      */
@@ -538,6 +557,7 @@ public final class S3PageFetcher implements PageFetcher {
         if (!forceLog && elapsedMs < SLOW_PROBE_THRESHOLD_MS) {
             return;
         }
+        metrics.recordStealReason("PROBE", "slow_" + callClass);
         long n = slowProbeExemplarCount.incrementAndGet();
         if (n > SLOW_PROBE_LOG_FIRST_N && Long.bitCount(n) != 1) {
             return;   // rate-limited: first N unconditionally, then only powers of two
@@ -546,7 +566,7 @@ public final class S3PageFetcher implements PageFetcher {
         // level-based escalation the store can always state the real number, so a slow exemplar says
         // what it was actually given (and at which rung) instead of leaving the base implicit.
         long budgetMs = attemptTimeoutForLevel(callClass, req.attemptTimeoutEscalationLevel()).toMillis();
-        log.warn("slow_probe_exemplar bucket={} call_class={} prefix={} start_after={} elapsed_ms={} "
+        log.debug("slow_probe_exemplar bucket={} call_class={} prefix={} start_after={} elapsed_ms={} "
                         + "connect_acquire_ms={} ttfb_ms={} attempt_timeout_ms={} escalation_level={} exemplar_n={}",
                 bucketForLog, callClass, describe(req.prefix()), describe(req.startAfter()), elapsedMs,
                 phaseCapture.connectAcquireNanos() < 0 ? -1 : phaseCapture.connectAcquireNanos() / 1_000_000L,

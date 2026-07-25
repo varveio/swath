@@ -24,6 +24,17 @@ final class LivenessOptions {
     /** The default zero-real-progress backstop window when {@code --no-progress-timeout} is unset. */
     static final Duration DEFAULT_NO_PROGRESS_TIMEOUT = LivenessWatchdog.DEFAULT_NO_PROGRESS_TIMEOUT;
 
+    /**
+     * The supported floor for {@code --progress-interval}. The grammar accepts {@code 1ms}, which
+     * on a ten-hour run asks for some 36 million progress records — a rate no human reads and no
+     * captured log wants. One record a second is already faster than a person can follow, so
+     * anything under it is a mistake rather than a preference: REJECTED, not silently clamped, the
+     * same way {@code --part-rotation-interval} treats its own floor and {@code --tune
+     * parquet.writers} treats its range. A flag that means something other than what it says is
+     * worse than an error message.
+     */
+    static final Duration MIN_PROGRESS_INTERVAL = Duration.ofSeconds(1);
+
     String progressInterval;
 
     String maxDuration;
@@ -33,13 +44,42 @@ final class LivenessOptions {
     String noProgressTimeout;
 
     Duration resolveProgressInterval() throws InvalidConfigException {
-        return progressInterval == null ? null : DurationParser.progressInterval(progressInterval);
+        return progressInterval == null ? null : parseProgressInterval(progressInterval);
     }
 
-    /** The progress cadence actually in effect: {@code --progress-interval}, else the default. */
+    /** Parse {@code --progress-interval}, enforcing {@link #MIN_PROGRESS_INTERVAL}. */
+    static Duration parseProgressInterval(String raw) throws InvalidConfigException {
+        Duration parsed = DurationParser.progressInterval(raw);
+        if (parsed.compareTo(MIN_PROGRESS_INTERVAL) < 0) {
+            throw new InvalidConfigException("--progress-interval must be >= "
+                    + MIN_PROGRESS_INTERVAL + " (got " + raw + "); a faster cadence outruns both a "
+                    + "reader and a captured log");
+        }
+        return parsed;
+    }
+
+    /**
+     * The configured progress cadence: {@code --progress-interval}, else the appended-record
+     * default. This is the figure the config echo and the run report carry, and the one {@code
+     * --tune summary.interval} falls back to — deliberately NOT the redrawing display's faster
+     * cadence, whose only cost is a repaint, where the sidecar's is an atomic rewrite of a file.
+     */
     Duration resolveEffectiveProgressInterval() throws InvalidConfigException {
         Duration explicit = resolveProgressInterval();
         return explicit != null ? explicit : RunProgressReporter.nonTtyInterval();
+    }
+
+    /**
+     * The cadence to actually tick at. An explicit {@code --progress-interval} always wins; absent
+     * one, a display that redraws in place gets the faster default (see {@link
+     * RunProgressReporter#ttyInterval()}).
+     */
+    Duration resolveDisplayProgressInterval(boolean redraw) throws InvalidConfigException {
+        Duration explicit = resolveProgressInterval();
+        if (explicit != null) {
+            return explicit;
+        }
+        return redraw ? RunProgressReporter.ttyInterval() : RunProgressReporter.nonTtyInterval();
     }
 
     /** Resolve {@code --max-duration}: a strictly-positive duration, or {@code null} when unset. */
@@ -68,18 +108,14 @@ final class LivenessOptions {
     }
 
     /**
-     * Starts a {@link RunProgressReporter} at the same {@code --progress-interval} cadence
-     * {@code ListRunner} uses for the engine phase (mirrors its private {@code startProgress} helper)
-     * — the seam the seed-phase zero-progress heartbeat reuses, since {@code ListRunner}'s own
-     * reporter does not exist yet during seeding.
-     *
-     * @param stdoutIsTerminal the CLI's own per-fd {@code TerminalCapabilities} probe --
-     *                         threaded in explicitly so swath-core never calls {@code
-     *                         System.console()} itself.
+     * Starts the run's SESSION progress reporter at the resolved {@code --progress-interval}
+     * cadence. The CLI owns this one because it is the only layer whose scope covers the whole run
+     * — the seed step included, which is where a stalled run is least visible and where every
+     * listing-shaped counter reads zero. {@code ListRunner}'s own start then joins this reporter
+     * rather than running a second one (see {@link RunProgressReporter}).
      */
-    RunProgressReporter startProgressReporter(RunContext ctx, boolean stdoutIsTerminal) throws InvalidConfigException {
-        Duration interval = resolveProgressInterval();
-        return interval == null ? RunProgressReporter.start(ctx.metrics(), stdoutIsTerminal)
-                : RunProgressReporter.start(ctx.metrics(), interval);
+    RunProgressReporter startProgressReporter(RunContext ctx, boolean redraw)
+            throws InvalidConfigException {
+        return RunProgressReporter.start(ctx.metrics(), resolveDisplayProgressInterval(redraw));
     }
 }

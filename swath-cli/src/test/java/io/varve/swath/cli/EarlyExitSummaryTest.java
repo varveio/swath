@@ -7,6 +7,7 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +29,8 @@ import io.varve.swath.error.RegionRedirectException;
 import io.varve.swath.error.ThrottleException;
 import io.varve.swath.error.UnauthorizedException;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.observability.JsonRunSummaryWriter;
+import io.varve.swath.observability.RunSummary;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -41,6 +44,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -177,7 +181,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());
@@ -188,6 +192,147 @@ final class EarlyExitSummaryTest {
         assertThat(root.get("strategy").asText()).isEqualTo("work_stealing");
         // An early-exit summary never ran the listing engine, so it carries NO `shape` block.
         assertThat(root.has("shape")).as("early-exit summary omits the shape block").isFalse();
+    }
+
+    /**
+     * A pre-engine early exit reaches the operator-facing block too, not the sidecar alone: a seed
+     * failure is precisely the run that stopped abnormally, which is what the auto gate's
+     * stop-reason clause is for. The block carries no resume invitation — the run is marked fatal,
+     * so a later resume would be refused.
+     */
+    @Test
+    void seedFailureAlsoReachesTheSummarySink(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "seedhash",
+                ctx, 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING");
+
+        assertThat(emitted).hasSize(1);
+        assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.SEED_FAILURE);
+        assertThat(SummaryRenderer.lines(
+                new SummaryRenderer.Preferences(true, false, true, true, dir.toString(), false),
+                ctx.metrics().summary(Duration.ZERO, "WORK_STEALING", 0L, 0L),
+                ctx.metrics().diagnostics(Duration.ZERO), emitted.getFirst()))
+                .first(STRING)
+                .isEqualTo("INCOMPLETE (seed_failure)");
+    }
+
+    /**
+     * Regression for a seed-phase interruption that lied about its own elapsed time: {@code
+     * writeEarlyExitSummary} used to hand {@link RunMetrics#summary} a hardcoded {@code
+     * Duration.ZERO} no matter how long the seed actually ran, so an operator killed mid-seed after
+     * real wall-clock time (and real API calls) still saw {@code "0 objects in 0.0s"} — disagreeing
+     * with the correct API-call count on the very next line. Both the operator-facing block and the
+     * {@code --report} sidecar must instead carry the run's real elapsed time.
+     */
+    @Test
+    void seedFailureReportsARealNonZeroDurationInBothSurfaces(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<RunSummary> emittedSummaries = new ArrayList<>();
+        List<JsonRunSummaryWriter.TerminalStatus> emittedStatus = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> {
+            emittedSummaries.add(summary);
+            emittedStatus.add(status);
+        });
+        // A seed that ran for 22s before it was interrupted -- the reproduction's own numbers.
+        long startedNs = System.nanoTime() - Duration.ofSeconds(22).toNanos();
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "seedhash",
+                ctx, 7L, startedNs, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+
+        RunSummary summary = emittedSummaries.getFirst();
+        assertThat(summary.duration())
+                .as("the seed-phase early exit must report the run's real elapsed time, not zero")
+                .isGreaterThan(Duration.ofSeconds(20));
+
+        List<String> lines = SummaryRenderer.lines(
+                new SummaryRenderer.Preferences(true, false, true, true, null, false),
+                summary, ctx.metrics().diagnostics(summary.duration()), emittedStatus.getFirst());
+        assertThat(lines.get(1))
+                .as("the human block's elapsed figure must not read 0.0s for a 22s seed window")
+                .doesNotContain("in 0.0s")
+                .contains("objects in");
+
+        Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
+        JsonNode root = MAPPER.readTree(sidecar.toFile());
+        assertThat(root.get("duration_ms").asLong())
+                .as("the JSON sidecar must carry the same real duration, not duration_ms:0")
+                .isGreaterThan(20_000L);
+    }
+
+    /**
+     * The one early exit the auto gate does not earn: a resume refusal never ran, and its own
+     * {@code swath: …} line already names both the problem and the fix, so an unrequested block
+     * would add nothing but a marker.
+     */
+    @Test
+    void resumeRefusalStaysSilentOnTheSummarySinkUnderAuto(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
+                ctx, 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+
+        assertThat(emitted).isEmpty();
+        assertThat(dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME))
+                .as("the sidecar still records the refusal for a machine consumer")
+                .exists();
+    }
+
+    /**
+     * An explicitly passed {@code --stats} forces the block past every gate, and a refusal is a
+     * terminal path like any other — leaving it out would make the two surfaces disagree, since the
+     * sidecar records the refusal regardless. What it renders is a one-line disposition: the run
+     * never started, so a statistics body would be zeros describing nothing.
+     */
+    @Test
+    void resumeRefusalReachesTheSummarySinkUnderAnExplicitStatsFlag(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        cmd.output.stats = true;
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
+                ctx, 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+
+        assertThat(emitted).hasSize(1);
+        assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.RESUME_REFUSED);
+        SummaryRenderer.Preferences prefs =
+                new SummaryRenderer.Preferences(true, false, true, true, dir.toString(), false);
+        RunSummary summary = ctx.metrics().summary(Duration.ZERO, "WORK_STEALING", 0L, 0L);
+        assertThat(SummaryRenderer.shouldRender(prefs, summary, emitted.getFirst()))
+                .as("the explicit-flag branch admits the refusal like any other terminal path")
+                .isTrue();
+        assertThat(SummaryRenderer.lines(prefs, summary,
+                ctx.metrics().diagnostics(Duration.ZERO), emitted.getFirst()))
+                .as("the disposition is the whole record -- no zeroed statistics body")
+                .containsExactly("INCOMPLETE (resume_refused)");
+    }
+
+    private static S3Config anonymousConfig() {
+        return new S3Config(Region.US_EAST_1, null, false,
+                S3Config.DEFAULT_MAX_PARALLEL, S3Config.DEFAULT_MAX_ATTEMPTS,
+                Duration.ofSeconds(30), S3Config.DEFAULT_API_CALL_TIMEOUT, AnonymousCredentialsProvider.create(),
+                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
     }
 
     private static Stream<Arguments> classifiedSeedFailures() {
@@ -225,7 +370,7 @@ final class EarlyExitSummaryTest {
         String errorClass = seedFailure.errorClass();
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING",
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.SEED_FAILURE, "WORK_STEALING",
                 exitCode, errorClass);
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
@@ -274,7 +419,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                ctx, 7L, false, StopReason.STUCK, "WORK_STEALING");
+                ctx, 7L, System.nanoTime(), false, StopReason.STUCK, "WORK_STEALING");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());
@@ -318,7 +463,7 @@ final class EarlyExitSummaryTest {
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
 
         cmd.writeEarlyExitSummary(OutputFormat.PARQUET, config, "seedhash",
-                RunContext.create(), 7L, false, StopReason.RESUME_REFUSED, "SEQUENTIAL");
+                RunContext.create(), 7L, System.nanoTime(), false, StopReason.RESUME_REFUSED, "SEQUENTIAL");
 
         Path sidecar = dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
         JsonNode root = MAPPER.readTree(sidecar.toFile());

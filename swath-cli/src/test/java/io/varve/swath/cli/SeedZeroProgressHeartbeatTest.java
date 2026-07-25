@@ -28,15 +28,16 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Start-of-listing marker (W + engine-toggle-default flag), first-request/first-page
- * markers, and a zero-progress heartbeat during a HUNG SEED phase (before {@link
- * RunProgressReporter}'s own engine-phase reporter would otherwise start) — full end-to-end
- * through {@link ListCommand#call()} with a {@link PageGate}-parked fetch.
+ * markers, and SEED-phase progress during a HUNG SEED — full end-to-end through {@link
+ * ListCommand#call()} with a {@link PageGate}-parked fetch. The session {@link
+ * RunProgressReporter} is started by the CLI around the whole run, so the seed window is covered
+ * by the same lifecycle that later covers listing and the merge.
  */
 final class SeedZeroProgressHeartbeatTest {
 
     @Test
     @Timeout(30)
-    void hungSeedEmitsFirstRequestMarkerAndAZeroProgressHeartbeat(@TempDir Path dir) throws Exception {
+    void hungSeedEmitsFirstRequestMarkerAndSeedShapedProgress(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
         PageGate gate = new PageGate(req -> true);   // parks the seed's very first fetch
         MockPageFetcher fetcher = MockPageFetcher.builder()
@@ -55,7 +56,12 @@ final class SeedZeroProgressHeartbeatTest {
         cmd.output.format = OutputFormat.PARQUET;
         cmd.output.destination = dir.resolve("out-dataset").toString();
         cmd.fetcherOverride = fetcher;
-        cmd.liveness.progressInterval = "50ms";   // tiny window so the seed-phase heartbeat ticks fast
+        // Default cadence and no --progress flag: off a terminal that leaves the structured log
+        // record as the run's progress surface, which is what this test reads. (An explicit
+        // --progress-interval would opt the run into the operator DISPLAY instead, and
+        // --no-progress would leave no progress surface at all.) The activation delay -- not the
+        // cadence -- puts the first record well inside the parked seed.
+        cmd.terminalOverride = new TerminalCapabilities(fd -> false);
 
         Logger listCommandLogger =
                 (Logger) LoggerFactory.getLogger(ListCommand.class);
@@ -91,21 +97,27 @@ final class SeedZeroProgressHeartbeatTest {
                     .as("the first-request marker must fire before the gated fetch returns")
                     .isTrue();
 
-            // Wait for at least one zero-progress heartbeat line to appear while the seed is
-            // still parked -- proves RunProgressReporter ticks even with nothing committed yet.
+            // Wait for at least one progress record to appear while the seed is still parked --
+            // and it must be SEED-shaped: zero probes completed against the probe budget, with the
+            // age of the last completed one climbing. A listing-shaped line would be all zeros here
+            // (no objects, no pages, no workers exist during seeding) and could not tell a healthy
+            // seed from a hung one, which is the whole point of the phase.
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            boolean heartbeatSeen = false;
-            while (System.nanoTime() < deadline) {
-                heartbeatSeen = appender.list.stream().map(ILoggingEvent::getFormattedMessage)
-                        .anyMatch(m -> m.startsWith("progress ") && m.contains("total_emitted=0"));
-                if (heartbeatSeen) {
-                    break;
+            String seedLine = null;
+            while (System.nanoTime() < deadline && seedLine == null) {
+                seedLine = appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                        .filter(m -> m.startsWith("progress ") && m.contains("phase=seeding"))
+                        .findFirst().orElse(null);
+                if (seedLine == null) {
+                    Thread.sleep(20);
                 }
-                Thread.sleep(20);
             }
-            assertThat(heartbeatSeen)
-                    .as("a zero-progress heartbeat must fire while the seed is hung, not just silence")
-                    .isTrue();
+            assertThat(seedLine)
+                    .as("a seed-phase progress record must fire while the seed is hung, not just silence")
+                    .isNotNull()
+                    .contains("probes=0")
+                    .contains("probe_budget=")
+                    .contains("last_probe_age_ms=");
             assertThat(appender.list.stream().map(ILoggingEvent::getFormattedMessage)
                     .anyMatch(m -> m.startsWith("list_first_page_returned")))
                     .as("the gated page has not returned yet -- must not have logged first_page_returned early")
