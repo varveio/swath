@@ -36,13 +36,18 @@ final class ProgressDisplayTest {
     /** Colour off: these tests pin field content, which is identical either way. */
     private static final AnsiPalette PLAIN = new AnsiPalette(false);
 
+    /** A frame's fields as one string, unbounded and unstyled — what these tests assert on. */
+    private static String line(ProgressEvent event) {
+        return String.join(OperatorText.SEP, ProgressDisplay.parts(event));
+    }
+
     private static final String RATE_LABEL = " (est. @ $" + RunMetrics.LIST_COST_PER_1K_USD + "/1k LIST)";
 
     // ---- the shape of each phase -------------------------------------
 
     @Test
     void seedingRendersProbesAgainstTheBudgetAndTheAgeOfTheLastProbe() {
-        String line = ProgressDisplay.line(seeding(12L, 64L, Duration.ofMillis(3_100)));
+        String line = line(seeding(12L, 64L, Duration.ofMillis(3_100)));
 
         assertThat(line).isEqualTo("seeding · 12/64 probes (19%) · last probe 3.1s ago"
                 + " · 21.7s elapsed · 64 API calls · <$0.001" + RATE_LABEL);
@@ -50,7 +55,7 @@ final class ProgressDisplayTest {
 
     @Test
     void listingRendersCountersAndRatesWithNoBarPercentageOrEta() {
-        String line = ProgressDisplay.line(listing(4_231_000L, 0L));
+        String line = line(listing(4_231_000L, 0L));
 
         assertThat(line).isEqualTo("listing · 4,231,000 objects · 128,000 keys/s (avg 96,000)"
                 + " · 4,231 pages · 512 in flight · 1m12s elapsed · 8,900 API calls · ~$0.045"
@@ -61,7 +66,7 @@ final class ProgressDisplayTest {
 
     @Test
     void listingKeepsRecoveredRowsApartFromTheWorkThisSessionDid() {
-        String line = ProgressDisplay.line(listing(1_000L, 4_000_000_000L));
+        String line = line(listing(1_000L, 4_000_000_000L));
 
         assertThat(line).as("a resumed run neither shows a zero it did not earn nor jumps by billions")
                 .contains("1,000 objects (+4,000,000,000 recovered)");
@@ -69,7 +74,7 @@ final class ProgressDisplayTest {
 
     @Test
     void theFinalMergePassRendersItsRowsAgainstTheStagedTotal() {
-        String line = ProgressDisplay.line(finalPass(3_100_000L, 12_000_000L));
+        String line = line(finalPass(3_100_000L, 12_000_000L));
 
         assertThat(line).isEqualTo("writing · 3,100,000/12,000,000 rows (26%) · 24 segments"
                 + " · 2m05s elapsed · 8,900 API calls · ~$0.045" + RATE_LABEL);
@@ -77,7 +82,7 @@ final class ProgressDisplayTest {
 
     @Test
     void aCascadePassRendersTheWorkItDidAndNoPercentage() {
-        String line = ProgressDisplay.line(cascadePass(24_000_000L, 12_000_000L));
+        String line = line(cascadePass(24_000_000L, 12_000_000L));
 
         assertThat(line).as("a cascade rewrites every staged row per pass: a fraction would pass 100%")
                 .isEqualTo("merging · 24,000,000 rows merged · 24 segments"
@@ -105,7 +110,7 @@ final class ProgressDisplayTest {
 
     @Test
     void anUnknownProviderWithholdsTheDollarExactlyAsTheSummaryDoes() {
-        String line = ProgressDisplay.line(costUnknown(listing(10L, 0L)));
+        String line = line(costUnknown(listing(10L, 0L)));
 
         assertThat(line).as("--endpoint-url: the LIST price is a guess, so the live line withholds it")
                 .doesNotContain("$");
@@ -118,7 +123,7 @@ final class ProgressDisplayTest {
                 new ProgressEvent.Completion(1L, 2L, ProgressEvent.Unit.ROWS), null, null,
                 new ProgressEvent.Merging(1L, 2L, 3L, 0L));
 
-        assertThat(ProgressDisplay.line(noCalls))
+        assertThat(line(noCalls))
                 .as("a merge-only resume fetches nothing: '~$0.000' would be noise dressed as an estimate")
                 .doesNotContain("$");
     }

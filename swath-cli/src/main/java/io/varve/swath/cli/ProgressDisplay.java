@@ -53,6 +53,13 @@ final class ProgressDisplay implements ProgressSink {
 
     private static final Logger log = LoggerFactory.getLogger(ProgressDisplay.class);
 
+    /** The field carrying the phase's headline figure — always the one after the phase name. */
+    private static final int HEADLINE_FIELD = 1;
+
+    /** The width a frame has when nothing has fit into it yet — see {@link #frame}. */
+    private static final int INDENT_COLUMNS =
+            new AttributedString(OperatorText.INDENT).columnLength();
+
     /**
      * What the CLI resolved about whether this run should show live progress. Unlike the end-of-run
      * block's preferences these are all known when the sink is installed: nothing here changes when
@@ -91,12 +98,6 @@ final class ProgressDisplay implements ProgressSink {
      */
     private final AnsiPalette ansi;
 
-    /** The field carrying the phase's headline figure — always the one after the phase name. */
-    private static final int HEADLINE_FIELD = 1;
-
-    /** {@link OperatorText#INDENT}'s width, the length a frame has when nothing has fit yet. */
-    private static final int INDENT_COLUMNS = OperatorText.INDENT.length();
-
     ProgressDisplay(StderrCoordinator stderr, boolean redraw, IntSupplier width, AnsiPalette ansi) {
         this.redraw = redraw;
         this.width = width;
@@ -116,6 +117,7 @@ final class ProgressDisplay implements ProgressSink {
         return sinkFor(prefs, stderr, ansi, TerminalGeometry::stderrWidth);
     }
 
+    /** As above, with the terminal-width source injected — the seam the redraw tests use. */
     static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr, AnsiPalette ansi,
             IntSupplier width) {
         if (Boolean.FALSE.equals(prefs.progress())) {
@@ -179,8 +181,8 @@ final class ProgressDisplay implements ProgressSink {
         try {
             // Width bounds a redrawing frame and nothing else: a plain record may be as long as it
             // likes, because a terminal wraps it harmlessly and a captured log has no width at all.
-            channel.frame(ansi.render(
-                    frame(parts(event), redraw ? width.getAsInt() : TerminalGeometry.UNKNOWN, ansi)));
+            int bound = redraw ? width.getAsInt() : TerminalGeometry.UNKNOWN;
+            channel.frame(ansi.render(frame(parts(event), bound, ansi)));
         } catch (RuntimeException e) {
             // The sink runs on the run's progress thread: a formatting fault must cost the operator
             // a frame, never the run's disposition or exit code.
@@ -246,11 +248,6 @@ final class ProgressDisplay implements ProgressSink {
      */
     boolean redraws() {
         return redraw;
-    }
-
-    /** One frame's text, without the indent — the shape the tests pin. */
-    static String line(ProgressEvent event) {
-        return String.join(OperatorText.SEP, parts(event));
     }
 
     /**
