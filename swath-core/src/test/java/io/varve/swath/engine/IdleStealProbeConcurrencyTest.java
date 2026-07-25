@@ -28,6 +28,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -140,11 +142,10 @@ final class IdleStealProbeConcurrencyTest {
      * the prototype for #3 had): there the throw skips the release entirely and the slot stays
      * owned by a worker that no longer exists.
      *
-     * <p>Per-commit, not {@code deep}: it injects no latency and aborts at the first probe. It does
-     * depend on some idle worker reaching the steal path before the owner drains the keyspace — a
-     * window {@code KEYS / MAX_KEYS} pages wide against {@code WORKERS - 1} idle thieves — and if
-     * that ever failed to happen the run would complete normally and this method would fail loudly
-     * on the missing throw, never pass vacuously.
+     * <p>Per-commit, not {@code deep}: it injects no latency and aborts at the first probe. Reaching
+     * the steal path is not left to the scheduler — a latch holds the seed owner after its first
+     * (eligibility-granting) page until a thief has reached the probe, so the interleaving is
+     * established rather than hoped for.
      */
     @Test
     @Timeout(60)
@@ -154,13 +155,23 @@ final class IdleStealProbeConcurrencyTest {
             keyspace.add(("k%05d".formatted(i)).getBytes(StandardCharsets.UTF_8));
         }
         AtomicInteger probesThrown = new AtomicInteger();
+        // The barrier that makes this deterministic rather than merely likely: the seed owner is
+        // let through exactly one page — enough to become steal-eligible — and is then held until a
+        // thief has reached the probe, so no legal schedule can drain the keyspace before the fault
+        // is injected. Its timeout is a fixture backstop; reaching it fails the run below.
+        CountDownLatch probeReached = new CountDownLatch(1);
+        AtomicInteger pagesServed = new AtomicInteger();
         RunContext ctx = RunContext.create();
         MockPageFetcher fetcher = MockPageFetcher.builder()
                 .keys(keyspace)
                 .interceptor((req, idx, page) -> {
                     if (isProbe(req)) {
                         probesThrown.incrementAndGet();
+                        probeReached.countDown();
                         throw new IllegalStateException(INJECTED_FAULT);
+                    }
+                    if (pagesServed.incrementAndGet() > 1) {
+                        probeReached.await(30, TimeUnit.SECONDS);
                     }
                     return page;
                 })

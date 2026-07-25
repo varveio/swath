@@ -60,11 +60,11 @@ final class IdleStealBackoff {
 
     /**
      * A denial and <b>which of the two regimes</b> caused it (§5 engagement idiom): {@code
-     * in_flight} — another worker owns the slot, so this one waits for the release signal on the
-     * seconds-scale backstop; {@code paced} — the slot is free but a non-productive streak has the
-     * fleet in exponential backoff. The aggregate {@code slot_denied} counter cannot separate them,
-     * and they call for opposite responses (wait vs. nothing to wait for), so post-hoc analysis
-     * needs the split to tell "the bound is holding" from "the fleet is backed off".
+     * in_flight} — another worker owns the slot, and a release is coming; {@code paced} — the slot
+     * is free but a non-productive streak has the fleet in exponential backoff, so there is no
+     * release to wait for, only a window that elapses or is {@link #reset()} early. The aggregate
+     * {@code slot_denied} counter cannot separate them, so post-hoc analysis needs the split to
+     * tell "the bound is holding" from "the fleet is backed off".
      */
     private void deny(String reason) {
         metrics.recordIdleBackoffSlotDenied();
