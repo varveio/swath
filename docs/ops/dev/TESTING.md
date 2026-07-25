@@ -142,7 +142,7 @@ surprises:
 | `LivelockUnderLatencyTest` | default | with 64 workers + 20ms page latency + instant probes, the scan completes within timeout (livelocked pre-fix); progress-gated victim eligibility |
 | `IdleThiefProbeScalingTest` | default | with high concurrency + deep keyspace, `api_calls` stays bounded (idle-steal backoff) |
 | `IdleStealSlotOwnershipTest` | default | CONC: the fleet-wide one-attempt slot is owned by its acquirer — `reset()` from unrelated workers never hands it away, a release admits exactly one successor, and a denied worker parks on the in-flight backstop |
-| `IdleStealProbeConcurrencyTest` | `deep` | the same bound measured at the store across a live scan: max **concurrent** probe fetches is exactly 1 while every worker's page commits fire resets |
+| `IdleStealProbeConcurrencyTest` | `deep` + default | the same bound measured at the store across a live scan: max **concurrent** probe fetches is exactly 1 while every worker's page commits fire resets (`deep`); the head-of-line characterization — four victims + one slow probe serialize fleet-wide without starving splits (`deep`); and the release-exactly-once guard, an unchecked throw inside the acquired region still frees the slot (per-commit) |
 | `WorkStealingScanSmokeTest` | default | Fast PERF-1 smoke: ~2k skewed keyspace, work-stealing balances, exactly-once |
 | `WorkStealingScanPerf1Test` | `perf` | Full PERF-1: 99%-skewed 100k keyspace, balance + O(W·log ρ) probe overhead |
 | `ParquetPerf2Test` | `perf` | Full PERF-2: 100k keys, measured peak heap < §7.2 budget, no VT pinning |
