@@ -27,6 +27,14 @@ non-rotating bucket instead; `RunMetricsDistributionWindowTest` is the guard. If
 `DistributionSummary` to `RunMetrics`, build it through `runScopedTimer`/`runScopedSummary` or it
 will silently reintroduce the rolling window.
 
+**Consequence for any MID-RUN reader.** These percentiles are now run-cumulative, not recent-window,
+so a consumer that samples them *while the run is going* (a progress line, a live dashboard, an OTLP
+scrape) sees the run so far rather than "the last two minutes". That is the correct semantics for the
+end-of-run summary these feed today, but a future live-monitoring consumer that genuinely wants a
+recent window must derive it (successive scrapes) rather than assume decay. Memory is unaffected:
+expiry governs histogram rotation, not bucket count, and `bufferLength=1` holds fewer rings than the
+default 3.
+
 These are the deep, post-hoc forensics fields of the JSON run-summary artifact (the artifact itself,
 its write/atomicity semantics, and the `stop_source`/`error_class` terminal facts are in
 [`docs/metrics-and-observability.md`](../metrics-and-observability.md) §3). Each reconstructs some

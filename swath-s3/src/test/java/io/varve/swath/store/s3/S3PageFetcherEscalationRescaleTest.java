@@ -101,6 +101,27 @@ class S3PageFetcherEscalationRescaleTest {
                 .isEqualTo(Duration.ofMillis(10_500));
     }
 
+    /**
+     * The floor applies on the SCAN branch too, not just the rescaled one.
+     *
+     * <p>The engine's ladder is authored against the DEFAULT 10 s scan base, but {@link S3Config}
+     * permits a larger configured one (only the CLI pins 10 s). With a 30 s scan base, a scan-class
+     * call takes the pass-through branch, so an un-floored implementation hands back ladder level 1
+     * (20 s) — an "escalation" that SHRINKS the budget below the base it is escalating from.
+     */
+    @Test
+    void scanClassEscalationIsFlooredAtALargerConfiguredScanBase() throws Exception {
+        FakeS3Client client = FakeS3Client.captureOnly();
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket",
+                S3PageFetcherConfig.DEFAULT.withScanApiCallAttemptTimeout(Duration.ofSeconds(30)));
+
+        fetcher.fetchPage(structureProbeEscalatedTo(LADDER_LEVEL_1));
+
+        assertThat(effectiveAttemptTimeout(client))
+                .as("escalation must never shrink a scan-class budget below its own 30s base")
+                .isEqualTo(Duration.ofSeconds(30));
+    }
+
     /** Escalation only ever buys room — a rescale must never hand back less than the class's base. */
     @Test
     void rescaleNeverReturnsLessThanTheCallClassBase() throws Exception {

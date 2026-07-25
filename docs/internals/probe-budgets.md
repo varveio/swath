@@ -50,10 +50,15 @@ split raised splits ~7×, roughly doubled throughput, and turned a run that neve
 that completes. Full before/after numbers, and the bucket to reproduce on, are in
 [`field-investigations.md`](../ops/dev/field-investigations.md).
 
-**A note on what this is not.** The storm was invisible to AIMD, correctly: only a handful of genuine
-5xx occurred, attempt timeouts deliberately don't vote `T` down, and *probe* timeouts are excluded
-from every AIMD down path. Reaching for a lower `--concurrency` would only have masked the problem by
-shrinking probe fan-out. Budget sizing, not concurrency, is the lever here.
+**A note on what this is not.** The storm was invisible to AIMD, correctly — and the reason is
+**actuator mismatch**, not just the documented freeze-without-shed deadlock. AIMD's only actuator is
+`T`, which gates slot-holding worker fetches; probes hold no slot, so no value of `T` acts on probe
+traffic. In this storm workers were *starved*, not congested, so reducing `T` would have been between
+useless and harmful. A controller with no actuator over the disturbance should not be fed the
+disturbance. Probe traffic has its own control stack — the per-attempt budget, `PROBE_TRANSIENT_RETRY_CAP`
+fail-fast, and `IdleStealBackoff`'s fleet-wide pacing — and every rung of it behaved correctly given a
+deadline set below the call's intrinsic cost. That is a configuration no controller can rescue, which
+is why the fix is budget sizing and not concurrency.
 
 ## 3. Escalation is re-expressed against each class's own base
 
@@ -100,3 +105,13 @@ single run tells you whether a budget is sized correctly. Write the result up in
 A scan-class budget cannot be sized to cover every keyspace: a `delimiter=/` probe crossing a very
 large flat directory can exceed any fixed budget, which is what the escalation ladder is for. Judge a
 budget by its **p50 and the run completing**, not by driving tail timeouts to zero.
+
+**Don't make the budgets adaptive.** Deriving a budget from an observed latency EWMA/percentile looks
+attractive but is the wrong shape here. The structure-probe distribution is *bimodal*, not drifting
+(p50 43 ms against p90 10.2 s): a budget sized off the healthy mode shrinks and still times out on
+flat-directory crossings, while one sized off the tail converges to "no budget". Adaptive timeouts
+answer latency *drift*; per-call escalation already answers the second mode, and answers it with
+evidence about that specific call. An adaptive budget would also put a second feedback loop on the
+same latency signal the AIMD freeze rung reads — two controllers, one signal, different time
+constants, and no post-hoc explanation for the oscillation. Both budgets are `S3Config` knobs, which
+is the right escape hatch for an unusual endpoint.

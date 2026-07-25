@@ -500,13 +500,19 @@ public final class S3PageFetcher implements PageFetcher {
     Duration escalatedAttemptTimeoutFor(Duration engineEscalated, String callClass) {
         Duration classBase = baseAttemptTimeoutFor(callClass);
         long scanNanos = scanApiCallAttemptTimeout.toNanos();
+        Duration rescaled;
         if (classBase.equals(scanApiCallAttemptTimeout) || scanNanos <= 0L) {
-            return engineEscalated;   // the ladder's own base: nothing to re-express
+            rescaled = engineEscalated;   // the ladder's own base: nothing to re-express
+        } else {
+            // Ratio in floating point (never nanos*nanos, which overflows a long at these magnitudes).
+            double multiple = (double) engineEscalated.toNanos() / (double) scanNanos;
+            rescaled = Duration.ofNanos((long) Math.ceil(classBase.toNanos() * multiple));
         }
-        // Ratio in floating point (never nanos*nanos, which overflows a long at these magnitudes).
-        double multiple = (double) engineEscalated.toNanos() / (double) scanNanos;
-        Duration rescaled = Duration.ofNanos((long) Math.ceil(classBase.toNanos() * multiple));
         // Escalation only ever BUYS room: never hand back less than the class's own base budget.
+        // Applied on BOTH branches, not just the rescaled one: the engine's ladder is authored
+        // against the DEFAULT scan base, but S3Config permits a larger configured one (only the CLI
+        // pins 10 s). A 30 s scan base would otherwise take the pass-through branch and let ladder
+        // level 1 (20 s) SHRINK the budget below the base it is supposed to be escalating from.
         return rescaled.compareTo(classBase) < 0 ? classBase : rescaled;
     }
 

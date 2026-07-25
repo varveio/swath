@@ -94,20 +94,48 @@ Run-scoped per-class latency after the fix:
 | `pivot_probe` | 15363 | 34.6 ms | 45.1 ms | 74.4 ms | 119 ms |
 | `structure_probe` | 4169 | 43.0 ms | 10,200 ms | 15,568 ms | 17,372 ms |
 
-### Residual, deliberately not fixed
+### Residual, and the right fix for it
 
 `structure_probe` keeps a heavy **tail** (p90 10.2 s) and 216 attempt timeouts remain. These
 concentrate in a few enormous flat directories — `working/staging/all_vs_all_alignments/FastGA/10k/`
-is the reproducible one — where a `delimiter=/` scan must cross an very large number of keys before
-it can return a single `CommonPrefix`. Even the 10 s scan budget is not enough there, and the ladder
+is the reproducible one — where a `delimiter=/` scan must cross a very large number of keys before it
+can return a single `CommonPrefix`. Even the 10 s scan budget is not enough there, and the ladder
 correctly escalates those to 20 s/40 s. This is inherent to the call shape on that keyspace, not a
-budget error: the p50 is 43 ms, the run completes, and the thief now gets pivots. Bounding it further
-belongs with the probe-concurrency work, not with budget tuning.
+budget error: p50 is 43 ms, the run completes, and the thief gets pivots again.
 
-**Related open follow-up:** probes are `slotGated=false`, so probe fan-out scales with worker-thread
-count with no ceiling of its own — 64 workers in the thief can fire ~64 simultaneous probes, which is
-the regime where a structure probe measured 5.4 s vs 1.15 s solo. Bounding probe concurrency
-independently of `T` touches the concurrency spine and needs its own design + adversarial review.
+**No budget can fix it, but a feedback gap can.** `Thief#structureProbesEnabled` already suppresses
+structure probes per-victim after `STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD` consecutive zero-fanout
+probes — precisely the enormous-flat-directory defense. But a structure probe that **times out** never
+returns its zero-fanout answer, so `consecutiveZeroFanoutProbes` never increments and the suppressor
+never engages: *the timeout destroys the very evidence that would stop the next probe*. Folding a
+structure-probe timeout streak into that same per-victim suppression counter turns the residual from
+"pay this cost repeatedly per flat region" into "pay once or twice, then fall back to bisection
+pivots". That is per-victim-scoped like the existing futility pacing, trivially instrumentable per the
+§5 engagement-counter doctrine, and it generalizes to flat buckets far better than any budget policy —
+it stops issuing the wrong probe *shape* instead of re-sizing its deadline. This, not budget tuning
+and not the probe-pacing latch, is the right home for the residual.
+
+**Related open follow-up — a leaked pacing latch, not missing pacing.** Probes are `slotGated=false`,
+so they bypass the AIMD slot gate, but they are *not* unbounded by design: every thief steal attempt
+must pass `IdleStealBackoff#tryAcquireAttemptSlot` (`WorkStealingScan.java:507`), whose stated
+contract is **at most one speculative steal attempt in flight fleet-wide**. The bound leaks:
+`IdleStealBackoff#reset()` clears `attemptInFlight` unconditionally, and it is called on every
+ordinary claim (`WorkStealingScan.java:496`) and every non-empty page commit
+(`WorkStealingScan.java:723`) — i.e. by unrelated workers, while an attempt is still running. So
+effective probe concurrency is roughly `1 + (reset rate × probe duration)`: with multi-second probes
+and tens of commits/sec it reaches tens in flight. The class javadoc concedes "a progress reset can
+briefly let a second through"; under this load both "briefly" and "a second" understate it.
+
+The follow-up is therefore to make `IdleStealBackoff` honor its own invariant — e.g. generation-stamp
+the in-flight attempt so `reset()` clears backoff state without releasing a genuinely running
+attempt's slot — **not** to add a second probe-concurrency controller. Still touches steal pacing, so
+it needs its own design + adversarial review. Its acceptance gate should be split rate: strict
+one-in-flight pacing risks capping splits near ~0.3–0.5/s when probes are slow, where the healthy run
+needed 380 splits in 173 s (~2.2/s). Fixing starvation from the other side would be no better.
+
+(An earlier revision of this note claimed "64 workers can fire ~64 simultaneous probes". That
+overstates the mechanism — the design intends one, and the real number is set by the leak rate, not
+by worker count. Corrected here so the follow-up targets the leak.)
 
 ### Found while investigating
 
