@@ -219,7 +219,7 @@ public final class S3PageFetcher implements PageFetcher {
             // S3FaultClassifier#classify, which dispatches most-specific-first.
             long elapsedNanos = System.nanoTime() - startedNs;
             recordFailureOutcomeAndCheckInterrupt(callClass, req, elapsedNanos, phaseCapture, sample);
-            throw faultClassifier.classify(e);
+            throw faultClassifier.classify(e, faultContext(callClass, req));
         } catch (RuntimeException e) {
             // A NON-SdkException RuntimeException escaping the SDK call (the SdkException arm
             // above already claims every modeled SDK fault family). A socket closure surfacing from a
@@ -241,7 +241,7 @@ public final class S3PageFetcher implements PageFetcher {
             // probe_latency[], same interrupt guard so our own cancel still unwinds cooperatively).
             long elapsedNanos = System.nanoTime() - startedNs;
             recordFailureOutcomeAndCheckInterrupt(callClass, req, elapsedNanos, phaseCapture, sample);
-            throw faultClassifier.classifySocketClosure(e);
+            throw faultClassifier.classifySocketClosure(e, faultContext(callClass, req));
         }
         } finally {
             // Fires exactly once regardless of how the inner try/catch above exits.
@@ -398,6 +398,15 @@ public final class S3PageFetcher implements PageFetcher {
      */
     static String toRequestParam(byte[] raw) {
         return new String(raw, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The faulting request's identity for {@link S3FaultClassifier}'s retryable fault lines — built
+     * here, not in the classifier, so {@link #describe}'s control-char escaping stays single-sourced.
+     */
+    private static S3FaultClassifier.FaultContext faultContext(String callClass, PageRequest req) {
+        return new S3FaultClassifier.FaultContext(
+                callClass, describe(req.prefix()), describe(req.startAfter()));
     }
 
     private static String describe(byte[] raw) {

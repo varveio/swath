@@ -58,6 +58,33 @@ final class S3FaultClassifier {
     }
 
     /**
+     * Which request faulted — attached to every RETRYABLE fault line so a fault STORM is
+     * attributable from the log alone.
+     *
+     * <p>A retryable fault repeats, potentially thousands of times in one run, and "which call class
+     * and which key range" is the whole diagnosis: a genomeark run emitted 1308 {@code s3_timeout}
+     * lines carrying only {@code bucket} and {@code type}, which is indistinguishable between a sick
+     * network and one mis-budgeted call class. It was in fact the latter — every one of those
+     * timeouts was a {@code structure_probe}, and none were worker pages — but that could only be
+     * recovered from the JSON run summary's per-call-class histograms, never from the 1308 log lines
+     * themselves. See {@code docs/internals/probe-budgets.md} §2.
+     *
+     * <p>Deliberately NOT attached to the terminal one-shot faults ({@code s3_no_such_bucket},
+     * {@code s3_access_denied}, {@code s3_unauthorized}, {@code s3_region_redirect}, {@code
+     * s3_error}): those are bucket-level facts that fire once and end the run, where a key range
+     * adds noise rather than attribution.
+     *
+     * @param callClass the faulting request's call class ({@code S3PageFetcher#callClass})
+     * @param prefix the faulting request's prefix, already control-char escaped for logging
+     * @param startAfter the faulting request's start-after cursor, already escaped for logging
+     */
+    record FaultContext(String callClass, String prefix, String startAfter) {
+
+        /** For call sites with no request in hand (never the production fetch path). */
+        static final FaultContext NONE = new FaultContext("unknown", "<none>", "<none>");
+    }
+
+    /**
      * Classifies an {@link SdkException} from {@code listObjectsV2} and returns the {@link
      * ListingException} {@code fetchPage} must throw, having already recorded the matching metrics
      * and emitted the matching log line. Never throws itself — the caller decides when to throw so
@@ -70,7 +97,7 @@ final class S3FaultClassifier {
      * S3Exception} sub-tree, then the generic (non-{@code S3Exception}) throttle/network/5xx/fatal
      * arms.
      */
-    ListingException classify(SdkException e) {
+    ListingException classify(SdkException e, FaultContext ctx) {
         if (e instanceof AbortedException) {
             // An SDK-side request abort with NO thread interrupt (the top-of-classifier interrupt
             // guard in fetchPage already ran and did not fire) — transient/retryable, never a bare
@@ -82,7 +109,8 @@ final class S3FaultClassifier {
             metrics.recordThrottleEvent(ThrottleType.ATTEMPT_TIMEOUT);
             metrics.recordStealReason("TRANSIENT", "aborted");
             metrics.recordConnectionAborted();
-            log.warn("s3_abort bucket={} type={}", bucket, e.getClass().getSimpleName());
+            log.warn("s3_abort bucket={} call_class={} prefix={} start_after={} type={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.attemptTimeout("S3 listObjectsV2 aborted for bucket=" + bucket, e);
         }
         if (e instanceof ApiCallAttemptTimeoutException || e instanceof ApiCallTimeoutException) {
@@ -97,18 +125,20 @@ final class S3FaultClassifier {
             // (abortable.abort() -> ConnectionHolder.cancel() -> managedConn.shutdown()), never the
             // reusable-release path — a 1:1, SDK-source-confirmed connection-destroy tally.
             metrics.recordConnectionAborted();
-            log.warn("s3_timeout bucket={} type={}", bucket, e.getClass().getSimpleName());
+            log.warn("s3_timeout bucket={} call_class={} prefix={} start_after={} type={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.attemptTimeout("S3 listObjectsV2 attempt timed out for bucket=" + bucket, e);
         }
         if (e instanceof S3Exception s3e) {
-            return classifyS3Exception(s3e);
+            return classifyS3Exception(s3e, ctx);
         }
         // Generic (non-S3Exception, non-timeout, non-abort) SdkException.
         if (isThrottle(e)) {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
             metrics.recordStealReason("THROTTLE", "slowdown");
-            log.warn("s3_throttle bucket={} s3_code={}", bucket, e.getClass().getSimpleName());
+            log.warn("s3_throttle bucket={} call_class={} prefix={} start_after={} s3_code={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.slowDown("S3 listObjectsV2 throttled (SlowDown) for bucket=" + bucket, e);
         }
         // A network-class SdkClientException (connection reset, socket read-timeout, DNS failure,
@@ -127,7 +157,8 @@ final class S3FaultClassifier {
             // ATTEMPT_TIMEOUT above, though less tightly source-confirmed (a broader exception
             // family here).
             metrics.recordConnectionAborted();
-            log.warn("s3_network_error bucket={} type={}", bucket, e.getClass().getSimpleName());
+            log.warn("s3_network_error bucket={} call_class={} prefix={} start_after={} type={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.networkExhaustion(
                     "S3 listObjectsV2 network error (exhausted retries) for bucket=" + bucket, e);
         }
@@ -138,7 +169,8 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SERVER_5XX);
             metrics.recordStealReason("THROTTLE", "server5xx");
-            log.warn("s3_server_error bucket={} s3_code={}", bucket, e.getClass().getSimpleName());
+            log.warn("s3_server_error bucket={} call_class={} prefix={} start_after={} s3_code={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), e.getClass().getSimpleName());
             return ThrottleException.serverError("S3 listObjectsV2 server error (5xx) for bucket=" + bucket, e);
         }
         metrics.recordS3Error(e.getClass().getSimpleName());
@@ -147,7 +179,7 @@ final class S3FaultClassifier {
         return new ListingException("S3 listObjectsV2 failed for bucket=" + bucket, e);
     }
 
-    private ListingException classifyS3Exception(S3Exception s3e) {
+    private ListingException classifyS3Exception(S3Exception s3e, FaultContext ctx) {
         String code = s3ErrorCode(s3e);
         String requestId = requestId(s3e);
         // A 503 SlowDown / ServiceUnavailable (or any SDK throttling signal) reaches us only AFTER
@@ -159,8 +191,9 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
             metrics.recordStealReason("THROTTLE", "slowdown");
-            log.warn("s3_throttle bucket={} status={} s3_code={} request_id={}",
-                    bucket, s3e.statusCode(), code, requestId);
+            log.warn("s3_throttle bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
+                            + "request_id={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), s3e.statusCode(), code, requestId);
             return ThrottleException.slowDown("S3 listObjectsV2 throttled (SlowDown) for bucket=" + bucket, s3e);
         }
         // A 5xx S3-side server error (500 InternalError and the 5xx class generally) reaching us
@@ -173,8 +206,9 @@ final class S3FaultClassifier {
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SERVER_5XX);
             metrics.recordStealReason("THROTTLE", "server5xx");
-            log.warn("s3_server_error bucket={} status={} s3_code={} request_id={}",
-                    bucket, s3e.statusCode(), code, requestId);
+            log.warn("s3_server_error bucket={} call_class={} prefix={} start_after={} status={} s3_code={} "
+                            + "request_id={}",
+                    bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(), s3e.statusCode(), code, requestId);
             return ThrottleException.serverError("S3 listObjectsV2 server error (5xx) for bucket=" + bucket, s3e);
         }
         // A 301 PermanentRedirect. Unlike the throttle/5xx arms above, this is NOT retryable --
@@ -230,12 +264,13 @@ final class S3FaultClassifier {
      * same {@link ThrottleException.Kind#NETWORK}), plus its own recovery counter and log line so
      * post-hoc analysis can tell the wrapper-escape path apart from the SDK path.
      */
-    ThrottleException classifySocketClosure(RuntimeException e) {
+    ThrottleException classifySocketClosure(RuntimeException e, FaultContext ctx) {
         metrics.recordThrottleEvent(ThrottleType.NETWORK);
         metrics.recordStealReason("TRANSIENT", "socket_closure");
         metrics.recordConnectionAborted();
         metrics.recordSocketClosureRecovered();
-        log.warn("s3_socket_closure bucket={} type={} cause={}", bucket,
+        log.warn("s3_socket_closure bucket={} call_class={} prefix={} start_after={} type={} cause={}",
+                bucket, ctx.callClass(), ctx.prefix(), ctx.startAfter(),
                 e.getClass().getSimpleName(), ioCauseName(e));
         return ThrottleException.networkExhaustion(
                 "S3 listObjectsV2 network error (socket closure) for bucket=" + bucket, e);
