@@ -1714,6 +1714,8 @@ public final class RunMetrics {
                 pages.get(),
                 peakInFlight.get(),
                 avgInFlight(),
+                elapsedMillis(runStartNanos.get(), firstStealNanos.get()),
+                elapsedMillis(runStartNanos.get(), peakInFlightNanos.get()),
                 totalSteals,
                 splits.get(),
                 Math.round(counterTotal("swath.errors")),
@@ -2094,8 +2096,20 @@ public final class RunMetrics {
         return (prefix == null || prefix.isBlank()) ? cursor : prefix + ">" + cursor;
     }
 
+    /**
+     * The USD-per-1000-LIST-requests rate every cost figure swath reports is derived from — the
+     * published AWS reference rate for LIST requests. It is a single-region constant and LIST
+     * pricing is not uniform across regions or providers, so every surface that renders a dollar
+     * figure must state this rate alongside it (and withhold the figure entirely when the provider
+     * is unknown, i.e. under {@code --endpoint-url}) rather than implying a precise bill.
+     */
+    public static final double LIST_COST_PER_1K_USD = 0.005;
+
+    /** The tag identifying {@link #LIST_COST_PER_1K_USD}'s provenance in the JSON run report. */
+    public static final String LIST_COST_SOURCE = "aws-list-reference-rate";
+
     private static double estimatedListCost(long apiCalls) {
-        return apiCalls * 0.005 / 1_000.0;
+        return apiCalls * LIST_COST_PER_1K_USD / 1_000.0;
     }
 
     private static String display(byte[] bytes) {

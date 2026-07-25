@@ -553,6 +553,13 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private void writeCost(ObjectNode costNode, RunSummary summary) {
         costNode.put("api_calls", summary.apiCalls());
         costNode.put("cost_usd", summary.costUsd());
+        // The rate cost_usd was derived from, named rather than implied: it is a single-region
+        // reference rate, so a reader in another region (or on another provider) can rescale
+        // instead of trusting a number swath cannot know. Same constant the terminal summary
+        // block labels its figure with.
+        ObjectNode basisNode = costNode.putObject("basis");
+        basisNode.put("rate_per_1k_usd", RunMetrics.LIST_COST_PER_1K_USD);
+        basisNode.put("source", RunMetrics.LIST_COST_SOURCE);
     }
 
     private void writeEfficiency(ObjectNode efficiencyNode, RunSummary summary) {
@@ -578,6 +585,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // Time-weighted average in-flight listing count — peak_in_flight saturates once
         // the concurrency ceiling is hit; avg_in_flight is the metric a sustained-parallelism fix moves.
         engineNode.put("avg_in_flight", summary.avgInFlight());
+        // Ramp-up timings: how long the run took to reach its first steal and its peak
+        // concurrency. Both were previously readable only off the -v list_run_diagnostics line,
+        // unlike every other field on it; -1 when the event never happened.
+        putLongOrNull(engineNode, "time_to_first_steal_ms", summary.timeToFirstStealMs());
+        putLongOrNull(engineNode, "time_to_peak_in_flight_ms", summary.timeToPeakInFlightMs());
         engineNode.put("steals", summary.steals());
         engineNode.put("splits", summary.splits());
         engineNode.put("errors", summary.errors());

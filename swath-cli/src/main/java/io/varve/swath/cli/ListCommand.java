@@ -389,6 +389,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 .fromCliConfig(otlp.resolvedExportMode(), otlp.metricsEndpoint,
                         metricsIntervalDuration, runResourceAttrs);
         RunContext ctx = RunContext.create(meterRegistry);
+        // The operator-facing end-of-run block, rendered from the same terminal RunSummary the
+        // --report JSON and the -v log line are built from (§ RunSummarySink). System.err for the
+        // same reason the destination echo uses it: a directly-constructed ListCommand has no
+        // picocli spec. Cost is withheld under --endpoint-url, where the provider's LIST pricing
+        // is unknowable.
+        ctx.metrics().setSummarySink(new SummaryRenderer(System.err, new SummaryRenderer.Preferences(
+                output.stats, quiet, resolvedOutput.kind() != OutputOptions.DestinationKind.STDOUT,
+                connection.endpointUrl == null, resumeDestination(resolvedOutput, mode))));
 
         // A SIGTERM/SIGINT flips the cancellation flag (stop_reason=signal); the --max-duration
         // deadline flips it with stop_reason=max_duration. Either way the run thread observes the
@@ -1645,6 +1653,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             log.warn("list_seed_early_exit_summary_write_failed run_id={} message={}",
                     runId, summaryEx.getMessage());
         }
+    }
+
+    /**
+     * The destination {@code swath resume} can pick this run back up from, or {@code null} when a
+     * partial leaves nothing to resume — so the summary block only ever offers a resume that will
+     * actually work. That is the directory-dataset destination whose co-located run handle {@code
+     * swath resume <dir>} opens: {@code --checkpoint none} keeps no durable state, a stdout or
+     * single-file destination has no run handle to reopen, and an explicit {@code --checkpoint
+     * PATH} is not where the resume verb looks.
+     */
+    private String resumeDestination(OutputOptions.Resolved resolved, CheckpointOptions.CheckpointMode mode) {
+        return mode.isAuto() && resolved.kind() == OutputOptions.DestinationKind.DIRECTORY
+                ? output.destination
+                : null;
     }
 
     /**

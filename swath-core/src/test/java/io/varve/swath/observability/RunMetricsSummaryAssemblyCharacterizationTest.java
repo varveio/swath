@@ -43,7 +43,8 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
     /** {@link RunSummary}'s record components, in declaration order. FROZEN. */
     private static final List<String> EXPECTED_SUMMARY_FIELDS = List.of(
             "runId", "objects", "duration", "strategy", "apiCalls", "costUsd", "outputFiles",
-            "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "steals", "splits",
+            "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "timeToFirstStealMs",
+            "timeToPeakInFlightMs", "steals", "splits",
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
             "cpuSeconds", "cpuEfficiency", "overfetchRatio", "pageFillRatio", "emptySplitRatio",
             "wastedProbeRatio", "stealSuccessRate", "compressionRatio", "seed", "shape",

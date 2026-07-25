@@ -1,8 +1,8 @@
 Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
-                  [--checkpoint=PATH|none|auto] [--concurrency=N]
-                  [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
-                  [--idle-timeout=DURATION] [--include=REGEX]
+                  [--[no-]stats] [--checkpoint=PATH|none|auto]
+                  [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
+                  [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
                   [--metrics-endpoint=URL] [--min-size=SIZE]
                   [--modified-since=DATE] [--modified-until=DATE]
@@ -37,6 +37,9 @@ Output:
                              Rotate Parquet parts by row count (default:
                                2000000; 0 disables).
       --report=PATH          Write the machine-readable run report to PATH.
+      --[no-]stats           Print the end-of-run summary to stderr (default:
+                               on for runs that take over a second, produce
+                               output, or stop early).
 
 Connection:
       --concurrency=N        Maximum concurrent listing requests (default: 64).

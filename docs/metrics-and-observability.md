@@ -12,6 +12,11 @@ subcommand: `swath -v list …` and `swath list -v …` both work (INFO), `-vv` 
 With `-v` or higher enabling INFO logs, progress is logged to stderr at a 30 s default cadence,
 configurable with `--progress-interval`.
 
+Verbosity does **not** gate the end-of-run summary block: it is written to stderr at the default
+level for any run that earns one (over 1.5 s, durable output produced, or an early stop), whether
+stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary) for the block, its
+`--stats`/`--no-stats` control, and how it relates to the `list_run_summary` line and `--report`.
+
 ---
 
 ## 1. Micrometer meters
@@ -174,6 +179,11 @@ proactive-cap contribution mixed into it.
 Core: `run_id, objects, duration_ms, strategy, api_calls, cost_usd, output_files,
 compressed_size_bytes, keys, pages, peak_in_flight, steals, splits, errors, keys_per_sec`.
 
+The JSON report's `engine` block additionally carries the two ramp-up timings the
+`list_run_diagnostics` line prints — `time_to_first_steal_ms` and `time_to_peak_in_flight_ms`
+(milliseconds from run start; `null` when the event never happened) — and `cost.basis` names the
+rate `cost_usd` was derived from (`rate_per_1k_usd`, `source`), so no consumer has to assume it.
+
 **Efficiency / resource fields** (summary/log fields — NOT Micrometer meters; sampled once at end;
 `-1` where unavailable, e.g. off-Linux):
 
@@ -268,7 +278,8 @@ downstream parser should key off, not "does `meters[]` exist".
     "confetti_feedback": true, "reflect_lift": true, "fanout_tiling": true,
     "mass_aware_seed": true, "readahead": false, "max_duration_ms": null },
   "output": { "format": "parquet", "files": 4, "compressed_size_bytes": 1234567 },
-  "cost": { "api_calls": 118, "cost_usd": 0.00059 },
+  "cost": { "api_calls": 118, "cost_usd": 0.00059,
+    "basis": { "rate_per_1k_usd": 0.005, "source": "aws-list-reference-rate" } },
   "efficiency": {
     "keys_per_sec": 4269.5, "api_calls_per_1k_objects": 1.07,
     "peak_rss_bytes": 268435456, "peak_heap_bytes": 134217728,
@@ -277,7 +288,9 @@ downstream parser should key off, not "does `meters[]` exist".
     "empty_split_ratio": 0.03, "wasted_probe_ratio": 0.11, "steal_success_rate": 0.62,
     "compression_ratio": 1.9
   },
-  "engine": { "pages": 112, "peak_in_flight": 61, "avg_in_flight": 16.4, "steals": 232602, "splits": 98, "errors": 0 },
+  "engine": { "pages": 112, "peak_in_flight": 61, "avg_in_flight": 16.4,
+    "time_to_first_steal_ms": 180, "time_to_peak_in_flight_ms": 4200,
+    "steals": 232602, "splits": 98, "errors": 0 },
   "seed": { "mode": "shallow", "probes": 3, "cut_points": 41, "synthesized_cuts": 0, "ranges": 42,
     "decisions": [
       { "prefix": "", "fanout": 3, "truncated": false, "classification": "delimiter_seeded",

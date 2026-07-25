@@ -48,7 +48,7 @@ final class JsonRunSummaryWriterTest {
     private static RunSummary summary() {
         return new RunSummary(
                 42L, 1000L, Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
-                4L, 1234567L, 1000L, 112L, 61L, 16.5, 232602L, 98L, 0L,
+                4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
@@ -501,7 +501,7 @@ final class JsonRunSummaryWriterTest {
         // sentinel).
         RunSummary summary = new RunSummary(
                 42L, 1000L, Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
-                4L, 1234567L, 1000L, 112L, 61L, 16.5, 232602L, 98L, 0L,
+                4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, -1L, -1L, -1.0, -1.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), null);
         JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
@@ -1010,7 +1010,7 @@ final class JsonRunSummaryWriterTest {
     private static RunSummary summaryWithDuration(Duration duration) {
         return new RunSummary(
                 42L, 1000L, duration, "WORK_STEALING", 118L, 0.00059,
-                4L, 1234567L, 1000L, 112L, 61L, 16.5, 232602L, 98L, 0L,
+                4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),

@@ -727,18 +727,50 @@ parts in name order reads the dataset in key order — once the output crosses t
 
 ### Progress
 
-Progress is logged to stderr at INFO every 30 seconds with strategy, active/target
-worker count, instantaneous `in_flight` ranges, live and average object rate, total
-emitted, API call count with estimated cost, oldest pending range, and ETA. Use
-`--progress-interval` to override the cadence (e.g. `2s` for dense sampling
-on short runs).
+Progress is logged to stderr every 30 seconds — at INFO, so it needs `-v` — with strategy,
+active/target worker count, instantaneous `in_flight` ranges, live and average object rate, total
+emitted, API call count with estimated cost, and oldest pending range. Use `--progress-interval` to
+override the cadence (e.g. `2s` for dense sampling on short runs).
 
 ### End-of-run summary
 
-At the end of every run swath prints a `list_run_summary` log line with:
-total objects, elapsed time, chosen strategy, API call count (LIST + probes)
-and estimated cost at $0.005/1000 LIST requests, output file count with
-compressed size, and the following efficiency/resource fields:
+When a run ends, swath prints a short summary block to **stderr** (stdout stays data):
+
+```
+  1,204,993 objects in 4m12s · 4,781 keys/s
+  1,208 API calls · 1.00 per 1k objects · in flight avg 52.0 · peak 64
+  ~$0.006 (est. @ $0.005/1k LIST)
+  12 files · 84.0 MB written · peak RSS 512.0 MB
+```
+
+A **faults line** — `throttled N · retried M · errors K` — is inserted only when one of those
+counts is non-zero, so its presence is itself the signal: `throttled` counts real S3 backpressure
+(503 SlowDown / transient 5xx), `retried` counts client-side transients that were retried and
+recovered, and the two are deliberately never folded together. A run that stopped short leads with
+`INCOMPLETE (<reason>)`, plus `— resume: swath resume <dir>` when the run left something resumable.
+A run stopped by a closed downstream (`swath list | head`) is not an incident: it prints nothing by
+default, and reads `stopped early — downstream closed` if you asked for the block explicitly.
+
+The block prints when the run **earned** it: it took longer than 1.5 s, it produced durable output,
+or it stopped for any reason other than finishing — and not under `-q`. Terminal detection does not
+enter into it: a summary redirected into `2> run.log` carries the same content it would on a
+terminal, because for an overnight or fleet run the captured log is the artifact. `--stats` forces
+the block past every one of those gates (short run, `-q`, redirected stderr alike), `--no-stats`
+suppresses it everywhere.
+
+| you want | use |
+| --- | --- |
+| the numbers, machine-readable | `--report PATH` (or the default `_swath_summary.json` sidecar) |
+| the numbers on a fast run, or under `-q` | `--stats` |
+| nothing at all on stderr | `--no-stats` |
+
+Automation should read `--report`, not scrape the block: it is a stable JSON document, and it
+carries strictly more than the human block does.
+
+With `-v`, the same figures are also logged as the `list_run_summary` line — a fuller field dump,
+kept because existing tooling scrapes it — carrying total objects, elapsed time, chosen strategy,
+API call count (LIST + probes) and estimated cost at $0.005/1000 LIST requests, output file count
+with compressed size, and the following efficiency/resource fields:
 
 | Field | Description |
 | --- | --- |

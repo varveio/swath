@@ -129,6 +129,7 @@ both as sensitive run artifacts.
 | --- | --- |
 | `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
 | `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
+| `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops early, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
 | `-h, --help` | — (prints help and exits) |
 | `-V, --version` | — (prints version and exits) |
 

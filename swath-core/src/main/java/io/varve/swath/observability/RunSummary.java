@@ -21,6 +21,12 @@ import java.util.List;
  * compressionRatio} instead render {@code 0.0} on a zero denominator, since they are always
  * computable from existing counters (no hot-path cost), just possibly vacuous on a tiny run.
  *
+ * <p>{@code timeToFirstStealMs} and {@code timeToPeakInFlightMs} are the run's ramp-up timings —
+ * milliseconds from run start to the first work steal / to the instant peak concurrency was first
+ * reached, {@code -1} when the event never happened (no steal, or a run that never started). They
+ * are the same values {@code list_run_diagnostics} prints, carried here so the JSON report has them
+ * too rather than leaving them log-only.
+ *
  * <p>{@code avgInFlight} is the time-weighted average in-flight listing count over the run
  * (sampled on every in-flight transition, no polling thread), {@code 0.0} before the run starts.
  * {@code peakInFlight} saturates once the concurrency ceiling is hit, so {@code avgInFlight} is the
@@ -45,6 +51,8 @@ public record RunSummary(
         long pages,
         long peakInFlight,
         double avgInFlight,
+        long timeToFirstStealMs,
+        long timeToPeakInFlightMs,
         long steals,
         long splits,
         long errors,

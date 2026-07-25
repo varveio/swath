@@ -351,6 +351,18 @@ final class OutputOptions {
             description = "Write the machine-readable run report to PATH.")
     String summaryJson;
 
+    /**
+     * {@code null} (unset) is the auto rule in {@link SummaryRenderer#shouldRender}; {@code
+     * --stats} forces the block on a short run and under {@code -q}, {@code --no-stats} is the
+     * true-silence switch. Not a tri-state option: nobody types {@code =auto}, and the negatable
+     * pair spells the only two values a user ever needs (the shape {@code rg --stats} uses).
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--stats", negatable = true,
+            description = "Print the end-of-run summary to stderr (default: on for runs that "
+                    + "take over a second, produce output, or stop early).")
+    Boolean stats;
+
     boolean noSummaryJson;
 
     String summaryJsonInterval;
