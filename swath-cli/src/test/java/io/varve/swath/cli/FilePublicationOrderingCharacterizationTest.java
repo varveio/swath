@@ -48,7 +48,18 @@ final class FilePublicationOrderingCharacterizationTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** One filesystem observation taken from inside a page fetch, i.e. mid-run. */
-    private record MidRunView(boolean destinationExists, int tempSiblings, long tempBytes) { }
+    private record MidRunView(int page, boolean destinationExists, int tempSiblings, long tempBytes) { }
+
+    /**
+     * Key count for the streaming observation. Sized well past the point where staging must be
+     * visible mid-run rather than only at close: rows reach the sink per COMMITTED RANGE (I1
+     * commit-before-emit), and the text writer buffers ~8 KiB, so a small run can legitimately
+     * finish every fetch before the first byte lands on disk. At this size many ranges commit and
+     * flush while pages are still being served, on any machine speed. (An observation must never
+     * WAIT for those bytes: every mid-run observation runs on a fetch thread, so blocking them all
+     * stops the ranges from ever completing — the writer starves and the wait deadlocks itself.)
+     */
+    private static final int STREAMING_KEYS = 20_000;
 
     // ---- ordering: stage → write → publish ---------------------------------------------------
 
@@ -65,10 +76,10 @@ final class FilePublicationOrderingCharacterizationTest {
         List<MidRunView> views = Collections.synchronizedList(new ArrayList<>());
 
         MockPageFetcher fetcher = MockPageFetcher.builder()
-                .keys(keys(500))
-                .maxKeysCap(50)   // many pages, so mid-run observations exist and the buffer flushes
+                .keys(keys(STREAMING_KEYS))
+                .maxKeysCap(100)   // many pages, so mid-run observations exist and the buffer flushes
                 .interceptor((req, idx, page) -> {
-                    views.add(observe(dir, out));
+                    views.add(observe(dir, out, idx));
                     return page;
                 })
                 .build();
@@ -82,15 +93,14 @@ final class FilePublicationOrderingCharacterizationTest {
         assertThat(views).as("the real destination path is NEVER observable mid-run — no partial, "
                         + "no zero-length placeholder: publication is a single rename at the end")
                 .noneMatch(MidRunView::destinationExists);
-        MidRunView last = views.get(views.size() - 1);
-        assertThat(last.tempSiblings())
-                .as("exactly one hidden temp sibling stages the run while it is in flight")
-                .isEqualTo(1);
-        assertThat(last.tempBytes())
+        assertThat(views)
+                .as("at most one hidden temp sibling stages the run at any moment")
+                .allMatch(view -> view.tempSiblings() <= 1);
+        assertThat(views)
                 .as("listing data is written into the STAGED file, not the destination, before publish")
-                .isGreaterThan(0L);
+                .anyMatch(view -> view.tempSiblings() == 1 && view.tempBytes() > 0L);
 
-        assertThat(Files.readAllLines(out)).hasSize(500);
+        assertThat(Files.readAllLines(out)).hasSize(STREAMING_KEYS);
         assertThat(stagingSiblings(dir, out)).as("the rename consumes the temp sibling").isEmpty();
     }
 
@@ -189,11 +199,12 @@ final class FilePublicationOrderingCharacterizationTest {
 
     // ---- helpers ------------------------------------------------------------------------------
 
-    private static MidRunView observe(Path dir, Path out) {
+    /** Takes one non-blocking mid-run observation from the fetch thread serving {@code page}. */
+    private static MidRunView observe(Path dir, Path out, int page) {
         try {
             List<Path> siblings = stagingSiblings(dir, out);
             long bytes = siblings.isEmpty() ? 0L : Files.size(siblings.get(0));
-            return new MidRunView(Files.exists(out), siblings.size(), bytes);
+            return new MidRunView(page, Files.exists(out), siblings.size(), bytes);
         } catch (Exception e) {
             throw new IllegalStateException("mid-run observation failed", e);
         }
