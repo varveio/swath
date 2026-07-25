@@ -291,7 +291,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             try {
                 write(summary, false, status.exitCode(), status.reason(), status.stopSource(), status.errorClass());
                 if (attempt > 1) {
-                    log.warn("summary_json_final_write_recovered path={} attempt={} of={}",
+                    log.debug("summary_json_final_write_recovered path={} attempt={} of={}",
                             config.path(), attempt, FINAL_WRITE_ATTEMPTS);
                 }
                 return;

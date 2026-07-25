@@ -307,7 +307,7 @@ public final class S3PageFetcher implements PageFetcher {
             // GaugedFetcher) only casts the AIMD vote and does not record the event.
             metrics.recordS3Throttle();
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
-            log.warn("s3_throttle bucket={} status={} s3_code={}", bucketForLog, httpStatus, "SlowDown");
+            log.debug("s3_throttle bucket={} status={} s3_code={}", bucketForLog, httpStatus, "SlowDown");
         }
         if (log.isDebugEnabled()) {
             log.debug("s3_page_fetched run_id={} worker_id={} node_id={} bucket={} prefix={} start_after={} keys={} common_prefixes={} truncated={} status={} latency_ms={}",
@@ -546,7 +546,7 @@ public final class S3PageFetcher implements PageFetcher {
         // level-based escalation the store can always state the real number, so a slow exemplar says
         // what it was actually given (and at which rung) instead of leaving the base implicit.
         long budgetMs = attemptTimeoutForLevel(callClass, req.attemptTimeoutEscalationLevel()).toMillis();
-        log.warn("slow_probe_exemplar bucket={} call_class={} prefix={} start_after={} elapsed_ms={} "
+        log.debug("slow_probe_exemplar bucket={} call_class={} prefix={} start_after={} elapsed_ms={} "
                         + "connect_acquire_ms={} ttfb_ms={} attempt_timeout_ms={} escalation_level={} exemplar_n={}",
                 bucketForLog, callClass, describe(req.prefix()), describe(req.startAfter()), elapsedMs,
                 phaseCapture.connectAcquireNanos() < 0 ? -1 : phaseCapture.connectAcquireNanos() / 1_000_000L,

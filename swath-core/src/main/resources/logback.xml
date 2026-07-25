@@ -11,4 +11,8 @@
         <appender-ref ref="STDERR"/>
     </root>
     <logger name="io.varve.swath" level="INFO"/>
+    <logger name="software.amazon.awssdk" level="ERROR"/>
+    <logger name="org.apache.hadoop" level="ERROR"/>
+    <logger name="org.apache.parquet" level="ERROR"/>
+    <logger name="io.netty" level="ERROR"/>
 </configuration>

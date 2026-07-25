@@ -54,13 +54,14 @@ final class MergeFanInPlanner {
     }
 
     /**
-     * Warn once, before the merge starts, that {@code segments >
+     * Note once, before the merge starts, that {@code segments >
      * effectiveFanIn} will force a cascade (multi-pass) merge — the same condition {@link
      * KWayMerge#merge} discovers pass-by-pass, surfaced up front instead of only inferable
      * afterward from the summary's {@code segments}/{@code passes} fields. {@code
      * predictedPasses} mirrors {@link KWayMerge#merge}'s own reduction exactly (repeatedly divide
      * by {@code effectiveFanIn}, plus the final streaming pass), so it is not a rough
-     * log-approximation but the actual pass count the cascade below will run.
+     * log-approximation but the actual pass count the cascade below will run. Logged at DEBUG —
+     * expected on a large sort and already recorded as a steal reason, not a fault.
      */
     void warnIfCascadePredicted(int segments, int effectiveFanIn) {
         if (segments <= effectiveFanIn) {
@@ -68,7 +69,7 @@ final class MergeFanInPlanner {
         }
         int predictedPasses = predictedPasses(segments, effectiveFanIn);
         metrics.recordStealReason("SORT", "merge_cascade_predicted");
-        log.warn("sort_merge_cascade_predicted segments={} effective_fan_in={} predicted_passes={} "
+        log.debug("sort_merge_cascade_predicted segments={} effective_fan_in={} predicted_passes={} "
                 + "advice=a larger heap (-Xmx) or a higher swath.sort.merge-budget-bytes raises "
                 + "effective_fan_in and can avoid the extra pass(es)",
                 segments, effectiveFanIn, predictedPasses);
@@ -81,8 +82,8 @@ final class MergeFanInPlanner {
      * trailers ({@code mergeBudgetBytes / max(maxRecordLen)}) when the input is page-run — never below 2.
      * Fires {@code SORT.merge_fanin_clamped} (with the fd/mem sub-reason) whenever the runtime clamp
      * reduces the fan-in below the static estimate; {@link #plan} then lets {@link
-     * #warnIfCascadePredicted} sound the loud cascade warning if the clamp forces the fan-in below the
-     * segment count.
+     * #warnIfCascadePredicted} note the cascade if the clamp forces the fan-in below the segment
+     * count.
      */
     private int clampedMergeFanIn(List<Path> segments) {
         int staticFanIn = config.effectiveFanIn();
@@ -99,7 +100,7 @@ final class MergeFanInPlanner {
             if (exactMemoryFanIn < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_mem_clamped");
             }
-            log.warn("sort_merge_fanin_clamped static_fan_in={} fd_bound={} exact_mem_fan_in={} "
+            log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} exact_mem_fan_in={} "
                     + "clamped_fan_in={} soft_fd_limit={} segments={}",
                     staticFanIn, fdBound, exactMemoryFanIn, clamped, softFdLimit, segments.size());
         }

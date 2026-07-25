@@ -1863,7 +1863,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     private boolean restoreBoolean(String field, boolean cliValue, boolean storedValue) {
         if (cliValue) {
             if (!storedValue) {
-                log.warn("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
+                log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
                         field, storedValue, cliValue);
             }
             return true;
@@ -1874,7 +1874,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     private String restoreString(String field, String cliValue, String storedValue) {
         if (cliValue != null) {
             if (storedValue != null && !storedValue.equals(cliValue)) {
-                log.warn("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
+                log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
                         field, storedValue, cliValue);
             }
             return cliValue;

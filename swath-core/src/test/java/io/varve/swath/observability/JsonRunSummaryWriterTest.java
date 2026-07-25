@@ -8,6 +8,7 @@ package io.varve.swath.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -868,7 +869,8 @@ final class JsonRunSummaryWriterTest {
     /**
      * A retry that succeeds within the bounded attempt budget recovers the FULL
      * write (meters[] included) — the degraded fallback is a last resort, not the normal recovery
-     * path — and says so at WARN (a transient blip, not the "no reliable summary" ERROR case).
+     * path — and says so at DEBUG (a transient blip already carried by the retry itself, not the
+     * "no reliable summary" ERROR case).
      */
     @Test
     void closeRecoversTheFullWriteOnARetryAfterATransientFirstFailure(@TempDir Path dir) throws Exception {
@@ -891,10 +893,13 @@ final class JsonRunSummaryWriterTest {
                 new ListAppender<>();
         appender.start();
         logger.addAppender(appender);
+        Level originalLevel = logger.getLevel();
+        logger.setLevel(Level.DEBUG);
         try {
             writer.close();
         } finally {
             logger.detachAppender(appender);
+            logger.setLevel(originalLevel);
         }
 
         JsonNode node = MAPPER.readTree(path.toFile());
