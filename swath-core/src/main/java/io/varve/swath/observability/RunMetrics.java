@@ -92,6 +92,9 @@ public final class RunMetrics {
     private final InFlightGauge inFlightGauge;
     private final AtomicReference<byte[]> currentCursor = new AtomicReference<>();
     private final AtomicReference<String> currentPrefix = new AtomicReference<>("");
+    // Where the terminal RunSummary goes beyond the log lines and the JSON report — NONE until a
+    // presentation layer installs its own (see RunSummarySink / setSummarySink).
+    private final AtomicReference<RunSummarySink> summarySink = new AtomicReference<>(RunSummarySink.NONE);
     private final AtomicReference<String> strategy = new AtomicReference<>("unknown");
     private final AtomicReference<String> strategyWhy = new AtomicReference<>("unknown");
     // §3.3: at most one swath.disk.free_bytes gauge per run — registerDiskFreeGauge is called from
@@ -1547,6 +1550,22 @@ public final class RunMetrics {
 
     public void setRunId(long value) {
         runId.set(value);
+    }
+
+    /**
+     * Install the run's terminal-summary sink (see {@link RunSummarySink}) — a per-run setter
+     * alongside {@link #setRunId}/{@link #setStrategy}, so a presentation layer can be wired in
+     * without threading a parameter through every {@code ListRunner.run*} entry point. The sink
+     * itself stays encapsulated: written here, read only by {@link #emitSummary}.
+     */
+    public void setSummarySink(RunSummarySink sink) {
+        summarySink.set(sink == null ? RunSummarySink.NONE : sink);
+    }
+
+    /** Hand the terminal summary to the installed {@link RunSummarySink}. */
+    public void emitSummary(RunSummary summary, RunDiagnostics diagnostics,
+            JsonRunSummaryWriter.TerminalStatus status) {
+        summarySink.get().accept(summary, diagnostics, status);
     }
 
     public void setStrategy(String value) {

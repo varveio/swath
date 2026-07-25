@@ -777,6 +777,8 @@ public final class ListRunner {
             ctx.metrics().recordOutput("parquet", "written",
                     result.finalFiles().size(), sortedOutputBytes(result.finalFiles()));
             logSummary(summary);
+            ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
+                    completionStatus(ctx, null));
             finish(jsonWriter, summary);
             return new ListingStatistics(result.totalRows(), 0L, 0L, 0L, summary.apiCalls(), elapsed);
         } finally {
@@ -1258,6 +1260,41 @@ public final class ListRunner {
         }
     }
 
+    /**
+     * Terminal-summary emit for a run that unwound before its epilogue (a cancel or a fatal): it
+     * mirrors the JSON sidecar's {@code close()}-time partial record — same snapshot, same {@link
+     * #terminalStatus} attribution — so the sink observes exactly the runs the report does, not
+     * only the ones that finished. Never throws: a sink failure must not mask the exception that
+     * ended the run.
+     */
+    private static <E extends Exception> void emitUnwoundSummary(RunContext ctx, LifecyclePlan<E> plan,
+                                                                  long startedNs) {
+        try {
+            Duration elapsed = elapsedSince(startedNs);
+            ctx.metrics().emitSummary(plan.snapshotSummary.apply(elapsed),
+                    ctx.metrics().diagnostics(elapsed), terminalStatus(ctx, plan.outputStage));
+        } catch (RuntimeException e) {
+            log.debug("list_run_summary_emit_failed message={}", e.getMessage());
+        }
+    }
+
+    /**
+     * The terminal disposition of a run that reached its epilogue: a broken pipe first (a
+     * downstream close is a clean stop, never a failure — {@link OutputStage#wasBrokenPipe()},
+     * carried as the {@code null} reason {@link JsonRunSummaryWriter.TerminalStatus} the sidecar
+     * uses), then any attributed cancel reason, else {@link StopReason#COMPLETED}. The unwound
+     * counterpart is {@link #terminalStatus(RunContext, OutputStage)}, which classifies a run that
+     * never got here.
+     */
+    private static JsonRunSummaryWriter.TerminalStatus completionStatus(RunContext ctx, OutputStage outputStage) {
+        if (outputStage != null && outputStage.wasBrokenPipe()) {
+            return new JsonRunSummaryWriter.TerminalStatus(null);
+        }
+        StopReason attributed = ctx.cancellation().stopReason();
+        return new JsonRunSummaryWriter.TerminalStatus(
+                attributed != null ? attributed : StopReason.COMPLETED);
+    }
+
     private static void logSummary(RunSummary summary) {
         log.info("list_run_summary run_id={} objects={} duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
                 summary.runId(), summary.objects(), summary.duration().toMillis(), summary.strategy(),
@@ -1379,6 +1416,7 @@ public final class ListRunner {
         JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, plan.jsonSummaryConfig,
                 () -> plan.snapshotSummary.apply(elapsedSince(startedNs)), plan.outputStage);
         plan.startLog.run();
+        boolean summaryEmitted = false;
         try {
             // Slot 1 — drain: run the pipeline (bound to the run id when checkpointed), then the sink's
             // success verb; teardown always fires in the finally.
@@ -1413,8 +1451,11 @@ public final class ListRunner {
                 ctx.metrics().recordRunCompletion(elapsed, summary.keysPerSecond());
             }
             plan.epilogue.recordOutput();
+            RunMetrics.RunDiagnostics diagnostics = ctx.metrics().diagnostics(elapsed);
             logSummary(summary);
-            logDiagnostics(ctx.metrics().diagnostics(elapsed));
+            logDiagnostics(diagnostics);
+            ctx.metrics().emitSummary(summary, diagnostics, completionStatus(ctx, plan.outputStage));
+            summaryEmitted = true;
             if (plan.outputStage == null) {
                 finish(jsonWriter, summary);
             } else {
@@ -1422,6 +1463,9 @@ public final class ListRunner {
             }
             return plan.statistics.compute(summary.apiCalls(), elapsed);
         } finally {
+            if (!summaryEmitted) {
+                emitUnwoundSummary(ctx, plan, startedNs);
+            }
             closeQuietly(jsonWriter);
         }
     }
