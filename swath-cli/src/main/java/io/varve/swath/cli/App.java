@@ -73,8 +73,13 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
                 .setCaseInsensitiveEnumValuesAllowed(true);
         CommandLine.IExecutionStrategy runLast = new CommandLine.RunLast();
         cmd.setExecutionStrategy(parseResult -> {
-            CommandLine parsed = parseResult.commandSpec().commandLine();
-            CliLogging.configure(GlobalOptions.effectiveVerbosity(parsed), GlobalOptions.effectiveQuietLevel(parsed));
+            // The deepest parsed level, not parseResult.commandSpec().commandLine() (always the
+            // root): a leaf-placed -v/-q (`swath list -vv …`) must be visible here too, and
+            // GlobalOptions.mergedLevel needs the genuine leaf to sum root+leaf without double
+            // counting when there is no subcommand at all (`swath -vv --help`).
+            List<CommandLine> parsedLevels = parseResult.asCommandLineList();
+            CommandLine leaf = parsedLevels.get(parsedLevels.size() - 1);
+            CliLogging.configure(GlobalOptions.effectiveVerbosity(leaf), GlobalOptions.effectiveQuietLevel(leaf));
             return runLast.execute(parseResult);
         });
         CommandLine completion = new CommandLine(new AutoComplete.GenerateCompletion());
