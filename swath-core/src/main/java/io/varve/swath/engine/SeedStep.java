@@ -571,6 +571,14 @@ public final class SeedStep {
             // use is deliberate (see SAMPLE_BUDGET's own javadoc).
             int descentCeiling = massAware ? maxProbes - Math.min(SAMPLE_BUDGET, maxProbes / 2) : maxProbes;
             boolean frontierReorderedFired = false;
+            // Empirical prior for the truncated levels the sample budget can no longer reach (§8):
+            // how the siblings ALREADY sampled in this same descent came out. SAMPLE_BUDGET (32) at
+            // SAMPLE_WIDTH (3) probes per level funds only ~10 disambiguations, and the budget is
+            // spent in DESCENT order — so on a bucket with more ambiguous levels than that, WHICH
+            // ones get sampled is decided by traversal position rather than by mass. See the
+            // prior's use-site below for why exhaustion must not silently mean "not heavy".
+            int heavySamples = 0;
+            int sampledLevels = 0;
             while (!expandable.isEmpty() && probeState[0] < descentCeiling) {
                 if (massAware && !frontierReorderedFired && expandable.size() > 1) {
                     // (§5 instrumentation rule): only counts a REAL engagement — fires the first
@@ -643,9 +651,39 @@ public final class SeedStep {
                         boolean heavy = false;
                         if (massAware && probeState[1] < SAMPLE_BUDGET && probeState[0] < maxProbes) {
                             heavy = sampleProvesHeavy(sub, probeState);
+                            sampledLevels++;
+                            if (heavy) {
+                                heavySamples++;
+                            }
                             recordSeed("heavy_cut_descended");   // the bounded second-level dive fired
                             if (!heavy) {
                                 recordSeed("explosion_confirmed");   // sample proved 1:1 (INT-8 shape)
+                            }
+                        } else if (massAware && sampledLevels > 0) {
+                            // The sample budget is spent, but this level is just as ambiguous as the
+                            // ones that got sampled. Falling through with heavy=false would LEAVE IT
+                            // WHOLE — the least-parallel outcome — on no evidence at all, decided by
+                            // where the level happened to sit in the descent order. Measured on
+                            // nara-1950-census: 11 levels sampled (10 banded, 1 confirmed explosion),
+                            // then California (445,879 objects) and New_York (606,090) came 12th and
+                            // 13th, were never sampled, and were left whole — a 64%-of-wall-clock
+                            // serial tail bought with zero information.
+                            //
+                            // Carry the prior from the siblings we DID sample instead: same bucket,
+                            // same descent, the strongest evidence available, and zero extra probes
+                            // (no page is fetched here). A genuinely 1:1 keyspace proves itself on
+                            // the sampled levels and the prior stays not-heavy, so the INT-8 shape is
+                            // unaffected; only a keyspace whose sampled levels came out heavy now
+                            // extends that verdict to the ones the budget could not reach.
+                            heavy = heavySamples * 2 >= sampledLevels;
+                            // Literal arguments, not a ternary: check-instrumentation-drift.py
+                            // resolves only literals, and a non-literal call site is silently
+                            // downgraded to a human-review warning (the c85f082 trap).
+                            recordSeed("heavy_prior_applied");
+                            if (heavy) {
+                                recordSeed("heavy_prior_banded");
+                            } else {
+                                recordSeed("heavy_prior_left_whole");
                             }
                         }
                         if (heavy) {
