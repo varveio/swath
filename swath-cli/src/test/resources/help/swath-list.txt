@@ -1,6 +1,6 @@
 Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
-                  [--[no-]stats] [--checkpoint=PATH|none|auto]
+                  [--[no-]stats] [--checkpoint=PATH|none|auto] [--color=MODE]
                   [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
                   [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
@@ -98,6 +98,8 @@ Resume:
       --restart              Discard any prior checkpoint and start fresh.
 
 Diagnostics:
+      --color=MODE           Color the end-of-run summary: auto, always, or
+                               never (default: auto).
       --engine-toggle=NAME=on|off
                              Set a diagnostic engine ablation (repeatable; see
                                docs/usage.md).

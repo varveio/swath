@@ -29,6 +29,18 @@ it honors the same environment variables any AWS SDK v2 client does.
 | `SWATH_OPTS`, `JAVA_OPTS` | unset | Extra JVM flags for the `installDist` launcher script only (no effect on the uber-jar or Docker image) | — |
 | `JAVA_TOOL_OPTIONS` | unset | Extra JVM flags read by the JVM itself (works for the uber-jar, `installDist`, and Docker) | — |
 
+### Terminal / color (cross-tool convention, not swath-specific)
+
+Affects only the end-of-run summary block under `--color=auto` (the default);
+irrelevant with an explicit `--color=always`/`--color=never`, which wins over
+all of these.
+
+| Variable | Effect | Overridden by |
+| --- | --- | --- |
+| `NO_COLOR` | Set to *any* value (even empty) — disables color, per [no-color.org](https://no-color.org) | `--color=always`/`--color=never` |
+| `TERM=dumb` | Disables color | `--color=always`/`--color=never` |
+| `CLICOLOR_FORCE` | Set to any value — forces color even off a terminal (the `gh` convention) | `NO_COLOR`, `TERM=dumb`, `--color=always`/`--color=never` |
+
 ## Flags and defaults
 
 ### S3 connection
@@ -130,6 +142,7 @@ both as sensitive run artifacts.
 | --- | --- |
 | `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
 | `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
+| `--color` | `auto` — colors the end-of-run summary block only when stderr is a terminal, unless `NO_COLOR`/`TERM=dumb` disables it or `CLICOLOR_FORCE` forces it; `always`/`never` win over all of that, including `NO_COLOR` |
 | `-h, --help` | — (prints help and exits) |
 | `-V, --version` | — (prints version and exits) |
 

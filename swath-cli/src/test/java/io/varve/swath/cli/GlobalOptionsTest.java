@@ -89,6 +89,29 @@ class GlobalOptionsTest {
     }
 
     @Test
+    void colorBeforeOrAfterTheVerbResolvesIdentically() {
+        CommandLine before = App.commandLine();
+        before.parseArgs("--color=never", "list", "s3://bucket/prefix");
+        CommandLine beforeList = before.getSubcommands().get("list");
+
+        CommandLine after = App.commandLine();
+        after.parseArgs("list", "s3://bucket/prefix", "--color=never");
+        CommandLine afterList = after.getSubcommands().get("list");
+
+        assertThat(GlobalOptions.effectiveColor(beforeList)).isEqualTo(AnsiPalette.Mode.NEVER);
+        assertThat(GlobalOptions.effectiveColor(afterList))
+                .isEqualTo(GlobalOptions.effectiveColor(beforeList));
+    }
+
+    @Test
+    void noColorFlagIsAuto() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveColor(list)).isEqualTo(AnsiPalette.Mode.AUTO);
+    }
+
+    @Test
     void verbosityConfiguresTheSwathLogbackLogger() {
         Logger logger = (Logger)
                 LoggerFactory.getLogger("io.varve.swath");

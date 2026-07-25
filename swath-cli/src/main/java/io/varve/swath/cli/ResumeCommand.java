@@ -122,6 +122,7 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         list.global.verbosity = new boolean[verbosity];
         int quietLevel = spec != null ? GlobalOptions.effectiveQuietLevel(spec.commandLine()) : global.quiet.length;
         list.global.quiet = new boolean[quietLevel];
+        list.global.color = spec != null ? GlobalOptions.effectiveColor(spec.commandLine()) : global.color;
         // Do not parse checkpoint output_format here: ListCommand must first classify the
         // checkpoint's recorded destination and let a FILE-origin refusal win with exit 2. The
         // checkpoint path is also the marker that preserves the ordinary malformed-format exit-1

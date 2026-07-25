@@ -45,7 +45,11 @@ import org.slf4j.LoggerFactory;
  * <p>The load-bearing case is a <b>redirected</b> stderr: {@code isatty} decides whether swath may
  * colorize, never whether the operator is told what happened, so a captured log gets the same
  * content a terminal does. That is the case a naive terminal gate silently breaks, and for an
- * overnight or fleet run it is the only artifact there is.
+ * overnight or fleet run it is the only artifact there is. {@link
+ * #everyFdCombinationGetsIdenticalContentButOnlyATtyStderrColors} is the direct proof: under
+ * {@code --color=auto} (the default) the four stdout/stderr tty combinations genuinely differ in
+ * <em>form</em> — ANSI iff stderr is a terminal — while their content, once escapes are stripped,
+ * is one and the same.
  */
 final class RunSummaryBlockTest {
 
@@ -78,7 +82,7 @@ final class RunSummaryBlockTest {
     private static final long OVER_THRESHOLD_MS = 1_800L;
 
     @Test
-    void everyFdCombinationGetsIdenticalContent(@TempDir Path dir) throws Exception {
+    void everyFdCombinationGetsIdenticalContentButOnlyATtyStderrColors(@TempDir Path dir) throws Exception {
         List<String> rendered = new ArrayList<>();
         for (boolean stdoutTty : List.of(true, false)) {
             for (boolean stderrTty : List.of(true, false)) {
@@ -86,17 +90,26 @@ final class RunSummaryBlockTest {
                 cmd.output.stats = true;
                 cmd.terminalOverride = new TerminalCapabilities(fd ->
                         fd == TerminalCapabilities.STDOUT_FD ? stdoutTty : stderrTty);
+                // No --color flag: pin the auto predicate to the fd alone, deterministically --
+                // NO_COLOR/TERM=dumb/CLICOLOR_FORCE must not leak in from the real dev/CI environment.
+                cmd.envOverride = key -> null;
+                String stderr = runCapturingStderr(cmd);
+
+                assertThat(stderr.contains("\u001B["))
+                        .as("--color=auto colors the block iff stderr (not stdout) is a terminal "
+                                + "-- this is the fd probe deciding FORM, per section 4.2")
+                        .isEqualTo(stderrTty);
                 // Figures differ run to run (rate, RSS, and whether a rate crosses into
                 // thousands); the CONTENT — which fields, in which shape — must not.
-                rendered.add(block(runCapturingStderr(cmd)).replaceAll("[0-9][0-9,.]*", "#"));
+                rendered.add(block(stderr).replaceAll("\\u001B\\[\\d+m", "")
+                        .replaceAll("[0-9][0-9,.]*", "#"));
             }
         }
 
         assertThat(rendered).as("the fd probe selects form, never whether: all four cells "
-                        + "carry the same summary content")
+                        + "carry the same summary content once escapes are stripped")
                 .containsOnly(rendered.getFirst());
         assertThat(rendered.getFirst()).contains("objects in").contains("API calls");
-        assertThat(rendered.getFirst()).doesNotContain("\u001B[");
     }
 
     @Test
@@ -104,6 +117,7 @@ final class RunSummaryBlockTest {
             throws Exception {
         ListCommand cmd = listCommand(dir.resolve("out.jsonl"), OVER_THRESHOLD_MS);
         cmd.terminalOverride = new TerminalCapabilities(fd -> false);   // stderr is a file
+        cmd.envOverride = key -> null;   // pin auto to the fd, independent of the real dev/CI env
 
         String stderr = runCapturingStderr(cmd);
 

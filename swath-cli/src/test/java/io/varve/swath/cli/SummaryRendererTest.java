@@ -30,13 +30,19 @@ final class SummaryRendererTest {
     private static final Duration SHORT = Duration.ofMillis(200);
     private static final Duration LONG = Duration.ofSeconds(30);
 
+    private static final String ESC = "\u001B";
+    private static final String ANSI_RESET = ESC + "[0m";
+    private static final String ANSI_DIM = ESC + "[2m";
+    private static final String ANSI_ACCENT = ESC + "[36m";
+    private static final String ANSI_RED = ESC + "[31m";
+
     private static final TerminalStatus COMPLETED = new TerminalStatus(StopReason.COMPLETED);
     private static final TerminalStatus INTERRUPTED = new TerminalStatus(StopReason.SIGNAL);
     private static final TerminalStatus BROKEN_PIPE = new TerminalStatus(null);
 
-    /** Auto (flag unset), not quiet, stdout destination, AWS pricing, nothing resumable. */
+    /** Auto (flag unset), not quiet, stdout destination, AWS pricing, nothing resumable, no color. */
     private static final SummaryRenderer.Preferences AUTO =
-            new SummaryRenderer.Preferences(null, false, false, true, null);
+            new SummaryRenderer.Preferences(null, false, false, true, null, false);
 
     // ---- the gate ----------------------------------------------------
 
@@ -53,7 +59,7 @@ final class SummaryRendererTest {
     @Test
     void durableOutputEarnsASummaryRegardlessOfDuration() {
         SummaryRenderer.Preferences toDisk =
-                new SummaryRenderer.Preferences(null, false, true, true, null);
+                new SummaryRenderer.Preferences(null, false, true, true, null, false);
         assertThat(SummaryRenderer.shouldRender(toDisk, summary(SHORT, 3L, 4096L), COMPLETED)).isTrue();
     }
 
@@ -65,9 +71,9 @@ final class SummaryRendererTest {
     @Test
     void quietSuppressesTheAutoSummaryButNotAnExplicitOne() {
         SummaryRenderer.Preferences quiet =
-                new SummaryRenderer.Preferences(null, true, false, true, null);
+                new SummaryRenderer.Preferences(null, true, false, true, null, false);
         SummaryRenderer.Preferences quietWithStats =
-                new SummaryRenderer.Preferences(true, true, false, true, null);
+                new SummaryRenderer.Preferences(true, true, false, true, null, false);
         assertThat(SummaryRenderer.shouldRender(quiet, summary(LONG), COMPLETED)).isFalse();
         assertThat(SummaryRenderer.shouldRender(quietWithStats, summary(LONG), COMPLETED)).isTrue();
     }
@@ -75,14 +81,14 @@ final class SummaryRendererTest {
     @Test
     void statsForcesASummaryOnASubThresholdRun() {
         SummaryRenderer.Preferences forced =
-                new SummaryRenderer.Preferences(true, false, false, true, null);
+                new SummaryRenderer.Preferences(true, false, false, true, null, false);
         assertThat(SummaryRenderer.shouldRender(forced, summary(SHORT), COMPLETED)).isTrue();
     }
 
     @Test
     void noStatsSuppressesEverywhere() {
         SummaryRenderer.Preferences never =
-                new SummaryRenderer.Preferences(false, false, true, true, "./out");
+                new SummaryRenderer.Preferences(false, false, true, true, "./out", false);
         assertThat(SummaryRenderer.shouldRender(never, summary(LONG, 3L, 4096L), COMPLETED)).isFalse();
         assertThat(SummaryRenderer.shouldRender(never, summary(LONG), INTERRUPTED)).isFalse();
     }
@@ -95,7 +101,7 @@ final class SummaryRendererTest {
     @Test
     void statsBypassesEvenTheBrokenPipeGate() {
         SummaryRenderer.Preferences forced =
-                new SummaryRenderer.Preferences(true, false, false, true, null);
+                new SummaryRenderer.Preferences(true, false, false, true, null, false);
         assertThat(SummaryRenderer.shouldRender(forced, summary(LONG), BROKEN_PIPE))
                 .as("an explicit --stats bypasses EVERY gate, the broken-pipe one included: the "
                         + "flag check must stay ahead of all of them")
@@ -113,7 +119,7 @@ final class SummaryRendererTest {
     @Test
     void aDurableDestinationThatProducedNothingDoesNotEarnASummary() {
         SummaryRenderer.Preferences toDisk =
-                new SummaryRenderer.Preferences(null, false, true, true, null);
+                new SummaryRenderer.Preferences(null, false, true, true, null, false);
         assertThat(SummaryRenderer.shouldRender(toDisk, summary(SHORT), COMPLETED))
                 .as("the reason to report is output that exists, not a destination that could "
                         + "have held some")
@@ -160,7 +166,7 @@ final class SummaryRendererTest {
     @Test
     void unknownProviderWithholdsTheDollarFigureEntirely() {
         SummaryRenderer.Preferences selfHosted =
-                new SummaryRenderer.Preferences(null, false, false, false, null);
+                new SummaryRenderer.Preferences(null, false, false, false, null, false);
 
         List<String> lines = render(selfHosted, LONG, metrics -> {
             metrics.recordEntriesEmitted(1_000L);
@@ -174,7 +180,7 @@ final class SummaryRendererTest {
     @Test
     void incompleteRunIsMarkedAndOffersTheResumeThatWillWork() {
         SummaryRenderer.Preferences resumable =
-                new SummaryRenderer.Preferences(null, false, true, true, "./out");
+                new SummaryRenderer.Preferences(null, false, true, true, "./out", false);
 
         List<String> lines = render(resumable, LONG, metrics -> { }, INTERRUPTED);
 
@@ -191,7 +197,7 @@ final class SummaryRendererTest {
     @Test
     void forcedBrokenPipeSummaryIsWordedNeutrallyAndCarriesNoMarker() {
         SummaryRenderer.Preferences forced =
-                new SummaryRenderer.Preferences(true, false, false, true, "./out");
+                new SummaryRenderer.Preferences(true, false, false, true, "./out", false);
 
         List<String> lines = render(forced, LONG, metrics -> { }, BROKEN_PIPE);
 
@@ -202,7 +208,7 @@ final class SummaryRendererTest {
     @Test
     void aCrashIsMarkedButNeverInvitesAResumeThatWouldFailAgain() {
         SummaryRenderer.Preferences resumable =
-                new SummaryRenderer.Preferences(null, false, true, true, "./out");
+                new SummaryRenderer.Preferences(null, false, true, true, "./out", false);
 
         List<String> lines = render(resumable, LONG, metrics -> { }, new TerminalStatus(StopReason.CRASH));
 
@@ -238,9 +244,98 @@ final class SummaryRendererTest {
         }
 
         assertThat(captured.toString(StandardCharsets.UTF_8))
-                .startsWith("  10 objects in 30.0s").doesNotContain("[");
+                .startsWith("  10 objects in 30.0s").doesNotContain("\u001B[");
         assertThat(stdout.toString(StandardCharsets.UTF_8))
                 .as("stdout is data, always: the block never goes near it").isEmpty();
+    }
+
+    // ---- color (§4.9) -------------------------------------------------
+
+    @Test
+    void colorEnabledAccentsTheHeadlineAndDimsEverythingElse() {
+        SummaryRenderer.Preferences colored =
+                new SummaryRenderer.Preferences(null, false, false, true, null, true);
+
+        String block = printed(colored, LONG, metrics -> {
+            metrics.recordEntriesEmitted(1_000L);
+            metrics.recordApiCall();
+        }, COMPLETED);
+        List<String> printedLines = List.of(block.split("\n"));
+
+        assertThat(printedLines.get(0)).as("the headline (objects/elapsed/rate) line gets the "
+                        + "one accent").contains(ANSI_ACCENT).contains("1,000 objects in 30.0s");
+        assertThat(printedLines.get(1)).as("the API-calls line beneath it is dimmed")
+                .contains(ANSI_DIM).contains("API calls");
+        assertThat(block).contains(ANSI_RESET);
+    }
+
+    @Test
+    void colorDisabledIsByteIdenticalContentToColorEnabledWithEscapesStripped() {
+        SummaryRenderer.Preferences colored =
+                new SummaryRenderer.Preferences(null, false, false, true, null, true);
+        SummaryRenderer.Preferences plain =
+                new SummaryRenderer.Preferences(null, false, false, true, null, false);
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.markRunStarted();
+        metrics.recordEntriesEmitted(1_000L);
+        metrics.recordApiCall();
+        RunSummary summary = metrics.summary(LONG, WORK_STEALING, 0L, 0L);
+        RunMetrics.RunDiagnostics diagnostics = metrics.diagnostics(LONG);
+
+        String coloredBlock = printed(colored, summary, diagnostics, COMPLETED);
+        String plainBlock = printed(plain, summary, diagnostics, COMPLETED);
+
+        assertThat(plainBlock).as("color off: no ANSI at all").doesNotContain(ESC);
+        assertThat(coloredBlock.replace(ANSI_RESET, "").replace(ANSI_DIM, "").replace(ANSI_ACCENT, ""))
+                .as("§4.2: the color decision changes form only, never content")
+                .isEqualTo(plainBlock);
+    }
+
+    @Test
+    void noColorAndTermDumbPrintByteIdenticalOutputToColorNever() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.markRunStarted();
+        metrics.recordEntriesEmitted(1_000L);
+        metrics.recordApiCall();
+        RunSummary summary = metrics.summary(LONG, WORK_STEALING, 0L, 0L);
+        RunMetrics.RunDiagnostics diagnostics = metrics.diagnostics(LONG);
+
+        // A terminal stderr (fdIsTerminal=true) would color under bare auto -- these three
+        // resolutions each suppress it a different way, and must agree byte for byte.
+        boolean colorNever = AnsiPalette.resolveEnabled(AnsiPalette.Mode.NEVER, null, null, null, true);
+        boolean noColorEnv = AnsiPalette.resolveEnabled(AnsiPalette.Mode.AUTO, "1", null, null, true);
+        boolean termDumb = AnsiPalette.resolveEnabled(AnsiPalette.Mode.AUTO, null, "dumb", null, true);
+
+        String colorNeverBlock = printed(new SummaryRenderer.Preferences(
+                null, false, false, true, null, colorNever), summary, diagnostics, COMPLETED);
+        String noColorBlock = printed(new SummaryRenderer.Preferences(
+                null, false, false, true, null, noColorEnv), summary, diagnostics, COMPLETED);
+        String termDumbBlock = printed(new SummaryRenderer.Preferences(
+                null, false, false, true, null, termDumb), summary, diagnostics, COMPLETED);
+
+        assertThat(colorNeverBlock).doesNotContain(ESC);
+        assertThat(noColorBlock).as("NO_COLOR=1 under auto: byte-identical to --color=never")
+                .isEqualTo(colorNeverBlock);
+        assertThat(termDumbBlock).as("TERM=dumb under auto: byte-identical to --color=never")
+                .isEqualTo(colorNeverBlock);
+    }
+
+    @Test
+    void incompleteMarkerIsRedUnderColorAndPlainWithoutIt() {
+        SummaryRenderer.Preferences colored =
+                new SummaryRenderer.Preferences(null, false, true, true, "./out", true);
+        SummaryRenderer.Preferences plain =
+                new SummaryRenderer.Preferences(null, false, true, true, "./out", false);
+
+        String coloredBlock = printed(colored, LONG, metrics -> { }, INTERRUPTED);
+        String plainBlock = printed(plain, LONG, metrics -> { }, INTERRUPTED);
+
+        assertThat(coloredBlock.lines().findFirst().orElseThrow())
+                .as("INCOMPLETE renders red under color")
+                .startsWith("  " + ANSI_RED + "INCOMPLETE (").contains(ANSI_RESET);
+        assertThat(plainBlock.lines().findFirst().orElseThrow())
+                .as("and as plain text without it")
+                .isEqualTo("  INCOMPLETE (signal) — resume: swath resume ./out");
     }
 
     private static List<String> render(SummaryRenderer.Preferences prefs, Duration duration,
@@ -250,6 +345,27 @@ final class SummaryRendererTest {
         arrange.accept(metrics);
         return SummaryRenderer.lines(prefs, metrics.summary(duration, WORK_STEALING, 0L, 0L),
                 metrics.diagnostics(duration), status);
+    }
+
+    /** The block as {@link SummaryRenderer#accept} actually prints it, escapes and all. */
+    private static String printed(SummaryRenderer.Preferences prefs, Duration duration,
+            java.util.function.Consumer<RunMetrics> arrange, TerminalStatus status) {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.markRunStarted();
+        arrange.accept(metrics);
+        return printed(prefs, metrics.summary(duration, WORK_STEALING, 0L, 0L), metrics.diagnostics(duration),
+                status);
+    }
+
+    /** Same as above, but on an ALREADY-BUILT summary/diagnostics — so two renderings that must
+     * compare content-equal (color on vs. off) never drift on a live figure (e.g. RSS) sampled
+     * fresh on each call. */
+    private static String printed(SummaryRenderer.Preferences prefs, RunSummary summary,
+            RunMetrics.RunDiagnostics diagnostics, TerminalStatus status) {
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        new SummaryRenderer(new PrintStream(captured, true, StandardCharsets.UTF_8), () -> prefs)
+                .accept(summary, diagnostics, status);
+        return captured.toString(StandardCharsets.UTF_8);
     }
 
     private static RunSummary summary(Duration duration) {

@@ -1,10 +1,12 @@
-Usage: swath [-hVqv] [COMMAND]
+Usage: swath [-hVqv] [--color=MODE] [COMMAND]
 High-performance object-store lister.
-  -h, --help      Show this help message and exit.
-  -q, --quiet     Decrease verbosity (-q ERROR, -qq silent); suppresses the
-                    startup destination echo.
-  -v              Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
-  -V, --version   Print version information and exit.
+      --color=MODE   Color the end-of-run summary: auto, always, or never
+                       (default: auto).
+  -h, --help         Show this help message and exit.
+  -q, --quiet        Decrease verbosity (-q ERROR, -qq silent); suppresses the
+                       startup destination echo.
+  -v                 Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
+  -V, --version      Print version information and exit.
 Commands:
   list    List a bucket or prefix.
   resume  Resume a run by its output directory: swath resume <dir>.

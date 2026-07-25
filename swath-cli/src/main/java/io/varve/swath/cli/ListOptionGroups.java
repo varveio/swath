@@ -87,6 +87,14 @@ final class ListOptionGroups {
         }
 
         @Resume(ResumeClass.FREE)
+        @Option(names = "--color", paramLabel = "MODE",
+                description = "Color the end-of-run summary: auto, always, or never "
+                        + "(default: auto).")
+        void color(AnsiPalette.Mode value) {
+            global.color = value;
+        }
+
+        @Resume(ResumeClass.FREE)
         @Option(names = "--engine-toggle", paramLabel = "NAME=on|off",
                 description = "Set a diagnostic engine ablation (repeatable; see docs/usage.md).")
         void engineToggle(String[] values) {

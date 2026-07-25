@@ -585,9 +585,9 @@ bookkeeping. A fresh `swath list -o <dir>` over a **completed** dataset is refus
 (steering to `--overwrite`) purely from the on-disk markers, so the guard holds even
 though the checkpoint is gone.
 
-#### Global flags (`-v`/`-q`, applies to every command)
+#### Global flags (`-v`/`-q`/`--color`, applies to every command)
 
-`-v` and `-q` are accepted **before or after** the verb — both
+`-v`, `-q`, and `--color` are accepted **before or after** the verb — both
 `swath -v list …` and `swath list -v …` work.
 
 | Flag | Level |
@@ -603,6 +603,7 @@ though the checkpoint is gone.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-q, --quiet` | off | Lowers the log level (see above) and suppresses the startup destination echo. `-qq` silences logging, but not the terminal `swath: …` error line printed on failure — that goes straight to the CLI's error stream, not through the logger |
+| `--color` | `auto` | Colors the end-of-run summary block: `auto` (color only when stderr is a terminal), `always`, or `never`. See [Color](#color) below |
 
 ---
 
@@ -787,6 +788,26 @@ A separate `list_run_diagnostics` INFO line carries internal counters:
 `splits_committed`, `unsplittable_victims`, `peak_in_flight`, page-shape
 fields, and throttle fields. These are diagnostics only, not Micrometer
 meters.
+
+### Color
+
+`--color=auto|always|never` (default `auto`) governs only the end-of-run summary block above — dim
+labels/units, one accent for the headline figures (objects/elapsed/rate), red for the `INCOMPLETE`
+marker. This is purely cosmetic: as with terminal detection generally (see above), it decides *form*,
+never *whether* the block prints.
+
+`auto` colors only when **stderr** is a terminal (stdout's tty-ness, used for `--format auto`, is a
+separate question — see [Output](#output)); it also respects the same conventions other CLIs do:
+
+| Signal | Effect |
+| --- | --- |
+| `NO_COLOR` set to any value | disables color |
+| `TERM=dumb` | disables color |
+| `CLICOLOR_FORCE` set to any value | forces color even off a terminal (the `gh` convention) |
+
+An explicit `--color=always`/`--color=never` wins over **all** of the above, `NO_COLOR` included —
+per [no-color.org](https://no-color.org), a command-line argument overrides the environment variable.
+swath does not honor `FORCE_COLOR`; that convention is JS-ecosystem, with no CLI-native precedent.
 
 ### Metrics (Micrometer)
 

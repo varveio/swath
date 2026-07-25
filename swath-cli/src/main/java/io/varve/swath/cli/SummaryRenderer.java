@@ -69,9 +69,12 @@ final class SummaryRenderer implements RunSummarySink {
      *         --endpoint-url} (MinIO/R2/LocalStack/self-hosted), where any {@code $} would be a guess
      * @param resumeDestination the destination a partial run can be resumed from, or {@code null}
      *         when this run left nothing resumable
+     * @param colorEnabled the resolved {@code --color}/{@code NO_COLOR}/{@code TERM}/{@code
+     *         CLICOLOR_FORCE}/stderr-tty decision (§4.9, {@link AnsiPalette#resolveEnabled}) —
+     *         resolved by the CLI, since only it knows the fd's terminal-ness
      */
     record Preferences(Boolean stats, boolean quiet, boolean durableDestination, boolean costKnown,
-                       String resumeDestination) {
+                       String resumeDestination, boolean colorEnabled) {
     }
 
     private final PrintStream err;
@@ -90,8 +93,11 @@ final class SummaryRenderer implements RunSummarySink {
             return;
         }
         try {
-            for (String line : lines(prefs, summary, diagnostics, status)) {
-                err.println(INDENT + line);
+            List<String> content = lines(prefs, summary, diagnostics, status);
+            AnsiPalette ansi = new AnsiPalette(prefs.colorEnabled());
+            boolean hasDisposition = disposition(prefs, status) != null;
+            for (int i = 0; i < content.size(); i++) {
+                err.println(INDENT + colorize(content.get(i), i, hasDisposition, ansi));
             }
             err.flush();
         } catch (RuntimeException e) {
@@ -99,6 +105,23 @@ final class SummaryRenderer implements RunSummarySink {
             // the block, never the run's disposition or exit code.
             log.debug("run_summary_render_failed message={}", e.getMessage());
         }
+    }
+
+    /**
+     * The palette (§4.9), applied to one already-{@link #lines}-composed line by its role rather
+     * than by restructuring how that method builds the text — {@code lines} stays plain, so its
+     * own tests keep pinning exact, uncolored content. The disposition line (when {@link
+     * #disposition} added one) is red only for the actual {@code INCOMPLETE} marker, never the
+     * neutral broken-pipe wording; the first content line after it — objects/elapsed/rate, the
+     * run's headline — gets the palette's one accent; every line after that (API calls, faults,
+     * cost, output) is dimmed so the headline reads first.
+     */
+    private static String colorize(String line, int index, boolean hasDisposition, AnsiPalette ansi) {
+        if (hasDisposition && index == 0) {
+            return line.startsWith("INCOMPLETE") ? ansi.red(line) : ansi.dim(line);
+        }
+        boolean headline = hasDisposition ? index == 1 : index == 0;
+        return headline ? ansi.accent(line) : ansi.dim(line);
     }
 
     /**

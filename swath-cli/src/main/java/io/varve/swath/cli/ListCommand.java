@@ -83,6 +83,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -192,6 +193,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * auto} deterministically (the JDK-25 per-fd isatty fix).
      */
     TerminalCapabilities terminalOverride;
+
+    /**
+     * Test-only seam (package-private, null in production): when set, {@code call()}'s {@code
+     * --color} resolution reads {@code NO_COLOR}/{@code TERM}/{@code CLICOLOR_FORCE} through this
+     * instead of {@code System.getenv}, so a test can pin them deterministically regardless of the
+     * real process environment. Mirrors {@link #terminalOverride}.
+     */
+    UnaryOperator<String> envOverride;
 
     /** Resolved once at the top of {@link #call()} from {@link #terminalOverride}/{@link
      * TerminalCapabilities} -- threaded into {@link LivenessOptions#startProgressReporter} so the
@@ -320,6 +329,16 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // stdin was wrongly classified non-terminal. TerminalCapabilities probes fd 1 independently.
         TerminalCapabilities terminal = terminalOverride != null ? terminalOverride : new TerminalCapabilities();
         stdoutIsTerminal = terminal.stdoutIsTerminal();
+        // --color resolution (§4.9): an explicit flag decides on its own; auto consults NO_COLOR/
+        // TERM=dumb/CLICOLOR_FORCE, then falls back to stderr's own terminal-ness -- the fd this
+        // decision is actually about, since it governs only the summary block, never whether it
+        // prints (that's shouldRender's job, never TTY-gated -- see SummaryRenderer). Root-vs-leaf
+        // merges the same way -v/-q do; env is read through envOverride so a test can pin it.
+        AnsiPalette.Mode colorMode = spec != null
+                ? GlobalOptions.effectiveColor(spec.commandLine()) : global.color;
+        UnaryOperator<String> env = envOverride != null ? envOverride : System::getenv;
+        boolean colorEnabled = AnsiPalette.resolveEnabled(colorMode, env.apply("NO_COLOR"),
+                env.apply("TERM"), env.apply("CLICOLOR_FORCE"), terminal.stderrIsTerminal());
         boolean deferredResumeFormat = resumeCommandCheckpoint != null;
         OutputOptions.Resolved resolvedOutput = deferredResumeFormat
                 ? output.resolveDeferredResumeOutput(stdoutIsTerminal)
@@ -400,7 +419,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // would render every resume as a non-durable, non-resumable stdout run.
         ctx.metrics().setSummarySink(new SummaryRenderer(System.err, () -> new SummaryRenderer.Preferences(
                 output.stats, quiet, output.resolvedKind != OutputOptions.DestinationKind.STDOUT,
-                connection.endpointUrl == null, resumeDestination(mode))));
+                connection.endpointUrl == null, resumeDestination(mode), colorEnabled)));
 
         // A SIGTERM/SIGINT flips the cancellation flag (stop_reason=signal); the --max-duration
         // deadline flips it with stop_reason=max_duration. Either way the run thread observes the
