@@ -88,7 +88,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.s3.pool.handshakes` | counter | — | one new pooled connection completed its TCP+TLS handshake (including TLS layered over an HTTPS-proxy tunnel) — fires only when the pool opens a genuinely NEW connection, and only after that handshake completes successfully; never on lease/reuse of an existing one, and never on a failed connect (see `connection_aborted` above for that). The rate this climbs to under an attempt-timeout storm is the handshake churn `swath.s3.pool.connection_aborted` predicts; the `swath.s3.pool.*` gauges above cannot see that rate at all (they are event-driven snapshots, not churn counters). swath's short connection idle time (5 s) and time-to-live (1 min) force frequent reconnects by design, so a nonzero handshake baseline in an otherwise-healthy run is expected, not pathology |
 | `swath.s3.socket_closure_recovered` | counter | — | a client-local socket-closure fault that escaped the SDK as a plain runtime exception rather than an `SdkException` (e.g. `UncheckedIOException(SocketException("Socket closed"))` surfacing from a transient S3 500 burst) was reclassified as a transient network fault and ridden out, instead of crashing the run unclassified at exit `1` / `error_class=unknown`. Incremented once per such recovery, alongside `swath.throttle.events{type=network}`, `swath.s3.pool.connection_aborted`, and `TRANSIENT.socket_closure`. A distinct series from the modeled network path, so you can tell this recovery engaged and how often; surfaced in the `recovered_errors` JSON rollup as `socket_closure` |
 | `swath.progress.units` | counter | — | **the stuck signal.** One monotonic counter that advances in **every** phase by construction — entries emitted during listing/writing, rows merged during the `--sort` k-way merge (batched, via the merge's progress callback). `rate(progress.units)==0` is therefore a phase-independent "stuck" test with no phase-gating logic and no boundary race — unlike `swath.entries.emitted` alone, which legitimately flatlines during the sort merge. It advances during intermediate cascade merge passes too, not just the final pass; one accepted seconds-scale window remains (the final Parquet-part flush) — see the caveats below |
-| `swath.phase` | gauge | — | live run phase for dashboard readability (and the self-throttle/tail boards) only — **not** the stuck-detection gate (a gauge is sampled at push time and can miss a phase shorter than the export interval). `0`=listing, `1`=merging, `2`=writing, `3`=complete, `4`=seeding (added later, hence the out-of-order code: the published codes are explicit and stable and can never be silently renumbered). `NaN` before the first phase is set (emitted at OTLP export, dropped downstream — see the NaN caveat below). A fresh run sets `seeding` before its first seed probe (a resume never re-seeds). Non-sort runs stay at `listing` until `complete` (their writing is concurrent with listing); the sort path sets `merging` for the cascade passes, `writing` once the final streaming pass + publish begin, then `complete` |
+| `swath.phase` | gauge | — | live run phase for dashboard readability (and the self-throttle/tail boards) only — **not** the stuck-detection gate (a gauge is sampled at push time and can miss a phase shorter than the export interval). `0`=listing, `1`=merging, `2`=writing, `3`=complete, `4`=seeding (added later, hence the out-of-order code: the published codes are explicit and stable and can never be silently renumbered). `NaN` before the first phase is set (emitted at OTLP export, dropped downstream — see the NaN caveat below); live progress reports that pre-phase state as `starting` rather than fabricating a phase. A fresh run sets `seeding` before its first seed probe, and so does a resume whose checkpoint holds zero nodes — the state an interrupted seed leaves behind, which must be re-seeded rather than resumed as complete. Non-sort runs stay at `listing` until `complete` (their writing is concurrent with listing); the sort path sets `merging` for the cascade passes, `writing` once the final streaming pass + publish begin, then `complete` |
 | `swath.output.files` | counter | `{format, outcome}` | output files/parts successfully written, per sink — `format` is one of `jsonl\|tsv\|table\|parquet` (a text sink is always 1 file; `--sort`'s final published output is itself Parquet, so it also reports `format=parquet` — the `swath.sort.*` meters are what distinguish the code path that produced it); `outcome` is `written`, or `truncated` for a text sink whose downstream pipe broke mid-run or at close (paired with `swath.output.broken_pipe`) — Parquet/sort have no broken-pipe concept and always report `written`. The same counts are carried in the JSON summary's `output_files`/`compressed_size_bytes`, so the two never disagree |
 | `swath.output.bytes` | counter | `{format}` | output bytes written INTO the sink, per sink/format — bytes offered to the sink's buffer, not bytes confirmed delivered downstream (see the broken-pipe row below). For text sinks (JSONL/TSV/TABLE) this is a REAL count of UTF-8 encoded bytes, not an estimate |
 | `swath.output.broken_pipe` | counter | — | a text sink (stdout or a file) was truncated by a downstream reader closing the pipe mid-run or at final flush — the run still exits 0. `swath.output.bytes` counts bytes offered INTO the sink, not bytes actually delivered downstream: on a mid-run break it undercounts the full listing, but on a close-time break it can equal the full logical output even though delivery was truncated — this counter is the truncation signal, not the byte count |
@@ -361,13 +361,16 @@ genuinely advances across successive periodic flushes mid-merge, which is what l
 reporter, which spans seeding, listing, merging and writing alike — so it emits the SAME `progress`
 record as every other phase, with a merge-shaped tail:
 ```
-progress run_id=<n> phase=merging … completed=<rows>/<staged> rows percent=<n> rows_merged=<n> staged_rows=<n> segments=<n> merge_passes=<n>
+progress run_id=<n> phase=merging … rows_merged=<n> staged_rows=<n> segments=<n> merge_passes=<n>
 ```
 at the `--progress-interval` cadence (default 30 s), so a short merge under a tight external
-watchdog still gets periodic ticks. `rows_merged` — rows the merge itself has moved, measured
-against the exact row total of the staged segments it was handed — is the field that advances on
-every tick; `merge_passes` reads 0 for the whole merge (the pass counter is bumped exactly once, at
-merge end, mirroring the `sort` block's `passes` field). There is no extra final line at merge end:
+watchdog still gets periodic ticks. `rows_merged` — rows of merge work done so far — is the field
+that advances on every tick; `merge_passes` reads 0 for the whole merge (the pass counter is bumped
+exactly once, at merge end, mirroring the `sort` block's `passes` field). A `completed=…` percentage
+appears only once the phase reaches `writing`: a cascading merge rewrites every staged row once per
+pass and does not know its pass count in advance, so `rows_merged` legitimately runs past
+`staged_rows` mid-cascade, and only the final pass — which drains exactly the staged rows once — has
+an honest denominator. There is no extra final line at merge end:
 one tick renders one record, and the terminal disposition is the run summary's job.
 
 **`stop_source`/`error_class`** (top-level, alongside `stop_reason`): post-hoc forensics
@@ -444,10 +447,13 @@ reference is in [`docs/internals/metrics-internals.md`](internals/metrics-intern
 ONE reporter covers the whole run — seeding, listing, merging, writing — and emits one `progress`
 record per tick. This is the log form of the tick, the surface an external supervisor tailing the
 log reads; it is what ticks whenever the operator display is not installed (§the gate in
-[`usage.md`](usage.md#progress) — `--no-progress`, a non-terminal stderr, or `-v`, which turns this
-record on in the first place). Every record carries `run_id, phase, strategy, elapsed_ms, phase_elapsed_ms,
-api_calls, cost_usd, retries`; `elapsed_ms` is always the whole session (a phase transition never
-resets the clock) and `phase_elapsed_ms` sits alongside it. The tail is phase-shaped:
+[`usage.md`](usage.md#progress) — a non-terminal stderr, or `-v`, which turns this record on in the
+first place). `--no-progress` suppresses progress outright: no display AND no record. Every record
+carries `run_id, phase, strategy, elapsed_ms, phase_elapsed_ms, api_calls, retries`, plus `cost_usd`
+where the provider's LIST pricing is knowable — under `--endpoint-url` the field is absent rather
+than quoting an AWS-derived guess, exactly as the end-of-run block withholds the `$`. `elapsed_ms`
+is always the whole session (a phase transition never resets the clock) and `phase_elapsed_ms` sits
+alongside it. The tail is phase-shaped:
 
 - **`phase=seeding`** — `probes`, `probe_budget`, `last_probe_age_ms`. A seeding run emits no
   objects, fetches no pages and holds no workers, so a listing-shaped line would read as all zeros
@@ -460,10 +466,12 @@ resets the clock) and `phase_elapsed_ms` sits alongside it. The tail is phase-sh
   `in_flight` vs `target_workers` (how much of the AIMD concurrency `T` is actually busy; the
   Micrometer gauge for the target is `swath.workers.active`), `steals`, `splits`.
 - **`phase=merging`/`writing`** — `rows_merged`, `staged_rows`, `segments`, `merge_passes`.
+- **`phase=starting`** — the run has set no phase yet (checkpoint open, resume reconciliation): a
+  run-level line only, and an honest one rather than a fabricated `listing`.
 
 A `completed=<done>/<total> <unit> percent=<n>` field appears only where BOTH sides have exact,
-documented semantics: seeding against its bounded probe budget, and the merge against the staged row
-total. Listing has neither — no total object count exists mid-scan — so it carries no percentage,
+documented semantics: seeding against its bounded probe budget, and the merge's FINAL pass
+(`phase=writing`) against the staged row total. Listing has neither — no total object count exists mid-scan — so it carries no percentage,
 no bar and no ETA, rather than a placeholder pretending otherwise. Live resident/heap memory is not
 sampled per tick (it was, at a full `/proc` + JVM-bean probe per record); peak RSS and heap are in
 the end-of-run summary, and the `swath.process.memory.*{kind=current}` gauges from §1 remain the

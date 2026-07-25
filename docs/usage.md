@@ -730,7 +730,8 @@ parts in name order reads the dataset in key order — once the output crosses t
 One reporter covers the whole run — the seed step, listing, the sort merge and the final write —
 and emits one record per tick on **stderr** (stdout stays data). It takes one of two forms, never
 both at once: the operator-facing line when a display is wanted, and the structured `progress` log
-record otherwise. Whichever is installed, a tick renders exactly once.
+record otherwise. Whichever is installed, a tick renders exactly once — and `--no-progress` installs
+neither, so it silences the log record as well as the display.
 
 The operator line is one plain, newline-terminated record per tick — no carriage returns, no
 redraw, no escape sequences, so a redirected stderr is readable as-is:
@@ -738,7 +739,8 @@ redraw, no escape sequences, so a redirected stderr is readable as-is:
 ```
   seeding · 12/64 probes (19%) · last probe 3.1s ago · 21.7s elapsed · 64 API calls · <$0.001 (est. @ $0.005/1k LIST)
   listing · 4,231,000 objects · 128,000 keys/s (avg 96,000) · 4,231 pages · 512 in flight · 1m12s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
-  merging · 3,100,000/12,000,000 rows (26%) · 24 segments · 2m05s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+  merging · 24,000,000 rows merged · 24 segments · 2m05s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+  writing · 3,100,000/12,000,000 rows (26%) · 24 segments · 2m28s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
 ```
 
 Each phase shows what it actually has. Seeding reports probes completed against the seed's probe
@@ -746,16 +748,17 @@ budget and the age of the last completed probe — the signal that tells a healt
 one, since a seeding run emits no objects, fetches no pages and holds no workers. Listing reports
 objects emitted this session (recovered rows from a resume are shown separately as `(+N
 recovered)`, so a resumed run neither displays a zero it did not earn nor jumps by billions at the
-end), live and average object rate, pages and in-flight ranges. Merging reports rows merged against
-the staged row total. Every line then carries session elapsed, API calls, and the estimated spend
+end), live and average object rate, pages and in-flight ranges. A merge reports the rows it has
+moved, and a percentage only for its final pass (`writing`): a cascading merge rewrites every staged
+row once per pass, so work done legitimately exceeds the staged rows until then. Every line then carries session elapsed, API calls, and the estimated spend
 with the rate it assumed — withheld entirely under `--endpoint-url`, where the provider's LIST
 pricing is unknowable, exactly as the end-of-run block withholds it. **No key text ever appears**:
 keys can carry arbitrary bytes, and a line that echoed them could be made to forge one.
 
 There is deliberately **no ETA and no percentage for listing**: an unsorted scan has no honest
-denominator — the object total is not known until the run ends. Seeding and merging do have exact
-ones (the probe budget; the staged rows), so those phases carry a completion figure and listing does
-not.
+denominator — the object total is not known until the run ends. Seeding and the merge's final pass
+do have exact ones (the probe budget; the staged rows), so those carry a completion figure and
+listing does not.
 
 Whether the line appears:
 
@@ -766,7 +769,7 @@ Whether the line appears:
 | `-q` / `-qq` | off, unless `--progress` |
 | `-v` or higher | off — INFO logging is on, so the structured `progress` record is the surface |
 | `--progress` | on, past every gate above, including off a terminal and under `-q` |
-| `--no-progress` | off, everywhere, including with an explicit `--progress-interval` |
+| `--no-progress` | off, everywhere — display and structured record alike, including with an explicit `--progress-interval` |
 | `--progress-interval DURATION` | on — asking for a cadence is asking for progress |
 
 The first record lands a couple of seconds in rather than a whole cadence later, so a run that
@@ -776,8 +779,8 @@ rather than clamped — a ten-hour run at `1ms` would attempt some 36 million re
 below one a second outruns both a reader and a captured log.
 
 Under `-v`, the same tick is logged instead as one structured `progress` record — run id, phase,
-session and phase elapsed, API calls, cost and retries, with the same phase-shaped tail — which is
-what an external supervisor tailing the log reads. See
+session and phase elapsed, API calls, retries and (where the provider's pricing is knowable) cost,
+with the same phase-shaped tail — which is what an external supervisor tailing the log reads. See
 [`metrics-and-observability.md`](metrics-and-observability.md#4--v-progress-record-30-s-default---progress-interval)
 for its field list.
 

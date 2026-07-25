@@ -114,10 +114,11 @@ lister itself, not a fleet system; a bucket fleet uses it as its data plane.
   from `SWATH_OTLP_INTERVAL`). A Prometheus scrape endpoint is planned, not yet
   wired (Micrometer is the facade, but only the OTLP registry ships).
 - Progress reporting: one reporter per run, spanning seeding through the final
-  write, emitting a 30-s **INFO** `progress` record whose fields are shaped by the
-  phase (no ETA and no percentage for listing, which has no honest denominator);
-  a TTY display renders through the neutral `ProgressSink` seam and is not yet
-  wired — on a TTY the same INFO path is used today.
+  write, whose fields are shaped by the phase (no ETA and no percentage for
+  listing, which has no honest denominator). The CLI picks the one sink that
+  renders it: an operator-facing display on stderr (automatic on a TTY unless
+  `-q`/`-v`, forced by `--progress`), the structured 30-s **INFO** `progress`
+  record otherwise, and nothing at all under `--no-progress`.
 - Exit codes: 0 success, 1 listing/output/checkpoint error, 2 config error/refusal,
   124 stopped by `--max-duration`, 130 SIGINT, 143 SIGTERM, plus exit 75
   `STUCK`/`EX_TEMPFAIL` for liveness failures. A partial is resumable only when
