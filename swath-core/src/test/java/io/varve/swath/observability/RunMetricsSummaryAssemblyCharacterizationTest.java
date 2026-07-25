@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -40,10 +41,16 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
      */
     private static final double AVG_IN_FLIGHT = 1.0;
 
-    /** {@link RunSummary}'s record components, in declaration order. FROZEN. */
+    /**
+     * {@link RunSummary}'s record components, in declaration order. FROZEN. {@code sessionDuration}
+     * was ADDED right after {@code duration} — the resolution for the elapsed-scope inconsistency
+     * between the live progress line (session-scoped, seeding included) and this record's
+     * `duration` (listing-scoped, a fresh run's clock starts AFTER seeding): moved deliberately here
+     * alongside that change, not re-captured.
+     */
     private static final List<String> EXPECTED_SUMMARY_FIELDS = List.of(
-            "runId", "objects", "duration", "strategy", "apiCalls", "costUsd", "outputFiles",
-            "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "timeToFirstStealMs",
+            "runId", "objects", "duration", "sessionDuration", "strategy", "apiCalls", "costUsd",
+            "outputFiles", "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "timeToFirstStealMs",
             "timeToPeakInFlightMs", "steals", "splits",
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
             "cpuSeconds", "cpuEfficiency", "overfetchRatio", "pageFillRatio", "emptySplitRatio",
@@ -75,6 +82,10 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(s.objects()).isEqualTo(910L);          // entries.emitted, incl. recordRecoveredObjects
         assertThat(s.keys()).isEqualTo(910L);             // keys mirrors objects
         assertThat(s.duration()).isEqualTo(Duration.ofSeconds(5));   // passed through verbatim
+        // No session-wide RunProgressReporter ever claimed this RunMetrics (the workload drives
+        // counters directly), so sessionDuration falls back to the listing duration verbatim rather
+        // than reading a garbage delta off an unset clock — see RunMetrics#sessionDuration(Duration).
+        assertThat(s.sessionDuration()).isEqualTo(Duration.ofSeconds(5));
         assertThat(s.strategy()).isEqualTo("WORK_STEALING");         // passed through verbatim
         assertThat(s.apiCalls()).isEqualTo(3L);           // the single WORK_STEALING series (production ordering)
         assertThat(s.costUsd()).isCloseTo(3 * 0.005 / 1_000.0, within(1e-12));
@@ -229,6 +240,40 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
             throw new IllegalStateException("worklist mutated under us");
         });
         assertThat(m.summary(Duration.ofSeconds(1), "s", 0L, 0L).slowRanges()).isEmpty();
+    }
+
+    /**
+     * The elapsed-scope split, on the exact figures the confirmed inconsistency was reported with: a
+     * live run's final progress frame read {@code 2m22s elapsed} while the summary line beneath it
+     * read {@code 3,270,132 objects in 1m43s} — the 39 s delta was the seed phase, which the
+     * session-wide {@link RunProgressReporter} covers but the listing clock ({@code duration},
+     * {@code RunMetrics#markRunStarted()}'s zero point) does not. {@code keysPerSecond} must stay
+     * keyed to {@code duration} (the listing clock) even though {@code sessionDuration} is now also
+     * on the record — a future edit that silently re-keys it to the larger, session figure would
+     * under-report throughput without any test noticing except this one.
+     */
+    @Test
+    void keysPerSecondStaysKeyedToTheListingClockNotTheSessionOne() throws Exception {
+        AtomicLong clock = new AtomicLong(0L);
+        RunMetrics m = new RunMetrics(new SimpleMeterRegistry(), clock::get);
+
+        try (RunProgressReporter reporter = RunProgressReporter.start(m, Duration.ofSeconds(30))) {
+            // Session start is captured HERE, at the CLI's pre-seed instant -- clock=0.
+            clock.addAndGet(Duration.ofSeconds(39).toNanos());   // the seed phase
+            m.markRunStarted();                                  // the listing clock's zero point
+            m.recordEntriesEmitted(3_270_132L);
+            clock.addAndGet(Duration.ofSeconds(103).toNanos());  // the listing phase
+
+            RunSummary s = m.summary(Duration.ofSeconds(103), "WORK_STEALING", 0L, 0L);
+
+            assertThat(s.duration()).isEqualTo(Duration.ofSeconds(103));
+            assertThat(s.sessionDuration())
+                    .as("39s of seeding folded back in -- the SAME 2m22s the live progress line reported")
+                    .isEqualTo(Duration.ofSeconds(142));
+            assertThat(s.keysPerSecond())
+                    .as("keyed to the 103s listing clock, never the 142s session one")
+                    .isCloseTo(3_270_132 / 103.0, within(1e-6));
+        }
     }
 
     @Test

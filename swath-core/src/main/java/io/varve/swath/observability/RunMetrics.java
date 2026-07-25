@@ -79,6 +79,15 @@ public final class RunMetrics {
     private final StuckErrorClassifier stuckClassifier = new StuckErrorClassifier();
     private final AtomicLong runId = new AtomicLong(-1L);
     private final AtomicLong runStartNanos = new AtomicLong();
+    // The whole-invocation session clock's zero point: set exactly once, when the OUTERMOST
+    // RunProgressReporter claims this run (the CLI's session-wide reporter, opened before seeding —
+    // see RunProgressReporter's own javadoc) -- never by a nested/joined start. `sessionClaimed`
+    // is a SEPARATE flag rather than a 0/negative sentinel on sessionStartNanos itself: nanoClock is
+    // a test seam (RunMetrics(MeterRegistry, LongSupplier)) that a deterministic test may legitimately
+    // start at 0, which a sentinel-on-the-timestamp scheme would misread as "never claimed" --
+    // see sessionDuration(Duration).
+    private final AtomicLong sessionStartNanos = new AtomicLong();
+    private final AtomicBoolean sessionClaimed = new AtomicBoolean();
     private final AtomicLong firstStealNanos = new AtomicLong(-1L);
     private final AtomicLong peakInFlightNanos = new AtomicLong(-1L);
     // Time-weighted average in-flight gauge — peak_in_flight saturates/blinds at the concurrency
@@ -1818,7 +1827,15 @@ public final class RunMetrics {
      * ticker with its own clock and its own windowed-rate baseline.
      */
     boolean claimProgressReporter(RunProgressReporter reporter) {
-        return progressReporter.compareAndSet(null, reporter);
+        boolean claimed = progressReporter.compareAndSet(null, reporter);
+        if (claimed) {
+            // This IS session start: the first (outermost) reporter opens before a fresh run's seed
+            // step, so its claim instant is the same session zero point its own elapsed-since-start
+            // ticks already measure -- see sessionDuration(Duration).
+            sessionStartNanos.set(nanoClock.getAsLong());
+            sessionClaimed.set(true);
+        }
+        return claimed;
     }
 
     /** Releases the reporter installed by {@link #claimProgressReporter}; a no-op for any other. */
@@ -1993,6 +2010,7 @@ public final class RunMetrics {
                 runId.get(),
                 keyCount,
                 duration,
+                sessionDuration(duration),
                 strategy,
                 apiCallCount,
                 estimatedListCost(apiCallCount),
@@ -2251,6 +2269,21 @@ public final class RunMetrics {
             return -1L;
         }
         return Math.max(0L, Duration.ofNanos(event - started).toMillis());
+    }
+
+    /**
+     * The whole-invocation session clock -- {@code listingDuration} (the {@code duration} param
+     * every other caller of {@link #summary} passes) with seeding folded back in, when there was a
+     * session-wide reporter around to measure it. Falls back to {@code listingDuration} itself (the
+     * two collapse to one figure, never a garbage delta) when {@link #sessionStartNanos} was never
+     * claimed -- a pre-seed early exit, or a caller (most unit tests) that builds a summary without
+     * ever starting a {@link RunProgressReporter}.
+     */
+    private Duration sessionDuration(Duration listingDuration) {
+        if (!sessionClaimed.get()) {
+            return listingDuration;
+        }
+        return Duration.ofNanos(Math.max(0L, nanoClock.getAsLong() - sessionStartNanos.get()));
     }
 
     /** CPU seconds consumed by this run (delta from run start), or {@code -1} if unavailable. */

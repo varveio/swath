@@ -191,6 +191,18 @@ rows the published `manifest.json` counts. Everything measured against this proc
 its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`, `overfetch_ratio`) excludes them: the
 recovered rows cost this run neither a second nor a LIST call.
 
+**`duration_ms` is the LISTING clock, not the whole session.** A fresh run's seed step (probing the
+bucket's shape to tile the initial worklist) runs BEFORE this clock's zero point, so `duration_ms` —
+and everything divided by it, `keys_per_sec` included — excludes seeding entirely; it is the honest
+throughput denominator, since seeding fetches no object. The JSON report's top-level
+`session_duration_ms` is the OTHER clock: the whole CLI invocation, seeding included — the same span
+the live progress line's `elapsed` already reports. The two agree exactly on a resumed run (seeding
+never re-runs on a normal resume) or any run whose seed step was cheap; a fresh run against a
+deeply-nested or hinted bucket is where they diverge, sometimes by tens of seconds. Neither figure is
+wrong — read `duration_ms` for throughput, `session_duration_ms` for "how long did the operator
+actually wait" — see the end-of-run summary block below, which prints both, clearly labeled, exactly
+when they diverge materially.
+
 The JSON report's `engine` block additionally carries the two ramp-up timings the
 `list_run_diagnostics` line prints — `time_to_first_steal_ms` and `time_to_peak_in_flight_ms`
 (milliseconds from run start; `null` when the event never happened) — and `cost.basis` names the
@@ -279,6 +291,7 @@ downstream parser should key off, not "does `meters[]` exist".
   "started_at": "2026-07-01T00:00:00Z",
   "as_of": "2026-07-01T00:00:25Z",
   "duration_ms": 25731,
+  "session_duration_ms": 25731,
   "objects": 109858,
   "config": {
     "target": "s3://my-bucket", "region": "us-east-2", "format": "parquet",

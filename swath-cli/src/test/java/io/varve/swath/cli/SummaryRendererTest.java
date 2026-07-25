@@ -141,6 +141,44 @@ final class SummaryRendererTest {
     }
 
     @Test
+    void materialSeedRendersBothTheListingFigureAndTheSessionTotal() {
+        RunSummary summary = summaryWithDurations(Duration.ofSeconds(103), Duration.ofSeconds(142));
+
+        List<String> lines = SummaryRenderer.lines(AUTO, summary, diagnostics(), COMPLETED);
+
+        assertThat(lines.get(0))
+                .as("keys/s sits right after the listing figure, so the rate's denominator is "
+                        + "never ambiguous between the two elapsed numbers")
+                .contains("1,500 objects in 1m43s listing").contains("keys/s")
+                .contains("2m22s total");
+    }
+
+    @Test
+    void negligibleSeedKeepsTheSingleFigureLine() {
+        RunSummary summary = summaryWithDurations(
+                Duration.ofSeconds(103), Duration.ofSeconds(103).plusMillis(500));
+
+        List<String> lines = SummaryRenderer.lines(AUTO, summary, diagnostics(), COMPLETED);
+
+        assertThat(lines.get(0)).contains("1,500 objects in 1m43s")
+                .doesNotContain("listing").doesNotContain("total");
+    }
+
+    @Test
+    void theSessionDeltaThresholdIsExclusiveSoAnExactlyOnTheBoundaryDeltaStaysOneFigure() {
+        RunSummary atThreshold = summaryWithDurations(
+                Duration.ofSeconds(100), Duration.ofSeconds(100).plus(SummaryRenderer.SESSION_DELTA_MIN));
+        RunSummary justOver = summaryWithDurations(
+                Duration.ofSeconds(100),
+                Duration.ofSeconds(100).plus(SummaryRenderer.SESSION_DELTA_MIN).plusMillis(1));
+
+        assertThat(SummaryRenderer.lines(AUTO, atThreshold, diagnostics(), COMPLETED).get(0))
+                .doesNotContain("listing").doesNotContain("total");
+        assertThat(SummaryRenderer.lines(AUTO, justOver, diagnostics(), COMPLETED).get(0))
+                .contains("listing").contains("total");
+    }
+
+    @Test
     void faultsLineRendersEveryCounterOnceAnyIsNonZero() {
         List<String> lines = render(AUTO, LONG, metrics -> {
             metrics.recordThrottleEvent(ThrottleType.SLOWDOWN);
@@ -376,6 +414,25 @@ final class SummaryRendererTest {
 
     private static RunSummary summary(Duration duration) {
         return summary(duration, 0L, 0L);
+    }
+
+    /**
+     * A {@link RunSummary} with an explicit {@code duration} (listing)/{@code sessionDuration}
+     * split, for the headline's material-vs-negligible-seed threshold tests — every other field is
+     * a placeholder, since only those two clocks (plus {@code objects}/{@code keysPerSecond}) drive
+     * what {@link SummaryRenderer#lines} renders on the headline.
+     */
+    private static RunSummary summaryWithDurations(Duration listing, Duration session) {
+        return new RunSummary(
+                1L, 1_500L, listing, session, WORK_STEALING, 0L, 0.0,
+                0L, 0L, 1_500L, 0L, 0L, 0.0, -1L, -1L, 0L, 0L, 0L,
+                50.0, 0.0, -1L, -1L, -1.0, -1.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), null);
+    }
+
+    /** A clean, zero-fault diagnostics snapshot — the faults line stays absent either way. */
+    private static RunMetrics.RunDiagnostics diagnostics() {
+        return new RunMetrics(new SimpleMeterRegistry()).diagnostics(Duration.ofSeconds(1));
     }
 
     private static RunSummary summary(Duration duration, long outputFiles, long bytes) {

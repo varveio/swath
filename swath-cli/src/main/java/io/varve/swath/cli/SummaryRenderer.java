@@ -55,6 +55,15 @@ final class SummaryRenderer implements RunSummarySink {
     static final Duration AUTO_MIN_ELAPSED = Duration.ofMillis(1_500);
 
     /**
+     * How far {@link RunSummary#sessionDuration()} must exceed {@link RunSummary#duration()}
+     * before the headline earns a second figure. {@code duration} is the listing clock (a fresh
+     * run's zero point is set AFTER seeding); {@code sessionDuration} is the whole CLI invocation,
+     * seeding included. A negligible seed (or a resumed run, where the two are always equal) keeps
+     * the one-figure line rather than printing two near-identical numbers a second apart.
+     */
+    static final Duration SESSION_DELTA_MIN = Duration.ofSeconds(1);
+
+    /**
      * The stops a {@code swath resume} genuinely picks up from — interruptions of a run that was
      * otherwise going fine. Deliberately an allow-list: a stop reason added later carries no resume
      * invitation until someone has confirmed a resume actually works for it.
@@ -181,8 +190,7 @@ final class SummaryRenderer implements RunSummarySink {
             // exit at least got as far as seeding.
             return lines;
         }
-        lines.add(count(summary.objects()) + " objects in " + elapsed(summary.duration())
-                + SEP + count(Math.round(summary.keysPerSecond())) + " keys/s");
+        lines.add(headline(summary));
         lines.add(count(summary.apiCalls()) + " API calls"
                 + SEP + rate(summary.apiCallsPer1kObjects()) + " per 1k objects"
                 + SEP + "in flight avg " + rate(summary.avgInFlight())
@@ -206,6 +214,25 @@ final class SummaryRenderer implements RunSummarySink {
             lines.add(output);
         }
         return lines;
+    }
+
+    /**
+     * The block's headline: objects, the LISTING clock {@code keys_per_sec} is keyed to, and the
+     * rate itself — plus, when a fresh run's seed step made the whole session materially longer than
+     * that (§ {@link #SESSION_DELTA_MIN}), the session total too, so the two adjacent numbers an
+     * operator sees (this line and the live progress line, which is session-scoped) never disagree
+     * without explanation. {@code keys/s} sits directly after the {@code listing} figure — not the
+     * {@code total} one — so which of the two the rate divides by is never left for the reader to
+     * guess.
+     */
+    private static String headline(RunSummary summary) {
+        Duration listing = summary.duration();
+        Duration session = summary.sessionDuration();
+        boolean materialSeed = session.minus(listing).compareTo(SESSION_DELTA_MIN) > 0;
+        String line = count(summary.objects()) + " objects in " + elapsed(listing)
+                + (materialSeed ? " listing" : "")
+                + SEP + count(Math.round(summary.keysPerSecond())) + " keys/s";
+        return materialSeed ? line + SEP + elapsed(session) + " total" : line;
     }
 
     /**

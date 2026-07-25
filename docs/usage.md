@@ -795,6 +795,23 @@ When a run ends, swath prints a short summary block to **stderr** (stdout stays 
   12 files · 84.0 MB written · peak RSS 512.0 MB
 ```
 
+The headline's elapsed figure is the **listing clock** — the same one `keys/s` divides
+by — which starts only AFTER a fresh run's seed step (probing the bucket's shape to tile the
+initial worklist). On a run whose seed step took a while, the headline instead carries a second
+figure, the whole session (seeding included — the same span the live progress line already
+reports), clearly labeled so which one the rate is keyed to is never ambiguous:
+
+```
+  3,270,132 objects in 1m43s listing · 31,750 keys/s · 2m22s total
+```
+
+That second figure only appears when it would actually differ from the listing one by more than
+about a second (`SummaryRenderer.SESSION_DELTA_MIN`) — a resumed run, or any run whose seed step was
+cheap, keeps the single-figure form above rather than printing two near-identical numbers. `--report`
+carries both unconditionally: `duration_ms` (listing, unchanged) and the additive `session_duration_ms`
+(the whole invocation) — see
+[`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end).
+
 A **faults line** — `throttled N · retried M · errors K` — is inserted only when one of those
 counts is non-zero, so its presence is itself the signal: `throttled` counts real S3 backpressure
 (503 SlowDown / transient 5xx), `retried` counts client-side transients that were retried and

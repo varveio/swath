@@ -46,8 +46,11 @@ final class JsonRunSummaryWriterTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static RunSummary summary() {
+        // sessionDuration (31s) deliberately differs from duration (25s) -- the listing-scoped
+        // clock -- so the round-trip test below exercises BOTH the unchanged duration_ms and the
+        // new additive session_duration_ms field, rather than a value where they'd coincide.
         return new RunSummary(
-                42L, 1000L, Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, Duration.ofSeconds(25), Duration.ofSeconds(31), "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
@@ -110,7 +113,10 @@ final class JsonRunSummaryWriterTest {
         assertThat(root.get("stop_reason").asText())
                 .as("completed:true ⇔ stop_reason=completed (schema v2)").isEqualTo("completed");
         assertThat(root.get("started_at").asText()).isEqualTo("2026-07-01T00:00:00Z");
+        // duration_ms stays LISTING-scoped (unchanged meaning) -- session_duration_ms is the
+        // additive, whole-invocation figure with seeding folded back in (RunSummary's javadoc).
         assertThat(root.get("duration_ms").asLong()).isEqualTo(25_000L);
+        assertThat(root.get("session_duration_ms").asLong()).isEqualTo(31_000L);
         assertThat(root.get("objects").asLong()).isEqualTo(1000L);
 
         JsonNode config = root.get("config");
@@ -500,7 +506,7 @@ final class JsonRunSummaryWriterTest {
         // cpu_seconds/cpu_efficiency (double); JSON renders these as null, not -1 (the log-line
         // sentinel).
         RunSummary summary = new RunSummary(
-                42L, 1000L, Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, Duration.ofSeconds(25), Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, -1L, -1L, -1.0, -1.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), null);
@@ -1009,7 +1015,7 @@ final class JsonRunSummaryWriterTest {
 
     private static RunSummary summaryWithDuration(Duration duration) {
         return new RunSummary(
-                42L, 1000L, duration, "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, duration, duration, "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,

@@ -450,6 +450,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // produced the file, and regardless of whether a later write attempt silently failed.
         root.put("as_of", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
         root.put("duration_ms", summary.duration().toMillis());
+        // The whole-invocation session clock, seeding included -- the SAME span the live progress
+        // line reports, unlike duration_ms above (the listing-only clock keys_per_sec divides by,
+        // which keeps its meaning unchanged here). Additive under schema v2 -- NOT a v3 bump.
+        root.put("session_duration_ms", summary.sessionDuration().toMillis());
         root.put("objects", summary.objects());
 
         RunConfig rc = config.runConfig();
