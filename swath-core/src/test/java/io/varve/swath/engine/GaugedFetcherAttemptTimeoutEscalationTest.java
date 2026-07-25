@@ -245,4 +245,41 @@ final class GaugedFetcherAttemptTimeoutEscalationTest {
                         + "never emits an escalation counter").isEqualTo(2.0);
         assertThat(steal(metrics, "TRANSIENT", "page_completed_at_1")).isEqualTo(1.0);
     }
+
+    /**
+     * REGRESSION (mirrors {@code TransientRetryFetcherTest}'s identical case): a request that
+     * ARRIVES already carrying an escalation level (level 2 here) must never be retried at a LOWER
+     * level than it came in at. The old bug derived the retry level purely from this loop's own
+     * local streak (which restarts at 0 on every {@code fetchPage} call), so the first
+     * ATTEMPT_TIMEOUT would step the request from its incoming level 2 DOWN to level 1 — halving
+     * the budget on the very next attempt. Fixed: the incoming level is a floor, never a starting
+     * point.
+     */
+    @Test
+    @Timeout(30)
+    void escalation_neverStepsAnIncomingPreEscalatedLevelDown() throws Exception {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        List<Integer> seenLevels = new ArrayList<>();
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(List.of(b("data/a")))
+                .interceptor((req, idx, page) -> {
+                    seenLevels.add(req.attemptTimeoutEscalationLevel());
+                    // Fail exactly once (whatever level it lands at) so the loop retries; that retry
+                    // is where the old bug would drop the incoming level 2 down to 1.
+                    if (idx == 0) {
+                        throw ThrottleException.attemptTimeout("forced retry to exercise the floor");
+                    }
+                    return page;
+                })
+                .build();
+        GaugedFetcher fetcher = workerFetcher(delegate, metrics, new CancellationToken());
+
+        ListPage page = fetcher.fetchPage(
+                PageRequest.objects(new byte[0], null, 1000).withAttemptTimeoutEscalationLevel(2));
+
+        assertThat(page).isNotNull();
+        assertThat(seenLevels)
+                .as("both attempts stay AT LEAST the incoming level 2 -- the retry must never see level 1")
+                .containsExactly(2, 2);
+    }
 }

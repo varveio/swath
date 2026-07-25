@@ -159,10 +159,16 @@ public final class TransientRetryFetcher implements PageFetcher {
         // RunMetrics#recordTransientRetryCapExhaustion.
         int attemptTimeoutFaults = 0;
         int votingFaults = 0;
+        // A floor, never a starting point: if req already arrived carrying an escalation level (a
+        // caller retrying an already-escalated logical fetch), the locally-derived level below must
+        // never step BELOW it -- escalation only ever buys room (PageRequest#withAttemptTimeoutEscalationLevel's
+        // javadoc), so a request entering at level 2 must not be handed a level-1 (halved) budget on
+        // its very next attempt just because this loop's own streak restarted at 0.
+        int incomingLevel = req.attemptTimeoutEscalationLevel();
         while (true) {
             throwIfRunCancelled();
-            int level = escalationLevel(consecutiveAttemptTimeouts);
-            PageRequest attemptReq = level == 0 ? req : req.withAttemptTimeoutEscalationLevel(level);
+            int level = Math.max(incomingLevel, escalationLevel(consecutiveAttemptTimeouts));
+            PageRequest attemptReq = level == incomingLevel ? req : req.withAttemptTimeoutEscalationLevel(level);
             try {
                 ListPage page = delegate.fetchPage(attemptReq);
                 if (level > 0 && metrics != null) {
@@ -175,7 +181,7 @@ public final class TransientRetryFetcher implements PageFetcher {
                 if (te.kind() == ThrottleException.Kind.ATTEMPT_TIMEOUT) {
                     consecutiveAttemptTimeouts++;
                     attemptTimeoutFaults++;
-                    int nextLevel = escalationLevel(consecutiveAttemptTimeouts);
+                    int nextLevel = Math.max(incomingLevel, escalationLevel(consecutiveAttemptTimeouts));
                     if (nextLevel > 0 && metrics != null) {
                         metrics.recordStealReason("TRANSIENT", "attempt_timeout_escalated_" + nextLevel);
                     }
