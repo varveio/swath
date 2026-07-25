@@ -1653,16 +1653,19 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * {@code --stats}, instead of being reported by the JSON alone. Emitted even when no sidecar
      * was configured, since a stdout run has no report to read instead.
      *
-     * <p>A resume REFUSAL is the one early exit that stays silent: nothing ran, so the block would
-     * be zeros under a marker, and the refusal throws an {@code InvalidArgsException} whose {@code
-     * swath: …} line already names the problem AND the fix. Every other early exit — a seed
-     * failure, a seed-time {@code STUCK}, a completed no-op resume — has a disposition worth
-     * reporting (the completed one only under {@code --stats}, since a zero-length clean run earns
-     * nothing automatically).
+     * <p>A resume REFUSAL is the one early exit the AUTO gate does not earn: nothing ran, and the
+     * refusal throws an {@code InvalidArgsException} whose {@code swath: …} line already names the
+     * problem AND the fix, so an unrequested block would add only a marker. An explicitly passed
+     * {@code --stats} is a different question — it promises a record of every terminal path, and
+     * the sidecar writes the refusal for a machine consumer either way — so it reaches the sink
+     * (as the one-line disposition {@link SummaryRenderer} renders for a run that never started).
+     * Every other early exit — a seed failure, a seed-time {@code STUCK}, a completed no-op resume
+     * — has a disposition worth reporting (the completed one only under {@code --stats}, since a
+     * zero-length clean run earns nothing automatically).
      */
-    private static void emitEarlyExitBlock(RunContext ctx, RunSummary summary,
-                                           JsonRunSummaryWriter.TerminalStatus status) {
-        if (status.reason() == StopReason.RESUME_REFUSED) {
+    private void emitEarlyExitBlock(RunContext ctx, RunSummary summary,
+                                    JsonRunSummaryWriter.TerminalStatus status) {
+        if (status.reason() == StopReason.RESUME_REFUSED && !Boolean.TRUE.equals(output.stats)) {
             return;
         }
         ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(Duration.ZERO), status);

@@ -530,11 +530,20 @@ public final class S3PageFetcher implements PageFetcher {
      * behavior, not a fault), so it belongs in the {@code -vv} tier with the other retried
      * transients rather than in the default WARN one. What it must NOT do is take its signal down
      * with it, so every slow probe — not just the sampled ones the line survives to describe —
-     * counts an engagement counter, plus the phase that dominated it ({@code connect_acquire} =
-     * connection-pool/TLS starvation vs {@code ttfb} = the store itself being slow). Those two
-     * facts are what an aggregate {@code call_class} latency distribution cannot separate;
-     * the exemplar's request identity (prefix/{@code start_after}) stays log-only, since an
-     * unbounded key as a metric tag is a cardinality explosion.
+     * counts a {@code PROBE.slow_<call_class>} engagement counter.
+     *
+     * <p><b>No dominant-phase counter.</b> Which half of the call was slow (connection-pool/TLS
+     * starvation vs the store being slow to first byte) is NOT classified here: {@code
+     * connect_acquire} and {@code ttfb} are independent best-effort SDK measurements that may
+     * partially overlap — the SDK does not say whether time-to-first-byte is measured from
+     * request-issue or from after the connection is already leased — so neither can be read as a
+     * share of the other, and any dominance test between them would be a systematically wrong
+     * label (see {@code docs/metrics-and-observability.md}'s {@code swath.fetch.latency.phase}
+     * row). Post-hoc reads the split off the per-call-class {@code
+     * swath.fetch.latency.phase{call_class,phase}} percentiles instead, with this call's own two
+     * raw phase timings on the exemplar line below. The exemplar's request identity
+     * (prefix/{@code start_after}) stays log-only, since an unbounded key as a metric tag is a
+     * cardinality explosion.
      *
      * @param forceLog {@code true} on any exception path (always a candidate regardless of elapsed);
      *                 {@code false} on the success path (gated by {@link #SLOW_PROBE_THRESHOLD_MS})
@@ -549,7 +558,6 @@ public final class S3PageFetcher implements PageFetcher {
             return;
         }
         metrics.recordStealReason("PROBE", "slow_" + callClass);
-        metrics.recordStealReason("PROBE", "slow_phase_" + dominantPhase(phaseCapture));
         long n = slowProbeExemplarCount.incrementAndGet();
         if (n > SLOW_PROBE_LOG_FIRST_N && Long.bitCount(n) != 1) {
             return;   // rate-limited: first N unconditionally, then only powers of two
@@ -564,20 +572,5 @@ public final class S3PageFetcher implements PageFetcher {
                 phaseCapture.connectAcquireNanos() < 0 ? -1 : phaseCapture.connectAcquireNanos() / 1_000_000L,
                 phaseCapture.timeToFirstByteNanos() < 0 ? -1 : phaseCapture.timeToFirstByteNanos() / 1_000_000L,
                 budgetMs, req.attemptTimeoutEscalationLevel(), n);
-    }
-
-    /**
-     * Which phase of a slow probe took the longer share — the cheap classification signal behind
-     * {@code PROBE.slow_phase_*}. {@code unknown} when the SDK published no phase timings for the
-     * call (an early failure, or an execution-attribute path that never reached the wire), so a
-     * missing measurement is never silently attributed to either phase.
-     */
-    private static String dominantPhase(S3CallClassLatencyPublisher.PhaseCapture phaseCapture) {
-        long connectAcquire = phaseCapture.connectAcquireNanos();
-        long timeToFirstByte = phaseCapture.timeToFirstByteNanos();
-        if (connectAcquire < 0 && timeToFirstByte < 0) {
-            return "unknown";
-        }
-        return connectAcquire > timeToFirstByte ? "connect_acquire" : "ttfb";
     }
 }

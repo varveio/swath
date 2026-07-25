@@ -8,6 +8,7 @@ package io.varve.swath.store.s3;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.error.ThrottleException;
@@ -19,6 +20,9 @@ import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
+import software.amazon.awssdk.core.metrics.CoreMetric;
+import software.amazon.awssdk.http.HttpMetric;
+import software.amazon.awssdk.metrics.MetricCollector;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 
@@ -173,6 +177,83 @@ class S3PageFetcherCallClassTest {
         // both phases stay the -1 unobserved sentinel and are correctly skipped, not fabricated.
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE));
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_TTFB));
+    }
+
+    /**
+     * The slow-probe engagement counter says THAT a probe was slow and for which call class — it
+     * deliberately does NOT say which phase dominated. {@code connect_acquire} and {@code ttfb} are
+     * independent best-effort SDK measurements that may partially overlap (the SDK never states
+     * whether time-to-first-byte starts at request-issue or after the connection is leased), so a
+     * dominance test between them is not a valid share comparison. This is the case that makes the
+     * point: 900 ms of pool-checkout wait reported alongside a 1000 ms time-to-first-byte —
+     * pool-dominated if TTFB is inclusive, store-dominated if the two are disjoint, and nothing in
+     * the SDK's contract says which. Exactly one {@code PROBE} counter fires; the two raw timings
+     * stay readable as their own {@code swath.fetch.latency.phase} series.
+     */
+    @Test
+    void aSlowProbeCountsEngagementByCallClassAndNeverClassifiesADominantPhase() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        S3Client client = FakeS3Client.respondingWith(request -> {
+            publishPhaseTimings(Duration.ofMillis(900), Duration.ofMillis(1000));
+            throw ApiCallAttemptTimeoutException.create(5000);
+        });
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        assertThatThrownBy(() -> fetcher.fetchPage(PageRequest.objects(null, null, 1)))
+                .isInstanceOf(ThrottleException.class);
+
+        assertThat(registry.find("swath.steal_reason").tag("outcome", "PROBE").counters())
+                .as("the call-class engagement counter is the only PROBE counter a slow probe fires")
+                .extracting(c -> c.getId().getTag("reason"))
+                .containsExactly("slow_pivot_probe");
+        List<RunSummary.CallClassLatencySummary> rows =
+                metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency();
+        assertThat(rows)
+                .as("both raw phase timings survive as independent per-call-class series")
+                .anySatisfy(r -> {
+                    assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_PIVOT_PROBE);
+                    assertThat(r.phase()).isEqualTo(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE);
+                    assertThat(r.p50Ms()).isCloseTo(900.0, within(50.0));
+                })
+                .anySatisfy(r -> {
+                    assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_PIVOT_PROBE);
+                    assertThat(r.phase()).isEqualTo(RunMetrics.LATENCY_PHASE_TTFB);
+                    assertThat(r.p50Ms()).isCloseTo(1000.0, within(50.0));
+                });
+    }
+
+    /**
+     * The same single-counter shape when the SDK published no phase timings at all (an early
+     * failure that never reached the wire) — a missing measurement produces no extra counter, so
+     * post-analysis never sees a phase-shaped signal it cannot trust.
+     */
+    @Test
+    void aSlowProbeWithNoSdkPhaseTimingsFiresTheSameSingleCounter() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        S3Client throwing = FakeS3Client.throwing(ApiCallAttemptTimeoutException.create(5000));
+        S3PageFetcher fetcher = new S3PageFetcher(throwing, "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        assertThatThrownBy(() -> fetcher.fetchPage(PageRequest.objectsDelimited(null, DELIM, null, 1000)))
+                .isInstanceOf(ThrottleException.class);
+
+        assertThat(registry.find("swath.steal_reason").tag("outcome", "PROBE").counters())
+                .extracting(c -> c.getId().getTag("reason"))
+                .containsExactly("slow_structure_probe");
+    }
+
+    /**
+     * Reports both SDK phase metrics into the capture the in-flight {@code fetchPage} started on
+     * this thread — the same synchronous {@code publish()} an {@code ApacheHttpClient} call makes
+     * before returning to the caller (see {@link S3CallClassLatencyPublisher}'s javadoc).
+     */
+    private static void publishPhaseTimings(Duration connectAcquire, Duration timeToFirstByte) {
+        MetricCollector root = MetricCollector.create("ApiCall");
+        MetricCollector attempt = root.createChild("ApiCallAttempt");
+        attempt.reportMetric(HttpMetric.CONCURRENCY_ACQUIRE_DURATION, connectAcquire);
+        attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, timeToFirstByte);
+        new S3CallClassLatencyPublisher().publish(root.collect());
     }
 
     /**

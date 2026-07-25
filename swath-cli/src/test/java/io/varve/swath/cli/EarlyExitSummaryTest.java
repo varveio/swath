@@ -30,6 +30,7 @@ import io.varve.swath.error.ThrottleException;
 import io.varve.swath.error.UnauthorizedException;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
+import io.varve.swath.observability.RunSummary;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -223,12 +224,12 @@ final class EarlyExitSummaryTest {
     }
 
     /**
-     * The one early exit that stays silent: a resume refusal never ran, so the block would be
-     * zeros under a marker — and the refusal's own {@code swath: …} line already names both the
-     * problem and the fix.
+     * The one early exit the auto gate does not earn: a resume refusal never ran, and its own
+     * {@code swath: …} line already names both the problem and the fix, so an unrequested block
+     * would add nothing but a marker.
      */
     @Test
-    void resumeRefusalStaysSilentOnTheSummarySink(@TempDir Path dir) throws Exception {
+    void resumeRefusalStaysSilentOnTheSummarySinkUnderAuto(@TempDir Path dir) throws Exception {
         Files.createDirectories(dir);
         ListCommand cmd = new ListCommand();
         cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
@@ -244,6 +245,40 @@ final class EarlyExitSummaryTest {
         assertThat(dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME))
                 .as("the sidecar still records the refusal for a machine consumer")
                 .exists();
+    }
+
+    /**
+     * An explicitly passed {@code --stats} forces the block past every gate, and a refusal is a
+     * terminal path like any other — leaving it out would make the two surfaces disagree, since the
+     * sidecar records the refusal regardless. What it renders is a one-line disposition: the run
+     * never started, so a statistics body would be zeros describing nothing.
+     */
+    @Test
+    void resumeRefusalReachesTheSummarySinkUnderAnExplicitStatsFlag(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        cmd.output.stats = true;
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
+                ctx, 7L, false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+
+        assertThat(emitted).hasSize(1);
+        assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.RESUME_REFUSED);
+        SummaryRenderer.Preferences prefs =
+                new SummaryRenderer.Preferences(true, false, true, true, dir.toString(), false);
+        RunSummary summary = ctx.metrics().summary(Duration.ZERO, "WORK_STEALING", 0L, 0L);
+        assertThat(SummaryRenderer.shouldRender(prefs, summary, emitted.getFirst()))
+                .as("the explicit-flag branch admits the refusal like any other terminal path")
+                .isTrue();
+        assertThat(SummaryRenderer.lines(prefs, summary,
+                ctx.metrics().diagnostics(Duration.ZERO), emitted.getFirst()))
+                .as("the disposition is the whole record -- no zeroed statistics body")
+                .containsExactly("INCOMPLETE (resume_refused)");
     }
 
     private static S3Config anonymousConfig() {

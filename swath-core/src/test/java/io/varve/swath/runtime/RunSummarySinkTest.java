@@ -151,9 +151,19 @@ final class RunSummarySinkTest {
     }
 
     /**
+     * How long the sink dwells before returning, so the sidecar's {@code close()} cannot land in
+     * the same millisecond as the emit. A re-snapshotting sidecar would read the clock only after
+     * the sink returned and so must report a strictly larger {@code duration_ms}; one that writes
+     * the pinned pair reports the sink's value whatever the sink did with the time.
+     */
+    private static final Duration SINK_DWELL = Duration.ofMillis(100);
+
+    /**
      * The unwound path takes ONE snapshot: the block and the sidecar's {@code completed:false}
      * partial report the same {@code duration_ms} and the same {@code stop_reason}, rather than
-     * each reading the counters a moment apart.
+     * each reading the counters a moment apart. The sink dwells {@link #SINK_DWELL} to make the two
+     * readings separable — without it, both land in the same millisecond and the equality holds
+     * even when the surfaces genuinely snapshot twice.
      */
     @Test
     @Timeout(30)
@@ -168,8 +178,14 @@ final class RunSummarySinkTest {
             List<Node> seeds = store.loadResumable(run.id(), false);
 
             RunContext ctx = RunContext.create();
-            ctx.metrics().setSummarySink((summary, diagnostics, status) ->
-                    emissions.add(new Emission(summary, diagnostics, status)));
+            ctx.metrics().setSummarySink((summary, diagnostics, status) -> {
+                emissions.add(new Emission(summary, diagnostics, status));
+                try {
+                    Thread.sleep(SINK_DWELL);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
             ctx.cancellation().cancel(StopReason.SIGNAL);
 
             assertThatThrownBy(() -> new ListRunner().runWorkStealing(

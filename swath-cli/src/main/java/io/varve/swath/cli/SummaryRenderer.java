@@ -167,6 +167,13 @@ final class SummaryRenderer implements RunSummarySink {
         if (disposition != null) {
             lines.add(disposition);
         }
+        if (status.reason() == StopReason.RESUME_REFUSED) {
+            // A refused resume never started the engine, so the disposition IS the whole record: a
+            // statistics body would be a block of zeros claiming to describe a run that never
+            // happened. This is the only stop reason with nothing behind it -- every other early
+            // exit at least got as far as seeding.
+            return lines;
+        }
         lines.add(count(summary.objects()) + " objects in " + elapsed(summary.duration())
                 + SEP + count(Math.round(summary.keysPerSecond())) + " keys/s");
         lines.add(count(summary.apiCalls()) + " API calls"
