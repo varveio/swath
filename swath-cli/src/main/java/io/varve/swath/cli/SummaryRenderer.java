@@ -13,8 +13,10 @@ import io.varve.swath.observability.StopReason;
 import java.io.PrintStream;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +48,15 @@ final class SummaryRenderer implements RunSummarySink {
      * silent (git's delayed-progress threshold is the nearest anchor at 2 s).
      */
     static final Duration AUTO_MIN_ELAPSED = Duration.ofMillis(1_500);
+
+    /**
+     * The stops a {@code swath resume} genuinely picks up from — interruptions of a run that was
+     * otherwise going fine. Deliberately an allow-list: a stop reason added later carries no resume
+     * invitation until someone has confirmed a resume actually works for it.
+     */
+    private static final Set<StopReason> RESUMABLE_STOPS = EnumSet.of(
+            StopReason.SIGNAL, StopReason.MAX_DURATION, StopReason.MAX_DURATION_NO_PROGRESS,
+            StopReason.STUCK);
 
     /** Two-space indent, so the block reads as one unit distinct from any log or echo line. */
     private static final String INDENT = "  ";
@@ -188,11 +199,13 @@ final class SummaryRenderer implements RunSummarySink {
      * records, and a resume invitation when this run left something to resume) for a run that
      * stopped short, neutral wording for a broken pipe, and nothing at all for a clean run.
      *
-     * <p>A crash gets the marker but never the invitation. A signal, a timebox and a stuck run are
-     * all interruptions of a run that was otherwise going fine, so resuming picks up where it left
-     * off; a crash is a deterministic in-process failure (a denied bucket, a corrupt segment) that
-     * a resume will simply hit again, and inviting one would be advice that wastes the operator's
-     * time.
+     * <p>A crash and a seed failure get the marker but never the invitation. A signal, a timebox
+     * and a stuck run — including a seed-time {@code STUCK}, which commits no nodes and is
+     * re-seeded by the next resume — are all interruptions of a run that was otherwise going fine,
+     * so resuming picks up where it left off. A crash is a deterministic in-process failure (a
+     * corrupt segment) that a resume will simply hit again, and a seed failure (a denied or missing
+     * bucket) marks the run fatal, so a resume would be REFUSED outright; inviting either is advice
+     * that wastes the operator's time.
      */
     private static String disposition(Preferences prefs, JsonRunSummaryWriter.TerminalStatus status) {
         if (isBrokenPipe(status)) {
@@ -202,7 +215,7 @@ final class SummaryRenderer implements RunSummarySink {
             return null;
         }
         String marker = "INCOMPLETE (" + status.reason().wireName() + ")";
-        return prefs.resumeDestination() == null || status.reason() == StopReason.CRASH
+        return prefs.resumeDestination() == null || !RESUMABLE_STOPS.contains(status.reason())
                 ? marker
                 : marker + " — resume: swath resume " + prefs.resumeDestination();
     }

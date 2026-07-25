@@ -588,7 +588,8 @@ though the checkpoint is gone.
 #### Global flags (`-v`/`-q`/`--color`, applies to every command)
 
 `-v`, `-q`, and `--color` are accepted **before or after** the verb — both
-`swath -v list …` and `swath list -v …` work.
+`swath -v list …` and `swath list -v …` work. Occurrences on the two sides add up, so
+`swath -v list … -v` is `-vv` (DEBUG), exactly as if you had written it on one side.
 
 | Flag | Level |
 | --- | --- |
@@ -749,8 +750,10 @@ counts is non-zero, so its presence is itself the signal: `throttled` counts rea
 (503 SlowDown / transient 5xx), `retried` counts client-side transients that were retried and
 recovered, and the two are deliberately never folded together. A run that stopped short leads with
 `INCOMPLETE (<reason>)`, plus `— resume: swath resume <dir>` when the run left something resumable
-and resuming could actually help — a crash is a deterministic failure a resume would hit again, so
-it gets the marker without the invitation.
+and resuming could actually help — a crash is a deterministic failure a resume would hit again, and
+a seed failure marks the run so a resume is refused outright, so both get the marker without the
+invitation. Runs that stop before the engine starts (a failed seed probe, for instance) get the
+block too, from the same numbers the report records.
 A run stopped by a closed downstream (`swath list | head`) is not an incident: it prints nothing by
 default, and reads `stopped early — downstream closed` if you asked for the block explicitly.
 

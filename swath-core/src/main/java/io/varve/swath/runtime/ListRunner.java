@@ -791,8 +791,10 @@ public final class ListRunner {
             if (!summaryEmitted) {
                 emitQuietly(() -> {
                     Duration unwound = elapsedSince(startedNs);
-                    ctx.metrics().emitSummary(snapshot.get(), ctx.metrics().diagnostics(unwound),
-                            terminalStatus(ctx, null));
+                    RunSummary partial = snapshot.get();
+                    JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, null);
+                    pin(jsonWriter, partial, status);
+                    ctx.metrics().emitSummary(partial, ctx.metrics().diagnostics(unwound), status);
                 });
             }
             closeQuietly(jsonWriter);
@@ -1275,37 +1277,50 @@ public final class ListRunner {
     }
 
     /**
-     * Terminal write of the JSON sidecar, skipped on broken pipe: stdout was truncated, so the
-     * run is not actually complete and the sidecar must not claim {@code completed:true}. Mirrors
-     * the {@code store.markRunFinished(..., FAILED)} treatment for the checkpoint DB. On broken
-     * pipe the sidecar is left as last flushed (or never written); the outer {@code finally}
-     * closes it without a final {@code completed:true} write, so a resume sees a stale/absent
-     * sidecar with no false "done" signal.
+     * The epilogue's terminal sidecar write, given the disposition the summary block was just
+     * rendered from. A broken pipe truncated stdout, so the run is not actually complete and the
+     * sidecar must not claim {@code completed:true} (mirroring the {@code
+     * store.markRunFinished(..., FAILED)} treatment for the checkpoint DB): the decided pair is
+     * pinned instead, and the outer {@code finally}'s {@code close()} writes exactly it — the same
+     * numbers and the same disposition the operator was shown, rather than a re-snapshot taken a
+     * moment later. Every other epilogue takes the ordinary {@code completed:true} write.
      */
-    private static void finishUnlessBrokenPipe(JsonRunSummaryWriter jsonWriter, RunSummary summary,
-                                                OutputStage outputStage) {
-        if (!outputStage.wasBrokenPipe()) {
+    private static void finishOrPin(JsonRunSummaryWriter jsonWriter, RunSummary summary,
+                                     JsonRunSummaryWriter.TerminalStatus status, OutputStage outputStage) {
+        if (outputStage != null && outputStage.wasBrokenPipe()) {
+            pin(jsonWriter, summary, status);
+        } else {
             finish(jsonWriter, summary);
         }
     }
 
+    /** Hand the sidecar the terminal pair the sink was given; a no-op when no sidecar was configured. */
+    private static void pin(JsonRunSummaryWriter jsonWriter, RunSummary summary,
+                            JsonRunSummaryWriter.TerminalStatus status) {
+        if (jsonWriter != null) {
+            jsonWriter.pinTerminal(summary, status);
+        }
+    }
+
     /**
-     * Terminal-summary emit for a run that unwound before its epilogue (a cancel or a fatal): it
-     * mirrors the JSON sidecar's {@code close()}-time partial record — same snapshot, same {@link
-     * #terminalStatus} attribution — so the sink observes exactly the runs the report does, not
-     * only the ones that finished.
+     * Terminal-summary emit for a run that unwound before its epilogue (a cancel or a fatal): the
+     * snapshot and the {@link #terminalStatus} attribution are taken ONCE and pinned into the JSON
+     * sidecar before being rendered, so the {@code close()}-time partial record and the
+     * operator-facing block are the same terminal record — one {@code duration_ms}, one
+     * disposition — and the sink observes exactly the runs the report does, not only the ones that
+     * finished.
      *
-     * <p>It takes its own elapsed reading and its own snapshot, and the sidecar's {@code close()}
-     * takes another a moment later, so on an unwound run the block's {@code duration_ms} can differ
-     * from the report's by the cost of rendering. Everything else agrees: the counters are quiesced
-     * by the time either reading is taken.
+     * <p>If building that snapshot throws, {@link #emitQuietly} swallows it with nothing pinned,
+     * and the sidecar falls back to its own suppliers exactly as before.
      */
     private static <E extends Exception> void emitUnwoundSummary(RunContext ctx, LifecyclePlan<E> plan,
-                                                                  long startedNs) {
+                                                                  JsonRunSummaryWriter jsonWriter, long startedNs) {
         emitQuietly(() -> {
             Duration elapsed = elapsedSince(startedNs);
-            ctx.metrics().emitSummary(plan.snapshotSummary.apply(elapsed),
-                    ctx.metrics().diagnostics(elapsed), terminalStatus(ctx, plan.outputStage));
+            RunSummary summary = plan.snapshotSummary.apply(elapsed);
+            JsonRunSummaryWriter.TerminalStatus status = terminalStatus(ctx, plan.outputStage);
+            pin(jsonWriter, summary, status);
+            ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed), status);
         });
     }
 
@@ -1323,20 +1338,29 @@ public final class ListRunner {
     }
 
     /**
-     * The terminal disposition of a run that reached its epilogue: any attributed cancel reason
-     * first, then a broken pipe (a downstream close is a clean stop, never a failure — {@link
-     * OutputStage#wasBrokenPipe()}, carried as the {@code null} reason {@link
-     * JsonRunSummaryWriter.TerminalStatus} the sidecar uses), else {@link StopReason#COMPLETED}.
-     * The precedence is {@link #attributedStatus}', shared with {@link #terminalStatus(RunContext,
-     * OutputStage)} — the unwound counterpart, which classifies a run that never got here.
+     * The ONE terminal disposition of a run that reached its epilogue — rendered to the summary
+     * sink and, on the broken-pipe branch, pinned into the JSON sidecar, so neither surface can
+     * name a disposition the other contradicts.
+     *
+     * <p>A run that got here drained its pipeline and committed its completion chain, so it is
+     * {@link StopReason#COMPLETED} even if a signal or a {@code --max-duration} deadline trips the
+     * cancellation token between that point and this one. That is not leniency: {@link
+     * #finish}'s {@code complete()} writes {@code completed:true} for exactly this run, and it
+     * returns normally, so the process exits 0. A cancel that arrived in time to cost the run
+     * anything never reaches here at all — it unwinds as a {@code CancelledException} through
+     * {@link #emitUnwoundSummary}, which is where an attributed stop reason genuinely IS the
+     * disposition. Consulting the live token here instead would let a cancel landing microseconds
+     * after the last object was published print {@code INCOMPLETE} over a report that says
+     * completed.
+     *
+     * <p>A broken pipe is the one epilogue the sidecar does not complete, so this defers to {@link
+     * #terminalStatus(RunContext, OutputStage)} — the value {@code close()} would otherwise
+     * compute for itself, {@link #attributedStatus} first and then the neutral {@code null} reason
+     * that says a downstream close is a clean stop, never a failure.
      */
     private static JsonRunSummaryWriter.TerminalStatus completionStatus(RunContext ctx, OutputStage outputStage) {
-        JsonRunSummaryWriter.TerminalStatus attributed = attributedStatus(ctx);
-        if (attributed != null) {
-            return attributed;
-        }
         if (outputStage != null && outputStage.wasBrokenPipe()) {
-            return new JsonRunSummaryWriter.TerminalStatus(null);
+            return terminalStatus(ctx, outputStage);
         }
         return new JsonRunSummaryWriter.TerminalStatus(StopReason.COMPLETED);
     }
@@ -1504,17 +1528,13 @@ public final class ListRunner {
             // otherwise both escape this method (failing a run that succeeded) and be re-emitted
             // by the finally below, attributed CRASH.
             summaryEmitted = true;
-            emitQuietly(() -> ctx.metrics().emitSummary(
-                    summary, diagnostics, completionStatus(ctx, plan.outputStage)));
-            if (plan.outputStage == null) {
-                finish(jsonWriter, summary);
-            } else {
-                finishUnlessBrokenPipe(jsonWriter, summary, plan.outputStage);
-            }
+            JsonRunSummaryWriter.TerminalStatus terminal = completionStatus(ctx, plan.outputStage);
+            emitQuietly(() -> ctx.metrics().emitSummary(summary, diagnostics, terminal));
+            finishOrPin(jsonWriter, summary, terminal, plan.outputStage);
             return plan.statistics.compute(summary.apiCalls(), elapsed);
         } finally {
             if (!summaryEmitted) {
-                emitUnwoundSummary(ctx, plan, startedNs);
+                emitUnwoundSummary(ctx, plan, jsonWriter, startedNs);
             }
             closeQuietly(jsonWriter);
         }

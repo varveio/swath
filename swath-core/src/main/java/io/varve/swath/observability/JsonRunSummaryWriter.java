@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -88,6 +89,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final ReentrantLock writeLock = new ReentrantLock();
     private final AtomicBoolean completedCalled = new AtomicBoolean(false);
+    /** The pair {@link #pinTerminal} decided, or {@code null} while the suppliers still own it. */
+    private final AtomicReference<Terminal> pinnedTerminal = new AtomicReference<>();
     private final Path parent;
     private final WriteSink sink;
 
@@ -212,6 +215,22 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         }
     }
 
+    /** One terminal decision, shared by the run's summary sink and this writer's final record. */
+    private record Terminal(RunSummary summary, TerminalStatus status) {
+    }
+
+    /**
+     * Pin the exact {@code (summary, status)} pair {@link #close()} will write, instead of letting
+     * it re-read {@link #snapshotSupplier}/{@link #terminalStatusSupplier} a moment later. The
+     * caller renders that same pair to the run's {@link RunSummarySink}, so the human block and
+     * this partial record cannot report a different {@code duration_ms} — nor, on a run that gets
+     * cancelled between the two reads, a different disposition. Irrelevant once {@link
+     * #complete(RunSummary)} has run: its terminal record is already the one decision.
+     */
+    public void pinTerminal(RunSummary summary, TerminalStatus status) {
+        pinnedTerminal.set(new Terminal(summary, status));
+    }
+
     @Override
     public void close() {
         DaemonSchedulers.stop(executor, log, "summary_json_writer_stop_timeout");
@@ -241,7 +260,9 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
      * (deliberately read HERE, inside this method's own try, rather than by {@link #close()}
      * passing already-evaluated arguments — a supplier built from partially-initialized state
      * mid-abort is exactly the kind of edge case that bites, and evaluating it in the caller's
-     * frame would let it escape uncaught before this method's ladder even starts).
+     * frame would let it escape uncaught before this method's ladder even starts). A run whose
+     * terminal path already decided the pair ({@link #pinTerminal}) skips the suppliers entirely
+     * and writes that decision, which is also what the operator-facing block reported.
      *
      * <ol>
      *   <li>build the snapshot: if either supplier itself throws, there is no summary to write at
@@ -264,9 +285,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private void writeFinalPartialWithResilience() {
         RunSummary summary;
         TerminalStatus status;
+        Terminal pinned = pinnedTerminal.get();
         try {
-            summary = snapshotSupplier.get();
-            status = terminalStatusSupplier.get();
+            summary = pinned != null ? pinned.summary() : snapshotSupplier.get();
+            status = pinned != null ? pinned.status() : terminalStatusSupplier.get();
         } catch (RuntimeException e) {
             // No summary was ever built, so there is nothing for the retry/degrade ladder below to
             // even attempt — a DISTINCT marker from summary_json_final_write_failed (that one means

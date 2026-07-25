@@ -5,6 +5,7 @@
  */
 package io.varve.swath.cli;
 
+import java.util.function.ToIntFunction;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
 
@@ -47,31 +48,39 @@ final class GlobalOptions {
     }
 
     /**
-     * The effective verbosity level across every level of the command line that could carry it —
-     * a subcommand's own mixin instance if the user placed {@code -v} after the verb, OR the
-     * root's if placed before it. At most one is ever actually populated per invocation; take the
-     * max so either placement works identically.
+     * The effective verbosity level: {@code -v} placed after the verb, before it, or both.
+     * See {@link #mergedLevel}.
      */
     static int effectiveVerbosity(CommandLine cmd) {
-        int leaf = verbosityOf(cmd.getCommand());
-        CommandLine root = rootOf(cmd);
-        int rootLevel = verbosityOf(root.getCommand());
-        return Math.max(leaf, rootLevel);
+        return mergedLevel(cmd, GlobalOptions::verbosityOf);
     }
 
     /**
-     * The effective {@code -q}/{@code --quiet} level across every level of the command line that
-     * could carry it — a root-level {@code swath -q list …} must suppress the same things a
-     * leaf-level {@code swath list -q …} does (the startup destination echo used to consult the leaf
-     * mixin only, so a root {@code -q} was silently ignored). At most one is ever actually populated
-     * per invocation; take the max so either placement works identically, mirroring {@link
-     * #effectiveVerbosity}.
+     * The effective {@code -q}/{@code --quiet} level — a root-level {@code swath -q list …} must
+     * suppress the same things a leaf-level {@code swath list -q …} does (the startup destination
+     * echo used to consult the leaf mixin only, so a root {@code -q} was silently ignored). See
+     * {@link #mergedLevel}.
      */
     static int effectiveQuietLevel(CommandLine cmd) {
-        int leaf = quietOf(cmd.getCommand());
+        return mergedLevel(cmd, GlobalOptions::quietOf);
+    }
+
+    /**
+     * One repeatable global counter, merged across the levels of the command line that can carry
+     * it — the leaf's own mixin instance for a flag placed after the verb, the root's for one
+     * placed before it.
+     *
+     * <p>The occurrences are SUMMED, not maxed. Both placements are accepted in the same
+     * invocation and picocli populates each level's mixin independently, so {@code swath -q list
+     * … -q} really does populate both with one each: it asks for two levels of quiet and must turn
+     * logging off, exactly as {@code swath list … -qq} does. Taking the max would silently discard
+     * one of the two occurrences. A {@code cmd} that IS the root ({@code swath -vv --help}) has a
+     * single mixin to read and is counted once, never doubled.
+     */
+    private static int mergedLevel(CommandLine cmd, ToIntFunction<Object> level) {
         CommandLine root = rootOf(cmd);
-        int rootLevel = quietOf(root.getCommand());
-        return Math.max(leaf, rootLevel);
+        int leaf = level.applyAsInt(cmd.getCommand());
+        return cmd == root ? leaf : leaf + level.applyAsInt(root.getCommand());
     }
 
     /**

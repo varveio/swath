@@ -81,6 +81,34 @@ class GlobalOptionsTest {
     }
 
     @Test
+    void quietSplitAcrossTheVerbStacksLikeARepeatedFlag() {
+        // Both sides of the verb accept -q, so both mixins really are populated in one invocation:
+        // the two occurrences must add up to -qq (OFF), not collapse to a single ERROR level.
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("-q", "list", "s3://bucket/prefix", "-q");
+        CommandLine list = cmd.getSubcommands().get("list");
+        ListCommand leaf = (ListCommand) list.getCommand();
+        App root = (App) cmd.getCommand();
+
+        assertThat(leaf.globalOptions().quiet).hasSize(1);
+        assertThat(root.globalOptions().quiet).hasSize(1);
+        assertThat(GlobalOptions.effectiveQuietLevel(list)).isEqualTo(2);
+    }
+
+    @Test
+    void verbositySplitAcrossTheVerbStacksLikeARepeatedFlag() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("-v", "list", "s3://bucket/prefix", "-v");
+        CommandLine list = cmd.getSubcommands().get("list");
+        ListCommand leaf = (ListCommand) list.getCommand();
+        App root = (App) cmd.getCommand();
+
+        assertThat(leaf.globalOptions().verbosity).hasSize(1);
+        assertThat(root.globalOptions().verbosity).hasSize(1);
+        assertThat(GlobalOptions.effectiveVerbosity(list)).isEqualTo(2);   // DEBUG, as `-vv` would
+    }
+
+    @Test
     void noQuietFlagIsZero() {
         CommandLine cmd = App.commandLine();
         cmd.parseArgs("list", "s3://bucket/prefix");

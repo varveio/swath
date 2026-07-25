@@ -97,10 +97,15 @@ class Int12BrokenPipeProcessIT {
                 .doesNotContain("\tat ")
                 .doesNotContain("Exception")
                 .doesNotContain("unexpected error")
-                // The end-to-end pin on wasBrokenPipe() -> completionStatus -> summary suppressed:
-                // `swath list | head` is the most ordinary interactive workflow there is and must
-                // never be dressed up as an incident.
-                .doesNotContain("INCOMPLETE");
+                // The end-to-end pin on wasBrokenPipe() -> completionStatus -> the auto summary
+                // being suppressed ENTIRELY, not merely reworded: `swath list | head` is the most
+                // ordinary interactive workflow there is and must never be dressed up as an
+                // incident, so neither the INCOMPLETE marker, nor the neutral broken-pipe
+                // disposition, nor the statistics block itself may reach a default-flags stderr.
+                .doesNotContain("INCOMPLETE")
+                .doesNotContain("downstream closed")
+                .doesNotContain("objects in")
+                .doesNotContain("API calls");
     }
 
     private static String quote(String s) {

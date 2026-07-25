@@ -526,6 +526,16 @@ public final class S3PageFetcher implements PageFetcher {
      * the AWS CLI (bucket/prefix/start-after/elapsed/phase breakdown/attempt-timeout escalation).
      * Worker-page fetches are never logged here -- this concerns probe pressure specifically.
      *
+     * <p>The line itself is DEBUG: it fires on a healthy run (a slow probe is ordinary tail
+     * behavior, not a fault), so it belongs in the {@code -vv} tier with the other retried
+     * transients rather than in the default WARN one. What it must NOT do is take its signal down
+     * with it, so every slow probe — not just the sampled ones the line survives to describe —
+     * counts an engagement counter, plus the phase that dominated it ({@code connect_acquire} =
+     * connection-pool/TLS starvation vs {@code ttfb} = the store itself being slow). Those two
+     * facts are what an aggregate {@code call_class} latency distribution cannot separate;
+     * the exemplar's request identity (prefix/{@code start_after}) stays log-only, since an
+     * unbounded key as a metric tag is a cardinality explosion.
+     *
      * @param forceLog {@code true} on any exception path (always a candidate regardless of elapsed);
      *                 {@code false} on the success path (gated by {@link #SLOW_PROBE_THRESHOLD_MS})
      */
@@ -538,6 +548,8 @@ public final class S3PageFetcher implements PageFetcher {
         if (!forceLog && elapsedMs < SLOW_PROBE_THRESHOLD_MS) {
             return;
         }
+        metrics.recordStealReason("PROBE", "slow_" + callClass);
+        metrics.recordStealReason("PROBE", "slow_phase_" + dominantPhase(phaseCapture));
         long n = slowProbeExemplarCount.incrementAndGet();
         if (n > SLOW_PROBE_LOG_FIRST_N && Long.bitCount(n) != 1) {
             return;   // rate-limited: first N unconditionally, then only powers of two
@@ -552,5 +564,20 @@ public final class S3PageFetcher implements PageFetcher {
                 phaseCapture.connectAcquireNanos() < 0 ? -1 : phaseCapture.connectAcquireNanos() / 1_000_000L,
                 phaseCapture.timeToFirstByteNanos() < 0 ? -1 : phaseCapture.timeToFirstByteNanos() / 1_000_000L,
                 budgetMs, req.attemptTimeoutEscalationLevel(), n);
+    }
+
+    /**
+     * Which phase of a slow probe took the longer share — the cheap classification signal behind
+     * {@code PROBE.slow_phase_*}. {@code unknown} when the SDK published no phase timings for the
+     * call (an early failure, or an execution-attribute path that never reached the wire), so a
+     * missing measurement is never silently attributed to either phase.
+     */
+    private static String dominantPhase(S3CallClassLatencyPublisher.PhaseCapture phaseCapture) {
+        long connectAcquire = phaseCapture.connectAcquireNanos();
+        long timeToFirstByte = phaseCapture.timeToFirstByteNanos();
+        if (connectAcquire < 0 && timeToFirstByte < 0) {
+            return "unknown";
+        }
+        return connectAcquire > timeToFirstByte ? "connect_acquire" : "ttfb";
     }
 }

@@ -24,7 +24,9 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.testkit.MockObject;
 import io.varve.swath.testkit.MockPageFetcher;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -168,6 +170,42 @@ final class ResumeCommandTest {
                 .hasMessageContaining("seed.mode")
                 .hasMessageContaining("run-shape")
                 .hasMessageContaining("cannot be changed by swath resume");
+    }
+
+    /**
+     * A resumed run renders the same end-of-run block a fresh one does, so it must accept the same
+     * switch for forcing/silencing it — {@code swath resume --stats <dir>} was an exit-2 unknown
+     * option. The flag is forwarded to the delegated {@link ListCommand} the way {@code
+     * -v}/{@code -q}/{@code --color} already are.
+     */
+    @Test
+    void statsIsAcceptedOnResumeAndForcesTheBlockOnACompletedNoOp(@TempDir Path tempDir)
+            throws Exception {
+        Path outputDir = seedCompletedRunDir(tempDir);
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        int exit;
+        try {
+            System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+            exit = App.commandLine().execute("resume", outputDir.toString(), "--stats");
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertThat(exit).isZero();
+        assertThat(captured.toString(StandardCharsets.UTF_8))
+                .as("--stats forces the block past the auto gate on a resume too")
+                .contains("objects in")
+                .contains("API calls");
+    }
+
+    @Test
+    void noStatsIsAcceptedOnResume(@TempDir Path tempDir) throws Exception {
+        Path outputDir = seedCompletedRunDir(tempDir);
+        ResumeCommand resume = new ResumeCommand();
+        new CommandLine(resume).parseArgs(outputDir.toString(), "--no-stats");
+
+        assertThat(resume.stats).isFalse();
     }
 
     @Test

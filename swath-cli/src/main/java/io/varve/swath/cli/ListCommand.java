@@ -81,7 +81,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -646,7 +645,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // so a bare resume from a DB with a stored region (and no --region/--endpoint-url/env
                 // region) resolves region from the checkpoint instead of failing region resolution.
                 // Region is deliberately excluded from args_hash.
-                restoreRunContext(run);
+                restoreRunContext(run, ctx.metrics());
                 OutputOptions.DestinationKind preRestoreKind = output.resolvedKind;
                 // A bare swath resume with no explicit -o only learns its destination here. Valid
                 // checkpoints restore a directory dataset, including a recognized .parquet path
@@ -1619,24 +1618,24 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             throws InvalidConfigException {
         JsonRunSummaryWriter.Config summaryConfig =
                 buildJsonSummaryConfig(resolved, config, argsHash);
-        if (summaryConfig == null) {
-            return;   // stdout/single-file text or internal suppression: no sidecar
-        }
         ctx.metrics().setRunId(runId);
         RunSummary summary =
                 ctx.metrics().summary(Duration.ZERO, strategy, 0L, 0L);
         // A seed-time retry-cap STUCK must carry the same
         // stop_source/error_class the normal-run summary path derives — reuse ListRunner's shared
         // helper rather than duplicating the source-tag -> RunMetrics#stuckErrorClass routing here.
-        Supplier<JsonRunSummaryWriter.TerminalStatus> terminalStatus =
+        JsonRunSummaryWriter.TerminalStatus terminalStatus =
                 reason == StopReason.STUCK
-                        ? () -> ListRunner.stuckTerminalStatus(ctx)
-                        : () -> new JsonRunSummaryWriter.TerminalStatus(
-                                reason, null, errorClass, exitCode);
+                        ? ListRunner.stuckTerminalStatus(ctx)
+                        : new JsonRunSummaryWriter.TerminalStatus(reason, null, errorClass, exitCode);
+        emitEarlyExitBlock(ctx, summary, terminalStatus);
+        if (summaryConfig == null) {
+            return;   // stdout/single-file text or internal suppression: no sidecar
+        }
         JsonRunSummaryWriter writer =
                 JsonRunSummaryWriter.start(summaryConfig,
                         ctx.metrics().registry(), Instant.now(), () -> summary,
-                        terminalStatus);
+                        () -> terminalStatus);
         try {
             if (completed) {
                 writer.complete(summary);
@@ -1645,6 +1644,28 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         } finally {
             writer.close();
         }
+    }
+
+    /**
+     * Render a pre-engine early exit to the operator-facing summary block, from the very {@link
+     * RunSummary}/{@link JsonRunSummaryWriter.TerminalStatus} pair the sidecar records — so a run
+     * that failed before the engine ever started reaches the block's abnormal-stop clause and
+     * {@code --stats}, instead of being reported by the JSON alone. Emitted even when no sidecar
+     * was configured, since a stdout run has no report to read instead.
+     *
+     * <p>A resume REFUSAL is the one early exit that stays silent: nothing ran, so the block would
+     * be zeros under a marker, and the refusal throws an {@code InvalidArgsException} whose {@code
+     * swath: …} line already names the problem AND the fix. Every other early exit — a seed
+     * failure, a seed-time {@code STUCK}, a completed no-op resume — has a disposition worth
+     * reporting (the completed one only under {@code --stats}, since a zero-length clean run earns
+     * nothing automatically).
+     */
+    private static void emitEarlyExitBlock(RunContext ctx, RunSummary summary,
+                                           JsonRunSummaryWriter.TerminalStatus status) {
+        if (status.reason() == StopReason.RESUME_REFUSED) {
+            return;
+        }
+        ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(Duration.ZERO), status);
     }
 
     /**
@@ -1768,19 +1789,19 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 engine.toggles.fanoutTiling(), engine.toggles.massAwareSeed(), engine.toggles.readahead());
     }
 
-    private void restoreRunContext(RunMeta run) {
+    private void restoreRunContext(RunMeta run, RunMetrics metrics) {
         SoftRestoreContext restored = run.context();
-        connection.noSignRequest = restoreBoolean("no_sign_request", connection.noSignRequest, restored.noSignRequest());
-        connection.profile = restoreString("profile", connection.profile, restored.profile());
-        connection.region = restoreString("region", connection.region, restored.region());
-        connection.fetchOwner = restoreBoolean("fetch_owner", connection.fetchOwner, restored.fetchOwner());
-        output.rawOutput = restoreBoolean("raw_output", output.rawOutput, restored.rawOutput());
-        output.destination = restoreString("output", output.destination, restored.outputPath());
+        connection.noSignRequest = restoreBoolean(metrics, "no_sign_request", connection.noSignRequest, restored.noSignRequest());
+        connection.profile = restoreString(metrics, "profile", connection.profile, restored.profile());
+        connection.region = restoreString(metrics, "region", connection.region, restored.region());
+        connection.fetchOwner = restoreBoolean(metrics, "fetch_owner", connection.fetchOwner, restored.fetchOwner());
+        output.rawOutput = restoreBoolean(metrics, "raw_output", output.rawOutput, restored.rawOutput());
+        output.destination = restoreString(metrics, "output", output.destination, restored.outputPath());
         // --output-type is an IDENTITY option restored=true — a bare resume restores it so its
         // identity_spec reproduces (destination kind is recomputed from the path; this is the raw
         // override behind it). A re-passed differing value survives (cli-wins) and is then refused.
-        output.outputType = restoreString("output_type", output.outputType, restored.outputType());
-        connection.requestPayerEnabled = restoreBoolean("request_payer", connection.requestPayerEnabled, restored.requestPayer());
+        output.outputType = restoreString(metrics, "output_type", output.outputType, restored.outputType());
+        connection.requestPayerEnabled = restoreBoolean(metrics, "request_payer", connection.requestPayerEnabled, restored.requestPayer());
     }
 
     private OutputFormat recordedOutputFormat(RunMeta run)
@@ -1917,25 +1938,42 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         }
     }
 
-    private boolean restoreBoolean(String field, boolean cliValue, boolean storedValue) {
+    private boolean restoreBoolean(RunMetrics metrics, String field, boolean cliValue, boolean storedValue) {
         if (cliValue) {
             if (!storedValue) {
-                log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
-                        field, storedValue, cliValue);
+                recordContextMismatch(metrics, field, String.valueOf(storedValue), String.valueOf(cliValue));
             }
             return true;
         }
         return storedValue;
     }
 
-    private String restoreString(String field, String cliValue, String storedValue) {
+    private String restoreString(RunMetrics metrics, String field, String cliValue, String storedValue) {
         if (cliValue != null) {
             if (storedValue != null && !storedValue.equals(cliValue)) {
-                log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
-                        field, storedValue, cliValue);
+                recordContextMismatch(metrics, field, storedValue, cliValue);
             }
             return cliValue;
         }
         return storedValue;
+    }
+
+    /**
+     * A resumed run's CLI value overrode the connection/output context its checkpoint recorded.
+     * The line is DEBUG — it fires on any resume that legitimately re-passes a differing flag, so
+     * it is not a default-tier fault — but the fact that a resume silently changed context is worth
+     * more than one log tier, so it also counts {@code RESUME.context_mismatch_<field>}: the
+     * counter reaches the {@code --report} JSON and {@code list_run_diagnostics}, where a post-hoc
+     * consumer can see WHICH fields were overridden on a run it is holding the report for. The
+     * overridden value itself stays log-only — a checkpointed region/profile/path is unbounded
+     * text, which a metric tag must never carry — while the report already records the effective
+     * one, so the pair reads as "this field was changed, from what the log says, to what the report
+     * says".
+     */
+    private static void recordContextMismatch(RunMetrics metrics, String field,
+                                              String checkpointValue, String cliValue) {
+        metrics.recordStealReason("RESUME", "context_mismatch_" + field);
+        log.debug("list_resume_context_mismatch field={} checkpoint={} cli={} (cli wins)",
+                field, checkpointValue, cliValue);
     }
 }

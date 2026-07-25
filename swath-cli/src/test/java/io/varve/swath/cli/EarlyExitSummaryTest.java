@@ -7,6 +7,7 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +29,7 @@ import io.varve.swath.error.RegionRedirectException;
 import io.varve.swath.error.ThrottleException;
 import io.varve.swath.error.UnauthorizedException;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -41,6 +43,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -188,6 +191,66 @@ final class EarlyExitSummaryTest {
         assertThat(root.get("strategy").asText()).isEqualTo("work_stealing");
         // An early-exit summary never ran the listing engine, so it carries NO `shape` block.
         assertThat(root.has("shape")).as("early-exit summary omits the shape block").isFalse();
+    }
+
+    /**
+     * A pre-engine early exit reaches the operator-facing block too, not the sidecar alone: a seed
+     * failure is precisely the run that stopped abnormally, which is what the auto gate's
+     * stop-reason clause is for. The block carries no resume invitation — the run is marked fatal,
+     * so a later resume would be refused.
+     */
+    @Test
+    void seedFailureAlsoReachesTheSummarySink(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "seedhash",
+                ctx, 7L, false, StopReason.SEED_FAILURE, "WORK_STEALING");
+
+        assertThat(emitted).hasSize(1);
+        assertThat(emitted.getFirst().reason()).isEqualTo(StopReason.SEED_FAILURE);
+        assertThat(SummaryRenderer.lines(
+                new SummaryRenderer.Preferences(true, false, true, true, dir.toString(), false),
+                ctx.metrics().summary(Duration.ZERO, "WORK_STEALING", 0L, 0L),
+                ctx.metrics().diagnostics(Duration.ZERO), emitted.getFirst()))
+                .first(STRING)
+                .isEqualTo("INCOMPLETE (seed_failure)");
+    }
+
+    /**
+     * The one early exit that stays silent: a resume refusal never ran, so the block would be
+     * zeros under a marker — and the refusal's own {@code swath: …} line already names both the
+     * problem and the fix.
+     */
+    @Test
+    void resumeRefusalStaysSilentOnTheSummarySink(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        ListCommand cmd = new ListCommand();
+        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.output.destination = dir.toString();
+        RunContext ctx = RunContext.create();
+        List<JsonRunSummaryWriter.TerminalStatus> emitted = new ArrayList<>();
+        ctx.metrics().setSummarySink((summary, diagnostics, status) -> emitted.add(status));
+
+        cmd.writeEarlyExitSummary(OutputFormat.PARQUET, anonymousConfig(), "refusedhash",
+                ctx, 7L, false, StopReason.RESUME_REFUSED, "WORK_STEALING");
+
+        assertThat(emitted).isEmpty();
+        assertThat(dir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME))
+                .as("the sidecar still records the refusal for a machine consumer")
+                .exists();
+    }
+
+    private static S3Config anonymousConfig() {
+        return new S3Config(Region.US_EAST_1, null, false,
+                S3Config.DEFAULT_MAX_PARALLEL, S3Config.DEFAULT_MAX_ATTEMPTS,
+                Duration.ofSeconds(30), S3Config.DEFAULT_API_CALL_TIMEOUT, AnonymousCredentialsProvider.create(),
+                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
     }
 
     private static Stream<Arguments> classifiedSeedFailures() {

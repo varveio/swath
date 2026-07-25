@@ -1,4 +1,5 @@
-Usage: swath resume [-hVqv] [--color=MODE] [--tune=KEY=VALUE]... [<dir>]
+Usage: swath resume [-hVqv] [--[no-]stats] [--color=MODE] [--tune=KEY=VALUE]...
+                    [<dir>]
 Resume a run by its output directory: swath resume <dir>.
       [<dir>]            The directory-dataset run handle to resume (opens
                            <dir>/.swath/checkpoint.sqlite).
@@ -7,6 +8,10 @@ Resume a run by its output directory: swath resume <dir>.
   -h, --help             Show this help message and exit.
   -q, --quiet            Decrease verbosity (-q ERROR, -qq silent); suppresses
                            the startup destination echo.
+      --[no-]stats       Print the end-of-run summary to stderr (default: on
+                           for runs over 1.5s, runs that produce output, and
+                           runs that stop short of finishing; a closed
+                           downstream pipe stays silent).
       --tune=KEY=VALUE   Set a resume-safe typed expert option (repeatable).
   -v                     Increase verbosity (-v INFO, -vv DEBUG, -vvv TRACE).
   -V, --version          Print version information and exit.
