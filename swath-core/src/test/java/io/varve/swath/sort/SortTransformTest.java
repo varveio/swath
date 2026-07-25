@@ -87,7 +87,7 @@ class SortTransformTest {
         int[] fired = {0};
         SortTransformResult result = transform(smallFanIn)
                 .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, units -> { },
-                        () -> fired[0]++);
+                        measured -> fired[0]++);
 
         assertThat(fired[0]).isEqualTo(1);
         assertThat(result.cascadedPasses()).isGreaterThan(0);   // sanity: a cascade really ran first

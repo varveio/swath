@@ -397,8 +397,12 @@ final class ParallelRangeMerge {
         return new RangeSelection(blocks, groupsRead, n - groupsRead);
     }
 
-    /** Per-range merge budget = total / R, expressed as a {@link KWayMerge} pass width. */
-    private int perRangeFanIn(int ranges) {
+    /**
+     * Per-range merge budget = total / R, expressed as a {@link KWayMerge} pass width. Package-private
+     * because {@link SortTransform} asks the same question before the merge starts: staged segments
+     * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
+     */
+    int perRangeFanIn(int ranges) {
         long perRangeBudget = config.mergeBudgetBytes() / ranges;
         long budgetBound = perRangeBudget / config.segmentRowGroupBytes();
         return (int) Math.min(config.fanIn(), Math.max(2L, budgetBound));

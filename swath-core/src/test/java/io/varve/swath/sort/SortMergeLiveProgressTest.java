@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -78,6 +79,101 @@ class SortMergeLiveProgressTest {
                 .isGreaterThan(STAGED_ROWS);
     }
 
+    /**
+     * The parallel range merge is the other branch, and its cascade passes are still AHEAD of it when
+     * the final-pass hook fires: every range k-way-merges all the staged segments and folds its own
+     * intermediates. So it must answer as the serial cascade does — work, no percentage — rather than
+     * measure those rewrites against the staged rows and run past 100% before any output exists.
+     */
+    @Test
+    void aCascadingParallelRangeMergeReportsWorkAndNoPercentage(@TempDir Path root) throws IOException {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
+
+        // Per-range fan-in 2 against five staged segments: every range cascades.
+        SortTransformResult result = mergeParquetWithProgress(root, metrics, samples,
+                parallelConfig().withFanIn(2));
+
+        assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
+                .isGreaterThan(0);
+        assertThat(samples).isNotEmpty();
+        assertThat(samples).allSatisfy(event -> {
+            assertThat(event.phase()).isEqualTo(Phase.WRITING);
+            assertThat(event.completion())
+                    .as("a cascading range merge has no honest denominator either")
+                    .isNull();
+        });
+        // Not vacuous: the merge really did move more rows than it was handed, which is exactly what
+        // a staged-rows percentage would have reported as a finished, then over-finished, merge.
+        assertThat(samples.get(samples.size() - 1).merging().sessionRowsMerged())
+                .isGreaterThan(STAGED_ROWS);
+    }
+
+    /** The parallel branch keeps its percentage where it is honest: one pass per range, no cascade. */
+    @Test
+    void aSinglePassParallelRangeMergeStillEndsAtExactlyOneHundredPercent(@TempDir Path root)
+            throws IOException {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
+
+        // Fan-in wider than the staged segment count: no range can cascade.
+        SortTransformResult result = mergeParquetWithProgress(root, metrics, samples,
+                parallelConfig().withFanIn(SEGMENTS + 1));
+
+        assertThat(result.cascadedPasses()).isZero();
+        assertThat(samples).allSatisfy(event ->
+                assertThat(event.completion().done()).isLessThanOrEqualTo(event.completion().total()));
+        assertThat(samples.get(samples.size() - 1).completion())
+                .isEqualTo(new ProgressEvent.Completion(STAGED_ROWS, STAGED_ROWS, ProgressEvent.Unit.ROWS));
+    }
+
+    /**
+     * Three ranges over a merge budget wide enough that only {@code fanIn} bounds the per-range pass
+     * width — so each test picks whether its ranges cascade by that one knob.
+     */
+    private SortConfig parallelConfig() {
+        return SortConfigs.base().withMergeParallelism(3).withMergeBudgetBytes(1L << 30);
+    }
+
+    /** The production wiring again, over COLUMNAR staging — the only format the parallel branch reads. */
+    private SortTransformResult mergeParquetWithProgress(Path root, RunMetrics metrics,
+                                                          List<ProgressEvent> samples, SortConfig config)
+            throws IOException {
+        Path staging = Files.createDirectories(root.resolve("run/_staging"));
+        Path output = Files.createDirectories(root.resolve("run"));
+        List<Path> segments = stageParquet(staging);
+
+        metrics.recordSortStaged(segments.size(), STAGED_ROWS);
+        metrics.setPhase(Phase.MERGING);
+        SortTransform transform = new SortTransform(
+                new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                        SortedFileWriterFactory.DEFAULT),
+                false, RangeMergeTimer.NO_OP);
+        return transform.transform(segments, output, staging, PublishListener.NO_OP,
+                units -> {
+                    metrics.recordProgress(units);
+                    samples.add(metrics.progressEvent(Duration.ofSeconds(1)));
+                },
+                metrics::startFinalMergePass);
+    }
+
+    private List<Path> stageParquet(Path dir) throws IOException {
+        List<Path> out = new ArrayList<>();
+        for (int s = 0; s < SEGMENTS; s++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int i = 0; i < ROWS_PER_SEGMENT; i++) {
+                rows.add(object(String.format("k%05d", i * SEGMENTS + s)));
+            }
+            Path path = dir.resolve("seg-" + s + ".parquet");
+            SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
+            try (SortedCursor cursor = new InMemoryCursor(rows, cmp, DuplicateHook.NO_OP)) {
+                writer.writeIntermediate(cursor, path);
+            }
+            out.add(path);
+        }
+        return out;
+    }
+
     /** The production wiring: fan-in pinned to 2 so five staged segments genuinely cascade. */
     private SortTransformResult mergeWithProgress(Path root, RunMetrics metrics, List<ProgressEvent> samples)
             throws IOException {
@@ -96,7 +192,7 @@ class SortMergeLiveProgressTest {
                     metrics.recordProgress(units);
                     samples.add(metrics.progressEvent(Duration.ofSeconds(1)));
                 },
-                () -> metrics.setPhase(Phase.WRITING));
+                metrics::startFinalMergePass);
     }
 
     private List<Path> stage(Path dir) throws IOException {
