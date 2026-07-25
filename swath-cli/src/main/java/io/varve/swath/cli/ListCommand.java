@@ -35,6 +35,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.MeterRegistries;
 import io.varve.swath.observability.Phase;
+import io.varve.swath.observability.ProgressSink;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.observability.RunSummary;
@@ -208,6 +209,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * System.console()} itself (core has no ambient terminal knowledge; the CLI is the one layer
      * that does). */
     private boolean stdoutIsTerminal;
+
+    /**
+     * Whether the installed progress surface redraws in place — settled when the sink is chosen and
+     * read again when the reporter starts, which is the only thing that decides this run's tick
+     * cadence. False for every run without a live display, which is also the cadence they want.
+     */
+    private boolean progressRedraw;
 
     /**
      * Test-only seam (package-private, null in production): when set, {@link
@@ -430,9 +438,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // doing, not whether this stderr wants to be told. So the CLI always installs the sink it
         // chose — the display, the structured log record, or none at all — rather than leaving a
         // default in place for the cases it declined to display (see ProgressDisplay#sinkFor).
-        ctx.metrics().setProgressSink(ProgressDisplay.sinkFor(new ProgressDisplay.Preferences(
+        ProgressSink progressSink = ProgressDisplay.sinkFor(new ProgressDisplay.Preferences(
                 output.progress, quiet, verbosity > 0, liveness.progressInterval != null,
-                terminal.stderrIsTerminal()), stderr));
+                terminal.stderrIsTerminal()), stderr);
+        // The tick cadence is read off the surface that was actually installed, not recomputed:
+        // only a display that redraws can afford — and needs — the faster default (§
+        // LivenessOptions#resolveDisplayProgressInterval).
+        progressRedraw = progressSink instanceof ProgressDisplay display && display.redraws();
+        ctx.metrics().setProgressSink(progressSink);
         // Whether a $ figure can exist at all is a fact about the provider, not about this terminal,
         // so it rides on the event and no progress surface has to remember to withhold it.
         ctx.metrics().setListCostKnown(costKnown);
@@ -832,7 +845,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // instead of running a second ticker (RunProgressReporter), and it closes first (before
             // the S3 client) so no frame can land after the run is over.
             try (S3Client s3 = S3ClientFactory.create(config, ctx.metrics());
-                    RunProgressReporter progress = liveness.startProgressReporter(ctx)) {
+                    RunProgressReporter progress = liveness.startProgressReporter(ctx, progressRedraw)) {
                 PageFetcher rawFetcher = fetcherOverride != null
                         ? fetcherOverride
                         : connection.maybeRateLimited(new S3PageFetcher(s3, s3uri.bucket(),

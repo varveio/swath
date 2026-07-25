@@ -88,7 +88,9 @@ Run control:
                              Abort after no committed progress (default: 10m;
                                0/none/off disables).
       --progress-interval=DURATION
-                             Set the progress reporting interval.
+                             Set the progress reporting interval (default: 1s
+                               while the progress line redraws on a terminal,
+                               30s for appended records; floor 1s).
       --[no-]sort            Globally sort a Parquet directory dataset by key.
 
 Resume:

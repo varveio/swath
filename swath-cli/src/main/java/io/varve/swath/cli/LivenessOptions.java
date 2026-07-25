@@ -58,10 +58,28 @@ final class LivenessOptions {
         return parsed;
     }
 
-    /** The progress cadence actually in effect: {@code --progress-interval}, else the default. */
+    /**
+     * The configured progress cadence: {@code --progress-interval}, else the appended-record
+     * default. This is the figure the config echo and the run report carry, and the one {@code
+     * --tune summary.interval} falls back to — deliberately NOT the redrawing display's faster
+     * cadence, whose only cost is a repaint, where the sidecar's is an atomic rewrite of a file.
+     */
     Duration resolveEffectiveProgressInterval() throws InvalidConfigException {
         Duration explicit = resolveProgressInterval();
         return explicit != null ? explicit : RunProgressReporter.nonTtyInterval();
+    }
+
+    /**
+     * The cadence to actually tick at. An explicit {@code --progress-interval} always wins; absent
+     * one, a display that redraws in place gets the faster default (see {@link
+     * RunProgressReporter#ttyInterval()}).
+     */
+    Duration resolveDisplayProgressInterval(boolean redraw) throws InvalidConfigException {
+        Duration explicit = resolveProgressInterval();
+        if (explicit != null) {
+            return explicit;
+        }
+        return redraw ? RunProgressReporter.ttyInterval() : RunProgressReporter.nonTtyInterval();
     }
 
     /** Resolve {@code --max-duration}: a strictly-positive duration, or {@code null} when unset. */
@@ -96,7 +114,8 @@ final class LivenessOptions {
      * listing-shaped counter reads zero. {@code ListRunner}'s own start then joins this reporter
      * rather than running a second one (see {@link RunProgressReporter}).
      */
-    RunProgressReporter startProgressReporter(RunContext ctx) throws InvalidConfigException {
-        return RunProgressReporter.start(ctx.metrics(), resolveEffectiveProgressInterval());
+    RunProgressReporter startProgressReporter(RunContext ctx, boolean redraw)
+            throws InvalidConfigException {
+        return RunProgressReporter.start(ctx.metrics(), resolveDisplayProgressInterval(redraw));
     }
 }

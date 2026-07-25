@@ -38,7 +38,9 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = "--progress-interval", paramLabel = "DURATION",
-                description = "Set the progress reporting interval.")
+                description = "Set the progress reporting interval (default: 1s while the "
+                        + "progress line redraws on a terminal, 30s for appended records; "
+                        + "floor 1s).")
         void progressInterval(String value) {
             liveness.progressInterval = value;
         }

@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,10 +22,14 @@ import org.slf4j.LoggerFactory;
  * formatting, and shares every number format with the end-of-run block through {@link
  * OperatorText}, so the two surfaces cannot spell the same figure two ways.
  *
- * <p><b>Plain, newline-terminated records.</b> No carriage return, no clear-to-end-of-line, no
- * terminal-width measurement: an in-place redraw is a separate, deliberately deferred piece of
- * work, and a redirected stderr must never receive control sequences. One frame is one complete
- * line, written and flushed under the {@link StderrCoordinator}'s lock.
+ * <p><b>Two forms, one content.</b> On a terminal wide enough to say so, a frame overwrites its
+ * predecessor in place — carriage return, the text, clear-to-end-of-line, no newline — so a long
+ * run occupies one line rather than scrolling the session away. Everywhere else the same text is a
+ * plain newline-terminated record: a redirected stderr must never receive a control sequence, and a
+ * captured log of carriage returns is not a log. The two differ in framing alone; no field appears
+ * in one and not the other, so a run's captured output says exactly what its terminal did. Both are
+ * written and flushed under the {@link StderrCoordinator}'s lock, which for the redrawing form also
+ * erases and repaints around every other writer of the fd.
  *
  * <p><b>Shaped by the phase.</b> Seeding shows probes against the seed's bounded budget and the age
  * of the last completed probe — the pair that tells a healthy seed from a hung one, and the case
@@ -67,8 +72,20 @@ final class ProgressDisplay implements ProgressSink {
 
     private final StderrCoordinator.ProgressChannel channel;
 
-    ProgressDisplay(StderrCoordinator stderr) {
-        this.channel = stderr.openProgress();
+    /**
+     * Where the terminal's width comes from, per frame. Injected so the redraw path is testable
+     * without a pty: production passes {@link TerminalGeometry#stderrWidth}, a test passes a fixed
+     * width or {@link TerminalGeometry#UNKNOWN}.
+     */
+    private final IntSupplier width;
+
+    /** Whether frames overwrite in place. False makes this exactly the plain-record display. */
+    private final boolean redraw;
+
+    ProgressDisplay(StderrCoordinator stderr, boolean redraw, IntSupplier width) {
+        this.redraw = redraw;
+        this.width = width;
+        this.channel = stderr.openProgress(redraw);
     }
 
     /**
@@ -80,10 +97,37 @@ final class ProgressDisplay implements ProgressSink {
      * and the only one a redirected run has.
      */
     static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr) {
+        return sinkFor(prefs, stderr, TerminalGeometry::stderrWidth);
+    }
+
+    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr, IntSupplier width) {
         if (Boolean.FALSE.equals(prefs.progress())) {
             return ProgressSink.NONE;
         }
-        return shouldDisplay(prefs) ? new ProgressDisplay(stderr) : ProgressSink.LOG;
+        if (!shouldDisplay(prefs)) {
+            return ProgressSink.LOG;
+        }
+        return new ProgressDisplay(stderr, shouldRedraw(prefs, width), width);
+    }
+
+    /**
+     * Whether frames overwrite in place rather than each taking a line. A narrower gate than {@link
+     * #shouldDisplay} on purpose: {@code --progress} forces progress to <em>appear</em> off a
+     * terminal, but nothing forces control sequences onto a stream that cannot act on them, so a
+     * redirected stderr keeps the plain records whatever the flag says. {@code TERM=dumb} is
+     * excluded on the same reasoning the colour resolution uses — a terminal that disclaims
+     * capability is taken at its word.
+     *
+     * <p>Width is the last condition because it is the one that can fail at runtime: no provider, a
+     * terminal that will not report, or one too narrow to say anything useful in
+     * ({@link TerminalGeometry#MIN_USABLE_WIDTH}) all fall back rather than emit an erase sequence
+     * whose effect cannot be predicted.
+     */
+    static boolean shouldRedraw(Preferences prefs, IntSupplier width) {
+        if (!prefs.stderrIsTerminal() || "dumb".equals(System.getenv("TERM"))) {
+            return false;
+        }
+        return width.getAsInt() >= TerminalGeometry.MIN_USABLE_WIDTH;
     }
 
     /**
@@ -116,12 +160,63 @@ final class ProgressDisplay implements ProgressSink {
     @Override
     public void accept(ProgressEvent event) {
         try {
-            channel.frame(OperatorText.INDENT + line(event));
+            channel.frame(redraw
+                    ? fit(parts(event), width.getAsInt())
+                    : OperatorText.INDENT + line(event));
         } catch (RuntimeException e) {
             // The sink runs on the run's progress thread: a formatting fault must cost the operator
             // a frame, never the run's disposition or exit code.
             log.debug("progress_render_failed message={}", e.getMessage());
         }
+    }
+
+    /**
+     * Bound a redrawing frame to the terminal's width, by dropping whole fields off the end rather
+     * than cutting through one. A frame that wraps occupies two physical rows while the erase that
+     * follows it reaches only one, so the remainder is stranded on screen and the display walks
+     * down it — the single failure an in-place redraw has to prevent. But {@code 8 API ca} is a
+     * frame that looks broken, and the fields are ordered most-important-first precisely so the
+     * ones that fall off the end are the ones worth losing.
+     *
+     * <p>Width is re-read every frame rather than tracked through a {@code WINCH} handler, so a
+     * terminal resized mid-run is honoured by the next frame and swath installs no signal handler
+     * for a display. {@link TerminalGeometry#UNKNOWN} bounds nothing: a width that stopped being
+     * knowable mid-run leaves one frame that may wrap, which beats a frame cut to nothing.
+     *
+     * <p>Measured in {@code String.length()} — UTF-16 units, not display columns. That is exact
+     * here and only here: every field is a number, a duration or an ASCII phase name, by the
+     * class's no-key-text rule. A field carrying arbitrary text would need real column measurement,
+     * and would be the reason to reach for one.
+     */
+    static String fit(List<String> parts, int width) {
+        if (width == TerminalGeometry.UNKNOWN) {
+            return OperatorText.INDENT + String.join(OperatorText.SEP, parts);
+        }
+        StringBuilder frame = new StringBuilder(OperatorText.INDENT);
+        for (String part : parts) {
+            int separator = frame.length() == OperatorText.INDENT.length() ? 0 : OperatorText.SEP.length();
+            if (frame.length() + separator + part.length() > width) {
+                break;
+            }
+            if (separator > 0) {
+                frame.append(OperatorText.SEP);
+            }
+            frame.append(part);
+        }
+        if (frame.length() > OperatorText.INDENT.length()) {
+            return frame.toString();
+        }
+        // A terminal too narrow for even the phase name. Nothing here is worth showing, but a
+        // wrapping frame would still strand rows, so this one case does cut mid-field.
+        return truncate(OperatorText.INDENT + parts.getFirst(), width);
+    }
+
+    /** Hard cut, for the one case {@link #fit} cannot solve by dropping a field. */
+    static String truncate(String frame, int width) {
+        if (width == TerminalGeometry.UNKNOWN || frame.length() <= width) {
+            return frame;
+        }
+        return frame.substring(0, width);
     }
 
     /** Whether a frame would be written at all — the gate that skips building the event. */
@@ -130,8 +225,28 @@ final class ProgressDisplay implements ProgressSink {
         return channel.isActive();
     }
 
+    /**
+     * Whether this display overwrites its frames in place. Read by the CLI to settle the run's tick
+     * cadence, so that decision is taken from the display actually installed rather than derived a
+     * second time from the same inputs and free to disagree with it.
+     */
+    boolean redraws() {
+        return redraw;
+    }
+
     /** One frame's text, without the indent — the shape the tests pin. */
     static String line(ProgressEvent event) {
+        return String.join(OperatorText.SEP, parts(event));
+    }
+
+    /**
+     * A frame's fields, most-important-first: the phase and its own counters, then the figures
+     * every phase shares. The order is what {@link #fit} drops from, so it is a display decision
+     * and not merely an assembly one — elapsed and API calls go last because a narrow terminal can
+     * spare them, and the phase goes first because a frame that cannot say what the run is doing
+     * says nothing at all.
+     */
+    static List<String> parts(ProgressEvent event) {
         List<String> parts = new ArrayList<>();
         parts.add(event.phase().name().toLowerCase(Locale.ROOT));
         if (event.seeding() != null) {
@@ -148,7 +263,7 @@ final class ProgressDisplay implements ProgressSink {
         if (event.estimatedCostUsd() != null && event.apiCalls() > 0) {
             parts.add(OperatorText.cost(event.estimatedCostUsd()));
         }
-        return String.join(OperatorText.SEP, parts);
+        return parts;
     }
 
     /**

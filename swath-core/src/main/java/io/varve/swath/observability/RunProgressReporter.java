@@ -31,6 +31,7 @@ public final class RunProgressReporter implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RunProgressReporter.class);
     private static final Duration NON_TTY_INTERVAL = Duration.ofSeconds(30);
+    private static final Duration TTY_INTERVAL = Duration.ofSeconds(1);
 
     /**
      * How long a run must be alive before its FIRST frame — deliberately NOT the cadence. Scheduling
@@ -70,6 +71,21 @@ public final class RunProgressReporter implements AutoCloseable {
     /** The default cadence (30s); also the default flush interval for {@link JsonRunSummaryWriter}. */
     public static Duration nonTtyInterval() {
         return NON_TTY_INTERVAL;
+    }
+
+    /**
+     * The default cadence for a display that overwrites its previous frame (1s) rather than
+     * appending one. The two defaults differ because the cost of a frame does: an appended record
+     * is a line in a captured log forever, so 30s of them is already plenty, while a redrawn frame
+     * replaces the one before it and leaves nothing behind — and a counter that only moves every
+     * 30s reads as a hung run, which is the exact misreading this display exists to prevent.
+     *
+     * <p>Only a default: an explicit {@code --progress-interval} wins on either surface, and this
+     * cadence never reaches the {@link JsonRunSummaryWriter} sidecar, whose flush is real I/O and
+     * keeps following {@link #nonTtyInterval()}.
+     */
+    public static Duration ttyInterval() {
+        return TTY_INTERVAL;
     }
 
     @Override

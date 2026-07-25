@@ -103,7 +103,7 @@ row — an object whose storage class the listing did not return is **dropped** 
 | `--concurrency` | `64` (AIMD ceiling; live value adapts within `[1, T]`) |
 | `--object-listing-queue-size` | `50000` |
 | `--request-rate` | unset (uncapped) |
-| `--progress-interval` | `30s` (floor `1s`; a faster value is rejected, not clamped) |
+| `--progress-interval` | `1s` when the progress line redraws on a terminal, `30s` for appended records (floor `1s`; a faster value is rejected, not clamped) |
 | `--max-duration` | unset (no timebox) |
 | `--idle-timeout` | `120s` |
 | `--no-progress-timeout` | `10m` |
@@ -157,7 +157,7 @@ both as sensitive run artifacts.
 | `engine.readahead` | `off` | Speculative dense-tail readahead |
 | `seed.mode` | `shallow` | Initial keyspace discovery strategy (`shallow`, `none`, `hints` reserved) |
 | `parquet.writers` | `3` | Bounded Parquet writer pool size (`2..4`) |
-| `summary.interval` | `--progress-interval` | JSON run-summary flush cadence |
+| `summary.interval` | `--progress-interval` when given, else `30s` | JSON run-summary flush cadence — it follows the *configured* interval, never the redrawing display's faster tick |
 | `sort.ignore-disk-check` | `off` | Skip `--sort`'s pre-run and periodic disk-space guard |
 
 See [`usage.md`](usage.md#tuning---tune) for what each knob actually changes and

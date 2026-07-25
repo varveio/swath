@@ -98,7 +98,7 @@ the registry, or `--tune KEY=?` for one key's accepted values.
 | `engine.readahead` | `on` or `off` | `off` | experimental | free | fresh `list` | Enable speculative dense-tail readahead. This can trade more API calls and memory for lower wall time. |
 | `seed.mode` | `shallow`, `none`, or `hints` | `shallow` | stable (`hints` reserved) | identity | fresh `list` | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
 | `parquet.writers` | integer `2..4` | `3` | stable | free | fresh `list` | Set the bounded Parquet writer pool. A file-shaped Parquet destination still resolves to one writer. |
-| `summary.interval` | positive duration | `--progress-interval` | stable | free | fresh `list` | Set report heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
+| `summary.interval` | positive duration | `--progress-interval` when given, else `30s` | stable | free | fresh `list` | Set report heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.ignore-disk-check` | `on` or `off` | `off` | diagnostic | free | fresh `list` and `resume` | Skip the pre-run and periodic sort disk-space guard. Use only after sizing the staging volume independently. |
 
 These settings feed the same resolved fields as the engine, Parquet, report,
@@ -426,7 +426,7 @@ network-, API-, and bucket-shape-dependent.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--report PATH` | `<output>/_swath_summary.json` for every non-stdout Parquet destination, including FILE-kind `*.parquet`; otherwise none | Write a machine-readable JSON run-summary to `PATH` |
-| `--tune summary.interval=DURATION` | `--progress-interval` | JSON run-summary flush cadence, e.g. `2s` or `500ms` |
+| `--tune summary.interval=DURATION` | `--progress-interval` when given, else `30s` | JSON run-summary flush cadence, e.g. `2s` or `500ms` |
 
 The summary is operational data, not a sanitized telemetry envelope. It records
 the target and raw arguments and can include filters, seed prefixes, slow-range
@@ -463,7 +463,7 @@ listing.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--concurrency N` | `64` | Target (ceiling) concurrency `T` for the work-stealing engine. Live concurrency is adjusted adaptively (AIMD) within `[1, T]`. |
-| `--progress-interval DURATION` | `30s` | Override the progress cadence (see §Progress) and opt into progress, e.g. `2s`; `1s` is the supported floor. |
+| `--progress-interval DURATION` | `1s` redrawing, `30s` appended | Override the progress cadence (see §Progress) and opt into progress, e.g. `2s`; `1s` is the supported floor. |
 | `--object-listing-queue-size N` | `50000` | In-flight entry budget for the listing queue |
 | `--request-rate N` | unset | Cap aggregate S3 API requests per second; `0` also disables the cap |
 | `--engine-toggle owner_split=off` | on | Diagnostic owner-side self-splitting ablation; the default keeps the optimization enabled |
@@ -733,8 +733,12 @@ both at once: the operator-facing line when a display is wanted, and the structu
 record otherwise. Whichever is installed, a tick renders exactly once — and `--no-progress` installs
 neither, so it silences the log record as well as the display.
 
-The operator line is one plain, newline-terminated record per tick — no carriage returns, no
-redraw, no escape sequences, so a redirected stderr is readable as-is:
+The operator line takes one of two **forms**, carrying identical content either way. On a terminal
+it redraws in place — each tick overwrites the last, so an hour-long run occupies a single line
+instead of scrolling the session away. Anywhere else it is one plain, newline-terminated record per
+tick: no carriage returns, no escape sequences, so a redirected stderr stays readable as-is and a
+captured log never fills with control characters. Only the framing differs; no field appears in one
+form and not the other, so a run's captured output says exactly what its terminal showed.
 
 ```
   seeding · 12/64 probes (19%) · last probe 3.1s ago · 21.7s elapsed · 64 API calls · <$0.001 (est. @ $0.005/1k LIST)
@@ -772,11 +776,25 @@ Whether the line appears:
 | `--no-progress` | off, everywhere — display and structured record alike, including with an explicit `--progress-interval` |
 | `--progress-interval DURATION` | on — asking for a cadence is asking for progress |
 
-The first record lands a couple of seconds in rather than a whole cadence later, so a run that
-finishes in 22 seconds is not silent. `--progress-interval` overrides the 30 s cadence (e.g. `2s`
-for dense sampling on short runs); **`1s` is the supported floor** and anything faster is rejected
-rather than clamped — a ten-hour run at `1ms` would attempt some 36 million records, and a cadence
-below one a second outruns both a reader and a captured log.
+A redrawing line is also bounded to the terminal's width, dropping whole trailing fields rather
+than cutting through one — the fields are ordered most-important-first for exactly that reason. The
+width is re-read every tick, so a window resized mid-run is honoured by the next frame. A terminal
+that will not report its width, or one under 24 columns, keeps the plain records instead: an erase
+whose reach cannot be predicted is worse than a line that scrolls. `TERM=dumb` does the same.
+
+The default cadence depends on the form, because the cost of a tick does. A redrawn frame replaces
+the one before it and leaves nothing behind, so it ticks **every second** — a counter that only
+moved every 30 s would read as a hung run, which is the misreading this display exists to prevent.
+An appended record is a line in a captured log forever, so it stays at **30 s**. Either way the
+first record lands a couple of seconds in rather than a whole cadence later, so a run that finishes
+in 22 seconds is not silent.
+
+`--progress-interval` overrides both (e.g. `2s` for dense sampling on short runs); **`1s` is the
+supported floor** and anything faster is rejected rather than clamped — a ten-hour run at `1ms`
+would attempt some 36 million records, and a cadence below one a second outruns both a reader and a
+captured log. Note that `--tune summary.interval` keeps following the *configured* interval (30 s
+unless you pass one), not the display's faster tick: a JSON sidecar flush is an atomic file rewrite,
+where a repaint costs nothing.
 
 Under `-v`, the same tick is logged instead as one structured `progress` record — run id, phase,
 session and phase elapsed, API calls, retries and (where the provider's pricing is knowable) cost,

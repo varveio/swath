@@ -85,7 +85,7 @@ final class ProgressDisplayTest {
     void everyFrameIsOnePlainLineWithNoControlCharacters() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
         display.accept(seeding(1L, 64L, Duration.ofMillis(200)));
         display.accept(listing(10L, 0L));
         display.accept(finalPass(1L, 2L));
@@ -186,7 +186,7 @@ final class ProgressDisplayTest {
     void nothingIsWrittenAfterProgressIsFinishedAndFinishingIsIdempotent() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
         display.accept(listing(10L, 0L));
 
         coordinator.finishProgress();
@@ -203,7 +203,7 @@ final class ProgressDisplayTest {
     void theSummaryBlockPermanentlyEndsProgressBeforeItWritesALine() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
         display.accept(listing(10L, 0L));
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.markRunStarted();
@@ -231,7 +231,7 @@ final class ProgressDisplayTest {
                 throw new IOException("Broken pipe");
             }
         }, true, StandardCharsets.UTF_8);
-        ProgressDisplay display = new ProgressDisplay(new StderrCoordinator(() -> broken));
+        ProgressDisplay display = new ProgressDisplay(new StderrCoordinator(() -> broken), false, () -> TerminalGeometry.UNKNOWN);
 
         display.accept(listing(10L, 0L));   // must not throw: the run's disposition is not stderr's
 

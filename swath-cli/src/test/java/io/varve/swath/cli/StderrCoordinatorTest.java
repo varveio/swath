@@ -46,7 +46,7 @@ final class StderrCoordinatorTest {
             }
             return stream;
         });
-        StderrCoordinator.ProgressChannel channel = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel channel = coordinator.openProgress(false);
 
         Thread frame = new Thread(() -> channel.frame("  listing · 10 objects"), "frame");
         frame.start();
@@ -97,7 +97,7 @@ final class StderrCoordinatorTest {
         PrintStream unflushed = new PrintStream(captured, false, StandardCharsets.UTF_8);
         StderrCoordinator coordinator = new StderrCoordinator(() -> unflushed);
 
-        assertThat(coordinator.openProgress().frame("  seeding · 1/64 probes (2%)")).isTrue();
+        assertThat(coordinator.openProgress(false).frame("  seeding · 1/64 probes (2%)")).isTrue();
 
         assertThat(captured.toString(StandardCharsets.UTF_8))
                 .as("a frame an operator cannot see yet is not progress")
@@ -108,7 +108,7 @@ final class StderrCoordinatorTest {
     void aClosedChannelNeverWritesAgainAndClosingIsIdempotent() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        StderrCoordinator.ProgressChannel channel = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel channel = coordinator.openProgress(false);
         channel.frame("  listing · 1 objects");
 
         channel.close();
@@ -124,7 +124,7 @@ final class StderrCoordinatorTest {
     void aFrameStillInFlightWhenProgressFinishesIsDropped() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        StderrCoordinator.ProgressChannel channel = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel channel = coordinator.openProgress(false);
 
         // The summary/error path's permanent finish, taken while a tick is still formatting.
         coordinator.finishProgress();
@@ -140,9 +140,9 @@ final class StderrCoordinatorTest {
     void aNewGenerationRetiresThePreviousRunsChannel() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        StderrCoordinator.ProgressChannel first = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel first = coordinator.openProgress(false);
 
-        StderrCoordinator.ProgressChannel second = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel second = coordinator.openProgress(false);
 
         assertThat(first.frame("  stale")).isFalse();
         assertThat(second.frame("  fresh")).isTrue();
@@ -160,7 +160,7 @@ final class StderrCoordinatorTest {
             }
         }, true, StandardCharsets.UTF_8);
         StderrCoordinator coordinator = new StderrCoordinator(() -> broken);
-        StderrCoordinator.ProgressChannel channel = coordinator.openProgress();
+        StderrCoordinator.ProgressChannel channel = coordinator.openProgress(false);
 
         assertThat(channel.frame("  listing · 1 objects")).isFalse();
         assertThat(channel.isActive()).isFalse();
@@ -223,10 +223,10 @@ final class StderrCoordinatorTest {
         AtomicBoolean useBroken = new AtomicBoolean(true);
         StderrCoordinator coordinator = new StderrCoordinator(() -> useBroken.get() ? broken : healthy);
 
-        assertThat(coordinator.openProgress().frame("  listing · lost")).isFalse();
+        assertThat(coordinator.openProgress(false).frame("  listing · lost")).isFalse();
         useBroken.set(false);
 
-        assertThat(coordinator.openProgress().frame("  listing · 2 objects"))
+        assertThat(coordinator.openProgress(false).frame("  listing · 2 objects"))
                 .as("a later invocation with a healthy stderr gets its progress back")
                 .isTrue();
         assertThat(captured.toString(StandardCharsets.UTF_8).lines())
