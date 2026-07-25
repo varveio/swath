@@ -247,8 +247,24 @@ public final class Thief {
         //    cursor/hi reads here are not a coherent snapshot; we re-validate under the lock.
         WorkerState victim = null;
         double best = Double.NEGATIVE_INFINITY;
+        // Why each candidate was rejected. NO_VICTIM.no_splittable_victim is by far the most
+        // common steal outcome on a collapsed run (4,000 of 4,221 attempts = 95% on
+        // s3://wis2globalcache/, 2026-07-25) but it folds FOUR structurally different situations
+        // into one number, and they call for opposite responses: an empty eligible pool means the
+        // fleet is waiting on page commits (nothing is wrong), all-unsplittable means the ranges
+        // are genuinely atomic, all-paced means the thieves are in per-victim futility cooldown,
+        // and no-remaining-span means estRemaining read zero on every candidate — which on a deep
+        // shared prefix can be a MEASUREMENT artefact rather than a fact about the keyspace.
+        // Post-hoc analysis cannot tell those apart from the aggregate, so the tail's actual
+        // refusal branch has never been identified. Counted here, reported below.
+        int seen = 0;
+        int skippedUnsplittable = 0;
+        int skippedPaced = 0;
+        int skippedNoSpan = 0;
         for (WorkerState w : pool) {
+            seen++;
             if (w.unsplittable()) {
+                skippedUnsplittable++;
                 continue;
             }
             // A victim that has racked up consecutive futile steal
@@ -258,6 +274,7 @@ public final class Thief {
             // make this pacing GLOBAL: a global cooldown starves a productive sibling's splits on a
             // skewed workload.
             if (w.stealPaced()) {
+                skippedPaced++;
                 if (metrics != null) {
                     metrics.recordStealReason("STEAL", "futility_paced");
                 }
@@ -272,6 +289,7 @@ public final class Thief {
             // (`interpolate(..., alphabetDigest())`) is unaffected — it never depended on rank-space sizing.
             double est = StealMath.estRemaining(w.cursor(), w.lo(), w.hi(), w.keysEmitted());
             if (est <= 0.0) {
+                skippedNoSpan++;
                 continue;   // no remaining span — nothing to steal here
             }
             if (est > best) {
@@ -280,8 +298,26 @@ public final class Thief {
             }
         }
         if (victim == null) {
-            log.debug("steal_failed run_id={} worker_id={} outcome={} reason={}",
-                    runId, RunContext.workerIdOrNone(), Outcome.NO_VICTIM, "no_splittable_victim");
+            // Exactly ONE discriminator fires alongside the aggregate, so the two series stay
+            // reconcilable: sum(discriminators) == no_splittable_victim. Literal arguments at each
+            // call site — check-instrumentation-drift.py resolves only literals.
+            if (metrics != null) {
+                if (seen == 0) {
+                    metrics.recordStealReason("NO_VICTIM", "pool_empty");
+                } else if (skippedNoSpan == seen) {
+                    metrics.recordStealReason("NO_VICTIM", "all_no_remaining_span");
+                } else if (skippedPaced == seen) {
+                    metrics.recordStealReason("NO_VICTIM", "all_futility_paced");
+                } else if (skippedUnsplittable == seen) {
+                    metrics.recordStealReason("NO_VICTIM", "all_unsplittable");
+                } else {
+                    metrics.recordStealReason("NO_VICTIM", "mixed_skips");
+                }
+            }
+            log.debug("steal_failed run_id={} worker_id={} outcome={} reason={} "
+                            + "seen={} unsplittable={} paced={} no_span={}",
+                    runId, RunContext.workerIdOrNone(), Outcome.NO_VICTIM, "no_splittable_victim",
+                    seen, skippedUnsplittable, skippedPaced, skippedNoSpan);
             return record(Outcome.NO_VICTIM, "no_splittable_victim");
         }
 
