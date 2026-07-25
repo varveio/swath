@@ -126,6 +126,18 @@ public final class Thief {
      * boundary costs balance, never correctness). Reset to zero on any non-zero fan-out.
      */
     private static final int STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD = 8;
+    /**
+     * Consecutive TIMED-OUT structure probes on one victim before probing is suppressed for it —
+     * far lower than {@link #STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD} because the two streaks cost
+     * differently by an order of magnitude. A zero-fan-out probe answered cheaply; a timed-out probe
+     * answered nothing after burning its whole escalated budget and aborting a connection.
+     *
+     * <p>Sized at 2 so a single blip (a transient network fault, an S3 hiccup) is never enough — but
+     * a second consecutive timeout on the SAME victim is evidence about the keyspace, not the
+     * network, and further probes there are throwing good time after bad. This is the flat-directory
+     * case a budget cannot fix: see {@code docs/internals/probe-budgets.md} §5.
+     */
+    private static final int STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD = 2;
 
     /**
      * While suppressed, still issue 1-in-{@code N} structure probes so a bucket whose
@@ -434,7 +446,12 @@ public final class Thief {
                         // byte-midpoint/sliver fallback below) and count it (§5). A different victim's
                         // counter is unaffected, so a suppressed flat region can never starve a mixed
                         // bucket's structured victims.
-                        metrics.recordStealReason("STRUCTURE", "suppressed_zero_fanout");
+                        // Distinguish the evidence: a victim proven FLAT (cheap zero-fan-out answers)
+                        // vs one that could not answer at all (timeout streak). Same decision, very
+                        // different diagnosis -- see STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD.
+                        metrics.recordStealReason("STRUCTURE",
+                                victim.consecutiveTimedOutStructureProbes() >= STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD
+                                        ? "suppressed_probe_timeout" : "suppressed_zero_fanout");
                         victim.recordStructureSuppressed();   // per-range tally for the slow-range dump
                     }
                 }
@@ -706,9 +723,46 @@ public final class Thief {
      * true median is unaffordable (see {@link #STRUCTURE_PROBE_MAX_KEYS}) and the furthest sampled
      * boundary is the largest carve the probe can prove. See walkthroughs.md §2.
      */
+    /**
+     * Issue one {@code delimiter=/} structure probe, attributing an ATTEMPT-TIMEOUT outcome to this
+     * victim before rethrowing.
+     *
+     * <p><b>Why this exists.</b> The per-victim suppression in {@link #structureProbesEnabled} is fed
+     * by what a probe REPORTS. A probe that times out reports nothing — it throws past the fan-out
+     * accounting in {@link #structurePivot} — so before this, a timing-out probe left the suppression
+     * counters untouched: <em>the timeout destroyed the very evidence that would have stopped the next
+     * probe</em>, and the thief kept re-probing a region that had already proved it could not answer,
+     * paying the full escalated budget every time. Recording the streak here closes that loop.
+     *
+     * <p>Only {@link ThrottleException.Kind#ATTEMPT_TIMEOUT} counts. A 503/5xx is store backpressure —
+     * a statement about the store's load, not about this keyspace's shape — and suppressing structure
+     * discovery on it would misattribute a transient service condition to the bucket. Every fault,
+     * counted or not, still propagates unchanged: this observes, it never swallows.
+     */
+    private ListPage probeStructure(WorkerState victim, PageRequest req)
+            throws SwathException, InterruptedException {
+        try {
+            ListPage page = fetcher.fetchPage(req);
+            // The probe ANSWERED (whatever its fan-out) -- this victim is reachable, so the streak of
+            // consecutive timeouts is broken. Mirrors the zero-fan-out counter's own reset discipline.
+            victim.resetTimedOutStructureProbes();
+            return page;
+        } catch (ThrottleException te) {
+            if (te.kind() == ThrottleException.Kind.ATTEMPT_TIMEOUT) {
+                victim.recordTimedOutStructureProbe();
+                if (metrics != null) {
+                    // §5: post-hoc analysis must be able to see this path engage, and to tell a
+                    // timeout-suppressed victim from a flat (zero-fan-out) one.
+                    metrics.recordStealReason("STRUCTURE", "probe_timed_out");
+                }
+            }
+            throw te;
+        }
+    }
+
     private StructuralPivot structurePivot(WorkerState victim, byte[] q, byte[] cForPivot, byte[] startAfter,
                                            byte[] H) throws SwathException, InterruptedException {
-        ListPage page = fetcher.fetchPage(new PageRequest(
+        ListPage page = probeStructure(victim, new PageRequest(
                 mode, STRUCTURE_PROBE_MAX_KEYS, q, SeedStep.DELIMITER, startAfter, null, null, null, null, 0));
         int fanout = page.commonPrefixes().size();
         // The delimiter=/ fan-out this runtime structure probe observed (§5 classification).
@@ -1035,9 +1089,12 @@ public final class Thief {
         if (!toggles.structureProbes()) {
             return false;
         }
-        if (victim.consecutiveZeroFanoutProbes() < STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD) {
+        if (victim.consecutiveZeroFanoutProbes() < STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD
+                && victim.consecutiveTimedOutStructureProbes() < STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD) {
             return true;
         }
+        // EITHER streak suppresses; the same random re-probe escape applies, so a victim is never
+        // locked out permanently if the keyspace or the network changes underneath it.
         return ThreadLocalRandom.current().nextInt(STRUCTURE_SUPPRESS_RETRY_DIVISOR) == 0;
     }
 

@@ -115,6 +115,20 @@ A scan-class budget cannot be sized to cover every keyspace: a `delimiter=/` pro
 large flat directory can exceed any fixed budget, which is what the escalation ladder is for. Judge a
 budget by its **p50 and the run completing**, not by driving tail timeouts to zero.
 
+**The tail is handled by not re-asking, not by a bigger budget.** `Thief#structureProbesEnabled`
+suppresses structure probing per-victim on two independent streaks: consecutive zero-fan-out probes
+(the region answered, and it is flat) and consecutive TIMED-OUT probes (the region could not answer
+at all). The timeout streak has a much lower threshold — `STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD = 2`
+vs 8 — because the two cost differently by an order of magnitude: a zero-fan-out probe answered
+cheaply, a timed-out one burned its whole escalated budget and aborted a connection to say nothing.
+Both suppressions share the same 1-in-N random re-probe escape, so a victim is never locked out
+permanently.
+
+That feedback loop was missing at first: a probe that times out throws past the fan-out accounting,
+so it left every counter untouched — *the timeout destroyed the very evidence that would have stopped
+the next probe*, and the thief re-probed regions that had already proved they could not answer.
+`Thief#probeStructure` is the chokepoint that closes it.
+
 **Don't make the budgets adaptive.** Deriving a budget from an observed latency EWMA/percentile looks
 attractive but is the wrong shape here. The structure-probe distribution is *bimodal*, not drifting
 (p50 43 ms against p90 10.2 s): a budget sized off the healthy mode shrinks and still times out on

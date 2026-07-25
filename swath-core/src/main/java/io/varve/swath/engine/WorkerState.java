@@ -83,6 +83,8 @@ public final class WorkerState {
      * so a benign race only shifts when suppression engages by a probe or two.
      */
     private final AtomicInteger consecutiveZeroFanoutProbes = new AtomicInteger();
+    /** Consecutive structure probes on this victim that timed out; see {@link #consecutiveTimedOutStructureProbes()}. */
+    private final AtomicInteger consecutiveTimedOutStructureProbes = new AtomicInteger();
 
     /**
      * Per-victim futility pacing. Running count of consecutive <b>futile</b> steal outcomes against
@@ -470,6 +472,32 @@ public final class WorkerState {
     /** Record a non-zero-fan-out structure probe against this victim (resets the counter). */
     public void resetZeroFanoutStructureProbes() {
         consecutiveZeroFanoutProbes.set(0);
+    }
+
+    /**
+     * This victim's running count of consecutive structure probes that TIMED OUT rather than
+     * answering. Consulted by {@link Thief#structureProbesEnabled} alongside
+     * {@link #consecutiveZeroFanoutProbes()}.
+     *
+     * <p><b>Why this is a separate counter.</b> Both streaks suppress probing on this victim, but
+     * they are different evidence and carry different cost. A zero-fan-out probe ANSWERED — cheaply,
+     * proving the region is flat. A timed-out probe answered nothing, having first burned its full
+     * escalated budget and aborted a connection. Keeping them apart lets the two thresholds differ by
+     * the order of magnitude their costs differ by, and keeps the {@code §5} engagement counters able
+     * to say WHICH evidence suppressed a victim.
+     */
+    public int consecutiveTimedOutStructureProbes() {
+        return consecutiveTimedOutStructureProbes.get();
+    }
+
+    /** Record a structure probe that timed out against this victim (increments the counter). */
+    public void recordTimedOutStructureProbe() {
+        consecutiveTimedOutStructureProbes.incrementAndGet();
+    }
+
+    /** Record a structure probe that ANSWERED against this victim (resets the timeout counter). */
+    public void resetTimedOutStructureProbes() {
+        consecutiveTimedOutStructureProbes.set(0);
     }
 
     /**

@@ -506,6 +506,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `PIVOT` | `reflect_hit` | the reflected empty-upper pivot probed NON-empty (seeded a commit at m_r, skipping the blind bisection) | |
 | `PIVOT` | `reflect_empty` | the reflected empty-upper pivot probed empty; bisection re-seeded at the shorter `(c, m_r]` interval | |
 | `STRUCTURE` | `suppressed_zero_fanout` | per-victim structure-probe suppression after K consecutive zero-fan-out probes | |
+| `STRUCTURE` | `probe_timed_out` | a `delimiter=/` structure probe hit its attempt-timeout budget; recorded against the victim so the timeout streak can suppress further probing there (a timeout otherwise reports NOTHING, destroying the evidence that would stop the next probe) | |
+| `STRUCTURE` | `suppressed_probe_timeout` | per-victim structure-probe suppression driven by the TIMEOUT streak rather than zero fan-out — the region could not answer at all, vs. answered "flat" | |
 | `STRUCTURE` | `fanout_capped` | a structure probe's page truncated at `STRUCTURE_PROBE_MAX_KEYS` — its CommonPrefixes are a prefix of the directory's children, so any committed pivot is the furthest proved boundary (`PIVOT.{structure,adaptive_structure}_capped`), not the true median | |
 | `OWNER_SPLIT` | `demand_gated` | a proactive owner self-split was suppressed by the saturation/demand gate | |
 | `OWNER_SPLIT` | `floor_reflected_blocked` | a proactive owner self-split was blocked by the observed-mass child-tail floor (reflected estimate) | |

@@ -103,7 +103,7 @@ can return a single `CommonPrefix`. Even the 10 s scan budget is not enough ther
 correctly escalates those to 20 s/40 s. This is inherent to the call shape on that keyspace, not a
 budget error: p50 is 43 ms, the run completes, and the thief gets pivots again.
 
-**No budget can fix it, but a feedback gap can.** `Thief#structureProbesEnabled` already suppresses
+**Fixed** (see "Structure-probe timeout suppression" below). **No budget can fix it, but a feedback gap can.** `Thief#structureProbesEnabled` already suppresses
 structure probes per-victim after `STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD` consecutive zero-fanout
 probes — precisely the enormous-flat-directory defense. But a structure probe that **times out** never
 returns its zero-fanout answer, so `consecutiveZeroFanoutProbes` never increments and the suppressor
@@ -146,3 +146,36 @@ published percentile decay while `count`/`totalTime` stay cumulative. Slot conte
 concurrency collapsed, and the rolling max had decayed to nothing by the time the summary was
 written. Every `probe_latency[]` percentile and `shape.regime.api_latency_p*` shared the defect on
 any run longer than two minutes. Fixed in `RunMetrics#DISTRIBUTION_WINDOW`.
+
+---
+
+## 2026-07-25 — structure-probe timeout suppression (follow-up to the above)
+
+Closed the feedback gap identified above: a structure probe that times out reports nothing, so it
+threw past the fan-out accounting and left every per-victim suppression counter untouched — the
+timeout destroyed the evidence that would have stopped the next probe. `Thief#probeStructure` now
+attributes an `ATTEMPT_TIMEOUT` to the victim (and only that kind — a 503 is store backpressure, not
+a statement about the keyspace) before rethrowing, and `structureProbesEnabled` suppresses on a
+timeout streak of 2 as well as the existing zero-fan-out streak of 8.
+
+Interleaved A/B against the immediately preceding commit, same bucket, alternating runs:
+
+| round | build | result | keys/s | timeouts | splits | `structure_probe` p90 |
+|---|---|---|---|---|---|---|
+| 1 (unbounded) | before | **did not finish** in 260 s | 34,669 | 631 | 302 | 10,736 ms |
+| 1 (unbounded) | after | **complete in 163 s** | 53,965 | 177 | 204 | 2,683 ms |
+| 2 (110 s cap) | before | 4.64 M objects | 46,875 | 301 | 42 | 10,199 ms |
+| 2 (110 s cap) | after | 6.56 M objects | 66,750 | 176 | 146 | 5,636 ms |
+| 3 (110 s cap) | before | 4.45 M objects | 44,594 | 301 | 42 | 10,199 ms |
+| 3 (110 s cap) | after | 5.65 M objects | 58,773 | 204 | 154 | 8,589 ms |
+
+Throughput +32–42 % in every round, timeouts roughly halved, and the structure-probe p90 tail cut by
+1.2–4×.
+
+**On split count — read it per unit time.** The unbounded round shows *fewer* absolute splits after
+the change (204 vs 302), which looks like a regression and was initially recorded as one. It is an
+artifact of comparing runs of different length: the "before" run was still going at 260 s, so it had
+far longer to accumulate splits. The equal-duration rounds are the honest comparison, and there
+splits went **up 3.5×** (146/154 vs 42/42 in the same 110 s). Suppressing hopeless probes does not
+cost parallelism — it buys it, because the thief stops spending its steal attempts on regions that
+cannot answer.
