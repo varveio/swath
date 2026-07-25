@@ -80,6 +80,9 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
             List<CommandLine> parsedLevels = parseResult.asCommandLineList();
             CommandLine leaf = parsedLevels.get(parsedLevels.size() - 1);
             CliLogging.configure(GlobalOptions.effectiveVerbosity(leaf), GlobalOptions.effectiveQuietLevel(leaf));
+            // Log events share stderr with the live progress record and the summary block, so the
+            // console appender writes through the one coordinator that serializes all of them.
+            CliLogging.serializeThrough(StderrCoordinator.shared());
             return runLast.execute(parseResult);
         });
         CommandLine completion = new CommandLine(new AutoComplete.GenerateCompletion());
@@ -116,6 +119,9 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
 
     private static int handleExecutionException(Exception ex, CommandLine cmd,
                                                 CommandLine.ParseResult parseResult) {
+        // A terminal error line is the run's last word on stderr: end live progress permanently
+        // first, so no frame still being formatted can land after it.
+        StderrCoordinator.shared().finishProgress();
         int code = ExitCodes.forThrowable(ex);
         SwathException domain = domainException(ex);
         if (domain != null) {
@@ -166,6 +172,7 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
         try {
             return cmd.execute(args);
         } catch (Throwable t) {
+            StderrCoordinator.shared().finishProgress();
             err.println("swath: unexpected error: " + t);
             return ExitCodes.UNEXPECTED;
         }

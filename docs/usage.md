@@ -463,7 +463,7 @@ listing.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--concurrency N` | `64` | Target (ceiling) concurrency `T` for the work-stealing engine. Live concurrency is adjusted adaptively (AIMD) within `[1, T]`. |
-| `--progress-interval DURATION` | `30s` | Override progress log cadence (see §Observability), e.g. `2s` or `500ms`. |
+| `--progress-interval DURATION` | `30s` | Override the progress cadence (see §Progress) and opt into progress, e.g. `2s`; `1s` is the supported floor. |
 | `--object-listing-queue-size N` | `50000` | In-flight entry budget for the listing queue |
 | `--request-rate N` | unset | Cap aggregate S3 API requests per second; `0` also disables the cap |
 | `--engine-toggle owner_split=off` | on | Diagnostic owner-side self-splitting ablation; the default keeps the optimization enabled |
@@ -727,23 +727,59 @@ parts in name order reads the dataset in key order — once the output crosses t
 
 ### Progress
 
-Progress is logged to stderr every 30 seconds — at INFO, so it needs `-v` — as one `progress`
-record per tick, for the whole run: the seed step, listing, the sort merge and the final write. Every
-record carries the run id, the phase, session and phase elapsed, API calls with estimated cost, and
-retries; the tail is whatever that phase actually has. Seeding reports probes completed against the
-seed's probe budget and the age of the last completed probe — the signal that tells a healthy seed
-from a hung one, since a seeding run emits no objects, fetches no pages and holds no workers.
-Listing reports objects emitted this session (recovered rows from a resume are counted separately,
-so a resumed run neither shows a zero it did not earn nor jumps by billions at the end), live and
-average object rate, pages, in-flight ranges and the target worker count. Merging reports rows
-merged against the staged row total.
+One reporter covers the whole run — the seed step, listing, the sort merge and the final write —
+and emits one record per tick on **stderr** (stdout stays data). It takes one of two forms, never
+both at once: the operator-facing line when a display is wanted, and the structured `progress` log
+record otherwise. Whichever is installed, a tick renders exactly once.
+
+The operator line is one plain, newline-terminated record per tick — no carriage returns, no
+redraw, no escape sequences, so a redirected stderr is readable as-is:
+
+```
+  seeding · 12/64 probes (19%) · last probe 3.1s ago · 21.7s elapsed · 64 API calls · <$0.001 (est. @ $0.005/1k LIST)
+  listing · 4,231,000 objects · 128,000 keys/s (avg 96,000) · 4,231 pages · 512 in flight · 1m12s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+  merging · 3,100,000/12,000,000 rows (26%) · 24 segments · 2m05s elapsed · 8,900 API calls · ~$0.045 (est. @ $0.005/1k LIST)
+```
+
+Each phase shows what it actually has. Seeding reports probes completed against the seed's probe
+budget and the age of the last completed probe — the signal that tells a healthy seed from a hung
+one, since a seeding run emits no objects, fetches no pages and holds no workers. Listing reports
+objects emitted this session (recovered rows from a resume are shown separately as `(+N
+recovered)`, so a resumed run neither displays a zero it did not earn nor jumps by billions at the
+end), live and average object rate, pages and in-flight ranges. Merging reports rows merged against
+the staged row total. Every line then carries session elapsed, API calls, and the estimated spend
+with the rate it assumed — withheld entirely under `--endpoint-url`, where the provider's LIST
+pricing is unknowable, exactly as the end-of-run block withholds it. **No key text ever appears**:
+keys can carry arbitrary bytes, and a line that echoed them could be made to forge one.
 
 There is deliberately **no ETA and no percentage for listing**: an unsorted scan has no honest
 denominator — the object total is not known until the run ends. Seeding and merging do have exact
 ones (the probe budget; the staged rows), so those phases carry a completion figure and listing does
-not. The first record lands a couple of seconds in rather than a whole cadence later, so a run that
-finishes in 22 seconds is not silent. Use `--progress-interval` to override the cadence (e.g. `2s`
-for dense sampling on short runs).
+not.
+
+Whether the line appears:
+
+| situation | progress |
+| --- | --- |
+| stderr is a terminal, no `-q`, no `-v` | on (the default) |
+| stderr is a file or a pipe | off — a summary prints once, progress repeats |
+| `-q` / `-qq` | off, unless `--progress` |
+| `-v` or higher | off — INFO logging is on, so the structured `progress` record is the surface |
+| `--progress` | on, past every gate above, including off a terminal and under `-q` |
+| `--no-progress` | off, everywhere, including with an explicit `--progress-interval` |
+| `--progress-interval DURATION` | on — asking for a cadence is asking for progress |
+
+The first record lands a couple of seconds in rather than a whole cadence later, so a run that
+finishes in 22 seconds is not silent. `--progress-interval` overrides the 30 s cadence (e.g. `2s`
+for dense sampling on short runs); **`1s` is the supported floor** and anything faster is rejected
+rather than clamped — a ten-hour run at `1ms` would attempt some 36 million records, and a cadence
+below one a second outruns both a reader and a captured log.
+
+Under `-v`, the same tick is logged instead as one structured `progress` record — run id, phase,
+session and phase elapsed, API calls, cost and retries, with the same phase-shaped tail — which is
+what an external supervisor tailing the log reads. See
+[`metrics-and-observability.md`](metrics-and-observability.md#4--v-progress-record-30-s-default---progress-interval)
+for its field list.
 
 ### End-of-run summary
 

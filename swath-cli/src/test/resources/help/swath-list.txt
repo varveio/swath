@@ -1,6 +1,7 @@
 Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
-                  [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
-                  [--[no-]stats] [--checkpoint=PATH|none|auto] [--color=MODE]
+                  [--no-metrics] [--no-sign-request] [--[no-]progress]
+                  [--restart] [--[no-]sort] [--[no-]stats]
+                  [--checkpoint=PATH|none|auto] [--color=MODE]
                   [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
                   [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
@@ -36,6 +37,9 @@ Output:
       --part-rotation-max-rows=N
                              Rotate Parquet parts by row count (default:
                                2000000; 0 disables).
+      --[no-]progress        Print live progress records to stderr (default: on
+                               when stderr is a terminal and neither -q nor -v
+                               was given; --progress-interval implies it).
       --report=PATH          Write the machine-readable run report to PATH.
       --[no-]stats           Print the end-of-run summary to stderr (default:
                                on for runs over 1.5s, runs that produce output,

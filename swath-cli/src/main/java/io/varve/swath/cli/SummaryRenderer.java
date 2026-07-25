@@ -5,17 +5,21 @@
  */
 package io.varve.swath.cli;
 
+import static io.varve.swath.cli.OperatorText.bytes;
+import static io.varve.swath.cli.OperatorText.cost;
+import static io.varve.swath.cli.OperatorText.count;
+import static io.varve.swath.cli.OperatorText.elapsed;
+import static io.varve.swath.cli.OperatorText.rate;
+
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunSummary;
 import io.varve.swath.observability.RunSummarySink;
 import io.varve.swath.observability.StopReason;
-import java.io.PrintStream;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -36,7 +40,8 @@ import org.slf4j.LoggerFactory;
  * sub-second search.
  *
  * <p>Cost is withheld entirely when the provider is unknown ({@code --endpoint-url}), and labeled
- * with the rate it assumed when shown — see {@link RunMetrics#LIST_COST_PER_1K_USD}.
+ * with the rate it assumed when shown — see {@link OperatorText#cost}, the one formatter this block
+ * and the live {@link ProgressDisplay} share so the two can never disagree.
  */
 final class SummaryRenderer implements RunSummarySink {
 
@@ -58,11 +63,8 @@ final class SummaryRenderer implements RunSummarySink {
             StopReason.SIGNAL, StopReason.MAX_DURATION, StopReason.MAX_DURATION_NO_PROGRESS,
             StopReason.STUCK);
 
-    /** Two-space indent, so the block reads as one unit distinct from any log or echo line. */
-    private static final String INDENT = "  ";
-
-    /** The field separator, matching the progress/summary idiom of modern CLIs. */
-    private static final String SEP = " · ";
+    /** The block's shared field separator — see {@link OperatorText}. */
+    private static final String SEP = OperatorText.SEP;
 
     /**
      * What the CLI resolved, and the renderer cannot work out for itself. Read through a supplier
@@ -88,17 +90,21 @@ final class SummaryRenderer implements RunSummarySink {
                        String resumeDestination, boolean colorEnabled) {
     }
 
-    private final PrintStream err;
+    private final StderrCoordinator stderr;
     private final Supplier<Preferences> preferences;
 
-    SummaryRenderer(PrintStream err, Supplier<Preferences> preferences) {
-        this.err = err;
+    SummaryRenderer(StderrCoordinator stderr, Supplier<Preferences> preferences) {
+        this.stderr = stderr;
         this.preferences = preferences;
     }
 
     @Override
     public void accept(RunSummary summary, RunMetrics.RunDiagnostics diagnostics,
             JsonRunSummaryWriter.TerminalStatus status) {
+        // The block is the run's last word on this fd, so live progress ends PERMANENTLY here --
+        // not merely interleaves safely. A tick already formatting when the run ended has its frame
+        // dropped when it reaches the coordinator, so nothing lands after the summary.
+        stderr.finishProgress();
         Preferences prefs = preferences.get();
         if (!shouldRender(prefs, summary, status)) {
             return;
@@ -107,10 +113,11 @@ final class SummaryRenderer implements RunSummarySink {
             List<String> content = lines(prefs, summary, diagnostics, status);
             AnsiPalette ansi = new AnsiPalette(prefs.colorEnabled());
             boolean hasDisposition = disposition(prefs, status) != null;
-            for (int i = 0; i < content.size(); i++) {
-                err.println(INDENT + colorize(content.get(i), i, hasDisposition, ansi));
-            }
-            err.flush();
+            stderr.record(err -> {
+                for (int i = 0; i < content.size(); i++) {
+                    err.println(OperatorText.INDENT + colorize(content.get(i), i, hasDisposition, ansi));
+                }
+            });
         } catch (RuntimeException e) {
             // The sink runs on the run's terminal path: a formatting fault must cost the operator
             // the block, never the run's disposition or exit code.
@@ -242,54 +249,9 @@ final class SummaryRenderer implements RunSummarySink {
         return parts.isEmpty() ? null : String.join(SEP, parts);
     }
 
-    /**
-     * The estimated spend WITH the rate it assumed. Stating the assumption is the honesty: LIST
-     * pricing varies by region, so a labeled reference rate lets a reader rescale, where a bare
-     * figure would over-claim (and a region→rate table in an OSS repo would silently go stale).
-     */
-    private static String cost(double usd) {
-        String amount = usd < 0.001
-                ? "<$0.001"
-                : String.format(Locale.ROOT, "~$%.3f", usd);
-        return amount + " (est. @ $" + RunMetrics.LIST_COST_PER_1K_USD + "/1k LIST)";
-    }
-
     /** A broken pipe carries no stop reason — the downstream closed, which is not a failure. */
     private static boolean isBrokenPipe(JsonRunSummaryWriter.TerminalStatus status) {
         return status.reason() == null;
     }
 
-    private static String count(long value) {
-        return String.format(Locale.ROOT, "%,d", value);
-    }
-
-    private static String rate(double value) {
-        return String.format(Locale.ROOT, "%.2f", value);
-    }
-
-    /** {@code 4.2s} under a minute, then {@code 4m12s}, then {@code 1h04m}. */
-    private static String elapsed(Duration duration) {
-        long seconds = duration.toSeconds();
-        if (seconds < 60) {
-            return String.format(Locale.ROOT, "%.1fs", duration.toMillis() / 1000.0);
-        }
-        if (seconds < 3600) {
-            return String.format(Locale.ROOT, "%dm%02ds", seconds / 60, seconds % 60);
-        }
-        return String.format(Locale.ROOT, "%dh%02dm", seconds / 3600, (seconds % 3600) / 60);
-    }
-
-    /** Decimal (1000-based) units, the same convention S3 itself bills and reports in. */
-    private static String bytes(long value) {
-        String[] units = {"B", "KB", "MB", "GB", "TB", "PB"};
-        double scaled = value;
-        int unit = 0;
-        while (scaled >= 1000.0 && unit < units.length - 1) {
-            scaled /= 1000.0;
-            unit++;
-        }
-        return unit == 0
-                ? count(value) + " B"
-                : String.format(Locale.ROOT, "%.1f %s", scaled, units[unit]);
-    }
 }

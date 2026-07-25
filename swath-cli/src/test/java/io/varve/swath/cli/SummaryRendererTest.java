@@ -237,7 +237,7 @@ final class SummaryRendererTest {
         PrintStream originalOut = System.out;
         System.setOut(new PrintStream(stdout, true, StandardCharsets.UTF_8));
         try {
-            new SummaryRenderer(new PrintStream(captured, true, StandardCharsets.UTF_8), () -> AUTO)
+            new SummaryRenderer(coordinator(captured), () -> AUTO)
                     .accept(metrics.summary(LONG, WORK_STEALING, 0L, 0L), metrics.diagnostics(LONG), COMPLETED);
         } finally {
             System.setOut(originalOut);
@@ -363,9 +363,15 @@ final class SummaryRendererTest {
     private static String printed(SummaryRenderer.Preferences prefs, RunSummary summary,
             RunMetrics.RunDiagnostics diagnostics, TerminalStatus status) {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        new SummaryRenderer(new PrintStream(captured, true, StandardCharsets.UTF_8), () -> prefs)
+        new SummaryRenderer(coordinator(captured), () -> prefs)
                 .accept(summary, diagnostics, status);
         return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    /** The block writes through the CLI's one stderr coordinator; here it wraps the capture buffer. */
+    private static StderrCoordinator coordinator(ByteArrayOutputStream captured) {
+        PrintStream stream = new PrintStream(captured, true, StandardCharsets.UTF_8);
+        return new StderrCoordinator(() -> stream);
     }
 
     private static RunSummary summary(Duration duration) {

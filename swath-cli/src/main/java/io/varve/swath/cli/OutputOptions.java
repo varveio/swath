@@ -364,6 +364,19 @@ final class OutputOptions {
                     + "a closed downstream pipe stays silent).")
     Boolean stats;
 
+    /**
+     * {@code null} (unset) is the auto rule in {@link ProgressDisplay#shouldDisplay}; {@code
+     * --progress} forces the live record on off a terminal and under {@code -q}, {@code
+     * --no-progress} suppresses it everywhere. The negatable pair, and the Output heading, are
+     * {@code --stats}'s: whether an operator surface prints is an output decision, while
+     * {@code --progress-interval} — how often the run samples ITSELF — stays with the run controls.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--progress", negatable = true,
+            description = "Print live progress records to stderr (default: on when stderr is a "
+                    + "terminal and neither -q nor -v was given; --progress-interval implies it).")
+    Boolean progress;
+
     boolean noSummaryJson;
 
     String summaryJsonInterval;

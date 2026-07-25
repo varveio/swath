@@ -75,6 +75,17 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
                     + "a closed downstream pipe stays silent).")
     Boolean stats;
 
+    /**
+     * The {@code --progress}/{@code --no-progress} lever, forwarded like {@code --stats} and for the
+     * same reason: a resumed run is a run, and its merge or re-listing is exactly the long, silent
+     * stretch an operator wants to watch.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--progress", negatable = true,
+            description = "Print live progress records to stderr (default: on when stderr is a "
+                    + "terminal and neither -q nor -v was given).")
+    Boolean progress;
+
     @Mixin
     final GlobalOptions global = new GlobalOptions();
 
@@ -139,6 +150,7 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         list.global.quiet = new boolean[quietLevel];
         list.global.color = spec != null ? GlobalOptions.effectiveColor(spec.commandLine()) : global.color;
         list.output.stats = stats;
+        list.output.progress = progress;
         // Do not parse checkpoint output_format here: ListCommand must first classify the
         // checkpoint's recorded destination and let a FILE-origin refusal win with exit 2. The
         // checkpoint path is also the marker that preserves the ordinary malformed-format exit-1

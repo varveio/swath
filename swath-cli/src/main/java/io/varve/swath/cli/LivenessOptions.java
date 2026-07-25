@@ -24,6 +24,17 @@ final class LivenessOptions {
     /** The default zero-real-progress backstop window when {@code --no-progress-timeout} is unset. */
     static final Duration DEFAULT_NO_PROGRESS_TIMEOUT = LivenessWatchdog.DEFAULT_NO_PROGRESS_TIMEOUT;
 
+    /**
+     * The supported floor for {@code --progress-interval}. The grammar accepts {@code 1ms}, which
+     * on a ten-hour run asks for some 36 million progress records — a rate no human reads and no
+     * captured log wants. One record a second is already faster than a person can follow, so
+     * anything under it is a mistake rather than a preference: REJECTED, not silently clamped, the
+     * same way {@code --part-rotation-interval} treats its own floor and {@code --tune
+     * parquet.writers} treats its range. A flag that means something other than what it says is
+     * worse than an error message.
+     */
+    static final Duration MIN_PROGRESS_INTERVAL = Duration.ofSeconds(1);
+
     String progressInterval;
 
     String maxDuration;
@@ -33,7 +44,18 @@ final class LivenessOptions {
     String noProgressTimeout;
 
     Duration resolveProgressInterval() throws InvalidConfigException {
-        return progressInterval == null ? null : DurationParser.progressInterval(progressInterval);
+        return progressInterval == null ? null : parseProgressInterval(progressInterval);
+    }
+
+    /** Parse {@code --progress-interval}, enforcing {@link #MIN_PROGRESS_INTERVAL}. */
+    static Duration parseProgressInterval(String raw) throws InvalidConfigException {
+        Duration parsed = DurationParser.progressInterval(raw);
+        if (parsed.compareTo(MIN_PROGRESS_INTERVAL) < 0) {
+            throw new InvalidConfigException("--progress-interval must be >= "
+                    + MIN_PROGRESS_INTERVAL + " (got " + raw + "); a faster cadence outruns both a "
+                    + "reader and a captured log");
+        }
+        return parsed;
     }
 
     /** The progress cadence actually in effect: {@code --progress-interval}, else the default. */

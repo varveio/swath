@@ -9,10 +9,14 @@ and the replay-server meters — is [`docs/internals/metrics-internals.md`](inte
 Logs go to **stderr** (stdout is data). Verbosity is a global flag, accepted **before or after** the
 subcommand: `swath -v list …` and `swath list -v …` both work (INFO), `-vv` (DEBUG), `-vvv` (TRACE).
 `-q` lowers the level instead — `-q` (ERROR) or `-qq` (off), winning over `-v` if both are given.
-With `-v` or higher enabling INFO logs, progress is logged to stderr at a 30 s default cadence,
-configurable with `--progress-interval` — one `progress` record per tick, from the seed step through
-listing, merging and writing. The first record lands a couple of seconds into the run rather than a
-whole cadence in, so a short run is not silent.
+One reporter covers the whole run — the seed step through listing, merging and writing — at a 30 s
+default cadence, configurable with `--progress-interval` (floor: `1s`; a faster value is rejected,
+not clamped). Its tick takes exactly one of two forms. When an operator display is wanted (§4's
+gate, or `--progress`), it is the plain human line documented in
+[`usage.md`](usage.md#progress); otherwise it is the structured `progress` **log** record below, at
+INFO — so it needs `-v`. A display REPLACES that record rather than adding to it: one tick renders
+once, never twice on the same stderr. The first record lands a couple of seconds into the run rather
+than a whole cadence in, so a short run is not silent.
 
 Verbosity does **not** gate the end-of-run summary block: it is written to stderr at the default
 level for any run that earns one (over 1.5 s, durable output produced, or an early stop), whether
@@ -438,7 +442,10 @@ reference is in [`docs/internals/metrics-internals.md`](internals/metrics-intern
 ## 4. `-v` progress record (30 s default; `--progress-interval`)
 
 ONE reporter covers the whole run — seeding, listing, merging, writing — and emits one `progress`
-record per tick. Every record carries `run_id, phase, strategy, elapsed_ms, phase_elapsed_ms,
+record per tick. This is the log form of the tick, the surface an external supervisor tailing the
+log reads; it is what ticks whenever the operator display is not installed (§the gate in
+[`usage.md`](usage.md#progress) — `--no-progress`, a non-terminal stderr, or `-v`, which turns this
+record on in the first place). Every record carries `run_id, phase, strategy, elapsed_ms, phase_elapsed_ms,
 api_calls, cost_usd, retries`; `elapsed_ms` is always the whole session (a phase transition never
 resets the clock) and `phase_elapsed_ms` sits alongside it. The tail is phase-shaped:
 
@@ -477,7 +484,7 @@ or "logging broken." Three markers close that:
   probe or the engine, whichever goes first. A run wedged on its very first LIST/region-resolve logs
   `list_first_request_issued` immediately and never logs `list_first_page_returned` — an unambiguous
   "stuck on request #1" signal, distinct from a run that never started at all.
-- **Seed-phase progress:** the §4 progress record ticks unconditionally at `--progress-interval`,
+- **Seed-phase progress:** the §4 progress tick fires unconditionally at `--progress-interval`,
   whether or not anything changed, and the reporter is started around the WHOLE run — the seed-probe
   window included — so a hung seed gets a `progress … phase=seeding probes=0 …` record at the
   configured cadence instead of nothing, with the first one a couple of seconds in rather than a

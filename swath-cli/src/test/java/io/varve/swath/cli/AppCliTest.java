@@ -61,13 +61,27 @@ class AppCliTest {
     @Test
     void listParsesProgressIntervalFlag() throws Exception {
         ListCommand list = new ListCommand();
-        new CommandLine(list).parseArgs("s3://bucket/prefix", "--progress-interval", "500ms",
+        new CommandLine(list).parseArgs("s3://bucket/prefix", "--progress-interval", "2s",
                 "--checkpoint", "none");
         list.syncArgGroups();
 
-        assertThat(list.liveness.resolveProgressInterval()).isEqualTo(Duration.ofMillis(500));
+        assertThat(list.liveness.resolveProgressInterval()).isEqualTo(Duration.ofSeconds(2));
         assertThat(DurationParser.progressInterval("2s")).isEqualTo(Duration.ofSeconds(2));
         assertThat(DurationParser.progressInterval("PT2S")).isEqualTo(Duration.ofSeconds(2));
+    }
+
+    @Test
+    void aProgressIntervalBelowTheSupportedFloorIsRejected() throws Exception {
+        // The grammar accepts 1ms; a ten-hour run at that cadence would attempt some 36 million
+        // records. Out-of-range option values are REJECTED here, never silently clamped.
+        for (String tooFast : new String[] {"1ms", "500ms", "PT0.5S"}) {
+            assertThatThrownBy(() -> LivenessOptions.parseProgressInterval(tooFast))
+                    .as("reject --progress-interval=%s", tooFast)
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining("--progress-interval must be >=");
+        }
+        assertThat(LivenessOptions.parseProgressInterval("1s"))
+                .isEqualTo(LivenessOptions.MIN_PROGRESS_INTERVAL);
     }
 
     @Test
