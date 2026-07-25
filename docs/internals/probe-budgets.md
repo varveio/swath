@@ -63,6 +63,29 @@ The consequences compounded well past the wasted calls:
 
 The timeouts were the visible symptom; **work starvation was the actual cost**.
 
+### 2.1 Measured effect of the fix
+
+Same bucket, same box, same flags — before the split vs after (the "after" run listed the bucket to
+completion, so its wall-clock is the whole bucket, not a truncated window):
+
+| | before | after |
+|---|---|---|
+| `structure_probe` p50 / p99 | 10,196 ms / 20,397 ms | **38.8 ms / 1,006 ms** |
+| attempt timeouts | 1308 | **139** |
+| connections aborted / TLS handshakes | 1308 / 1392 | **139 / 382** |
+| splits | 55 | **350** |
+| `latency_inflation` freezes | 1176 | **29** |
+| throughput | 23.8 k keys/s | **57.2 k keys/s** |
+| run | 6.6 M objects in 280 s, still going | **8.8 M objects, complete, 154 s** |
+
+Two things worth reading off this table beyond the headline. First, the collapse really was
+**probe-driven**: nothing about the worker path changed, yet splits went up 6.4× once the thief could
+get pivots again. Second, the freeze count fell 40× **without the freeze rung being touched** — the
+1176 freezes were a downstream symptom of the storm's connection churn inflating worker latency, not
+an independent mis-tuning. On the healthy run the Vegas rung reads a 64 ms baseline against a 90 ms
+worker p50 (ratio 1.41, comfortably under `LATENCY_FREEZE_FACTOR = 2.0`) and correctly stays quiet.
+Retuning that constant off the storm-contaminated run would have been fixing a symptom.
+
 ## 3. Escalation is re-expressed against each class's own base
 
 `GaugedFetcher` escalates a logical fetch's per-attempt budget on consecutive `ATTEMPT_TIMEOUT`
