@@ -95,6 +95,12 @@ public final class RunMetrics {
     // Where the terminal RunSummary goes beyond the log lines and the JSON report — NONE until a
     // presentation layer installs its own (see RunSummarySink / setSummarySink).
     private final AtomicReference<RunSummarySink> summarySink = new AtomicReference<>(RunSummarySink.NONE);
+    // Where live progress goes, and the single session-wide reporter that feeds it (see
+    // ProgressSink / RunProgressReporter). The reporter reference is what makes ONE progress
+    // lifecycle out of the several nested scopes that each want one: the first start owns it, a
+    // nested start joins it.
+    private final AtomicReference<ProgressSink> progressSink = new AtomicReference<>(ProgressSink.LOG);
+    private final AtomicReference<RunProgressReporter> progressReporter = new AtomicReference<>();
     private final AtomicReference<String> strategy = new AtomicReference<>("unknown");
     private final AtomicReference<String> strategyWhy = new AtomicReference<>("unknown");
     // §3.3: at most one swath.disk.free_bytes gauge per run — registerDiskFreeGauge is called from
@@ -229,6 +235,25 @@ public final class RunMetrics {
     // unobserved-until-first-value idiom as the §3.8 pool gauges above.
     private final Counter progressUnits;
     private final AtomicLong phaseCode = new AtomicLong(-1);
+    // Live-progress state, all read once per progress tick and never on a hot path. The two
+    // tallies are plain monotonic mirrors of counters whose totals would otherwise cost a full
+    // registry walk per tick (counterTotal scans every meter and every measurement); same
+    // dedicated-mirror idiom the liveness tallies above use, for the same reason.
+    private final AtomicLong apiCallsTally = new AtomicLong();
+    private final AtomicLong stealsTally = new AtomicLong();
+    /** Objects a resume carried over from a previous attempt — session work is emitted minus this. */
+    private final AtomicLong recoveredObjects = new AtomicLong();
+    /** When the current phase began, so a tick can show phase elapsed WITHOUT resetting session elapsed. */
+    private final AtomicLong phaseStartNanos = new AtomicLong();
+    /** {@code progress.units} at the merge's start — the baseline merged rows are counted from. */
+    private final AtomicLong mergeProgressBaseline = new AtomicLong(-1);
+    /** Rows staged into the sort segments handed to the merge: the merge's exact denominator. */
+    private final AtomicLong sortStagedRows = new AtomicLong();
+    private final AtomicLong sortStagedSegments = new AtomicLong();
+    /** Seed structure probes completed, their budget, and when the last one landed (liveness). */
+    private final AtomicLong seedProbes = new AtomicLong();
+    private final AtomicLong seedProbeBudget = new AtomicLong();
+    private final AtomicLong lastSeedProbeNanos = new AtomicLong(-1);
 
     // Shape feature-vector accumulators (end-of-run classification signals; §5) — extracted to
     // ShapeAccumulator; its two dimension constants now live there too (relocated). Aliases
@@ -637,6 +662,7 @@ public final class RunMetrics {
         String tag = normalizeTag(strategy.get());
         apiCalls.computeIfAbsent(tag,
                 s -> Counter.builder("swath.api.calls").tag("strategy", s).register(registry)).increment();
+        apiCallsTally.incrementAndGet();   // cheap mirror for the live progress tick
     }
 
     public void recordError(String type) {
@@ -647,6 +673,7 @@ public final class RunMetrics {
     public void recordSteal(String outcome) {
         steals.computeIfAbsent(normalizeTag(outcome),
                 o -> Counter.builder("swath.steals").tag("result", o).register(registry)).increment();
+        stealsTally.incrementAndGet();   // cheap mirror for the live progress tick
     }
 
     public void recordSplit() {
@@ -816,10 +843,16 @@ public final class RunMetrics {
      * own {@code recordEntriesEmitted} calls in this same process, so replaying it here for the
      * pre-crash rows would double-count. Never route this backfill through {@code
      * recordEntriesEmitted} itself for that reason.
+     *
+     * <p>The same rows are tallied separately as RECOVERED work so live progress can label them as
+     * such: they land in one lump when the merge is already done, and a display that folded them
+     * into this session's emitted count would sit at zero and then jump by the whole pre-crash
+     * total (see {@link ProgressEvent.Listing}).
      */
     public void recordRecoveredObjects(long rows) {
         if (rows > 0) {
             entriesEmitted.increment(rows);
+            recoveredObjects.addAndGet(rows);
         }
     }
 
@@ -1425,10 +1458,48 @@ public final class RunMetrics {
 
     /**
      * §3.2: live {@code swath.phase} gauge — dashboard readability only (see {@link Phase}'s
-     * javadoc for why this is never the stuck-detection gate).
+     * javadoc for why this is never the stuck-detection gate). Also starts the phase clock live
+     * progress reports alongside (never instead of) session elapsed, and — entering {@link
+     * Phase#MERGING} — pins the {@code progress.units} baseline the merge's own row count is
+     * measured from, so a merge reports the rows IT moved rather than the run's emitted objects
+     * (which stay flat throughout a merge, and are zero outright on a merge-only resume).
+     *
+     * <p>The phase clock reads {@link System#nanoTime()} directly, NOT the injectable {@code
+     * nanoClock}: that seam exists so the in-flight gauge and the {@code time_to_*} summary fields
+     * are deterministic under a fake clock, and every extra read off it shifts those pinned values.
+     * A display clock has no such contract — it measures wall time for a human, nothing more.
      */
     public void setPhase(Phase phase) {
         phaseCode.set(phase.code());
+        phaseStartNanos.set(System.nanoTime());
+        if (phase == Phase.MERGING) {
+            mergeProgressBaseline.compareAndSet(-1L, progressUnitsTally.get());
+        }
+    }
+
+    /**
+     * One completed seed structure probe. The count and the age of the last one are the only live
+     * evidence a seeding run is alive: it emits no entries, fetches no pages and holds no workers,
+     * so every listing-shaped field reads zero for its whole duration.
+     */
+    public void recordSeedProbe() {
+        seedProbes.incrementAndGet();
+        lastSeedProbeNanos.set(System.nanoTime());
+    }
+
+    /** The seed step's probe budget — the exact denominator seed-phase completion is measured against. */
+    public void recordSeedProbeBudget(long budget) {
+        seedProbeBudget.set(Math.max(0L, budget));
+    }
+
+    /**
+     * The staged sort segments handed to the k-way merge, and their exact row total — the merge's
+     * documented denominator (see {@link ProgressEvent.Merging}). Recorded at merge kickoff, on
+     * both the listing-completion and the merge-only-resume path.
+     */
+    public void recordSortStaged(long segments, long rows) {
+        sortStagedSegments.set(Math.max(0L, segments));
+        sortStagedRows.set(Math.max(0L, rows));
     }
 
     public void recordEstimatedBytes(long bytes) {
@@ -1628,29 +1699,120 @@ public final class RunMetrics {
         return (long) sortMergePasses.count();
     }
 
-    public ProgressSnapshot snapshot(Duration elapsed) {
-        long keyCount = Math.round(counterTotal("swath.entries.emitted"));
-        long apiCallCount = Math.round(counterTotal("swath.api.calls"));
-        double seconds = Math.max(0.001, elapsed.toNanos() / 1_000_000_000.0);
-        double avgRate = keyCount / seconds;
-        double liveRate = windowedRate(elapsed.toNanos(), keyCount, avgRate);
-        return new ProgressSnapshot(
+    /**
+     * Install the run's live-progress sink (see {@link ProgressSink}) — the per-run setter
+     * alongside {@link #setSummarySink}, so a presentation layer can own the progress channel
+     * without threading a parameter through every {@code ListRunner.run*} entry point. The
+     * installed sink REPLACES {@link ProgressSink#LOG}: one tick renders once.
+     */
+    public void setProgressSink(ProgressSink sink) {
+        progressSink.set(sink == null ? ProgressSink.NONE : sink);
+    }
+
+    /** The installed sink — read once per tick by {@link RunProgressReporter}, and nowhere else. */
+    ProgressSink progressSink() {
+        return progressSink.get();
+    }
+
+    /**
+     * The session-wide progress reporter, or {@code null} when none is running. Owned by {@link
+     * RunProgressReporter#start}: CAS'd in by the first (outermost) start and cleared by that same
+     * reporter's {@code close()}; a nested start joins the winner instead of scheduling a second
+     * ticker with its own clock and its own windowed-rate baseline.
+     */
+    boolean claimProgressReporter(RunProgressReporter reporter) {
+        return progressReporter.compareAndSet(null, reporter);
+    }
+
+    /** Releases the reporter installed by {@link #claimProgressReporter}; a no-op for any other. */
+    void releaseProgressReporter(RunProgressReporter reporter) {
+        progressReporter.compareAndSet(reporter, null);
+    }
+
+    /**
+     * ONE immutable sample of the run's live state for {@code sessionElapsed}, built once per tick
+     * and fanned out (see {@link ProgressEvent}). Cheap by construction: every field is an atomic
+     * read or one Micrometer counter read — no registry walk, no resource probe — and the windowed
+     * rate advances its baseline exactly once per tick, because exactly one reporter builds this.
+     */
+    public ProgressEvent progressEvent(Duration sessionElapsed) {
+        long apiCallCount = apiCallsTally.get();
+        Phase phase = phaseOf(phaseCode.get());
+        long now = System.nanoTime();
+        return new ProgressEvent(
+                phase,
                 runId.get(),
                 strategy.get(),
-                keyCount,
-                liveRate,
+                sessionElapsed,
+                Duration.ofNanos(Math.max(0L, now - phaseStartNanos.get())),
+                apiCallCount,
+                estimatedListCost(apiCallCount),
+                throttleEventsTally.get(),
+                completionOf(phase),
+                phase == Phase.SEEDING ? seedingProgress(now) : null,
+                phase == Phase.LISTING ? listingProgress(sessionElapsed) : null,
+                phase == Phase.MERGING || phase == Phase.WRITING ? mergingProgress() : null);
+    }
+
+    /** {@code swath.phase}'s current value as a {@link Phase}; {@link Phase#LISTING} before it is set. */
+    private static Phase phaseOf(long code) {
+        for (Phase phase : Phase.values()) {
+            if (phase.code() == code) {
+                return phase;
+            }
+        }
+        return Phase.LISTING;
+    }
+
+    /**
+     * The phase's completion figure, or {@code null} where no honest denominator exists — which is
+     * the LISTING case and the reason there is no bar, no percentage and no ETA there: an unsorted
+     * scan does not know its object total until it ends. Seeding and merging both have exact ones.
+     */
+    private ProgressEvent.Completion completionOf(Phase phase) {
+        if (phase == Phase.SEEDING && seedProbeBudget.get() > 0) {
+            return new ProgressEvent.Completion(seedProbes.get(), seedProbeBudget.get(),
+                    ProgressEvent.Unit.PROBES);
+        }
+        if ((phase == Phase.MERGING || phase == Phase.WRITING) && sortStagedRows.get() > 0) {
+            return new ProgressEvent.Completion(mergedRows(), sortStagedRows.get(),
+                    ProgressEvent.Unit.ROWS);
+        }
+        return null;
+    }
+
+    private ProgressEvent.Seeding seedingProgress(long now) {
+        long last = lastSeedProbeNanos.get();
+        return new ProgressEvent.Seeding(seedProbes.get(), seedProbeBudget.get(),
+                Duration.ofNanos(last < 0 ? Math.max(0L, now - phaseStartNanos.get())
+                        : Math.max(0L, now - last)));
+    }
+
+    private ProgressEvent.Listing listingProgress(Duration sessionElapsed) {
+        long keyCount = Math.round(entriesEmitted.count());
+        double seconds = Math.max(0.001, sessionElapsed.toNanos() / 1_000_000_000.0);
+        double avgRate = keyCount / seconds;
+        return new ProgressEvent.Listing(
+                Math.max(0L, keyCount - recoveredObjects.get()),
+                recoveredObjects.get(),
+                windowedRate(sessionElapsed.toNanos(), keyCount, avgRate),
                 avgRate,
                 pages.get(),
                 currentInFlight(),
                 concurrencyTarget.get(),
-                apiCallCount,
-                estimatedListCost(apiCallCount),
-                Math.round(counterTotal("swath.steals")),
-                splits.get(),
-                oldestPendingRange(),
-                "unknown",
-                display(currentCursor.get()),
-                currentPrefix.get());
+                stealsTally.get(),
+                splits.get());
+    }
+
+    private ProgressEvent.Merging mergingProgress() {
+        return new ProgressEvent.Merging(mergedRows(), sortStagedRows.get(), sortStagedSegments.get(),
+                (long) sortMergePasses.count());
+    }
+
+    /** Rows merged since the merge began — {@code progress.units} advanced past its merge baseline. */
+    private long mergedRows() {
+        long baseline = mergeProgressBaseline.get();
+        return baseline < 0 ? 0L : Math.max(0L, progressUnitsTally.get() - baseline);
     }
 
     public RunSummary summary(Duration duration, String strategy, long outputFiles, long compressedBytes) {
@@ -1979,25 +2141,6 @@ public final class RunMetrics {
         return cpu < 0 ? -1.0 : cpu / wallSeconds;
     }
 
-    public record ProgressSnapshot(
-            long runId,
-            String strategy,
-            long keys,
-            double liveKeysPerSecond,
-            double keysPerSecond,
-            long pages,
-            long inFlight,
-            long concurrencyTarget,
-            long apiCalls,
-            double estimatedCostUsd,
-            long steals,
-            long splits,
-            String oldestPendingRange,
-            String eta,
-            String cursor,
-            String prefix) {
-    }
-
     /**
      * {@code throttleEvents}/{@code transientEvents}/{@code aimdVotes}: three
      * DISTINCT counts, deliberately not folded into one another so no field lies about what actually
@@ -2085,15 +2228,6 @@ public final class RunMetrics {
 
     private static String normalizeTag(String value) {
         return value == null || value.isBlank() ? "unknown" : value;
-    }
-
-    private String oldestPendingRange() {
-        String prefix = currentPrefix.get();
-        String cursor = display(currentCursor.get());
-        if ("<none>".equals(cursor)) {
-            return prefix == null || prefix.isBlank() ? "<none>" : prefix;
-        }
-        return (prefix == null || prefix.isBlank()) ? cursor : prefix + ">" + cursor;
     }
 
     /**

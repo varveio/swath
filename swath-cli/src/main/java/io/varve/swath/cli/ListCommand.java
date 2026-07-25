@@ -34,6 +34,7 @@ import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.MeterRegistries;
+import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.observability.RunSummary;
@@ -802,7 +803,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // The fetcher is created once and shared by the seed probe and the engine, so a
             // fresh run pays a single S3 client setup. Resume reloads existing nodes (it never
             // re-seeds); a fresh run seeds the worklist before loading the resumable set.
-            try (S3Client s3 = S3ClientFactory.create(config, ctx.metrics())) {
+            //
+            // The session progress reporter opens here, around EVERYTHING the run does: the seed
+            // step, the engine, and the sort merge/publish tail. It is the CLI's to start because
+            // this is the only scope that spans all three — the engine's own start joins this one
+            // instead of running a second ticker (RunProgressReporter), and it closes first (before
+            // the S3 client) so no frame can land after the run is over.
+            try (S3Client s3 = S3ClientFactory.create(config, ctx.metrics());
+                    RunProgressReporter progress = liveness.startProgressReporter(ctx)) {
                 PageFetcher rawFetcher = fetcherOverride != null
                         ? fetcherOverride
                         : connection.maybeRateLimited(new S3PageFetcher(s3, s3uri.bucket(),
@@ -830,20 +838,17 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // "empty ⇒ done" determinations, so a re-seeded resume proceeds normally in either
                 // mode; a normal partial resume (nodes present) is unaffected.
                 if (!run.resumed() || store.countNodes(run.id()) == 0) {
-                    // Bind the metrics run id before the seed heartbeat starts, so its progress line
-                    // reports the real run id instead of RunMetrics' unset default (-1) — run.id() is
-                    // already known (openRun assigned it above); writeEarlyExitSummary/ListRunner
-                    // re-set the same value later, a harmless idempotent re-assignment.
+                    // Bind the metrics run id before the first probe, so the progress reporter
+                    // already ticking reports the real run id instead of RunMetrics' unset default
+                    // (-1) — run.id() is already known (openRun assigned it above);
+                    // writeEarlyExitSummary/ListRunner re-set the same value later, a harmless
+                    // idempotent re-assignment. The phase is set here, strictly before the seed's
+                    // first probe, so a run that hangs in seeding reports SEEDING (probes against
+                    // their budget, age of the last completed one) instead of a listing shape whose
+                    // every field is zero by construction — the case the issue evidenced.
                     ctx.metrics().setRunId(run.id());
-                    // A zero-progress heartbeat for the seed window specifically — the gap the
-                    // issue evidenced (a hung seed produced zero log lines for hours, since
-                    // RunProgressReporter only starts once ListRunner's engine dispatch is entered,
-                    // well after seeding). Piggybacks on the EXISTING RunProgressReporter/--progress-
-                    // interval cadence rather than new scheduling infra; on the common fast-seed path
-                    // it ticks zero times (seeding finishes in milliseconds) and costs nothing beyond
-                    // starting/stopping one daemon thread.
-                    try (RunProgressReporter seedHeartbeat =
-                                 liveness.startProgressReporter(ctx, stdoutIsTerminal)) {
+                    ctx.metrics().setPhase(Phase.SEEDING);
+                    try {
                         seedFreshRun(store, run.id(), fetcher, s3uri, ctx);
                     } catch (Exception e) {
                         // A seed-time InterruptedException is a LIVENESS signal,

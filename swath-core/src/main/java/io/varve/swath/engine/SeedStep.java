@@ -184,6 +184,9 @@ public final class SeedStep {
         this.targetSeeds = Math.min(PROBE_PAGE, 4 * w);
         // The descent probe budget is bounded by the same target (one-time, ~O(seed) RPCs).
         this.maxProbes = Math.min(256, Math.max(1, this.targetSeeds));
+        if (metrics != null) {
+            metrics.recordSeedProbeBudget(this.maxProbes);   // the seed phase's exact denominator
+        }
         // The whole scan's own upper bound — the scope every top-level cut's unmeasured tail
         // falls back to in spanScore (see scopeCeiling).
         this.topScopeCeiling = scopeCeiling(this.prefix);
@@ -1315,6 +1318,10 @@ public final class SeedStep {
             // (STUCK)/halted despite each probe actually completing. A seed truly wedged inside a
             // single probe (zero probes ever completing) still correctly trips the watchdog.
             metrics.markProgress();
+            // One completed probe, for the live seed-phase display: the count against maxProbes is
+            // the only exact completion figure this phase has, and the age of the last one is the
+            // only evidence a seeding run (zero objects, zero pages, zero workers) is still alive.
+            metrics.recordSeedProbe();
         }
         return page;
     }

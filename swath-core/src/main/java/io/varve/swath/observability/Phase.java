@@ -18,6 +18,12 @@ package io.varve.swath.observability;
  * Micrometer itself) — the series is effectively absent until a phase is set.
  */
 public enum Phase {
+    /**
+     * The pre-listing seed step ({@code SeedStep}): bounded structure probes, zero emitted entries.
+     * Declared FIRST (lifecycle order) but coded {@code 4} — the explicit codes above are already
+     * published, and inserting a constant must never renumber them.
+     */
+    SEEDING(4),
     LISTING(0),
     MERGING(1),
     WRITING(2),

@@ -30,7 +30,6 @@ import io.varve.swath.observability.Phase;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.observability.RunSummary;
-import io.varve.swath.observability.SortMergeHeartbeat;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.BrokenPipe;
@@ -705,7 +704,7 @@ public final class ListRunner {
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
                     merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                            sortedSegmentPaths(store, runId, stagingDir), sortConfig, mode, spec.bucket(),
+                            sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                             spec.argsHash(), runId, spec.progressInterval(), false);
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
@@ -758,11 +757,10 @@ public final class ListRunner {
             store.setSortPhase(runId, SortPhase.MERGING);
             ctx.metrics().setPhase(Phase.MERGING);
             List<PartRef> segRows = sortedSegmentRows(store, runId);
-            List<Path> segments = segRows.stream().map(p -> stagingDir.resolve(p.path())).toList();
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
             SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
-                    segments, sortConfig, mode, spec.bucket(),
+                    segRows, sortConfig, mode, spec.bucket(),
                     spec.argsHash(), runId, spec.progressInterval(), true);
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
@@ -818,8 +816,14 @@ public final class ListRunner {
      *         {@code false}: it has no such identity guarantee.
      */
     private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
-            List<Path> segments, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
+            List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
             Duration progressInterval, boolean identityVerifiedWideSweep) throws SwathException {
+        // The exact merge denominator, recorded HERE because this is the one point both merge
+        // callers pass through with the staged parts in hand: rows merged is measured against the
+        // rows those very segments hold (see RunMetrics#recordSortStaged).
+        ctx.metrics().recordSortStaged(stagedParts.size(),
+                stagedParts.stream().mapToLong(PartRef::rows).sum());
+        List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
         Comparator<ListEntry> comparator = new ListEntryComparator();
         SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
         // Wrap the final-file writer factory so each row streamed into the merged output marks
@@ -843,16 +847,14 @@ public final class ListRunner {
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).
         ctx.metrics().markProgress();
         Timer.Sample mergeSample = ctx.metrics().startSortMergeTimer();
-        // The merge/publish tail runs OUTSIDE RunProgressReporter's LISTING-only
-        // try-with-resources scope (ListRunner#run), so without a dedicated heartbeat here a
-        // fully-enumerated run is silent on every external channel for the whole merge, even
-        // though it is genuinely advancing (swath.progress.units, fed by KWayMerge's per-pass
-        // callback above). Started at merge kickoff, stopped on both the success and exception
-        // path via try-with-resources. Honors the SAME configured
-        // --progress-interval the listing phase's RunProgressReporter uses (startProgress), not a
-        // hardcoded default — a short merge under a tight external watchdog + short
-        // --progress-interval must still see periodic ticks, not just the final close() line.
-        try (SortMergeHeartbeat heartbeat = startSortMergeHeartbeat(ctx.metrics(), progressInterval)) {
+        // The merge/publish tail must keep reporting: it is genuinely advancing (swath.progress.units,
+        // fed by KWayMerge's per-pass callback below) and an external supervisor reading only the log
+        // tail would otherwise see silence and kill a healthy, still-merging run. Normally the run's
+        // session reporter is already ticking and this start JOINS it (see RunProgressReporter); on
+        // the merge-only resume path, where no listing ever ran, this IS the owner. Either way it
+        // honors the same configured --progress-interval, and stops on both the success and the
+        // exception path.
+        try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
             SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
                     (finalFiles, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
@@ -994,12 +996,6 @@ public final class ListRunner {
     private static List<PartRef> sortedSegmentRows(CheckpointStore store, long runId) throws CheckpointException {
         return store.finalizedParts(runId).stream()
                 .filter(p -> SORT_SEGMENT_FORMAT.equals(p.format())).toList();
-    }
-
-    private static List<Path> sortedSegmentPaths(CheckpointStore store, long runId, Path stagingDir)
-            throws CheckpointException {
-        return sortedSegmentRows(store, runId).stream()
-                .map(p -> stagingDir.resolve(p.path())).toList();
     }
 
     /**
@@ -1158,26 +1154,16 @@ public final class ListRunner {
                 .build());
     }
 
-    private static RunProgressReporter startProgress(RunContext ctx, Duration interval) {
-        // Engine-internal caller: no ambient terminal knowledge exists this deep in swath-core (the
-        // CLI is the one layer that probes it, via LivenessOptions#startProgressReporter for the
-        // seed-phase heartbeat) -- false preserves the exact prior behavior, since this value was
-        // never functionally consumed anyway (see RunProgressReporter's still-pending JLine TODO).
-        return interval == null ? RunProgressReporter.start(ctx.metrics(), false)
-                : RunProgressReporter.start(ctx.metrics(), interval);
-    }
-
     /**
-     * Mirrors {@link #startProgress}'s null-default resolution so the merge-phase
-     * heartbeat honors the SAME configured {@code --progress-interval} the listing phase's {@link
-     * RunProgressReporter} uses — unset ({@code null}) still resolves to {@link
-     * SortMergeHeartbeat}'s own non-TTY default, so default behavior is unchanged. Package-private
-     * (not {@code private}) so {@code ListRunnerSortMergeHeartbeatWiringTest} can pin this exact
-     * resolution without reflection.
+     * Starts the run's progress reporter at the configured {@code --progress-interval}, or the
+     * default cadence when unset. Package-private (not {@code private}) so {@code
+     * ListRunnerProgressWiringTest} can pin this resolution without reflection. When the CLI has
+     * already started the session reporter (it spans the seed step too), this returns a joined
+     * handle — see {@link RunProgressReporter}.
      */
-    static SortMergeHeartbeat startSortMergeHeartbeat(RunMetrics metrics, Duration interval) {
-        return interval == null ? SortMergeHeartbeat.start(metrics)
-                : SortMergeHeartbeat.start(metrics, interval);
+    static RunProgressReporter startProgress(RunContext ctx, Duration interval) {
+        return RunProgressReporter.start(ctx.metrics(),
+                interval == null ? RunProgressReporter.nonTtyInterval() : interval);
     }
 
     /** No-op (returns {@code null}) unless the CLI configured a JSON run-summary sidecar. */
@@ -1488,31 +1474,31 @@ public final class ListRunner {
         plan.startLog.run();
         boolean summaryEmitted = false;
         try {
-            // Slot 1 — drain: run the pipeline (bound to the run id when checkpointed), then the sink's
-            // success verb; teardown always fires in the finally.
-            boolean drained = false;
-            try {
-                if (plan.runId != null) {
-                    runWithRunId(ctx, plan.runId, () -> {
-                        try (RunProgressReporter ignored = startProgress(ctx, plan.progressInterval)) {
+            // Progress spans BOTH slots, not just the drain: the sort path's whole merge/publish tail
+            // runs inside complete(), and scoping the reporter to the pipeline alone is what left a
+            // fully-enumerated run reporting nothing for its entire merge. close() only stops daemon
+            // schedulers and never throws, so the drained flag below stays accurate.
+            try (RunProgressReporter progress = startProgress(ctx, plan.progressInterval)) {
+                // Slot 1 — drain: run the pipeline (bound to the run id when checkpointed), then the sink's
+                // success verb; teardown always fires in the finally.
+                boolean drained = false;
+                try {
+                    if (plan.runId != null) {
+                        runWithRunId(ctx, plan.runId, () -> {
                             pipeline.run(ctx, plan.producer, plan.consumerStage);
                             plan.drain.onDrained();
-                        }
-                    });
-                } else {
-                    try (RunProgressReporter ignored = startProgress(ctx, plan.progressInterval)) {
+                        });
+                    } else {
                         pipeline.run(ctx, plan.producer, plan.consumerStage);
                         plan.drain.onDrained();
                     }
+                    drained = true;
+                } finally {
+                    plan.drain.onFinally(drained);
                 }
-                // Set AFTER the progress reporter closes: its close() must never throw (it only
-                // stops daemon schedulers), or a cleanly-drained sink would be aborted below.
-                drained = true;
-            } finally {
-                plan.drain.onFinally(drained);
+                // Slot 2 — complete: the per-path ordered store-mutation chain, before the terminal summary.
+                plan.complete.commit();
             }
-            // Slot 2 — complete: the per-path ordered store-mutation chain, before the terminal summary.
-            plan.complete.commit();
             // Slot 3 — epilogue.
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = plan.terminalSummary.apply(elapsed);

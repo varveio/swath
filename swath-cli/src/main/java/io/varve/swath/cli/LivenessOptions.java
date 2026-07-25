@@ -68,18 +68,13 @@ final class LivenessOptions {
     }
 
     /**
-     * Starts a {@link RunProgressReporter} at the same {@code --progress-interval} cadence
-     * {@code ListRunner} uses for the engine phase (mirrors its private {@code startProgress} helper)
-     * — the seam the seed-phase zero-progress heartbeat reuses, since {@code ListRunner}'s own
-     * reporter does not exist yet during seeding.
-     *
-     * @param stdoutIsTerminal the CLI's own per-fd {@code TerminalCapabilities} probe --
-     *                         threaded in explicitly so swath-core never calls {@code
-     *                         System.console()} itself.
+     * Starts the run's SESSION progress reporter at the resolved {@code --progress-interval}
+     * cadence. The CLI owns this one because it is the only layer whose scope covers the whole run
+     * — the seed step included, which is where a stalled run is least visible and where every
+     * listing-shaped counter reads zero. {@code ListRunner}'s own start then joins this reporter
+     * rather than running a second one (see {@link RunProgressReporter}).
      */
-    RunProgressReporter startProgressReporter(RunContext ctx, boolean stdoutIsTerminal) throws InvalidConfigException {
-        Duration interval = resolveProgressInterval();
-        return interval == null ? RunProgressReporter.start(ctx.metrics(), stdoutIsTerminal)
-                : RunProgressReporter.start(ctx.metrics(), interval);
+    RunProgressReporter startProgressReporter(RunContext ctx) throws InvalidConfigException {
+        return RunProgressReporter.start(ctx.metrics(), resolveEffectiveProgressInterval());
     }
 }
