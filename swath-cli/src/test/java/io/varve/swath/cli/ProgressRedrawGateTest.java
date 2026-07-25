@@ -54,11 +54,18 @@ class ProgressRedrawGateTest {
                 () -> TerminalGeometry.MIN_USABLE_WIDTH)).isTrue();
     }
 
+    private static final AnsiPalette PLAIN = new AnsiPalette(false);
+
+    /** The frame as the operator sees it, colour off so these pin content and width only. */
+    private static String render(java.util.List<String> parts, int width) {
+        return PLAIN.render(ProgressDisplay.frame(parts, width, PLAIN));
+    }
+
     @Test
     void aFrameTooWideLosesWholeFieldsAndNeverHalfOfOne() {
         // 39 columns fits the phase and the object count, and not the rate. The dropped field goes
         // whole: "4,781 key" is the frame that looks broken, and is what this forecloses.
-        String frame = ProgressDisplay.fit(PARTS, 39);
+        String frame = render(PARTS, 39);
 
         assertThat(frame).isEqualTo("  listing · 1,204,993 objects");
         assertThat(frame.length()).isLessThanOrEqualTo(39);
@@ -66,27 +73,56 @@ class ProgressRedrawGateTest {
 
     @Test
     void aFrameThatFitsKeepsEveryField() {
-        String frame = ProgressDisplay.fit(PARTS, 120);
+        String frame = render(PARTS, 120);
 
         assertThat(frame).isEqualTo(
                 "  listing · 1,204,993 objects · 4,781 keys/s · 1,208 API calls");
-        assertThat(ProgressDisplay.fit(PARTS, frame.length())).isEqualTo(frame);
+        assertThat(render(PARTS, frame.length())).isEqualTo(frame);
     }
 
     @Test
     void aTerminalNarrowerThanTheFirstFieldFallsBackToACut() {
         // The one case a field cannot be dropped to solve: something must still bound the line, or
         // it wraps and the erase strands a row.
-        String frame = ProgressDisplay.fit(PARTS, 6);
+        String frame = render(PARTS, 6);
 
         assertThat(frame).hasSize(6).isEqualTo("  list");
+    }
+
+    @Test
+    void aFieldOfWideCharactersIsBoundedByColumnsNotCharacters() {
+        // "日本語 objects" is 11 characters but 14 display columns, so with the 9-column indent and
+        // phase plus a 3-column separator the frame needs 26. Bounded by String.length() it would
+        // measure 23, fit at a width it actually overruns, wrap, and strand a row past the reach of
+        // the erase -- the exact failure the redraw exists to prevent. No field carries text like
+        // this today; the bound has to hold for the one that eventually does.
+        List<String> wide = List.of("listing", "日本語 objects", "4,781 keys/s");
+
+        assertThat(render(wide, 26)).isEqualTo("  listing · 日本語 objects");
+        assertThat(render(wide, 25))
+                .as("one column short is one column short, however few characters that is")
+                .isEqualTo("  listing");
+    }
+
+    @Test
+    void aStyledFrameCarriesOnlyWellFormedEscapes() {
+        AnsiPalette colour = new AnsiPalette(true);
+
+        String frame = colour.render(ProgressDisplay.frame(PARTS, 39, colour));
+
+        // Strip every COMPLETE SGR sequence; anything left is a half-written one, which would
+        // leave the terminal styled for the rest of the session. This is what cutting the rendered
+        // string -- rather than the styled representation -- would produce.
+        assertThat(frame.replaceAll("\u001B\\[[0-9;]*m", ""))
+                .doesNotContain("\u001B");
+        assertThat(frame).endsWith("\u001B[0m");
     }
 
     @Test
     void anUnknownWidthBoundsNothingRatherThanBoundingToNothing() {
         // The failure this forecloses: treating UNKNOWN (-1) as a width would cut every frame to
         // nothing, turning "we cannot measure" into "print nothing at all".
-        assertThat(ProgressDisplay.fit(PARTS, TerminalGeometry.UNKNOWN))
+        assertThat(render(PARTS, TerminalGeometry.UNKNOWN))
                 .isEqualTo("  listing · 1,204,993 objects · 4,781 keys/s · 1,208 API calls");
     }
 }

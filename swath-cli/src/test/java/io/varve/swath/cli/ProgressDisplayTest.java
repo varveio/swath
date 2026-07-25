@@ -33,6 +33,9 @@ import org.junit.jupiter.api.Test;
  */
 final class ProgressDisplayTest {
 
+    /** Colour off: these tests pin field content, which is identical either way. */
+    private static final AnsiPalette PLAIN = new AnsiPalette(false);
+
     private static final String RATE_LABEL = " (est. @ $" + RunMetrics.LIST_COST_PER_1K_USD + "/1k LIST)";
 
     // ---- the shape of each phase -------------------------------------
@@ -85,7 +88,7 @@ final class ProgressDisplayTest {
     void everyFrameIsOnePlainLineWithNoControlCharacters() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN, PLAIN);
         display.accept(seeding(1L, 64L, Duration.ofMillis(200)));
         display.accept(listing(10L, 0L));
         display.accept(finalPass(1L, 2L));
@@ -157,7 +160,7 @@ final class ProgressDisplayTest {
         StderrCoordinator stderr = coordinator(new ByteArrayOutputStream());
 
         assertThat(ProgressDisplay.sinkFor(
-                new ProgressDisplay.Preferences(false, false, true, true, true), stderr))
+                new ProgressDisplay.Preferences(false, false, true, true, true), stderr, PLAIN))
                 .as("--no-progress must silence the structured record too, or -v still gets ticks")
                 .isSameAs(ProgressSink.NONE);
     }
@@ -166,10 +169,10 @@ final class ProgressDisplayTest {
     void aRunThatDeclinesTheDisplayKeepsTheStructuredRecord() {
         StderrCoordinator stderr = coordinator(new ByteArrayOutputStream());
 
-        assertThat(ProgressDisplay.sinkFor(auto(false), stderr))
+        assertThat(ProgressDisplay.sinkFor(auto(false), stderr, PLAIN))
                 .as("a redirected run's progress surface is the log record a supervisor tails")
                 .isSameAs(ProgressSink.LOG);
-        assertThat(ProgressDisplay.sinkFor(auto(true), stderr)).isInstanceOf(ProgressDisplay.class);
+        assertThat(ProgressDisplay.sinkFor(auto(true), stderr, PLAIN)).isInstanceOf(ProgressDisplay.class);
     }
 
     @Test
@@ -186,7 +189,7 @@ final class ProgressDisplayTest {
     void nothingIsWrittenAfterProgressIsFinishedAndFinishingIsIdempotent() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN, PLAIN);
         display.accept(listing(10L, 0L));
 
         coordinator.finishProgress();
@@ -203,7 +206,7 @@ final class ProgressDisplayTest {
     void theSummaryBlockPermanentlyEndsProgressBeforeItWritesALine() {
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         StderrCoordinator coordinator = coordinator(captured);
-        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN);
+        ProgressDisplay display = new ProgressDisplay(coordinator, false, () -> TerminalGeometry.UNKNOWN, PLAIN);
         display.accept(listing(10L, 0L));
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.markRunStarted();
@@ -231,7 +234,7 @@ final class ProgressDisplayTest {
                 throw new IOException("Broken pipe");
             }
         }, true, StandardCharsets.UTF_8);
-        ProgressDisplay display = new ProgressDisplay(new StderrCoordinator(() -> broken), false, () -> TerminalGeometry.UNKNOWN);
+        ProgressDisplay display = new ProgressDisplay(new StderrCoordinator(() -> broken), false, () -> TerminalGeometry.UNKNOWN, PLAIN);
 
         display.accept(listing(10L, 0L));   // must not throw: the run's disposition is not stderr's
 

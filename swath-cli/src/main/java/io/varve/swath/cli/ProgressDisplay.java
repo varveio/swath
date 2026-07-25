@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.IntSupplier;
+import org.jline.utils.AttributedString;
+import org.jline.utils.AttributedStringBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,9 +84,23 @@ final class ProgressDisplay implements ProgressSink {
     /** Whether frames overwrite in place. False makes this exactly the plain-record display. */
     private final boolean redraw;
 
-    ProgressDisplay(StderrCoordinator stderr, boolean redraw, IntSupplier width) {
+    /**
+     * The palette, which also decides whether any colour is emitted at all — so a redirected
+     * stderr gets the same fields as plain text without this class branching on it. Shared with
+     * the end-of-run block, so the two surfaces cannot dim and accent by different rules.
+     */
+    private final AnsiPalette ansi;
+
+    /** The field carrying the phase's headline figure — always the one after the phase name. */
+    private static final int HEADLINE_FIELD = 1;
+
+    /** {@link OperatorText#INDENT}'s width, the length a frame has when nothing has fit yet. */
+    private static final int INDENT_COLUMNS = OperatorText.INDENT.length();
+
+    ProgressDisplay(StderrCoordinator stderr, boolean redraw, IntSupplier width, AnsiPalette ansi) {
         this.redraw = redraw;
         this.width = width;
+        this.ansi = ansi;
         this.channel = stderr.openProgress(redraw);
     }
 
@@ -96,18 +112,19 @@ final class ProgressDisplay implements ProgressSink {
      * every other run keeps the structured record — the surface a supervisor tailing the log reads,
      * and the only one a redirected run has.
      */
-    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr) {
-        return sinkFor(prefs, stderr, TerminalGeometry::stderrWidth);
+    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr, AnsiPalette ansi) {
+        return sinkFor(prefs, stderr, ansi, TerminalGeometry::stderrWidth);
     }
 
-    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr, IntSupplier width) {
+    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr, AnsiPalette ansi,
+            IntSupplier width) {
         if (Boolean.FALSE.equals(prefs.progress())) {
             return ProgressSink.NONE;
         }
         if (!shouldDisplay(prefs)) {
             return ProgressSink.LOG;
         }
-        return new ProgressDisplay(stderr, shouldRedraw(prefs, width), width);
+        return new ProgressDisplay(stderr, shouldRedraw(prefs, width), width, ansi);
     }
 
     /**
@@ -160,9 +177,10 @@ final class ProgressDisplay implements ProgressSink {
     @Override
     public void accept(ProgressEvent event) {
         try {
-            channel.frame(redraw
-                    ? fit(parts(event), width.getAsInt())
-                    : OperatorText.INDENT + line(event));
+            // Width bounds a redrawing frame and nothing else: a plain record may be as long as it
+            // likes, because a terminal wraps it harmlessly and a captured log has no width at all.
+            channel.frame(ansi.render(
+                    frame(parts(event), redraw ? width.getAsInt() : TerminalGeometry.UNKNOWN, ansi)));
         } catch (RuntimeException e) {
             // The sink runs on the run's progress thread: a formatting fault must cost the operator
             // a frame, never the run's disposition or exit code.
@@ -171,52 +189,48 @@ final class ProgressDisplay implements ProgressSink {
     }
 
     /**
-     * Bound a redrawing frame to the terminal's width, by dropping whole fields off the end rather
-     * than cutting through one. A frame that wraps occupies two physical rows while the erase that
-     * follows it reaches only one, so the remainder is stranded on screen and the display walks
-     * down it — the single failure an in-place redraw has to prevent. But {@code 8 API ca} is a
-     * frame that looks broken, and the fields are ordered most-important-first precisely so the
-     * ones that fall off the end are the ones worth losing.
+     * Build one frame: styled by role, and bounded to the terminal by dropping whole trailing
+     * fields rather than cutting through one. A frame that wraps occupies two physical rows while
+     * the erase that follows it reaches only one, so the remainder is stranded on screen and the
+     * display walks down it — the single failure an in-place redraw has to prevent. But {@code 8
+     * API ca} is a frame that looks broken, and the fields are ordered most-important-first
+     * precisely so the ones that fall off the end are the ones worth losing.
+     *
+     * <p><b>Measured in display columns, not characters.</b> {@link AttributedString#columnLength}
+     * counts what the terminal will actually occupy — {@code 日本語 ok} is six characters and nine
+     * columns — so the bound holds for any text a field might one day carry, not only for the ASCII
+     * digits every field carries today. Styling rides along in the same object, so a cut never
+     * lands inside an escape sequence.
      *
      * <p>Width is re-read every frame rather than tracked through a {@code WINCH} handler, so a
      * terminal resized mid-run is honoured by the next frame and swath installs no signal handler
-     * for a display. {@link TerminalGeometry#UNKNOWN} bounds nothing: a width that stopped being
-     * knowable mid-run leaves one frame that may wrap, which beats a frame cut to nothing.
-     *
-     * <p>Measured in {@code String.length()} — UTF-16 units, not display columns. That is exact
-     * here and only here: every field is a number, a duration or an ASCII phase name, by the
-     * class's no-key-text rule. A field carrying arbitrary text would need real column measurement,
-     * and would be the reason to reach for one.
+     * for a display. {@link TerminalGeometry#UNKNOWN} bounds nothing — a width that stopped being
+     * knowable, or a plain record that never had one, leaves the frame whole.
      */
-    static String fit(List<String> parts, int width) {
-        if (width == TerminalGeometry.UNKNOWN) {
-            return OperatorText.INDENT + String.join(OperatorText.SEP, parts);
-        }
-        StringBuilder frame = new StringBuilder(OperatorText.INDENT);
-        for (String part : parts) {
-            int separator = frame.length() == OperatorText.INDENT.length() ? 0 : OperatorText.SEP.length();
-            if (frame.length() + separator + part.length() > width) {
+    static AttributedString frame(List<String> parts, int width, AnsiPalette ansi) {
+        AttributedStringBuilder frame = new AttributedStringBuilder();
+        frame.append(ansi.plain(OperatorText.INDENT));
+        for (int i = 0; i < parts.size(); i++) {
+            // The headline figure — objects listed, probes completed, rows merged — carries the
+            // palette's one accent, exactly as the end-of-run block's headline line does. It is
+            // always the field after the phase name, for every phase.
+            AttributedString field = i == HEADLINE_FIELD
+                    ? ansi.accent(parts.get(i))
+                    : ansi.dim(parts.get(i));
+            AttributedString separator = i == 0 ? ansi.plain("") : ansi.dim(OperatorText.SEP);
+            if (width != TerminalGeometry.UNKNOWN
+                    && frame.columnLength() + separator.columnLength()
+                            + field.columnLength() > width) {
                 break;
             }
-            if (separator > 0) {
-                frame.append(OperatorText.SEP);
-            }
-            frame.append(part);
+            frame.append(separator).append(field);
         }
-        if (frame.length() > OperatorText.INDENT.length()) {
-            return frame.toString();
+        if (frame.columnLength() > INDENT_COLUMNS) {
+            return frame.toAttributedString();
         }
         // A terminal too narrow for even the phase name. Nothing here is worth showing, but a
         // wrapping frame would still strand rows, so this one case does cut mid-field.
-        return truncate(OperatorText.INDENT + parts.getFirst(), width);
-    }
-
-    /** Hard cut, for the one case {@link #fit} cannot solve by dropping a field. */
-    static String truncate(String frame, int width) {
-        if (width == TerminalGeometry.UNKNOWN || frame.length() <= width) {
-            return frame;
-        }
-        return frame.substring(0, width);
+        return ansi.dim(OperatorText.INDENT + parts.getFirst()).columnSubSequence(0, width);
     }
 
     /** Whether a frame would be written at all — the gate that skips building the event. */
@@ -241,7 +255,7 @@ final class ProgressDisplay implements ProgressSink {
 
     /**
      * A frame's fields, most-important-first: the phase and its own counters, then the figures
-     * every phase shares. The order is what {@link #fit} drops from, so it is a display decision
+     * every phase shares. The order is what {@link #frame} drops from, so it is a display decision
      * and not merely an assembly one — elapsed and API calls go last because a narrow terminal can
      * spare them, and the phase goes first because a frame that cannot say what the run is doing
      * says nothing at all.

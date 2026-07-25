@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The {@code --color}/{@code NO_COLOR}/{@code TERM}/{@code CLICOLOR_FORCE} precedence (§4.9), and
- * the palette's dim/accent/red wrapping. {@link AnsiPalette#resolveEnabled} takes the raw env
+ * the palette's dim/accent/red styling and its column-accurate truncation. {@link AnsiPalette#resolveEnabled} takes the raw env
  * values as parameters rather than reading {@code System.getenv} itself, so these are pure,
  * deterministic unit tests that never touch the real process environment.
  */
@@ -67,20 +67,44 @@ final class AnsiPaletteTest {
     // ---- the palette itself --------------------------------------------
 
     @Test
-    void enabledWrapsWithTheExpectedSgrCodesAndResets() {
+    void enabledRendersTheExpectedSgrCodesAndResets() {
         AnsiPalette on = new AnsiPalette(true);
 
-        assertThat(on.dim("x")).isEqualTo("\u001B[2mx\u001B[0m");
-        assertThat(on.accent("x")).isEqualTo("\u001B[36mx\u001B[0m");
-        assertThat(on.red("x")).isEqualTo("\u001B[31mx\u001B[0m");
+        // Pinned as exact bytes rather than "contains an escape": these three codes are the whole
+        // palette, and swath renders them itself rather than consulting a terminfo database, so
+        // they must not drift with the rendering library underneath.
+        assertThat(on.render(on.dim("x"))).isEqualTo("\u001B[2mx\u001B[0m");
+        assertThat(on.render(on.accent("x"))).isEqualTo("\u001B[36mx\u001B[0m");
+        assertThat(on.render(on.red("x"))).isEqualTo("\u001B[31mx\u001B[0m");
     }
 
     @Test
-    void disabledReturnsTextUnchanged() {
+    void disabledRendersTextUnchanged() {
         AnsiPalette off = new AnsiPalette(false);
 
-        assertThat(off.dim("x")).isEqualTo("x");
-        assertThat(off.accent("x")).isEqualTo("x");
-        assertThat(off.red("x")).isEqualTo("x");
+        assertThat(off.render(off.dim("x"))).isEqualTo("x");
+        assertThat(off.render(off.accent("x"))).isEqualTo("x");
+        assertThat(off.render(off.red("x"))).isEqualTo("x");
+        assertThat(off.render(off.plain("x"))).isEqualTo("x");
+    }
+
+    @Test
+    void aStyledStringSurvivesBeingCutToAWidth() {
+        AnsiPalette on = new AnsiPalette(true);
+
+        // The reason styling and truncation share a representation: cutting the RENDERED string
+        // would slice the leading escape and leave the terminal wearing it. Cutting by column
+        // re-emits the style and its reset around whatever survived.
+        String cut = on.render(on.dim("listing is long").columnSubSequence(0, 7));
+
+        assertThat(cut).isEqualTo("\u001B[2mlisting\u001B[0m");
+    }
+
+    @Test
+    void widthIsMeasuredInDisplayColumnsNotCharacters() {
+        // The defect this forecloses. A frame bounded by String.length() believes this text is 6
+        // wide when it occupies 9 terminal columns, so it under-truncates, the line wraps, and the
+        // erase that follows reaches only one of the two rows it now occupies.
+        assertThat(new AnsiPalette(false).plain("日本語 ok").columnLength()).isEqualTo(9);
     }
 }

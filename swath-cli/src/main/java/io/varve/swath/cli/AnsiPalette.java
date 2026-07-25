@@ -5,21 +5,39 @@
  */
 package io.varve.swath.cli;
 
+import org.jline.utils.AttributedCharSequence;
+import org.jline.utils.AttributedString;
+import org.jline.utils.AttributedStyle;
+
 /**
- * The one place swath's SGR escape codes live, plus the {@code --color}/{@code NO_COLOR}/
- * {@code TERM}/{@code CLICOLOR_FORCE} precedence that decides whether they're ever emitted (spec
- * §4.9). The palette is deliberately small: dim for labels/units, one accent for the headline
- * figures, red for {@code INCOMPLETE}. Nothing else, and no 256-colour or truecolour codes.
+ * swath's operator palette, and the {@code --color}/{@code NO_COLOR}/{@code TERM}/{@code
+ * CLICOLOR_FORCE} precedence that decides whether it is ever emitted (spec §4.9). The palette is
+ * deliberately small: dim for labels and secondary lines, one accent for the headline figure, red
+ * for {@code INCOMPLETE}. Nothing else, and no 256-colour or truecolour codes.
+ *
+ * <p><b>Styles, not escape codes.</b> Text is styled as an {@link AttributedString} and rendered to
+ * ANSI only at the last moment, by {@link #render}. That indirection is not decoration: the live
+ * progress frame must be cut to the terminal's width, and cutting a {@code String} that already
+ * contains escape sequences can slice one in half and leave the terminal wearing a colour — or
+ * worse, an incomplete control sequence — for the rest of the session. {@link
+ * AttributedCharSequence#columnSubSequence} cuts by display column with the styles held separately,
+ * so a truncated frame is still a well-formed one. Styling and truncation have to share a
+ * representation to be safe, and this is it.
+ *
+ * <p>Colour resolution stays swath's own: JLine renders, it does not decide. {@link #render} emits
+ * plain text when {@link #resolveEnabled} said no, so a caller never branches on colour itself and
+ * no surface can forget to.
  */
 final class AnsiPalette {
 
     /** {@code --color}'s accepted values. */
     enum Mode { AUTO, ALWAYS, NEVER }
 
-    private static final String RESET = "\u001B[0m";
-    private static final String DIM = "\u001B[2m";
-    private static final String ACCENT = "\u001B[36m";   // cyan: the block's one accent
-    private static final String RED = "\u001B[31m";
+    private static final AttributedStyle DIM = AttributedStyle.DEFAULT.faint();
+    private static final AttributedStyle ACCENT =
+            AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN);
+    private static final AttributedStyle RED =
+            AttributedStyle.DEFAULT.foreground(AttributedStyle.RED);
 
     private final boolean enabled;
 
@@ -31,23 +49,34 @@ final class AnsiPalette {
         return enabled;
     }
 
-    /** Labels and units — de-emphasized so the figures they describe read first. */
-    String dim(String text) {
-        return wrap(DIM, text);
+    /** Labels, units and secondary lines — de-emphasized so the figures they describe read first. */
+    AttributedString dim(String text) {
+        return new AttributedString(text, DIM);
     }
 
-    /** The headline figures — the one accent color the palette allows. */
-    String accent(String text) {
-        return wrap(ACCENT, text);
+    /** The headline figures — the one accent colour the palette allows. */
+    AttributedString accent(String text) {
+        return new AttributedString(text, ACCENT);
     }
 
     /** The {@code INCOMPLETE} marker only. */
-    String red(String text) {
-        return wrap(RED, text);
+    AttributedString red(String text) {
+        return new AttributedString(text, RED);
     }
 
-    private String wrap(String code, String text) {
-        return enabled ? code + text + RESET : text;
+    /** Unstyled text that still goes through {@link #render}, so every path is uniform. */
+    AttributedString plain(String text) {
+        return new AttributedString(text);
+    }
+
+    /**
+     * The last step before the bytes reach stderr: ANSI when this palette is enabled, and the bare
+     * characters when it is not. {@link AttributedCharSequence#toAnsi()} is asked for no terminal,
+     * so it emits the plain SGR codes this palette's four styles need and consults no terminfo
+     * database — swath already decided, and a capability lookup could only disagree with it.
+     */
+    String render(AttributedCharSequence styled) {
+        return enabled ? styled.toAnsi() : styled.toString();
     }
 
     /**

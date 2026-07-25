@@ -149,10 +149,10 @@ final class SummaryRenderer implements RunSummarySink {
      */
     private static String colorize(String line, int index, boolean hasDisposition, AnsiPalette ansi) {
         if (hasDisposition && index == 0) {
-            return line.startsWith("INCOMPLETE") ? ansi.red(line) : ansi.dim(line);
+            return ansi.render(line.startsWith("INCOMPLETE") ? ansi.red(line) : ansi.dim(line));
         }
         boolean headline = hasDisposition ? index == 1 : index == 0;
-        return headline ? ansi.accent(line) : ansi.dim(line);
+        return ansi.render(headline ? ansi.accent(line) : ansi.dim(line));
     }
 
     /**
