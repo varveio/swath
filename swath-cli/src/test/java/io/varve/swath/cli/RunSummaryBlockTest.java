@@ -78,8 +78,12 @@ final class RunSummaryBlockTest {
         swathLogger.setLevel(originalLevel);
     }
 
-    /** Long enough to clear {@link SummaryRenderer#AUTO_MIN_ELAPSED} without a flag forcing it. */
-    private static final long OVER_THRESHOLD_MS = 1_800L;
+    /**
+     * Long enough to clear {@link SummaryRenderer#AUTO_MIN_ELAPSED} without a flag forcing it.
+     * Held on the FIRST fetch only: what earns the summary is the run's session wall clock, so one
+     * hold past the threshold is enough — holding every page multiplies it by the fetch count.
+     */
+    private static final long OVER_THRESHOLD_MS = 2_500L;
 
     @Test
     void everyFdCombinationGetsIdenticalContentButOnlyATtyStderrColors(@TempDir Path dir) throws Exception {
@@ -343,7 +347,9 @@ final class RunSummaryBlockTest {
                         "data/b".getBytes(StandardCharsets.UTF_8)));
         if (firstPageDelayMs > 0) {
             fetcher.interceptor((req, idx, page) -> {
-                TimeUnit.MILLISECONDS.sleep(firstPageDelayMs);
+                if (idx == 0) {
+                    TimeUnit.MILLISECONDS.sleep(firstPageDelayMs);
+                }
                 return page;
             });
         }

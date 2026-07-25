@@ -139,13 +139,25 @@ final class LiveProgressRecordTest {
         return captured.toString(StandardCharsets.UTF_8).lines().toList();
     }
 
+    /**
+     * How long the run is held open, on its FIRST fetch only. What earns a frame is the run's
+     * elapsed wall clock, not the number of slow pages: the reporter's first frame lands at
+     * {@code min(activation delay, cadence)} — 1s under the explicit {@link #FASTEST_CADENCE}, 2s
+     * for {@link #runVerbose}, which deliberately keeps the default cadence — so one hold past the
+     * later of those two is what every case here needs. Sleeping on every page instead multiplies
+     * that by the fetch count (~10 for this keyspace, seed probes included) and buys nothing.
+     */
+    private static final long FIRST_PAGE_HOLD_MS = 3_500L;
+
     /** A checkpoint-free run over a mock keyspace, slowed so at least one frame is due. */
     private static ListCommand slowListCommand(Path out) {
         MockPageFetcher fetcher = MockPageFetcher.builder()
                 .keys(List.of("data/a".getBytes(StandardCharsets.UTF_8),
                         "data/b".getBytes(StandardCharsets.UTF_8)))
                 .interceptor((req, idx, page) -> {
-                    TimeUnit.MILLISECONDS.sleep(1_600L);
+                    if (idx == 0) {
+                        TimeUnit.MILLISECONDS.sleep(FIRST_PAGE_HOLD_MS);
+                    }
                     return page;
                 })
                 .build();
