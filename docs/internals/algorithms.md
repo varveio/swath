@@ -382,9 +382,12 @@ steal():
   are simply not *efficient*, because N thieves converge on the same argmax victim
   and all but one lose the CAS. Measured on a 6.6M-key bucket, honouring the bound
   raised steal success from ~4% to ~25% and cut API calls ~35%.
-- **A worker denied the slot waits for its release, it does not poll for it.**
-  The park backstop while an attempt is in flight is seconds-scale, not the ~5 ms
-  pacing base, because the release itself broadcasts on the ledger. The backstop
+- **Waiting on the slot is release-driven, not poll-driven.** A denied worker
+  re-reads the state under the ledger gate and acts on what it finds there — it may
+  claim a child that became ready meanwhile, or park on whatever pacing window the
+  attempt's own outcome left behind. When it does park *because the slot is still
+  held*, the backstop is seconds-scale, not the ~5 ms pacing base, because the
+  release itself broadcasts on the ledger. That backstop
   bounds the wait for an attempt that *outlives* it — it is not the mechanism that
   ends an ordinary wait, and not merely a lost-signal fallback. The release
   must be signalled *outside* the backoff monitor: `Worklist.park` holds its gate

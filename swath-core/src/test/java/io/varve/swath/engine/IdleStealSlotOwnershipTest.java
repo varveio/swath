@@ -39,17 +39,21 @@ final class IdleStealSlotOwnershipTest {
     private static final int UNRELATED_WORKERS = 4;
     private static final int RESETS_PER_WORKER = 2_000;
     private static final int WAITERS = 8;
+    /** Production's own pacing shape (WorkStealingScan's PARK_NANOS / cap / in-flight backstop). */
+    private static final long PACING_BASE_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
+    private static final long PACING_CAP_NANOS = TimeUnit.MILLISECONDS.toNanos(50);
+    private static final long ATTEMPT_PARK_NANOS = TimeUnit.SECONDS.toNanos(1);
 
     private static IdleStealBackoff backoff() {
         return backoff(new SimpleMeterRegistry());
     }
 
     private static IdleStealBackoff backoff(MeterRegistry registry) {
-        return new IdleStealBackoff(
-                TimeUnit.MILLISECONDS.toNanos(5),
-                TimeUnit.MILLISECONDS.toNanos(50),
-                TimeUnit.SECONDS.toNanos(1),
-                new RunMetrics(registry));
+        return backoff(registry, PACING_BASE_NANOS, PACING_CAP_NANOS);
+    }
+
+    private static IdleStealBackoff backoff(MeterRegistry registry, long baseNanos, long capNanos) {
+        return new IdleStealBackoff(baseNanos, capNanos, ATTEMPT_PARK_NANOS, new RunMetrics(registry));
     }
 
     private static double denials(MeterRegistry registry, String reason) {
@@ -132,7 +136,10 @@ final class IdleStealSlotOwnershipTest {
     @Test
     @Timeout(10)
     void recordNonProductivePacesTheFleetWithoutReleasingTheSlot() {
-        IdleStealBackoff backoff = backoff();
+        // Minute-scale window for the same reason as the attribution test: a 5 ms window could
+        // expire between arming it and reading it back, and the assertion would turn on timing.
+        long window = TimeUnit.MINUTES.toNanos(1);
+        IdleStealBackoff backoff = backoff(new SimpleMeterRegistry(), window, window);
         assertThat(backoff.tryAcquireAttemptSlot()).isTrue();
 
         backoff.recordNonProductive();
@@ -140,8 +147,8 @@ final class IdleStealSlotOwnershipTest {
         assertThat(backoff.tryAcquireAttemptSlot()).as("still owned after a non-productive outcome").isFalse();
         backoff.releaseSlot();
         assertThat(backoff.parkNanos())
-                .as("the backoff window it just armed still applies to the next attempt")
-                .isPositive();
+                .as("released, but the backoff window it armed still paces the next attempt")
+                .isGreaterThan(TimeUnit.SECONDS.toNanos(30));
     }
 
     /**
@@ -153,17 +160,16 @@ final class IdleStealSlotOwnershipTest {
     @Timeout(10)
     void aDeniedWorkerParksOnTheInFlightBackstopNotThePacingBase() {
         IdleStealBackoff backoff = backoff();
-        long base = TimeUnit.MILLISECONDS.toNanos(5);
 
-        assertThat(backoff.parkNanos()).as("idle fleet, no attempt in flight").isEqualTo(base);
+        assertThat(backoff.parkNanos()).as("idle fleet, no attempt in flight").isEqualTo(PACING_BASE_NANOS);
 
         assertThat(backoff.tryAcquireAttemptSlot()).isTrue();
         assertThat(backoff.parkNanos())
                 .as("an attempt is in flight — wait for its release signal, don't poll")
-                .isEqualTo(TimeUnit.SECONDS.toNanos(1));
+                .isEqualTo(ATTEMPT_PARK_NANOS);
 
         backoff.releaseSlot();
-        assertThat(backoff.parkNanos()).as("released: back to the pacing base").isEqualTo(base);
+        assertThat(backoff.parkNanos()).as("released: back to the pacing base").isEqualTo(PACING_BASE_NANOS);
     }
 
     /**
@@ -175,7 +181,10 @@ final class IdleStealSlotOwnershipTest {
     @Timeout(10)
     void denialsAreAttributedToTheRegimeThatRefused() {
         MeterRegistry registry = new SimpleMeterRegistry();
-        IdleStealBackoff backoff = backoff(registry);
+        // A minute-scale pacing window, not production's 5 ms: the `paced` half asserts a refusal
+        // that only holds while the armed window is unexpired, and at 5 ms a GC or scheduler pause
+        // between the two lines would let the acquire through and fail the test on timing alone.
+        IdleStealBackoff backoff = backoff(registry, TimeUnit.MINUTES.toNanos(1), TimeUnit.MINUTES.toNanos(1));
 
         assertThat(backoff.tryAcquireAttemptSlot()).isTrue();
         assertThat(backoff.tryAcquireAttemptSlot()).as("refused: another worker owns the slot").isFalse();
