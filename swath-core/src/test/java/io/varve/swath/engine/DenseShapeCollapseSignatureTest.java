@@ -54,20 +54,35 @@ import org.junit.jupiter.api.Timeout;
  *
  * <p>The comparison ({@link #off}/{@link #control1}/{@link #control2}) isolates what latency reveals:
  * <ul>
- *   <li><b>OFF + latency</b> — the collapse: low avg-in-flight / high serial_frac, elevated {@code
- *       cursor_passed_pivot}, {@code attempt_timeout_probe} >> 0 — and byte-exact correct output (the
- *       collapse is a PERF failure, not a correctness one).</li>
+ *   <li><b>OFF + latency</b> — the collapse: low avg-in-flight / high serial_frac, {@code
+ *       attempt_timeout_probe} > 0 — and byte-exact correct output (the collapse is a PERF failure,
+ *       not a correctness one).</li>
  *   <li><b>CONTROL 1 — OFF, zero latency</b> — the blind spot: the SAME keyspace/toggle run with a
  *       zero-latency, fault-free harness produces ZERO probe timeouts and ZERO sheds. The whole
  *       spiral is invisible offline without a latency fixture. (Note: {@code cursor_passed_pivot}
  *       is NOT a clean latency discriminator — a collapsed seed makes 48 thieves contend over ~2 ranges,
  *       and the instant owner drains fast, so scheduling races occur even at zero latency; the true
- *       latency-only signals are the probe timeouts and the shed.)</li>
+ *       latency-only signals are the probe timeouts and the shed. Since the strict steal bound it is
+ *       INVERTED — measured 10 at zero latency against 1 with latency, because instant probes recycle
+ *       the one attempt slot while a 90-160ms cold probe holds it — so this arm no longer asserts on
+ *       it at all.)</li>
  *   <li><b>CONTROL 2 — ON + latency</b> — {@code fanout_tiling} ON ties the story together: the SAME
  *       hostile latency largely defuses the collapse (seed tiles pre-empt the probe race), dropping
  *       serial_frac and raising avg-in-flight materially.</li>
  * </ul>
- * The sustained-timeout SHED is proven in a dedicated cold-start-storm arm ({@link #offStorm}), because
+ * <p><b>What the strict steal bound changed here.</b> This fixture was written against an engine
+ * whose speculative steal probes ran concurrently fleet-wide, so probe-timeout pressure scaled with
+ * the number of idle thieves and the OFF arm produced dozens of {@code attempt_timeout_probe} faults.
+ * Making that bound strict (one attempt in flight fleet-wide) serializes the probes, and a
+ * non-productive attempt then paces the next one out to the backoff cap — so this 1.7s collapsed tail
+ * now issues exactly ONE probe, deterministically (1/1 across 8 runs). The volume thresholds this arm
+ * used to assert (>15 timeouts, >5 cursor races) were therefore measuring the OLD steal policy, not
+ * the collapse: they cannot be restored by re-tuning the fixture, because the pressure they counted is
+ * precisely what the bound removed. What remains — and is asserted — is the collapse's structural
+ * signature (a ~2-range seed, serial_frac at 1.0, avg-in-flight far below W) plus the latency-only
+ * fact that a cold probe times out at all where the zero-latency control cannot.
+ *
+ * <p>The sustained-timeout SHED is proven in a dedicated cold-start-storm arm ({@link #offStorm}), because
  * it cannot coexist with the sustained-probe signature in ONE bounded run — see {@link
  * #STARTUP_TIMEOUT_BURST} and {@link #offStorm_coldStartStormFiresTheShedSpiral} for why (a harness
  * limitation).
@@ -170,16 +185,15 @@ final class DenseShapeCollapseSignatureTest {
                 .as("OFF sustains only a low average in-flight (a couple of drainers, not W)")
                 .isLessThan(WORKERS / 4.0);
 
-        // Elevated cursor_passed_pivot: slow cold probes let the owner's fast warm cursor race past the
-        // thief's pivot before the split commits (the ~100:1 structural race, scaled).
-        assertThat(off.cursorPassedPivot)
-                .as("OFF loses the cursor_passed_pivot race repeatedly under slow cold probes")
-                .isGreaterThan(5L);
-
-        // Probe attempt-timeouts >> 0: cold split-probes exceed the scaled attempt-timeout budget and fault.
+        // Probe attempt-timeouts: a cold split-probe exceeds the scaled attempt-timeout budget and
+        // faults. The VOLUME is no longer a signature -- see the class javadoc: the fleet-wide
+        // one-attempt-in-flight bound serializes probes, so this collapsed tail issues exactly one
+        // in a 1.7s run (measured 1/1 across 8 runs) where the pre-bound engine issued dozens. What
+        // survives as the latency-only signal is that a cold probe times out AT ALL, which the
+        // zero-latency control (0, always) never does -- control1 asserts that delta.
         assertThat(off.probeTimeouts)
-                .as("OFF: cold split-probes time out en masse (attempt_timeout_probe)")
-                .isGreaterThan(15L);
+                .as("OFF: a cold split-probe exceeds the attempt-timeout budget (attempt_timeout_probe)")
+                .isGreaterThanOrEqualTo(1L);
     }
 
     // ---- CONTROL 1: the zero-latency harness is blind to the spiral ---------------------------------
@@ -199,10 +213,13 @@ final class DenseShapeCollapseSignatureTest {
                 .as("zero latency: no timeout storm -> the sustained-timeout shed never fires")
                 .isZero();
 
-        // The blind spot as a delta: the fixture reveals probe-timeout pressure the zero-latency harness cannot.
+        // The blind spot as a delta: the fixture reveals probe-timeout pressure the zero-latency
+        // harness cannot. The delta is now 1 vs 0 rather than dozens vs 0 -- the strict steal bound
+        // caps the volume, not the visibility, and zero is exactly what the zero-latency harness can
+        // never rise above (a probe that costs nothing cannot exceed a budget).
         assertThat(off.probeTimeouts)
                 .as("the latency fixture reveals probe-timeout pressure invisible to the zero-latency harness")
-                .isGreaterThan(control1.probeTimeouts + 15L);
+                .isGreaterThan(control1.probeTimeouts);
         assertThat(offStorm.sheds)
                 .as("the latency fixture reveals shed storms invisible to the zero-latency harness")
                 .isGreaterThan(control1.sheds);
