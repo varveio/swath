@@ -73,7 +73,8 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
                 .setCaseInsensitiveEnumValuesAllowed(true);
         CommandLine.IExecutionStrategy runLast = new CommandLine.RunLast();
         cmd.setExecutionStrategy(parseResult -> {
-            CliLogging.configure(GlobalOptions.effectiveVerbosity(parseResult.commandSpec().commandLine()));
+            CommandLine parsed = parseResult.commandSpec().commandLine();
+            CliLogging.configure(GlobalOptions.effectiveVerbosity(parsed), GlobalOptions.effectiveQuietLevel(parsed));
             return runLast.execute(parseResult);
         });
         CommandLine completion = new CommandLine(new AutoComplete.GenerateCompletion());

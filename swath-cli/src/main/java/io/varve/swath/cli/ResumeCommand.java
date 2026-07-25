@@ -120,7 +120,8 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         // merging root+leaf the same way ListCommand#call() does for its own invocation.
         int verbosity = spec != null ? GlobalOptions.effectiveVerbosity(spec.commandLine()) : global.verbosity.length;
         list.global.verbosity = new boolean[verbosity];
-        list.global.quiet = spec != null ? GlobalOptions.effectiveQuiet(spec.commandLine()) : global.quiet;
+        int quietLevel = spec != null ? GlobalOptions.effectiveQuietLevel(spec.commandLine()) : global.quiet.length;
+        list.global.quiet = new boolean[quietLevel];
         // Do not parse checkpoint output_format here: ListCommand must first classify the
         // checkpoint's recorded destination and let a FILE-origin refusal win with exit 2. The
         // checkpoint path is also the marker that preserves the ordinary malformed-format exit-1

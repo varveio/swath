@@ -58,13 +58,34 @@ class GlobalOptionsTest {
         before.parseArgs("-q", "list", "s3://bucket/prefix");
         CommandLine beforeList = before.getSubcommands().get("list");
         ListCommand listBefore = (ListCommand) beforeList.getCommand();
-        assertThat(listBefore.global.quiet).isFalse();   // set on the ROOT App's mixin, not list's own
-        assertThat(GlobalOptions.effectiveQuiet(beforeList)).isTrue();
+        assertThat(listBefore.global.quiet).isEmpty();   // set on the ROOT App's mixin, not list's own
+        assertThat(GlobalOptions.effectiveQuietLevel(beforeList)).isEqualTo(1);
 
         CommandLine after = App.commandLine();
         after.parseArgs("list", "s3://bucket/prefix", "-q");
         ListCommand listAfter = (ListCommand) after.getSubcommands().get("list").getCommand();
-        assertThat(listAfter.globalOptions().quiet).isTrue();
+        assertThat(listAfter.globalOptions().quiet).hasSize(1);
+    }
+
+    @Test
+    void repeatedQFlagsStack() {
+        CommandLine longForm = App.commandLine();
+        longForm.parseArgs("list", "s3://bucket/prefix", "--quiet", "--quiet");
+        CommandLine longList = longForm.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(longList)).isEqualTo(2);
+
+        CommandLine shortForm = App.commandLine();
+        shortForm.parseArgs("list", "s3://bucket/prefix", "-qq");
+        CommandLine shortList = shortForm.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(shortList)).isEqualTo(2);
+    }
+
+    @Test
+    void noQuietFlagIsZero() {
+        CommandLine cmd = App.commandLine();
+        cmd.parseArgs("list", "s3://bucket/prefix");
+        CommandLine list = cmd.getSubcommands().get("list");
+        assertThat(GlobalOptions.effectiveQuietLevel(list)).isZero();
     }
 
     @Test

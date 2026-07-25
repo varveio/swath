@@ -15,8 +15,9 @@ import picocli.CommandLine.Option;
  * subcommand that accepts it — each occurrence is its own independent picocli option, so {@link
  * #effectiveVerbosity} merges whichever level(s) the user actually populated.
  *
- * <p>{@code -q} has one real consumer today (suppresses {@link OutputOptions#echoResolvedOutput}'s
- * startup destination line) and will grow more as a stderr run summary lands.
+ * <p>{@code -q} suppresses {@link OutputOptions#echoResolvedOutput}'s startup destination line and,
+ * repeated ({@code -qq}), lowers the log level below what {@code -v}/{@code -vv}/{@code -vvv} would
+ * otherwise raise it to — see {@link CliLogging#configure}.
  */
 final class GlobalOptions {
 
@@ -25,8 +26,9 @@ final class GlobalOptions {
     boolean[] verbosity = new boolean[0];
 
     @Resume(ResumeClass.FREE)
-    @Option(names = {"-q", "--quiet"}, description = "Suppress the startup destination echo.")
-    boolean quiet;
+    @Option(names = {"-q", "--quiet"},
+            description = "Suppress the startup destination echo; lowers the log level (repeatable).")
+    boolean[] quiet = new boolean[0];
 
     /** A command whose CLI surface carries a {@link GlobalOptions} mixin. */
     interface Carrier {
@@ -47,13 +49,18 @@ final class GlobalOptions {
     }
 
     /**
-     * The effective {@code -q}/{@code --quiet} across every level of the command line that could
-     * carry it — a root-level {@code swath -q list …} must suppress the same things a leaf-level
-     * {@code swath list -q …} does (the startup destination echo used to consult the leaf mixin
-     * only, so a root {@code -q} was silently ignored).
+     * The effective {@code -q}/{@code --quiet} level across every level of the command line that
+     * could carry it — a root-level {@code swath -q list …} must suppress the same things a
+     * leaf-level {@code swath list -q …} does (the startup destination echo used to consult the leaf
+     * mixin only, so a root {@code -q} was silently ignored). At most one is ever actually populated
+     * per invocation; take the max so either placement works identically, mirroring {@link
+     * #effectiveVerbosity}.
      */
-    static boolean effectiveQuiet(CommandLine cmd) {
-        return quietOf(cmd.getCommand()) || quietOf(rootOf(cmd).getCommand());
+    static int effectiveQuietLevel(CommandLine cmd) {
+        int leaf = quietOf(cmd.getCommand());
+        CommandLine root = rootOf(cmd);
+        int rootLevel = quietOf(root.getCommand());
+        return Math.max(leaf, rootLevel);
     }
 
     private static CommandLine rootOf(CommandLine cmd) {
@@ -68,7 +75,7 @@ final class GlobalOptions {
         return command instanceof Carrier carrier ? carrier.globalOptions().verbosity.length : 0;
     }
 
-    private static boolean quietOf(Object command) {
-        return command instanceof Carrier carrier && carrier.globalOptions().quiet;
+    private static int quietOf(Object command) {
+        return command instanceof Carrier carrier ? carrier.globalOptions().quiet.length : 0;
     }
 }

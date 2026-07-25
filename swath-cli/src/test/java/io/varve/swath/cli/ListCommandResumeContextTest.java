@@ -252,7 +252,7 @@ final class ListCommandResumeContextTest {
         Path outDir = Files.createDirectories(dir.resolve("restored-dataset"));
         seedCompletedRun(db, true, null, "us-west-2", false, false, outDir.toString());
         ListCommand cmd = bareResumeCommand(db);
-        cmd.global.quiet = true;
+        cmd.global.quiet = new boolean[] {true};
 
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         PrintStream previous = System.err;

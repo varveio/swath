@@ -1,4 +1,4 @@
-Usage: swath list [-hqVv] [--fetch-owner] [--force] [--[no-]force-path-style]
+Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--no-metrics] [--no-sign-request] [--restart] [--[no-]sort]
                   [--checkpoint=PATH|none|auto] [--concurrency=N]
                   [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
@@ -101,7 +101,8 @@ Diagnostics:
                                SWATH_OTLP_ENDPOINT).
       --no-metrics           Disable metrics export, including environment
                                configuration.
-  -q, --quiet                Suppress the startup destination echo.
+  -q, --quiet                Suppress the startup destination echo; lowers the
+                               log level (repeatable).
       --trace=PATH           Write a diagnostic JSONL run trace to PATH.
       --tune=KEY=VALUE       Set a typed expert option (repeatable; use --tune
                                help).

@@ -352,9 +352,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // directly and call call() without ever going through picocli parsing, leaving @Spec spec
         // null -- exactly like openSink()'s raw FileDescriptor.out, this stays independent of picocli.
         // -q consults the MERGED root+leaf quiet: a root-level `swath -q list …`
-        // must suppress this too, not just a leaf `swath list -q …` (GlobalOptions.effectiveQuiet
+        // must suppress this too, not just a leaf `swath list -q …` (GlobalOptions.effectiveQuietLevel
         // degrades to the leaf's own mixin when spec is null -- direct-construction unit tests).
-        boolean quiet = spec != null ? GlobalOptions.effectiveQuiet(spec.commandLine()) : global.quiet;
+        boolean quiet = spec != null
+                ? GlobalOptions.effectiveQuietLevel(spec.commandLine()) > 0 : global.quiet.length > 0;
         if (!deferredResumeFormat) {
             output.echoResolvedOutput(resolvedOutput, System.err, quiet);   // never silent
         }
