@@ -136,4 +136,45 @@ class S3PageFetcherEscalationBudgetTest {
                 .as("clamping saturates rather than throwing on extreme input")
                 .isEqualTo(atCap);
     }
+
+    /**
+     * The no-config convenience constructor must derive its scan-class base from the REAL client's
+     * own {@code apiCallAttemptTimeout} when the client can report it, not silently assume {@link
+     * S3Config#DEFAULT_ATTEMPT_TIMEOUT} -- otherwise a caller pairing a custom-timeout client with
+     * this overload would escalate scan-class calls against the wrong base (§ the convenience
+     * constructor's own javadoc).
+     */
+    @Test
+    void theConvenienceConstructorReadsTheScanBaseBackFromANonDefaultClient() {
+        try (software.amazon.awssdk.services.s3.S3Client client = software.amazon.awssdk.services.s3.S3Client
+                .builder()
+                .region(software.amazon.awssdk.regions.Region.US_EAST_1)
+                .credentialsProvider(
+                        software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider.create())
+                .overrideConfiguration(o -> o.apiCallAttemptTimeout(Duration.ofSeconds(45)))
+                .build()) {
+            S3PageFetcher fetcher = new S3PageFetcher(client, "bucket");
+
+            assertThat(fetcher.attemptTimeoutForLevel(
+                            io.varve.swath.observability.RunMetrics.CALL_CLASS_WORKER_PAGE, 0))
+                    .as("the client's own 45s override, not the swath-internal 10s default")
+                    .isEqualTo(Duration.ofSeconds(45));
+        }
+    }
+
+    /**
+     * A hand-rolled {@code S3Client} test double (every other test in this suite) does not support
+     * {@code serviceClientConfiguration()} -- the convenience constructor must fall back to the
+     * default rather than propagating that {@link UnsupportedOperationException}.
+     */
+    @Test
+    void theConvenienceConstructorFallsBackToTheDefaultWhenTheClientCannotReportItsConfiguration() {
+        FakeS3Client client = FakeS3Client.captureOnly();
+
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket");
+
+        assertThat(fetcher.attemptTimeoutForLevel(
+                        io.varve.swath.observability.RunMetrics.CALL_CLASS_WORKER_PAGE, 0))
+                .isEqualTo(Duration.ofSeconds(10));
+    }
 }

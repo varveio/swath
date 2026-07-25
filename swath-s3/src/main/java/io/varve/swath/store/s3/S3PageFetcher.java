@@ -98,9 +98,29 @@ public final class S3PageFetcher implements PageFetcher {
     private final AtomicLong slowProbeExemplarCount =
             new AtomicLong();
 
-    /** The no-option convenience: an OBJECTS fetcher with {@link S3PageFetcherConfig#DEFAULT} wiring. */
+    /**
+     * The no-option convenience: an OBJECTS fetcher with {@link S3PageFetcherConfig#DEFAULT} wiring,
+     * except the scan-class base is read back from {@code s3} itself rather than assumed —
+     * {@link S3PageFetcherConfig#scanApiCallAttemptTimeout} must be the SAME value the client was
+     * built with (see its javadoc), so a caller pairing this overload with a client configured at a
+     * non-default {@code apiCallAttemptTimeout} would otherwise escalate against the wrong base.
+     * Falls back to {@link S3Config#DEFAULT_ATTEMPT_TIMEOUT} when {@code s3} cannot report its own
+     * configuration -- {@link S3Client#serviceClientConfiguration()}'s default method throws {@link
+     * UnsupportedOperationException} for a hand-rolled {@code S3Client} test double, which is every
+     * other caller of this overload.
+     */
     public S3PageFetcher(S3Client s3, String bucket) {
-        this(s3, bucket, S3PageFetcherConfig.DEFAULT);
+        this(s3, bucket, S3PageFetcherConfig.DEFAULT.withScanApiCallAttemptTimeout(
+                clientAttemptTimeoutOrDefault(s3)));
+    }
+
+    private static Duration clientAttemptTimeoutOrDefault(S3Client s3) {
+        try {
+            return s3.serviceClientConfiguration().overrideConfiguration()
+                    .apiCallAttemptTimeout().orElse(S3Config.DEFAULT_ATTEMPT_TIMEOUT);
+        } catch (RuntimeException e) {
+            return S3Config.DEFAULT_ATTEMPT_TIMEOUT;
+        }
     }
 
     /**

@@ -223,4 +223,51 @@ final class StructureProbeTimeoutSuppressionTest {
         assertThat(counter(metrics, "STRUCTURE", "probe_timed_out"))
                 .as("the timeout-suppression metric must stay silent on a non-timeout fault").isZero();
     }
+
+    /**
+     * Regression companion to {@link #aSlowdownFaultedStructureProbeDoesNotRecordAgainstTheVictimThroughTheThief}:
+     * that test starts from a FRESH victim, so {@code isZero()} there cannot distinguish "SLOWDOWN
+     * leaves an existing streak untouched" from "SLOWDOWN resets it" -- both read the same. This
+     * establishes a genuine streak first (a real {@code ATTEMPT_TIMEOUT} probe through the same
+     * {@link Thief}), then drives a {@code SLOWDOWN} probe on the SAME victim and asserts the
+     * pre-existing streak survives untouched -- the only outcome {@link Thief#probeStructure}'s
+     * kind-gated catch actually permits, since RESET only ever runs on the SUCCESS path.
+     */
+    @Test
+    void aSlowdownFaultDoesNotResetAPreExistingTimeoutStreakThroughTheThief() throws Exception {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        AtomicInteger delimiterProbes = new AtomicInteger();
+        List<byte[]> siblingDirs = new ArrayList<>();
+        for (int i = 0; i <= 199; i++) {
+            siblingDirs.add(b("led/%04d/obj".formatted(i)));
+        }
+        MockPageFetcher delegate = MockPageFetcher.builder()
+                .keys(siblingDirs)
+                .interceptor((req, idx, page) -> {
+                    if (req.delimiter() != null && req.delimiter().length > 0) {
+                        int n = delimiterProbes.incrementAndGet();
+                        if (n == 1) {
+                            throw ThrottleException.attemptTimeout("first structure probe times out");
+                        }
+                        throw ThrottleException.slowDown("later structure probe faults, 503");
+                    }
+                    return page;
+                })
+                .build();
+        WorkerState victim = WorkerStates.of(1, b("led/0100/"), b("led/0100/obj"), b("led/02"));
+        victim.addKeysEmitted(100);
+        Thief thief = Thiefs.of(StubCheckpointStore.returning(42L), delegate, 1L, new byte[0],
+                ListingMode.OBJECTS, (childNodeId, childLo, childHi) -> { }, metrics);
+
+        thief.steal(List.of(victim));
+        assertThat(victim.consecutiveTimedOutStructureProbes())
+                .as("the first probe's ATTEMPT_TIMEOUT establishes a real streak").isEqualTo(1);
+
+        thief.steal(List.of(victim));
+        assertThat(delimiterProbes.get())
+                .as("the second steal actually re-issued a structure probe").isEqualTo(2);
+        assertThat(victim.consecutiveTimedOutStructureProbes())
+                .as("SLOWDOWN must neither reset nor extend a pre-existing timeout streak")
+                .isEqualTo(1);
+    }
 }
