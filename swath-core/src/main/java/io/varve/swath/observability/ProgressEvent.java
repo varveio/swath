@@ -28,8 +28,13 @@ import java.time.Duration;
  * <p><b>{@link #completion()} is {@code null} for listing</b>, and that is deliberate: an unsorted
  * scan has no honest denominator (no total object count exists before the run ends), so there is no
  * bar, no percentage and no ETA. It is populated only where numerator and denominator both have
- * exact, documented semantics — seeding against its bounded probe budget, and the merge against the
- * staged row count.
+ * exact, documented semantics — seeding against its bounded probe budget, and the merge's final
+ * pass against the staged row count.
+ *
+ * <p><b>{@link #estimatedCostUsd()} is {@code null} when the provider's LIST pricing is not
+ * knowable</b> (under {@code --endpoint-url}), rather than every sink being trusted to remember to
+ * withhold it: the figure is derived from a single-region AWS reference rate, so against an unknown
+ * provider it is a guess, and an absent field is the only representation no renderer can leak.
  */
 public record ProgressEvent(
         Phase phase,
@@ -38,7 +43,7 @@ public record ProgressEvent(
         Duration sessionElapsed,
         Duration phaseElapsed,
         long apiCalls,
-        double estimatedCostUsd,
+        Double estimatedCostUsd,
         long retries,
         Completion completion,
         Seeding seeding,
@@ -87,10 +92,13 @@ public record ProgressEvent(
     }
 
     /**
-     * Merge/publish-phase state. {@code sessionRowsMerged} counts rows merged since this phase
-     * began (not the run's emitted objects, which stay flat through the merge and are 0 outright on
-     * a merge-only resume), against {@code stagedRows} — the exact row total of the segments handed
-     * to the merge. {@code passes} is only non-zero once the whole cascade finishes.
+     * Merge/publish-phase state. {@code sessionRowsMerged} counts rows of merge WORK done since the
+     * merge began (not the run's emitted objects, which stay flat through the merge and are 0
+     * outright on a merge-only resume). A cascading merge rewrites every staged row once per pass,
+     * so this legitimately exceeds {@code stagedRows} on a multi-pass merge — which is exactly why
+     * it is not the completion numerator (see {@link Completion}). {@code stagedRows} is the exact
+     * row total of the segments handed to the merge, and {@code passes} is only non-zero once the
+     * whole cascade finishes.
      */
     public record Merging(long sessionRowsMerged, long stagedRows, long segments, long passes) {
     }

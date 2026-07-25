@@ -17,6 +17,12 @@ package io.varve.swath.observability;
  * it, so an operator never sees the same tick rendered twice (once as a log record, once as a
  * display frame) on one stderr.
  *
+ * <p><b>A sink renders; it does not govern.</b> Whether progress runs at all is the caller's
+ * choice of sink ({@link #NONE} for a run that asked for none — which is why "no progress" can
+ * never mean merely "no display"); when it stops is {@link RunMetrics#finishProgress()}; and
+ * whether a cost figure exists at all is {@link ProgressEvent#estimatedCostUsd()}. None of the
+ * three is left to an implementation to remember.
+ *
  * <p>{@link #isEnabled()} is checked BEFORE the event is built, so a run with progress switched off
  * — or with the log sink installed while INFO is disabled, which is the default level — pays
  * nothing at all per tick: no snapshot, no counter walk, no rate sampling.

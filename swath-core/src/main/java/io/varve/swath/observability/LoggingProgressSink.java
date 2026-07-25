@@ -18,7 +18,9 @@ import org.slf4j.LoggerFactory;
  * and one duplicate).
  *
  * <p>Every record carries the same run-level prefix; the tail is whatever the phase actually has
- * (see {@link ProgressEvent}). Logs under {@link RunProgressReporter}'s logger name, NOT this
+ * (see {@link ProgressEvent}) — including {@code cost_usd}, which is absent rather than guessed
+ * when the provider's LIST pricing is unknowable, so a log tail is never handed an AWS-priced
+ * figure for a run that went somewhere else. Logs under {@link RunProgressReporter}'s logger name, NOT this
  * class's own: operator log filters and per-class appender levels are keyed on that name and moving
  * the line to a new one would silently re-home its identity.
  */
@@ -28,7 +30,9 @@ final class LoggingProgressSink implements ProgressSink {
 
     private static final String COMMON =
             "progress run_id={} phase={} strategy={} elapsed_ms={} phase_elapsed_ms={} api_calls={}"
-                    + " cost_usd={} retries={}";
+                    + " retries={}";
+    /** Only for a provider whose LIST pricing is knowable — see {@link ProgressEvent#estimatedCostUsd()}. */
+    private static final String COST = " cost_usd={}";
     private static final String COMPLETION = " completed={}/{} {} percent={}";
     private static final String SEEDING = " probes={} probe_budget={} last_probe_age_ms={}";
     private static final String LISTING =
@@ -41,7 +45,11 @@ final class LoggingProgressSink implements ProgressSink {
         String format = COMMON;
         Object[] args = {e.runId(), e.phase().name().toLowerCase(Locale.ROOT), e.strategy(),
                 e.sessionElapsed().toMillis(), e.phaseElapsed().toMillis(), e.apiCalls(),
-                e.estimatedCostUsd(), e.retries()};
+                e.retries()};
+        if (e.estimatedCostUsd() != null) {
+            format += COST;
+            args = concat(args, e.estimatedCostUsd());
+        }
         if (e.completion() != null) {
             ProgressEvent.Completion c = e.completion();
             format += COMPLETION;

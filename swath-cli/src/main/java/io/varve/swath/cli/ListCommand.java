@@ -422,21 +422,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // them splicing each other, and what lets the block permanently end progress before it
         // writes its first line.
         StderrCoordinator stderr = StderrCoordinator.shared();
+        boolean costKnown = connection.endpointUrl == null;
         ctx.metrics().setSummarySink(new SummaryRenderer(stderr, () -> new SummaryRenderer.Preferences(
                 output.stats, quiet, output.resolvedKind != OutputOptions.DestinationKind.STDOUT,
-                connection.endpointUrl == null, resumeDestination(mode), colorEnabled)));
+                costKnown, resumeDestination(mode), colorEnabled)));
         // Live progress is the CLI's call for the same reason: swath-core knows WHAT the run is
-        // doing, not whether this stderr wants to be told. Installing the display REPLACES the
-        // structured progress log record, so one tick renders exactly once; leaving it uninstalled
-        // leaves that record as the run's progress surface, which is why -v is in the gate below.
-        ProgressDisplay progress = ProgressDisplay.shouldDisplay(new ProgressDisplay.Preferences(
+        // doing, not whether this stderr wants to be told. So the CLI always installs the sink it
+        // chose — the display, the structured log record, or none at all — rather than leaving a
+        // default in place for the cases it declined to display (see ProgressDisplay#sinkFor).
+        ctx.metrics().setProgressSink(ProgressDisplay.sinkFor(new ProgressDisplay.Preferences(
                 output.progress, quiet, verbosity > 0, liveness.progressInterval != null,
-                terminal.stderrIsTerminal()))
-                ? new ProgressDisplay(stderr, connection.endpointUrl == null)
-                : null;
-        if (progress != null) {
-            ctx.metrics().setProgressSink(progress);
-        }
+                terminal.stderrIsTerminal()), stderr));
+        // Whether a $ figure can exist at all is a fact about the provider, not about this terminal,
+        // so it rides on the event and no progress surface has to remember to withhold it.
+        ctx.metrics().setListCostKnown(costKnown);
 
         // A SIGTERM/SIGINT flips the cancellation flag (stop_reason=signal); the --max-duration
         // deadline flips it with stop_reason=max_duration. Either way the run thread observes the
@@ -467,12 +466,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         } catch (CancelledException e) {
             return timeboxExitOrRethrow(ctx.cancellation(), ctx.metrics(), e, argsHash);
         } finally {
-            // The backstop for a run that never reached its summary: DaemonSchedulers.stop() can
-            // return while a tick is still formatting, so the display closes its channel and any
-            // frame still in flight is dropped when it reaches the coordinator.
-            if (progress != null) {
-                progress.close();
-            }
+            // The backstop for a run that never reached its summary (which ends progress itself):
+            // DaemonSchedulers.stop() can return while a tick is still formatting, so progress is
+            // ended for whichever sink is installed, and the stderr generation with it — any frame
+            // still in flight is dropped when it reaches the coordinator.
+            ctx.metrics().finishProgress();
+            stderr.finishProgress();
             SignalHandlers.unregister(ctx.cancellation());
         }
     }

@@ -12,7 +12,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * THE live-progress lifecycle of a run: one ticker, spanning seed → listing → merge → writing, that
- * builds one {@link ProgressEvent} per tick and hands it to the installed {@link ProgressSink}.
+ * drives one {@link ProgressEvent} per tick into the installed {@link ProgressSink} (via {@link
+ * RunMetrics#emitProgress}, which owns the enabled check and the render-vs-teardown ordering — this
+ * class owns the cadence and nothing else).
  *
  * <p><b>One lifecycle, several scopes.</b> Several nested scopes each want progress running (the
  * CLI around the whole run including the seed step, {@code ListRunner} around the engine and the
@@ -81,11 +83,7 @@ public final class RunProgressReporter implements AutoCloseable {
 
     private void reportSafely() {
         try {
-            ProgressSink sink = metrics.progressSink();
-            if (!sink.isEnabled()) {
-                return;   // nothing renders this tick: build no event at all
-            }
-            sink.accept(metrics.progressEvent(Duration.ofNanos(System.nanoTime() - startedNs)));
+            metrics.emitProgress(Duration.ofNanos(System.nanoTime() - startedNs));
         } catch (RuntimeException e) {
             log.warn("progress_report_failed message={}", e.getMessage());
         }

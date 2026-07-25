@@ -75,6 +75,43 @@ final class LiveProgressRecordTest {
                 .isGreaterThanOrEqualTo(0);
     }
 
+    @Test
+    @Timeout(60)
+    void verboseRunsPublishTheStructuredRecordAndNoProgressSilencesThatToo(@TempDir Path dir)
+            throws Exception {
+        List<String> withProgress = runVerbose(dir.resolve("with.jsonl"), null);
+        assertThat(withProgress).as("-v makes the structured record this run's progress surface")
+                .anyMatch(line -> line.contains("progress run_id="));
+
+        List<String> suppressed = runVerbose(dir.resolve("without.jsonl"), false);
+        assertThat(suppressed)
+                .as("--no-progress suppresses progress, not merely the display: no record either")
+                .noneMatch(line -> line.contains("progress run_id="));
+        assertThat(suppressed).as("the rest of the -v log is untouched")
+                .anyMatch(line -> line.contains("list_run_start"));
+    }
+
+    /**
+     * One {@code -v} run at INFO, with the log level restored so no other test inherits it. The
+     * cadence is left at its default: an explicit {@code --progress-interval} is itself an opt-in to
+     * the display, and this is the case where the structured record is the surface. The default
+     * activation delay still puts a tick inside this run.
+     */
+    private static List<String> runVerbose(Path out, Boolean progress) throws Exception {
+        ListCommand cmd = slowListCommand(out);
+        cmd.global.verbosity = new boolean[] {true};
+        cmd.output.progress = progress;
+        cmd.terminalOverride = new TerminalCapabilities(fd -> false);
+        cmd.envOverride = key -> null;
+
+        CliLogging.configure(1, 0);
+        try {
+            return runCapturingStderr(cmd);
+        } finally {
+            CliLogging.configure(0, 0);
+        }
+    }
+
     /** A progress frame: the indented phase-led record, as distinct from the summary block. */
     private static boolean isFrame(String line) {
         return line.startsWith("  seeding · ") || line.startsWith("  listing · ")

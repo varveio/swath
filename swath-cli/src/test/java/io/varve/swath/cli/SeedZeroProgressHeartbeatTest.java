@@ -56,13 +56,12 @@ final class SeedZeroProgressHeartbeatTest {
         cmd.output.format = OutputFormat.PARQUET;
         cmd.output.destination = dir.resolve("out-dataset").toString();
         cmd.fetcherOverride = fetcher;
-        // The supported floor (LivenessOptions.MIN_PROGRESS_INTERVAL) -- the fastest cadence a run
-        // can ask for, so the seed-phase record lands while the seed is still parked.
-        cmd.liveness.progressInterval = "1s";
-        // An explicit cadence would otherwise opt this run into the operator DISPLAY, which
-        // replaces the structured log record this test reads. --no-progress keeps the log record
-        // as the run's progress surface (ProgressDisplay#shouldDisplay).
-        cmd.output.progress = false;
+        // Default cadence and no --progress flag: off a terminal that leaves the structured log
+        // record as the run's progress surface, which is what this test reads. (An explicit
+        // --progress-interval would opt the run into the operator DISPLAY instead, and
+        // --no-progress would leave no progress surface at all.) The activation delay -- not the
+        // cadence -- puts the first record well inside the parked seed.
+        cmd.terminalOverride = new TerminalCapabilities(fd -> false);
 
         Logger listCommandLogger =
                 (Logger) LoggerFactory.getLogger(ListCommand.class);

@@ -30,14 +30,19 @@ import org.slf4j.LoggerFactory;
  * of the last completed probe — the pair that tells a healthy seed from a hung one, and the case
  * that motivated this display: a 22-second seed used to look exactly like a hang. Listing shows
  * counters and rates and deliberately no bar, percentage or ETA (an unsorted scan has no honest
- * denominator). Merging shows rows merged against the exact staged row total.
+ * denominator). A merge shows the rows it has moved, and a percentage only for its final pass —
+ * the one pass whose denominator is exactly the staged row total.
+ *
+ * <p><b>It renders; it does not decide.</b> Whether progress runs, when it stops and whether a cost
+ * figure exists are all settled before an event reaches here (see {@link ProgressSink}), so this
+ * class cannot be the reason a run that asked for silence got a line.
  *
  * <p><b>No key text.</b> Nothing an S3 bucket controls reaches this line: keys can carry arbitrary
  * bytes, and a display that echoed them could be made to forge a terminal record. Every field here
  * is a number, a duration or a phase name. Any future key sample must go through {@code
  * RunMetrics}'s {@code display()}/{@code ControlCharEscaper} path and stay off the default line.
  */
-final class ProgressDisplay implements ProgressSink, AutoCloseable {
+final class ProgressDisplay implements ProgressSink {
 
     private static final Logger log = LoggerFactory.getLogger(ProgressDisplay.class);
 
@@ -61,16 +66,24 @@ final class ProgressDisplay implements ProgressSink, AutoCloseable {
     }
 
     private final StderrCoordinator.ProgressChannel channel;
-    private final boolean costKnown;
+
+    ProgressDisplay(StderrCoordinator stderr) {
+        this.channel = stderr.openProgress();
+    }
 
     /**
-     * @param costKnown whether the provider's LIST pricing is knowable — false under {@code
-     *         --endpoint-url}, where any {@code $} would be a guess, exactly as the end-of-run
-     *         block treats it
+     * The run's progress sink — ONE decision, so no surface is governed by accident. {@code
+     * --no-progress} means {@link ProgressSink#NONE}: not "no display", which would leave the
+     * structured {@code progress} log record running and hand an INFO-enabled run the very output
+     * it asked to be spared. Otherwise the display renders when {@link #shouldDisplay} says so, and
+     * every other run keeps the structured record — the surface a supervisor tailing the log reads,
+     * and the only one a redirected run has.
      */
-    ProgressDisplay(StderrCoordinator stderr, boolean costKnown) {
-        this.channel = stderr.openProgress();
-        this.costKnown = costKnown;
+    static ProgressSink sinkFor(Preferences prefs, StderrCoordinator stderr) {
+        if (Boolean.FALSE.equals(prefs.progress())) {
+            return ProgressSink.NONE;
+        }
+        return shouldDisplay(prefs) ? new ProgressDisplay(stderr) : ProgressSink.LOG;
     }
 
     /**
@@ -103,7 +116,7 @@ final class ProgressDisplay implements ProgressSink, AutoCloseable {
     @Override
     public void accept(ProgressEvent event) {
         try {
-            channel.frame(OperatorText.INDENT + line(event, costKnown));
+            channel.frame(OperatorText.INDENT + line(event));
         } catch (RuntimeException e) {
             // The sink runs on the run's progress thread: a formatting fault must cost the operator
             // a frame, never the run's disposition or exit code.
@@ -117,14 +130,8 @@ final class ProgressDisplay implements ProgressSink, AutoCloseable {
         return channel.isActive();
     }
 
-    /** Ends this display's progress generation. Idempotent; nothing writes after it. */
-    @Override
-    public void close() {
-        channel.close();
-    }
-
     /** One frame's text, without the indent — the shape the tests pin. */
-    static String line(ProgressEvent event, boolean costKnown) {
+    static String line(ProgressEvent event) {
         List<String> parts = new ArrayList<>();
         parts.add(event.phase().name().toLowerCase(Locale.ROOT));
         if (event.seeding() != null) {
@@ -136,9 +143,9 @@ final class ProgressDisplay implements ProgressSink, AutoCloseable {
         }
         parts.add(OperatorText.elapsed(event.sessionElapsed()) + " elapsed");
         parts.add(OperatorText.count(event.apiCalls()) + " API calls");
-        // The same rule the end-of-run block applies: no LIST call, no bill, and no figure at all
-        // when the provider is unknown -- so the live line and the final block never disagree.
-        if (costKnown && event.apiCalls() > 0) {
+        // The same rule the end-of-run block applies: no LIST call, no bill — and no figure exists
+        // at all when the provider is unknown, so the live line and the final block never disagree.
+        if (event.estimatedCostUsd() != null && event.apiCalls() > 0) {
             parts.add(OperatorText.cost(event.estimatedCostUsd()));
         }
         return String.join(OperatorText.SEP, parts);
@@ -173,12 +180,16 @@ final class ProgressDisplay implements ProgressSink, AutoCloseable {
                 OperatorText.count(listing.inFlight()) + " in flight");
     }
 
-    /** Rows merged against the staged total — an exact denominator, so this phase gets a figure. */
+    /**
+     * The final pass's rows against the staged total — an exact denominator, so that pass gets a
+     * figure. A cascade pass rewrites every staged row again, so it reports the work it has done
+     * and no percentage rather than a fraction that would run past 100%.
+     */
     private static List<String> merging(ProgressEvent event) {
         ProgressEvent.Merging merging = event.merging();
         String rows = event.completion() != null
                 ? completion(event.completion(), "rows")
-                : OperatorText.count(merging.sessionRowsMerged()) + " rows";
+                : OperatorText.count(merging.sessionRowsMerged()) + " rows merged";
         return List.of(rows, OperatorText.count(merging.segments()) + " segments");
     }
 
