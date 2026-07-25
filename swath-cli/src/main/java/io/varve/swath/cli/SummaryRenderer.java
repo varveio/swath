@@ -48,9 +48,13 @@ final class SummaryRenderer implements RunSummarySink {
     private static final Logger log = LoggerFactory.getLogger(SummaryRenderer.class);
 
     /**
-     * How long a run must take before it earns an unrequested summary. Short enough that any run
-     * an operator actually waits on qualifies, long enough that scripted sub-second listings stay
-     * silent (git's delayed-progress threshold is the nearest anchor at 2 s).
+     * How long a run must take before it earns an unrequested summary. Measured against {@link
+     * RunSummary#sessionDuration()} — the operator's whole wall clock, seeding included — never
+     * {@link RunSummary#duration()}, which starts only after a fresh run's seed step and so would
+     * judge a long seed followed by a short listing as sub-threshold even though the operator sat
+     * through the whole thing. Short enough that any run an operator actually waits on qualifies,
+     * long enough that scripted sub-second listings stay silent (git's delayed-progress threshold
+     * is the nearest anchor at 2 s).
      */
     static final Duration AUTO_MIN_ELAPSED = Duration.ofMillis(1_500);
 
@@ -157,7 +161,14 @@ final class SummaryRenderer implements RunSummarySink {
      * everywhere. Otherwise a run earns a summary automatically when it ran long enough to be
      * waited on, produced durable output, or stopped for any reason other than finishing:
      *
-     * <pre>auto = (elapsed &gt; 1.5s OR durable dataset produced OR stopped abnormally) AND NOT quiet</pre>
+     * <pre>auto = (session elapsed &gt; 1.5s OR durable dataset produced OR stopped abnormally) AND NOT quiet</pre>
+     *
+     * <p>The elapsed clause is keyed to {@link RunSummary#sessionDuration()}, not {@link
+     * RunSummary#duration()}: this gate's question is "did a human wait on this?", and it is the
+     * operator's whole wall clock — seeding included — that answers it, not the listing-only span
+     * a fresh run's seed step excludes. {@code sessionDuration} falls back to {@code duration} when
+     * no session-wide reporter ever claimed the run (a pre-seed early exit), so that case is
+     * unaffected.
      *
      * <p>A broken pipe is excluded: {@code swath list | head} is the most ordinary interactive
      * workflow there is, it exits 0, and it must not be dressed up as an incident.
@@ -170,7 +181,7 @@ final class SummaryRenderer implements RunSummarySink {
         if (prefs.quiet() || isBrokenPipe(status)) {
             return false;
         }
-        return summary.duration().compareTo(AUTO_MIN_ELAPSED) > 0
+        return summary.sessionDuration().compareTo(AUTO_MIN_ELAPSED) > 0
                 || (prefs.durableDestination() && summary.outputFiles() > 0)
                 || status.reason() != StopReason.COMPLETED;
     }

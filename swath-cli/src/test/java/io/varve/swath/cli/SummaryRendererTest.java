@@ -117,6 +117,28 @@ final class SummaryRendererTest {
     }
 
     @Test
+    void longSeedFollowedByAShortListingStillEarnsASummary() {
+        // A run can seed for well over the threshold and then list in a blink -- the gate must key
+        // off the operator's whole wait (sessionDuration), not the post-seed listing clock alone.
+        RunSummary longSeedShortListing = summaryWithDurations(Duration.ofMillis(500), Duration.ofSeconds(39));
+
+        assertThat(SummaryRenderer.shouldRender(AUTO, longSeedShortListing, COMPLETED))
+                .as("39s of seeding is exactly the kind of wait this gate exists to catch, even "
+                        + "though the listing itself was sub-threshold")
+                .isTrue();
+    }
+
+    @Test
+    void aGenuinelyTrivialRunWithAShortSeedAndAShortListingStaysSilent() {
+        RunSummary trivial = summaryWithDurations(Duration.ofMillis(100), Duration.ofMillis(300));
+
+        assertThat(SummaryRenderer.shouldRender(AUTO, trivial, COMPLETED))
+                .as("the gate keying off sessionDuration must not become always-on for a run "
+                        + "nobody waited on at all")
+                .isFalse();
+    }
+
+    @Test
     void aDurableDestinationThatProducedNothingDoesNotEarnASummary() {
         SummaryRenderer.Preferences toDisk =
                 new SummaryRenderer.Preferences(null, false, true, true, null, false);

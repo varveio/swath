@@ -163,6 +163,11 @@ final class ListRunnerObservabilityTest {
                 .orElseThrow(() -> new AssertionError("no list_run_diagnostics log line emitted"));
 
         assertThat(summaryLine)
+                .as("the -v line must carry both clocks, same as the JSON report and the "
+                        + "stderr summary, so a machine consumer scraping this line never disagrees "
+                        + "with the other two surfaces about the session's actual wall clock")
+                .contains("duration_ms=")
+                .contains("session_duration_ms=")
                 .contains("api_calls_per_1k_objects=")
                 .contains("peak_rss_bytes=")
                 .contains("peak_heap_bytes=")

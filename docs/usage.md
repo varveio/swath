@@ -824,8 +824,9 @@ block too, from the same numbers the report records.
 A run stopped by a closed downstream (`swath list | head`) is not an incident: it prints nothing by
 default, and reads `stopped early — downstream closed` if you asked for the block explicitly.
 
-The block prints when the run **earned** it: it took longer than 1.5 s, it produced durable output,
-or it stopped for any reason other than finishing — and not under `-q`. Terminal detection does not
+The block prints when the run **earned** it: the operator's whole wait — seeding included — was
+longer than 1.5 s, it produced durable output, or it stopped for any reason other than finishing —
+and not under `-q`. Terminal detection does not
 enter into it: a summary redirected into `2> run.log` carries the same content it would on a
 terminal, because for an overnight or fleet run the captured log is the artifact. `--stats` forces
 the block past every one of those gates (short run, `-q`, redirected stderr alike), `--no-stats`

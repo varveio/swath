@@ -1354,8 +1354,9 @@ public final class ListRunner {
     }
 
     private static void logSummary(RunSummary summary) {
-        log.info("list_run_summary run_id={} objects={} duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
-                summary.runId(), summary.objects(), summary.duration().toMillis(), summary.strategy(),
+        log.info("list_run_summary run_id={} objects={} duration_ms={} session_duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
+                summary.runId(), summary.objects(), summary.duration().toMillis(),
+                summary.sessionDuration().toMillis(), summary.strategy(),
                 summary.apiCalls(), summary.costUsd(), summary.outputFiles(), summary.compressedBytes(),
                 summary.keys(), summary.pages(), summary.peakInFlight(), summary.steals(), summary.splits(),
                 summary.errors(), summary.keysPerSecond(), summary.apiCallsPer1kObjects(),
