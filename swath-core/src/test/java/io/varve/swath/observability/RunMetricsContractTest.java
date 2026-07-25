@@ -502,6 +502,7 @@ final class RunMetricsContractTest {
             RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
             metrics.setRunId(7L);
             metrics.setStrategy("WORK_STEALING");
+            metrics.setPhase(Phase.LISTING);   // in_flight is a LISTING-shaped field
             metrics.setConcurrencyTarget(4L);
             metrics.incrementInFlight();
             try (RunProgressReporter ignored = RunProgressReporter.start(metrics, Duration.ofMillis(5))) {

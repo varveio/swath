@@ -101,6 +101,14 @@ public final class RunMetrics {
     // nested start joins it.
     private final AtomicReference<ProgressSink> progressSink = new AtomicReference<>(ProgressSink.LOG);
     private final AtomicReference<RunProgressReporter> progressReporter = new AtomicReference<>();
+    // The one lock a tick and the terminal summary contend for (see emitProgress/finishProgress):
+    // it is what makes "the summary is the run's last word" true for WHATEVER sink is installed,
+    // rather than only for a sink that happens to share the CLI's stderr coordinator.
+    private final Object progressLock = new Object();
+    private boolean progressFinished;
+    // Whether the provider's LIST pricing is knowable at all (false under --endpoint-url), so no
+    // progress renderer can publish an AWS-priced figure for a run that went somewhere else.
+    private volatile boolean listCostKnown = true;
     private final AtomicReference<String> strategy = new AtomicReference<>("unknown");
     private final AtomicReference<String> strategyWhy = new AtomicReference<>("unknown");
     // §3.3: at most one swath.disk.free_bytes gauge per run — registerDiskFreeGauge is called from
@@ -243,10 +251,17 @@ public final class RunMetrics {
     private final AtomicLong stealsTally = new AtomicLong();
     /** Objects a resume carried over from a previous attempt — session work is emitted minus this. */
     private final AtomicLong recoveredObjects = new AtomicLong();
-    /** When the current phase began, so a tick can show phase elapsed WITHOUT resetting session elapsed. */
-    private final AtomicLong phaseStartNanos = new AtomicLong();
-    /** {@code progress.units} at the merge's start — the baseline merged rows are counted from. */
+    /**
+     * When the current phase began, so a tick can show phase elapsed WITHOUT resetting session
+     * elapsed. Seeded at construction rather than left at zero: before the first {@link #setPhase}
+     * the run IS in {@link Phase#STARTING}, and that state began when these metrics did — a zero
+     * here would report the phase clock as running since the {@link System#nanoTime()} origin.
+     */
+    private final AtomicLong phaseStartNanos = new AtomicLong(System.nanoTime());
+    /** {@code progress.units} at the merge's start — the baseline merge WORK is counted from. */
     private final AtomicLong mergeProgressBaseline = new AtomicLong(-1);
+    /** {@code progress.units} at the final merge pass's start — the baseline completion is counted from. */
+    private final AtomicLong finalPassProgressBaseline = new AtomicLong(-1);
     /** Rows staged into the sort segments handed to the merge: the merge's exact denominator. */
     private final AtomicLong sortStagedRows = new AtomicLong();
     private final AtomicLong sortStagedSegments = new AtomicLong();
@@ -1462,7 +1477,10 @@ public final class RunMetrics {
      * progress reports alongside (never instead of) session elapsed, and — entering {@link
      * Phase#MERGING} — pins the {@code progress.units} baseline the merge's own row count is
      * measured from, so a merge reports the rows IT moved rather than the run's emitted objects
-     * (which stay flat throughout a merge, and are zero outright on a merge-only resume).
+     * (which stay flat throughout a merge, and are zero outright on a merge-only resume). Entering
+     * {@link Phase#WRITING} (the final merge pass) pins a SECOND baseline: only that pass drains
+     * exactly the staged rows once, so only it has an honest completion denominator — see
+     * {@link #completionOf}.
      *
      * <p>The phase clock reads {@link System#nanoTime()} directly, NOT the injectable {@code
      * nanoClock}: that seam exists so the in-flight gauge and the {@code time_to_*} summary fields
@@ -1474,6 +1492,8 @@ public final class RunMetrics {
         phaseStartNanos.set(System.nanoTime());
         if (phase == Phase.MERGING) {
             mergeProgressBaseline.compareAndSet(-1L, progressUnitsTally.get());
+        } else if (phase == Phase.WRITING) {
+            finalPassProgressBaseline.compareAndSet(-1L, progressUnitsTally.get());
         }
     }
 
@@ -1633,9 +1653,14 @@ public final class RunMetrics {
         summarySink.set(sink == null ? RunSummarySink.NONE : sink);
     }
 
-    /** Hand the terminal summary to the installed {@link RunSummarySink}. */
+    /**
+     * Hand the terminal summary to the installed {@link RunSummarySink}. The terminal summary is
+     * the run's last word, so live progress ends first and permanently ({@link #finishProgress()})
+     * — for whichever sink is installed, not merely for one that shares the summary's fd.
+     */
     public void emitSummary(RunSummary summary, RunDiagnostics diagnostics,
             JsonRunSummaryWriter.TerminalStatus status) {
+        finishProgress();
         summarySink.get().accept(summary, diagnostics, status);
     }
 
@@ -1703,15 +1728,61 @@ public final class RunMetrics {
      * Install the run's live-progress sink (see {@link ProgressSink}) — the per-run setter
      * alongside {@link #setSummarySink}, so a presentation layer can own the progress channel
      * without threading a parameter through every {@code ListRunner.run*} entry point. The
-     * installed sink REPLACES {@link ProgressSink#LOG}: one tick renders once.
+     * installed sink REPLACES {@link ProgressSink#LOG}: one tick renders once. Ignored after
+     * {@link #finishProgress()}: progress ends once, permanently.
      */
     public void setProgressSink(ProgressSink sink) {
-        progressSink.set(sink == null ? ProgressSink.NONE : sink);
+        synchronized (progressLock) {
+            if (!progressFinished) {
+                progressSink.set(sink == null ? ProgressSink.NONE : sink);
+            }
+        }
     }
 
-    /** The installed sink — read once per tick by {@link RunProgressReporter}, and nowhere else. */
-    ProgressSink progressSink() {
-        return progressSink.get();
+    /**
+     * End live progress for good, whichever sink is installed. This is where the "no progress after
+     * the run's last word" rule lives, because this is the layer that knows WHICH sink is installed
+     * — a presentation layer can only silence its own channel, and the structured {@link
+     * ProgressSink#LOG} record is not on it. Called by {@link #emitSummary} before the terminal
+     * block reaches the summary sink, and by the CLI when a run unwinds without one.
+     *
+     * <p>The lock is what makes the ordering real rather than probabilistic: a tick that is already
+     * rendering completes BEFORE this returns, and one that has not started sees {@link
+     * ProgressSink#NONE} and never builds an event. Idempotent.
+     */
+    public void finishProgress() {
+        synchronized (progressLock) {
+            progressFinished = true;
+            progressSink.set(ProgressSink.NONE);
+        }
+    }
+
+    /**
+     * Render one tick to the installed sink — the whole of {@link RunProgressReporter}'s tick body,
+     * here rather than there so the enabled check, the event build and the render happen under the
+     * one lock {@link #finishProgress()} takes.
+     */
+    void emitProgress(Duration sessionElapsed) {
+        ProgressSink sink = progressSink.get();
+        if (!sink.isEnabled()) {
+            return;   // nothing renders this tick: build no event at all
+        }
+        synchronized (progressLock) {
+            if (progressSink.get() != sink) {
+                return;   // progress ended while this tick was waiting: its frame is dropped
+            }
+            sink.accept(progressEvent(sessionElapsed));
+        }
+    }
+
+    /**
+     * Whether the provider's LIST pricing is knowable — {@code false} under {@code --endpoint-url},
+     * where the AWS reference rate ({@link #LIST_COST_PER_1K_USD}) describes a different provider's
+     * bill. Recorded on the run rather than in one renderer's preferences so EVERY progress surface
+     * withholds the figure by construction (see {@link ProgressEvent#estimatedCostUsd()}).
+     */
+    public void setListCostKnown(boolean known) {
+        listCostKnown = known;
     }
 
     /**
@@ -1746,7 +1817,7 @@ public final class RunMetrics {
                 sessionElapsed,
                 Duration.ofNanos(Math.max(0L, now - phaseStartNanos.get())),
                 apiCallCount,
-                estimatedListCost(apiCallCount),
+                listCostKnown ? estimatedListCost(apiCallCount) : null,
                 throttleEventsTally.get(),
                 completionOf(phase),
                 phase == Phase.SEEDING ? seedingProgress(now) : null,
@@ -1754,28 +1825,39 @@ public final class RunMetrics {
                 phase == Phase.MERGING || phase == Phase.WRITING ? mergingProgress() : null);
     }
 
-    /** {@code swath.phase}'s current value as a {@link Phase}; {@link Phase#LISTING} before it is set. */
+    /**
+     * {@code swath.phase}'s current value as a {@link Phase}; {@link Phase#STARTING} before it is
+     * set — the honest answer for a run still opening its checkpoint, rather than a fabricated
+     * LISTING whose phase clock has not started.
+     */
     private static Phase phaseOf(long code) {
         for (Phase phase : Phase.values()) {
             if (phase.code() == code) {
                 return phase;
             }
         }
-        return Phase.LISTING;
+        return Phase.STARTING;
     }
 
     /**
      * The phase's completion figure, or {@code null} where no honest denominator exists — which is
      * the LISTING case and the reason there is no bar, no percentage and no ETA there: an unsorted
-     * scan does not know its object total until it ends. Seeding and merging both have exact ones.
+     * scan does not know its object total until it ends.
+     *
+     * <p>Seeding has one (probes against a bounded budget). The merge has one only for its FINAL
+     * pass ({@link Phase#WRITING}), measured from the baseline pinned when that pass began: a
+     * cascading merge rewrites every staged row once per pass and does not know its pass count in
+     * advance, so cumulative merge work over staged rows would pass 100% mid-cascade and report a
+     * finished merge before any final output was written. The cascade therefore reports work
+     * ({@link ProgressEvent.Merging#sessionRowsMerged()}) and no percentage.
      */
     private ProgressEvent.Completion completionOf(Phase phase) {
         if (phase == Phase.SEEDING && seedProbeBudget.get() > 0) {
             return new ProgressEvent.Completion(seedProbes.get(), seedProbeBudget.get(),
                     ProgressEvent.Unit.PROBES);
         }
-        if ((phase == Phase.MERGING || phase == Phase.WRITING) && sortStagedRows.get() > 0) {
-            return new ProgressEvent.Completion(mergedRows(), sortStagedRows.get(),
+        if (phase == Phase.WRITING && sortStagedRows.get() > 0 && finalPassProgressBaseline.get() >= 0) {
+            return new ProgressEvent.Completion(rowsSince(finalPassProgressBaseline), sortStagedRows.get(),
                     ProgressEvent.Unit.ROWS);
         }
         return null;
@@ -1805,14 +1887,14 @@ public final class RunMetrics {
     }
 
     private ProgressEvent.Merging mergingProgress() {
-        return new ProgressEvent.Merging(mergedRows(), sortStagedRows.get(), sortStagedSegments.get(),
-                (long) sortMergePasses.count());
+        return new ProgressEvent.Merging(rowsSince(mergeProgressBaseline), sortStagedRows.get(),
+                sortStagedSegments.get(), (long) sortMergePasses.count());
     }
 
-    /** Rows merged since the merge began — {@code progress.units} advanced past its merge baseline. */
-    private long mergedRows() {
-        long baseline = mergeProgressBaseline.get();
-        return baseline < 0 ? 0L : Math.max(0L, progressUnitsTally.get() - baseline);
+    /** Rows of merge work since a pinned {@code progress.units} baseline; {@code 0} while unpinned. */
+    private long rowsSince(AtomicLong baseline) {
+        long pinned = baseline.get();
+        return pinned < 0 ? 0L : Math.max(0L, progressUnitsTally.get() - pinned);
     }
 
     public RunSummary summary(Duration duration, String strategy, long outputFiles, long compressedBytes) {

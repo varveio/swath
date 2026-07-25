@@ -591,8 +591,8 @@ public final class ListRunner {
      * leftover {@code seg-*}/{@code merge-*.parquet}, if any) is swept before listing begins, so the
      * staging dir is always clean before a fresh run's segments land in it.
      *
-     * <p>On a reattach resume this method re-lists only the non-durable tail, so before the
-     * terminal summary it back-fills the pre-crash durable segments' objects/segment-count into this
+     * <p>On a reattach resume this method re-lists only the non-durable tail, so as soon as the
+     * durable set is read back it back-fills those segments' objects/segment-count into this
      * fresh run's counters ({@link io.varve.swath.observability.RunMetrics#recordRecoveredObjects}
      * + {@link io.varve.swath.observability.RunMetrics#recordRecoveredSortSegments}) — the
      * reattach/partial-relist sibling of {@link #runSortMergeOnly}'s backfill.
@@ -629,8 +629,6 @@ public final class ListRunner {
         producer.enableSortPacking(new SortPagePacker(comparator, sortConfig));
         SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
 
-        final long recoveredSortedRows;
-        final int recoveredSegments;
         if (reattach) {
             List<PartRef> segmentRows = sortedSegmentRows(store, runId);
             Set<String> keep = segmentRows.stream().map(PartRef::path).collect(Collectors.toSet());
@@ -642,8 +640,18 @@ public final class ListRunner {
             if (!segmentRows.isEmpty()) {
                 ctx.metrics().recordStealReason("SORT", "resume_reattached");
             }
-            recoveredSortedRows = segmentRows.stream().mapToLong(PartRef::rows).sum();
-            recoveredSegments = segmentRows.size();
+            // Backfill the pre-crash durable segments' rows/count HERE — the moment they become
+            // known, before this process lists anything — rather than once the merge is done. This
+            // fresh RunMetrics only ever sees the relisted TAIL in-process, so without the backfill
+            // objects/sort.segments under-report the whole run; recording it late additionally cost
+            // every live progress event of the listing phase its recovered_objects (they all
+            // reported 0, and the tally landed when the phase was already WRITING). The figures are
+            // read back from the checkpoint and never change afterwards. Nothing to do on a fresh
+            // or --restart run.
+            if (!segmentRows.isEmpty()) {
+                ctx.metrics().recordRecoveredObjects(segmentRows.stream().mapToLong(PartRef::rows).sum());
+                ctx.metrics().recordRecoveredSortSegments(segmentRows.size());
+            }
         } else {
             // A FRESH or --restart sorted run
             // starts this run_id at zero finalized segments, so anything already sitting in the
@@ -660,8 +668,6 @@ public final class ListRunner {
             } catch (IOException e) {
                 throw new OutputException("failed to sweep abandoned sort staging on fresh run", e);
             }
-            recoveredSortedRows = 0L;
-            recoveredSegments = 0;
         }
 
         SegmentSink sink = result -> {
@@ -708,16 +714,6 @@ public final class ListRunner {
                             spec.argsHash(), runId, spec.progressInterval(), false);
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
-
-                    // A reattach resume re-lists only the non-durable tail (this method's javadoc), so
-                    // this fresh RunMetrics only saw the tail's entries/segments in-process. Back-fill the
-                    // pre-crash durable segments' rows/count captured above (before this process listed
-                    // anything) so objects/sort.segments in the terminal summary count the WHOLE run, not
-                    // just the tail. No-op (both locals stay 0) on a fresh or --restart run.
-                    if (recoveredSegments > 0) {
-                        ctx.metrics().recordRecoveredObjects(recoveredSortedRows);
-                        ctx.metrics().recordRecoveredSortSegments(recoveredSegments);
-                    }
                 })
                 // The sort path's final published output is itself Parquet (SortedParquetWriterFactory) —
                 // labelled "parquet" here, not a distinct "sort" tag, so it lands on the SAME

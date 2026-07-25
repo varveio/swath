@@ -49,6 +49,7 @@ final class LiveProgressContractTest {
         assertThat(Phase.WRITING.code()).isEqualTo(2);
         assertThat(Phase.COMPLETE.code()).isEqualTo(3);
         assertThat(Phase.SEEDING.code()).isEqualTo(4);
+        assertThat(Phase.STARTING.code()).isEqualTo(5);
         assertThat(List.of(Phase.values()).stream().map(Phase::code).distinct()).hasSize(Phase.values().length);
     }
 
@@ -83,15 +84,85 @@ final class LiveProgressContractTest {
         metrics.recordSortStaged(4L, 1_000L);
         metrics.setPhase(Phase.MERGING);
         metrics.recordProgress(250);
+        metrics.setPhase(Phase.WRITING);   // the final pass: the one with an exact denominator
+        metrics.recordProgress(250);
 
         ProgressEvent event = metrics.progressEvent(Duration.ofSeconds(9));
 
-        assertThat(event.merging().sessionRowsMerged()).isEqualTo(250L);
+        assertThat(event.merging().sessionRowsMerged()).isEqualTo(500L);
         assertThat(event.merging().stagedRows()).isEqualTo(1_000L);
         assertThat(event.merging().segments()).isEqualTo(4L);
         assertThat(event.completion())
                 .isEqualTo(new ProgressEvent.Completion(250L, 1_000L, ProgressEvent.Unit.ROWS));
         assertThat(event.listing()).isNull();
+    }
+
+    @Test
+    void aCascadingMergeReportsWorkAndNoPercentageUntilTheFinalPass() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.recordSortStaged(5L, 5L);
+        metrics.setPhase(Phase.MERGING);
+        metrics.recordProgress(5);   // cascade pass 1 rewrites every staged row
+        metrics.recordProgress(5);   // cascade pass 2 rewrites them again
+
+        ProgressEvent midCascade = metrics.progressEvent(Duration.ofSeconds(3));
+        assertThat(midCascade.merging().sessionRowsMerged())
+                .as("cumulative merge work legitimately exceeds the staged rows")
+                .isEqualTo(10L);
+        assertThat(midCascade.completion())
+                .as("a cascade cannot report a fraction: 10/5 would show a finished merge")
+                .isNull();
+
+        metrics.setPhase(Phase.WRITING);
+        metrics.recordProgress(2);
+        assertThat(metrics.progressEvent(Duration.ofSeconds(4)).completion())
+                .isEqualTo(new ProgressEvent.Completion(2L, 5L, ProgressEvent.Unit.ROWS));
+    }
+
+    @Test
+    void aRunThatHasSetNoPhaseYetSaysSoInsteadOfFabricatingListing() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+
+        ProgressEvent event = metrics.progressEvent(Duration.ofSeconds(6));
+
+        assertThat(event.phase()).as("checkpoint recovery is not listing").isEqualTo(Phase.STARTING);
+        assertThat(event.listing()).isNull();
+        assertThat(event.phaseElapsed())
+                .as("the phase clock starts with the run, not at the nanoTime origin")
+                .isLessThan(Duration.ofMinutes(1));
+    }
+
+    @Test
+    void anUnknownProviderHasNoCostFigureForAnySinkToRender() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.recordApiCall();
+        metrics.setListCostKnown(false);
+
+        assertThat(metrics.progressEvent(Duration.ofSeconds(2)).estimatedCostUsd())
+                .as("--endpoint-url: an AWS-priced figure is a guess, so no figure exists")
+                .isNull();
+
+        metrics.setListCostKnown(true);
+        assertThat(metrics.progressEvent(Duration.ofSeconds(2)).estimatedCostUsd()).isNotNull();
+    }
+
+    @Test
+    void theTerminalSummaryEndsProgressForWhicheverSinkIsInstalled() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.setPhase(Phase.LISTING);
+        RecordingSink sink = new RecordingSink();
+        metrics.setProgressSink(sink);
+        metrics.emitProgress(Duration.ofSeconds(1));
+
+        Duration ran = Duration.ofSeconds(30);
+        metrics.emitSummary(metrics.summary(ran, "WORK_STEALING", 0L, 0L), metrics.diagnostics(ran),
+                new JsonRunSummaryWriter.TerminalStatus(StopReason.COMPLETED));
+        metrics.emitProgress(Duration.ofSeconds(31));
+        metrics.setProgressSink(sink);   // even a re-install cannot revive it
+        metrics.emitProgress(Duration.ofSeconds(32));
+
+        assertThat(sink.events).as("the summary is the run's last word, whichever sink renders progress")
+                .hasSize(1);
     }
 
     @Test
