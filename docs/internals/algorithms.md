@@ -1193,6 +1193,26 @@ a valid partition from the first durable moment or it does not exist at all). On
     buckets the frontier exhausts long before the wallet does, so the old
     ~one-probe-per-level cost still describes the common case (e.g. a
     1-object-per-leaf Hive/Spark tree costs one seed call + a flat scan).
+  - **The seed's cost is bounded in calls; its wall clock is bounded in round
+    trips.** The two are not the same budget, and only the first is capped
+    above. The descent is **serial** — it polls one frontier node, probes it,
+    and enqueues that probe's children before choosing the next — so seed wall
+    time is approximately `maxProbes × probe RTT`, and raising `--concurrency`
+    lengthens it rather than shortening it (a higher worker count buys a larger
+    `maxProbes`, and the probes still run one at a time). A `delimiter=/`
+    structure probe is also the most expensive request shape S3 serves, since
+    the store must scan and aggregate to return `CommonPrefixes` rather than
+    hand back the next page of keys. For an anchor: a 256-probe descent under
+    the replay server's `prod-commoncrawl` latency injection
+    (`223ms + 55ms per CommonPrefix`) took **~2m48s**, during which the run
+    emits no objects at all. This is why the live progress display carries a
+    `seeding` phase with a probe count and the age of the last completed probe
+    (`docs/usage.md` §Progress): every listing-shaped counter reads zero for
+    that whole span, so a healthy seed and a wedged one are otherwise
+    indistinguishable. Nothing here parallelizes the descent today; the probes
+    are independent and could be batched, at the cost of the frontier's
+    per-probe feedback, and that trade is unmade.
+
     Multi-level adaptive descent: descend one additional delimiter level only
     when a sub-level's prefix count is *non-truncated and narrow* (below the
     cap). An exploding or truncated sub-level is classified and disposed of
