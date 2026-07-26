@@ -15,6 +15,7 @@ import io.varve.swath.checkpoint.RunKey;
 import io.varve.swath.checkpoint.RunMeta;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.engine.policy.NoVictimReason;
+import io.varve.swath.engine.policy.RetryReason;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -74,6 +75,33 @@ import org.junit.jupiter.api.io.TempDir;
  * pool_empty} calls lost); the pre-existing {@code RETRY}-double-count mutant this test was
  * originally written to catch still fails against this extended fixture too ({@code but was:
  * 3907L}). None of the four buckets is vacuous.
+ *
+ * <p><b>A second conservation invariant, over the {@code ALPHABET} "verdict" engagement (added after
+ * an independent review found this test reconciled only the four terminal outcome buckets, never any
+ * mid-cascade engagement {@code contracts.md} §2.1 cites this test for).</b> See the assertion's own
+ * inline comment for the derivation; in short, {@code ThiefPolicy#addAlphabetEngagement} records
+ * exactly one of {@code alphabet_chosen}/{@code alphabet_fallback} per selected attempt that reaches
+ * a bounded victim's initial pivot placement with a non-null pivot, which is exactly every selected
+ * attempt minus the three pre-pivot {@code RetryReason}s and every {@code UNSPLITTABLE} (its one and
+ * only source) -- deliberately NOT the same thing as summing every {@code ALPHABET.*} reason:
+ * {@code AlphabetDigest#chooseScalar} separately reports its own {@code fallback_out_of_window}/
+ * {@code fallback_no_room}/{@code window_gap} marks (zero or more times per attempt, driven by the
+ * observed alphabet, not by which attempt this is), which is exactly what an earlier version of this
+ * assertion got wrong (it summed the whole {@code ALPHABET} outcome and failed against UNMUTATED code,
+ * {@code expected: 21L but was: 42L} -- corrected here to the two verdict reasons only). Both mutants
+ * above (double-record / delete {@code Thief#applyEngagements}) turn the corrected assertion red;
+ * neither is caught by the four-bucket invariant alone, since the verdict marks are recorded through a
+ * different call path ({@code applyEngagements} draining the attempt's engagement list) than the four
+ * terminal outcomes (direct {@code Thief#record}/{@code Thief#steal} calls). {@code STRUCTURE}/
+ * {@code PIVOT} mid-cascade marks and the {@code STEAL}
+ * pacing engagement are NOT reconciled by this test: unlike {@code ALPHABET}, none of them has a
+ * single, unconditional call site whose firing condition reduces to already-independently-recorded
+ * counters -- each is gated by cascade branches (structure-probe suppression, density-reflection
+ * outcome, per-candidate pacing state) that are themselves schedule/topology-dependent under real
+ * contention, not computable from the call totals alone without either predicting a race outcome or
+ * adding new production instrumentation. Their single-threaded shape is pinned instead by the
+ * decision-trace goldens; see {@code contracts.md} §2.1's own citation of this test for the exact,
+ * narrowed scope of what conservation it verifies under contention.
  */
 final class ThiefStealReasonConservationTest {
 
@@ -287,6 +315,59 @@ final class ThiefStealReasonConservationTest {
             assertThat(countReason(metrics, "NO_VICTIM", NoVictimReason.POOL_EMPTY.code()))
                     .as("every explicit empty-pool call lands on POOL_EMPTY, exactly once each")
                     .isEqualTo((long) THREADS * EMPTY_POOL_CALLS_PER_THREAD);
+
+            // A SECOND conservation invariant, this time over the ALPHABET "verdict" engagement -- issue
+            // found by an independent review: this test previously reconciled only the four terminal
+            // outcome buckets, never any of the mid-cascade engagement categories (ALPHABET/STRUCTURE/
+            // PIVOT) contracts.md §2.1 cites this test for. ThiefPolicy#addAlphabetEngagement records
+            // exactly one of alphabet_chosen/alphabet_fallback, unconditionally, on the path that reaches
+            // a bounded (hi != null) victim's initial pivot placement with a non-null pivot
+            // (ThiefPolicy.java:312, immediately before the first key probe is requested). Every OTHER
+            // path out of StealAttempt#start() before that point is accounted for by an EXISTING,
+            // independently recorded counter:
+            //   - UNSPLITTABLE has exactly ONE source in the whole cascade -- ThiefPolicy never returns
+            //     MarkUnsplittable except from the m==null branch immediately preceding the verdict's
+            //     call site (verified: MarkUnsplittable is constructed nowhere else in ThiefPolicy.java);
+            //   - the three RETRY reasons that fire BEFORE that point (UNCHANGED_NONPRODUCTIVE_SNAPSHOT,
+            //     CURSOR_AT_OR_PAST_HI, UNSTARTED_FRONTIER -- see RetryReason's own javadoc for why the
+            //     other two, RETRY_PIVOT_ADJACENT/BISECT_BUDGET_EXHAUSTED, are deep-cascade RETRYs that
+            //     fire only AFTER the verdict already did, as do the executor-owned bound_moved/
+            //     cursor_passed_pivot/split_aborted string-literal RETRYs Thief itself emits).
+            // So the verdict count == every selected-victim attempt EXCEPT those three early RETRYs and
+            // every UNSPLITTABLE -- an exact, schedule-independent identity (it never predicts which
+            // CHILD_CREATED/RETRY a given attempt lands on, only which attempts had a chance to reach the
+            // verdict's call site at all). Every counter on the right-hand side here is recorded by a
+            // call site OTHER than the applyEngagements/applyMutations pipeline the verdict itself goes
+            // through (NoVictimReason/RetryReason/terminal-outcome recording are direct
+            // Thief#record/Thief#steal calls, never routed through an Engagement list), so this
+            // reconciles the verdict against genuinely independent ground truth.
+            //
+            // NOT sumByOutcome(metrics, "ALPHABET"): that also sums AlphabetDigest#chooseScalar's own
+            // three variable, digest-state-dependent fallback marks (ALPHABET.fallback_out_of_window/
+            // fallback_no_room/window_gap -- zero or more PER interpolate() call, driven by the observed
+            // alphabet, not by which attempt this is) -- summing the whole ALPHABET outcome failed
+            // against UNMUTATED code (expected: 21L but was: 42L, a real run's numbers) before this
+            // narrowing to the two verdict reasons was applied.
+            //
+            // Mutation evidence: mutating Thief#applyEngagements to iterate its list TWICE (double-
+            // records every engagement, including the verdict mark) turns this assertion red (actual
+            // exactly 2x expected: 46L vs 23L, a real run's numbers); deleting the body of
+            // Thief#applyEngagements entirely (so no engagement is ever recorded) turns it red too
+            // (actual 0, expected > 0 since childCreated > 0 is already asserted above). Both mutants
+            // left the test GREEN before this assertion existed; both reverted clean afterward.
+            long alphabetVerdict = countReason(metrics, "ALPHABET", "alphabet_chosen")
+                    + countReason(metrics, "ALPHABET", "alphabet_fallback");
+            long selectedAttempts = totalCalls - noVictim;
+            long preAlphabetRetries = countReason(metrics, "RETRY", RetryReason.UNCHANGED_NONPRODUCTIVE_SNAPSHOT.code())
+                    + countReason(metrics, "RETRY", RetryReason.CURSOR_AT_OR_PAST_HI.code())
+                    + countReason(metrics, "RETRY", RetryReason.UNSTARTED_FRONTIER.code());
+            assertThat(alphabetVerdict).as("nonzero ALPHABET verdict marks were recorded at all").isGreaterThan(0);
+            assertThat(alphabetVerdict)
+                    .as("every ALPHABET verdict engagement (alphabet_chosen/alphabet_fallback) reconciles "
+                            + "against selected attempts minus the three pre-pivot-placement RETRY reasons "
+                            + "minus every UNSPLITTABLE (the sole MarkUnsplittable source, at the same check "
+                            + "site the verdict is guarded by)")
+                    .isEqualTo(selectedAttempts - preAlphabetRetries - unsplittable);
         }
     }
 }
