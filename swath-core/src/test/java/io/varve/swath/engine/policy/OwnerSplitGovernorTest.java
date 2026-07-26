@@ -114,7 +114,9 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.REMAINING_EST_FLOOR);
-        assertThat(decision.engagements()).as("uncounted today (issue #16)").isEmpty();
+        assertThat(decision.engagements())
+                .as("issue #16: the floor now records its own engagement")
+                .containsExactly(new Engagement("OWNER_SPLIT", "remaining_est_floor"));
     }
 
     @Test

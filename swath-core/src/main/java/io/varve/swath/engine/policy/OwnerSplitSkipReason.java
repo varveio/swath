@@ -24,8 +24,7 @@ public enum OwnerSplitSkipReason {
     OPEN_FRONTIER("open_frontier"),
     /**
      * The estimated remaining work does not clear {@code SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys}
-     * — a genuine suppressed carve, currently UNCOUNTED (issue #16: no {@link Engagement} fires
-     * here yet, violating AGENTS.md's instrument-every-path law).
+     * — a genuine suppressed carve: {@code OWNER_SPLIT.remaining_est_floor} (issue #16).
      */
     REMAINING_EST_FLOOR("remaining_est_floor"),
     /**

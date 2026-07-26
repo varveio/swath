@@ -80,9 +80,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // which needs no estRemaining change to land on a populated value.
         double est = StealMath.estRemaining(cursorTo, lo, H, view.keysEmitted());
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
-            // Remaining work too small to be worth a proactive carve — see OwnerSplitSkipReason's
-            // javadoc: uncounted today (issue #16).
-            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR, List.of());
+            // Remaining work too small to be worth a proactive carve — issue #16.
+            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR,
+                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())));
         }
         if (view.committed() - view.lastSelfSplitPage() < SELF_SPLIT_MIN_PAGES_BETWEEN) {
             // Rate-limit: O(1) self-splits per drain, not one per page. See OwnerSplitSkipReason's
