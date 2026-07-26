@@ -98,6 +98,40 @@ import org.junit.jupiter.api.Test;
  * thiefCascadeMechanisms}: reaching it requires the parent-empty sliver's byte-ADJACENT
  * cursor/bound divergence (see {@code Thief#isCursorAdjacentSliver}) on top of a truncated
  * probe, a narrow enough combination that a second independent recipe was not attempted here.
+ *
+ * <p>{@code owner_self_split}'s per-fixture count above is the same trap the thief mechanism
+ * count exists to avoid: it says nothing about which of {@link OwnerSplitGovernor}'s SIX gates
+ * (algorithms.md §3.3) each event actually exercises. The per-gate count (grepping the committed
+ * goldens' {@code reason_deltas}, not hand-counted):
+ * <ul>
+ *   <li>{@code OPEN_FRONTIER} (silent by design, no counter — see {@code OwnerSplitSkipReason}'s
+ *       javadoc): 1 event, 1 fixture (owner-split-gates)</li>
+ *   <li>{@code REMAINING_EST_FLOOR}: 2 events, 2 fixtures (owner-split-gates, explosion-1to1)</li>
+ *   <li>{@code RATE_LIMITED}: 1 event, 1 fixture (owner-split-gates)</li>
+ *   <li>{@code DEMAND_GATED}: 2 events, 2 fixtures (owner-split-gates, flat-wide)</li>
+ *   <li>{@code UNSPLITTABLE_PIVOT}: 1 event, 1 fixture (owner-split-gates) — the byte-adjacent
+ *       {@code (cursorTo, hi]} recipe below, mirroring {@code
+ *       ThiefPolicyCascadeTest#unsplittable_terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds}'s
+ *       technique (a proper-prefix extension by one C0-control byte, per {@code ByteMidpoint}'s
+ *       I12 null contract)</li>
+ *   <li>A successful carve ({@code OWNER_SPLIT.self_published}): 3 events, 3 fixtures
+ *       (deep-narrow, owner-split-gates, partition-key-value) — of which one also engages {@code
+ *       pivot_reflect_clamped} (owner-split-gates) and one {@code pivot_reflect_lifted}
+ *       (partition-key-value)</li>
+ * </ul>
+ * {@code FLOOR_REFLECTED_BLOCKED} (the observed-mass child-tail floor) and the confetti feedback
+ * gate's two outcomes ({@code CONFETTI_SUPPRESSED}, the {@code confetti_probe} engagement) are
+ * NOT pinned by any fixture here — a real gap, not silently absent: the observed-mass floor and
+ * the confetti gate's {@code MIN_SAMPLE}-warmup/probe state machine are already boundary-tested in
+ * isolation ({@code OwnerSplitChildMassFloorTest}, {@code ConfettiFeedbackGateTest}) and wiring-tested
+ * against {@link OwnerSplitGovernor} directly ({@code OwnerSplitGovernorTest}), but no recipe
+ * driving THIS recorder (a single {@link OwnerSelfSplit} call against a hand-built {@link
+ * WorkerState}) has been built to reach them — see {@code decision-trace-goldens.md}'s "known
+ * gaps" section. {@code OWNER_SPLIT.self_aborted} (the durable-split CAS rejection) is likewise
+ * absent here by construction: every scenario's {@code StubCheckpointStore} always accepts the
+ * split, so the abort path is out of this single-attempt recorder's reach entirely — it is covered
+ * instead by {@code OwnerSelfSplitContractTest}'s dedicated abort-path test (T2), which forces
+ * every split to reject.
  */
 final class DecisionTraceGoldenTest {
 
@@ -446,7 +480,7 @@ final class DecisionTraceGoldenTest {
         recordOwnerSplitAttempt(fx, ownerSelfSplit(m1, t1, 4, 100, () -> 0L, () -> 4),
                 frontier, b("a"), selfSplit1, m1, t1);
 
-        // 2. Too small a remaining span: the issue #16 UNINSTRUMENTED silent gate.
+        // 2. Too small a remaining span -> OWNER_SPLIT.remaining_est_floor (issue #16).
         RunMetrics m2 = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink t2 = new RecordingTraceSink();
         WorkerState tiny = WorkerStates.of(2, b("d/00"), b("d/00"), b("d/05"));
@@ -481,7 +515,38 @@ final class DecisionTraceGoldenTest {
         recordOwnerSplitAttempt(fx, ownerSelfSplit(m5, t5, 1, 100, () -> 0L, () -> 1),
                 published, b("d/002500"), selfSplit5, m5, t5);
 
+        // 6. Genuinely unsplittable THIS page: cursorTo is a proper prefix of hi, and hi's one
+        //    extra byte (U+001F, below the safe-scalar floor MIN_SAFE=U+0020) leaves no safe key
+        //    strictly between (ByteMidpoint's I12 null contract -- mirrors ThiefPolicyCascadeTest's
+        //    terminal-null-pivot recipe of extending by one C0-control byte). Single worker (no
+        //    demand gate), clear of the rate limit; keysEmitted is picked so est still clears the
+        //    remaining-est floor even though the byte-adjacent tail is almost the whole weight of
+        //    the consumed span (est = keysEmitted * (0x1F/65536)/(0x01/256) = keysEmitted *
+        //    31/256 -- exact in double precision, both terms being small integers over powers of
+        //    two) -> OWNER_SPLIT.unsplittable_pivot, decision.split=false. Transient, not cached:
+        //    unlike the thief's UNSPLITTABLE.no_pivot, the SAME range is reconsidered at its next
+        //    qualifying page-commit.
+        RunMetrics m6 = new RunMetrics(new SimpleMeterRegistry());
+        RecordingTraceSink t6 = new RecordingTraceSink();
+        byte[] unsplittableCursorTo = extendByte(b("d/00"), 0x01);   // one byte past lo, minimal value
+        byte[] unsplittableHi = extendByte(unsplittableCursorTo, 0x1F);   // cursorTo + one C0-control byte
+        WorkerState unsplittable = WorkerStates.of(6, b("d/00"), b("d/00"), unsplittableHi);
+        unsplittable.addKeysEmitted(20_000);
+        long[] selfSplit6 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        recordOwnerSplitAttempt(fx, ownerSelfSplit(m6, t6, 1, 100, () -> 0L, () -> 1),
+                unsplittable, unsplittableCursorTo, selfSplit6, m6, t6);
+
         GoldenTrace.writeOrVerify(fx);
+    }
+
+    /**
+     * {@code prefix} with one extra byte appended (a raw value, not through a {@code String}
+     * literal — a C0-control byte is not safely visible/reviewable embedded in source text).
+     */
+    private static byte[] extendByte(byte[] prefix, int extra) {
+        byte[] out = Arrays.copyOf(prefix, prefix.length + 1);
+        out[prefix.length] = (byte) extra;
+        return out;
     }
 
     /** A dense, bounded, far-consumed victim large enough to clear the owner-split remaining-work floor. */

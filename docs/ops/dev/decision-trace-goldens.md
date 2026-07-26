@@ -165,6 +165,15 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   legacy-tool-generated datasets — and nothing else in this fixture matrix
   covers it. Disclosed here rather than silently dropped; not planned to be
   closed as part of this safety net.
+- **Three of `OwnerSplitGovernor`'s gates have no golden event.** The observed-mass
+  child-tail floor (`OwnerSplitSkipReason#FLOOR_REFLECTED_BLOCKED`) and the confetti
+  feedback gate's two outcomes (`CONFETTI_SUPPRESSED`, the `confetti_probe` engagement)
+  are all instrumented and boundary-tested in isolation (`OwnerSplitChildMassFloorTest`,
+  `ConfettiFeedbackGateTest`, `OwnerSplitGovernorTest`), but no recipe driving THIS
+  recorder (a single `OwnerSelfSplit` call against a hand-built `WorkerState`) has been
+  built to reach them — see `DecisionTraceGoldenTest`'s class-level Javadoc for the
+  full per-gate count. Not fixed here; disclosed so the gap is visible rather than
+  silently absent from an otherwise-complete-looking matrix.
 
 ## Coverage matrix
 
