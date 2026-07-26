@@ -537,11 +537,23 @@ public final class WorkerState {
     }
 
     /**
-     * Whether this victim is currently <b>paced</b> (in a futility cooldown) and should be skipped
-     * as a steal victim this attempt. Consumes one skip of the cooldown when it returns {@code true}, so
-     * the cooldown decays one steal-selection pass at a time and the victim becomes eligible again once
-     * it expires (or sooner, on productive progress via {@link #markStolen}). Read/mutated without
-     * {@link #lock()} — a benign race only ends a cooldown an attempt or two early.
+     * <b>Test-only: no production caller.</b> Production victim selection reads {@link
+     * #pacingSkipAvailable()} (a peek) at view-construction time and applies {@link
+     * #consumePacingSkip()} afterward, only for the candidates the policy's {@code
+     * io.varve.swath.engine.policy.Selection} actually marks paced — the split-in-two shape {@link
+     * #pacingSkipAvailable()}'s own javadoc describes. This method's combined check-and-decrement is
+     * the PRE-EXTRACTION shape those two
+     * methods replaced; it is kept only because {@code decision-trace-goldens.md}'s {@code
+     * pacing.steal_paced} fixtures drive it directly as a pure state machine (a deliberate test
+     * convenience, not a live code path) — an earlier version of this javadoc described it as if it
+     * were still the live per-attempt check ("should be skipped as a steal victim this attempt"),
+     * which is stale and corrected here.
+     *
+     * <p>Whether this victim is currently <b>paced</b> (in a futility cooldown). Consumes one skip of
+     * the cooldown when it returns {@code true}, so the cooldown decays one call at a time and the
+     * victim becomes eligible again once it expires (or sooner, on productive progress via {@link
+     * #markStolen}). Read/mutated without {@link #lock()} — a benign race only ends a cooldown a call
+     * or two early.
      *
      * <p>The paced-check and the decay step are {@link FutilityPacingPolicy#paced}/{@link
      * FutilityPacingPolicy#decay} — the check is a plain (non-mutating) {@code get}, and the decay is
