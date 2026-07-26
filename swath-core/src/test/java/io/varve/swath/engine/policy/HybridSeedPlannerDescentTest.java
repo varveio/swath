@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.varve.swath.engine.EngineToggles;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
@@ -149,8 +150,14 @@ final class HybridSeedPlannerDescentTest {
             if ("c/".equals(p) && after == null) {
                 return new SeedProbeOutcome(List.of(b("c/a/"), b("c/b/")), true, 0, b("c/b/"));
             }
+            // A NON-empty second page (unlike an earlier version of this fixture, which returned
+            // List.of() here): deleting the second-page cut-ingestion path entirely (never folding
+            // outcome.commonPrefixes() from the TOP_EXTRA response into the accumulated cut set) still
+            // satisfied the previous, all-empty-second-page fixture, since page 2 contributed nothing
+            // either way -- an independent review's finding. "c/c/" here is a real, distinct cut this
+            // test now depends on actually reaching plan.cuts().
             if ("c/".equals(p) && "c/b/".equals(after)) {
-                return new SeedProbeOutcome(List.of(), false, 0, null);
+                return new SeedProbeOutcome(List.of(b("c/c/")), false, 0, null);
             }
             throw new AssertionError("unscripted probe: prefix=" + p + " startAfter=" + after);
         };
@@ -165,11 +172,11 @@ final class HybridSeedPlannerDescentTest {
         assertThat(plan.probes()).isEqualTo(2);
 
         assertThat(plan.cuts().stream().map(c -> new String(c, StandardCharsets.UTF_8)))
-                .containsExactly("c/a/", "c/b/");
+                .containsExactly("c/a/", "c/b/", "c/c/");
         assertThat(plan.decisions().stream().map(HybridSeedPlannerDescentTest::describe).toList())
                 .containsExactly(
                         describe(prefix, 2, true, "tiny_leaf_explosion", 2, 0),
-                        describe(prefix, 0, false, "top_probe_paginated", 0, 0));
+                        describe(prefix, 1, false, "top_probe_paginated", 1, 0));
 
         assertThat(reasons(engagements))
                 .containsExactly("top_probe_paginated", "tiny_leaf_explosion", "top_truncated");
@@ -185,7 +192,8 @@ final class HybridSeedPlannerDescentTest {
     @Test
     void weightSampleSubLoopMassWeightsAnOverCapWideTop() {
         byte[] prefix = b("w/");
-        int childCount = 21;
+        int childCount = 60;
+        int heavyFromIndex = 9;
         List<byte[]> topChildren = new ArrayList<>(childCount);
         for (int i = 0; i < childCount; i++) {
             topChildren.add(b("w/%03d/".formatted(i)));
@@ -193,14 +201,21 @@ final class HybridSeedPlannerDescentTest {
         HybridSeedPlanner planner = new HybridSeedPlanner(prefix, 5, EngineToggles.DEFAULT);
         assertThat(planner.probeBudget()).isEqualTo(20);   // targetSeeds = min(1000, 4*5) = 20
 
+        // Children from "w/009/" on report a heavier objectCount than earlier ones -- an earlier
+        // version of this fixture gave every child the SAME weight (5), so a mutant that subsamples
+        // POSITIONALLY (evenly-spaced over the sorted cut set) yet still emits the
+        // mass_weighted_subsample mark passed unnoticed (an independent review's finding). This
+        // fixture's own cut count (60) so far exceeds targetSeeds (20) that a genuine weight skew
+        // produces a cut SET a positional subsample of the same 60 cuts could never produce (see the
+        // direct comparison below, reconstructing subsampleEvenly's own even-index formula) --
+        // discriminating without needing to predict massWeightedSubsample's exact selection precisely.
         Function<RequestSeedProbe, SeedProbeOutcome> script = req -> {
             String p = new String(req.probePrefix(), StandardCharsets.UTF_8);
             if ("w/".equals(p)) {
                 return new SeedProbeOutcome(topChildren, false, 0, null);
             }
-            // Every child (descended or weight-sampled) is an identical narrow, no-new-cuts leaf —
-            // the response depends only on being a "w/NNN/" child, not on WHICH one or WHEN.
-            return new SeedProbeOutcome(List.of(), false, 5, null);
+            boolean heavy = p.compareTo("w/%03d/".formatted(heavyFromIndex)) >= 0;
+            return new SeedProbeOutcome(List.of(), false, heavy ? 50 : 1, null);
         };
 
         List<RequestSeedProbe> issued = new ArrayList<>();
@@ -218,6 +233,27 @@ final class HybridSeedPlannerDescentTest {
 
         assertThat(plan.cuts()).as("the over-cap cut set was reduced to at most targetSeeds")
                 .hasSizeLessThanOrEqualTo(20).isNotEmpty();
+
+        // Reconstruct exactly what a POSITIONAL (evenly-spaced) subsample of the same 60 sorted cuts
+        // down to targetSeeds(20) would have picked -- subsampleEvenly's own index formula
+        // (idx = i*(n-1)/(max-1)), mirrored here since that method is private to HybridSeedPlanner. A
+        // mutant that discards the weight map and always calls the positional path (while still
+        // emitting the mass_weighted_subsample mark) would make plan.cuts() equal to this reconstructed
+        // list; the deliberately skewed weights above make the genuine result provably different.
+        List<byte[]> sortedAll = new ArrayList<>(topChildren);
+        sortedAll.sort(Arrays::compareUnsigned);
+        int n = sortedAll.size();
+        int max = 20;
+        List<String> positional = new ArrayList<>(max);
+        for (int i = 0; i < max; i++) {
+            int idx = (int) ((long) i * (n - 1) / (max - 1));
+            positional.add(new String(sortedAll.get(idx), StandardCharsets.UTF_8));
+        }
+        List<String> actual = plan.cuts().stream().map(c -> new String(c, StandardCharsets.UTF_8)).toList();
+        assertThat(actual)
+                .as("a genuinely mass-weighted subsample over these deliberately skewed weights must "
+                        + "differ from a purely positional (evenly-spaced) subsample of the same 60 cuts")
+                .isNotEqualTo(positional);
         // The finalizeDecisions rewrite: the top-level entry's raw "narrow" classification is
         // promoted to "delimiter_seeded" only once the WHOLE run's shape is known to be the
         // generic case (synthesized == 0, no special per-level classification anywhere).
