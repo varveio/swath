@@ -253,6 +253,103 @@ public sealed interface EntryFormatter permits ParquetFormatter, JsonlFormatter,
 public final class Scope implements AutoCloseable { /* fork / joinAllOrThrow / close = shutdownNow+await */ }
 ```
 
+### 2.1 The policy/executor split — view read timing, mutation timing, exactly-once engagements
+
+`io.varve.swath.engine.policy` (`StealPolicy`/`ThiefPolicy`, `OwnerSplitPolicy`/`OwnerSplitGovernor`)
+decides; `io.varve.swath.engine` (`Thief`, `OwnerSelfSplit`) is the only code that touches a lock, a
+clock, or the checkpoint CAS. The decision-trace goldens prove the two sides agree on *values*
+(sequential replay, byte-identical). They say nothing about *when*, under real concurrency, a view's
+fields were read relative to the lock scopes the pre-extraction monolith held them in — a policy
+deciding on a stale or torn read costs a wasted probe or a wrong-but-recoverable counter (the CAS
+re-validate in `commit()`/`maybeOwnerSelfSplit` still protects every tiling invariant, I1–I12), never
+a gap/overlap. That failure mode has no other written home, which is itself the gap this section
+closes.
+
+**View construction — one pass, no lock, per view type:**
+
+- **`VictimView`** (one per pool member, `Thief.steal`): `nodeId`/`lo`/`cursor`/`hi`/`keysEmitted`/
+  `unsplittable`/`pacingSkipAvailable` are all read in a single unlocked pass over the pool, exactly
+  as the pre-extraction monolith's selection loop read them — **before** `policy.selectVictim` runs
+  over the resulting list.
+- **`StealAttemptView`** (one per attempt, after `victim.snapshot()`): `cursor`/`hi` come from the
+  snapshot (lock-guarded pair read, unchanged); `densityFraction`/`alphabetDigest`/
+  `unchangedSinceNonProductiveSteal`/`keysEmitted`/`consecutiveZeroFanoutProbes`/
+  `consecutiveTimedOutStructureProbes` are read once, up front, immediately after the snapshot —
+  **before** `policy.beginAttempt` or any probe in this attempt has run.
+- **`OwnerSplitView`** (one per self-split attempt, `OwnerSelfSplit.maybeOwnerSelfSplit`): every field
+  is read once, entirely inside the caller's `ws.lock()` hold (`WorkStealingScan.runClaim` holds it
+  across the whole method, unchanged from pre-extraction) — **before** `governor.decide` runs the
+  whole gate chain.
+
+**Mutation timing.** A `VictimMutation`/`OwnerSplitMutation` is never applied by the policy itself —
+only the executor mutates a live `WorkerState`, via `Thief.applyMutations`/`OwnerSelfSplit.applyMutations`,
+and only in response to a `mutations()` list the policy returned alongside its decision:
+
+- Selection-scoped `VictimMutation`s (`selection.mutations()`) are applied once, immediately after
+  `policy.selectVictim` returns — i.e. after the *entire* pool has been scanned, not immediately after
+  the one candidate that triggered the mutation was examined.
+- Per-attempt `VictimMutation`s (`action.mutations()`) are applied once per `StealAction`, immediately
+  before that action's own probe/commit/retry is dispatched — never re-applied, since the executor's
+  `while (true)` loop discards each `action` after acting on it exactly once (this is what makes the
+  exactly-once rule below hold across `Retry`/abort paths too).
+- The split-defining mutations — `WorkerState#narrowHi`/`restoreHi` and the `CheckpointStore#splitNode`
+  CAS itself — are **not** policy `VictimMutation`s at all; they are executor-only, always issued
+  inside `victim.lock()`/`ws.lock()` in `commit()`/`maybeOwnerSelfSplit`. Every policy-driven
+  `VictimMutation` that runs *outside* a lock is cheap, per-victim `AtomicInteger`/boolean bookkeeping
+  (pacing skips, futility/no-pivot/structure-probe tallies) — never a field the split CAS's guard
+  clause reads.
+- `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` is the one exception with **no** widened window at
+  all: `governor.decide(view)` and `applyMutations(decision.mutations())` both run back-to-back inside
+  the same `ws.lock()` hold, so decide-then-apply is a single lock scope, not two.
+
+**Engagements are exactly-once by the same mechanism.** `applyEngagements` is called at the identical
+points `applyMutations` is (selection-scoped once per `steal()` call; per-attempt once per
+`action.engagements()`) — every `Engagement` a `Selection`/`StealAction`/`OwnerSplitDecision` carries is
+recorded exactly once, because the object carrying it is visited exactly once. `ThiefPolicy.Attempt`'s
+internal `pendingEngagements`/`pendingMutations` (drained via `List.copyOf(...)` + `.clear()` on each
+`StealAction` it hands back) prevent the policy itself from double-emitting across a multi-probe
+cascade; the executor's single-application-per-action loop prevents the executor from doing so either,
+including on every `Retry`/abort path (a retried attempt is a brand-new `Thief.steal()` call with a
+brand-new view — it never replays a discarded action's engagements).
+
+**Field-by-field audit against `main` (pre-extraction) — every widened window, whether or not benign:**
+
+| View | Field(s) | Pre-extraction read timing | Post-extraction read timing | Classification |
+|---|---|---|---|---|
+| `VictimView` | `nodeId`,`lo`,`cursor`,`hi`,`keysEmitted`,`unsplittable` | unlocked, single pool pass, inline in the selection loop | unlocked, single pool pass, inline in the view-construction loop | unchanged |
+| `VictimView` | `pacingSkipAvailable` / `CONSUME_PACING_SKIP` | `stealPaced()`: check-and-decrement in **one** call, inline per-candidate — no other candidate's work intervenes between check and consume | check (`pacingSkipAvailable()`) at view-construction time; consume (`consumePacingSkip()`) applied only after `selectVictim` has scanned the **whole** pool | **WIDENED** — see below |
+| `StealAttemptView` | `cursor`,`hi` (via `victim.snapshot()`) | lock-guarded pair read, same call site | lock-guarded pair read, same call site | unchanged |
+| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live, multiple times, later in the cascade (far-ahead fraction, pivot interpolation, alphabet engagement — each its own live call) | read once, up front, immediately after the snapshot; the same cached value serves every later use | narrowed (one earlier read replaces several later ones) |
+| `StealAttemptView` | `unchangedSinceNonProductiveSteal(snap)` | pure comparison, immediately after the snapshot | same | unchanged |
+| `StealAttemptView` | `keysEmitted` | not read by the per-attempt cascade in either version (only `VictimView.keysEmitted`, a distinct field, feeds `estRemaining` at selection) | same | unchanged (dead field either way) |
+| `StealAttemptView` | `consecutiveZeroFanoutStructureProbes`,`consecutiveTimedOutStructureProbes` | read live at the structure-probe-suppression check, **after** this attempt's own far-ahead/step-back key-probe round trip(s) had already completed | cached at view construction, **before** any probe in this attempt has run; the structure-probe-suppression check consults the same cached value later | **WIDENED** — see below |
+| `OwnerSplitView` | `H`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged |
+| `OwnerSplitView` | `outstanding` | read only if the demand gate was actually reached — i.e. only after the remaining-est-floor and rate-limit gates had already passed | read unconditionally at view construction, for every self-split attempt, whether or not the demand gate will be consulted | **WIDENED** — already disclosed at `OwnerSelfSplit`'s `outstanding` field javadoc; a heuristic input, so this changes only which page-commit's snapshot the demand gate happens to see, never correctness |
+| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, not a comparable "view field" | read via `confettiFeedback.snapshot()`, once, at view construction, inside `ws.lock()` | see issue #22's own commit for the full concurrency-relaxation disclosure; not re-litigated here |
+
+**The two `Thief`-side widenings in the table above are judged benign, but the judgment is the
+reviewer's to check, not the implementer's to make silently:**
+
+- *Pacing-skip window.* If `markStolen()` (resets the cooldown to zero on a productive split) and then
+  a fresh `recordFutileSteal()` (starts a **new** cooldown episode) both land on the same candidate
+  during this window, the stale `consumePacingSkip()` still fires unconditionally and erroneously
+  consumes one skip of the new, unrelated cooldown. Both `pacingSkipAvailable()`'s `> 0` and
+  `stealPaced()`'s `<= 0` checks treat a negative `stealPacingSkips` identically to zero, so this
+  cannot flip a "not paced" read into a "still paced" one or vice versa — the consequence is bounded
+  to wasting one skip of an unrelated episode, never a stuck/starved victim.
+- *Structure-probe-suppression window.* A **different**, concurrently-racing thief probing the same
+  victim during this attempt's own key-probe round trip can move the cached counters in either
+  direction relative to what a live read would show: upward across the suppression threshold (this
+  attempt proceeds with a structure probe it should have suppressed — a wasted probe) or downward back
+  under it (this attempt is routed through the 1-in-64 recovery gate when it should have proceeded
+  unconditionally — a missed structure-probe opportunity). Both directions cost only a wasted or missed
+  probe; neither can produce a gap, overlap, or duplicate split.
+
+One counter-conservation test exercising this contention directly —
+`ThiefStealReasonConservationTest` — reconciles `swath.steal_reason` totals against the number of
+`steal()` calls made under genuine multi-threaded racing (conservation only, never a specific
+interleaving; issue #18).
+
 ---
 
 ## 3. SQLite checkpoint schema
