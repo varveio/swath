@@ -421,6 +421,69 @@ def enclosing_method(jf: JavaFile, pos: int):
 TYPE_HEADER_RE = re.compile(r"\b(?:class|interface|enum|record)\s+\w+")
 
 
+def is_local_declaration(jf: JavaFile, match_start: int, ident: str) -> bool:
+    """Whether the assignment to `ident` at `match_start` is a LOCAL DECLARATION inside some
+    method (`String mechanism = "x";`) rather than a write to the enclosing type's field
+    (`mechanism = "x";` / `this.mechanism = "x";` / a type-level field initializer).
+
+    This is the second half of Pattern C's correctness. `declares_field` establishes that a
+    field named `ident` exists at all; this establishes that the particular assignment being
+    credited is actually to THAT field. Without it, a sibling method's same-named local still
+    contributes its literals to the emission site even when the field genuinely exists --
+    over-resolving in the silent direction (a spurious pair validates a §5 registry row that
+    no code emits, instead of ghosting it).
+
+    A leading type token is the discriminator: Java requires one to declare a local, and
+    forbids one on an assignment to an already-declared field."""
+    # Walk back over the identifier's leading whitespace to whatever precedes it.
+    i = match_start - 1
+    while i >= 0 and jf.scrub[i] in " \t":
+        i -= 1
+    if i < 0:
+        return False
+    # A type token immediately before the identifier means a declaration. Grab it and check
+    # it is an identifier-shaped word (covers `String`, `Outcome`, `var`, and generic/array
+    # forms, whose closing `>`/`]` we treat as declaration markers directly).
+    if jf.scrub[i] in ">]":
+        return enclosing_method(jf, match_start) is not None
+    end = i + 1
+    while i >= 0 and (jf.scrub[i].isalnum() or jf.scrub[i] in "_$."):
+        i -= 1
+    token = jf.scrub[i + 1:end]
+    if not token or not BARE_IDENT_RE.match(token.split(".")[-1]):
+        return False
+    if token in CONTROL_KEYWORDS or token in ("return", "case"):
+        return False
+    # A type token IS present -- this is a declaration. It is a local (rather than a
+    # type-level field initializer) exactly when a method body encloses it.
+    return enclosing_method(jf, match_start) is not None
+
+
+def declares_field(jf: JavaFile, type_body: tuple[int, int], ident: str) -> bool:
+    """Whether `ident` is declared as a FIELD directly in `type_body` (as opposed to a
+    local of some method inside it). Gates `resolve_single_arg`'s Pattern C widening: the
+    widened assignment scan covers the whole type body, so without this check a same-named
+    local in a sibling method would be credited to the field. A declaration counts only
+    when it sits at type level -- i.e. no method-like block encloses it, which is exactly
+    what distinguishes `private String mechanism;` from `String mechanism = "x";` inside a
+    method. Record components count too: they are fields for this purpose, and the
+    canonical constructor may assign them."""
+    t_start, t_end = type_body
+    decl_re = re.compile(r"(?<![.\w])(?:\w+\s*(?:<[^<>;{}]*>)?(?:\[\s*\])*)\s+"
+                          + re.escape(ident) + r"\s*[;=,)]")
+    for dm in decl_re.finditer(jf.scrub, t_start, t_end):
+        enclosing = enclosing_method(jf, dm.start())
+        if enclosing is None:
+            return True
+        # A record's canonical component list lives in the type's DECLARATION parameter
+        # span, which `enclosing_method` reports as the record's own method-like header
+        # rather than as type level; accept it explicitly.
+        _, _, body_start, body_end, _ = enclosing
+        if not (body_start <= dm.start() < body_end):
+            return True
+    return False
+
+
 def enclosing_type_body(jf: JavaFile, pos: int) -> tuple[int, int] | None:
     """The smallest enclosing TYPE (class/interface/enum/record) body containing `pos`
     -- as opposed to `enclosing_method`, which finds the smallest enclosing METHOD.
@@ -759,6 +822,13 @@ def resolve_correlated_pair_via_sites(files: dict[Path, JavaFile], call_re: re.P
     `try_resolve_record_accessor_pair` (record construction sites)."""
     pairs: set[tuple[str, str]] = set()
     warnings: list[str] = []
+    # Whether ANY candidate site survived to be resolved. Without this, a `label` with zero
+    # matching sites (a record type never constructed, a wrapper whose only call sites live
+    # outside the scanned modules) returns `(empty, None)` -- no pairs AND no warning -- and
+    # `resolve_two_args` passes that through as-is, so the emission site silently contributes
+    # nothing and is never flagged for human review. That is the same fail-quiet direction the
+    # enum narrowing was hardened against: a guard that resolves fewer pairs must SAY so.
+    saw_site = False
     for jf in files.values():
         for cm in call_re.finditer(jf.scrub):
             open_idx = cm.end() - 1
@@ -772,6 +842,7 @@ def resolve_correlated_pair_via_sites(files: dict[Path, JavaFile], call_re: re.P
             args = split_top_level(inner_orig, inner_scrub)
             if max(idx0, idx1) >= len(args):
                 continue
+            saw_site = True
             site_pairs, warn = resolve_two_args(files, jf, cm.start(), args[idx0], args[idx1],
                                                  type_index, depth)
             if warn or not site_pairs:
@@ -779,6 +850,9 @@ def resolve_correlated_pair_via_sites(files: dict[Path, JavaFile], call_re: re.P
                                  f"could not resolve correlated pair for {label}(...)")
                 continue
             pairs |= site_pairs
+    if not saw_site:
+        warnings.append(f"no call/construction site found for {label}(...) "
+                         f"-- nothing resolved, so this emission site contributes no pairs")
     return pairs, ("; ".join(warnings) if warnings else None)
 
 
@@ -907,11 +981,17 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
     # it may be an INSTANCE FIELD assigned across several methods of the enclosing TYPE
     # instead (e.g. `ThiefPolicy.Attempt#mechanism`, set in one method and read at a `new
     # Commit(...)` site in another). Widen the same assignment scan to the smallest
-    # enclosing type's whole body.
+    # enclosing type's whole body -- but ONLY once `base` is confirmed to be declared as a
+    # field of that type. Without the gate the widened scan also credits a same-named LOCAL
+    # in any sibling method (`String mechanism = "x";` in an unrelated method of the same
+    # class), which over-resolves in the SILENT direction: a spuriously-resolved pair
+    # validates a §5 registry row that no code actually emits, instead of ghosting it.
     type_body = enclosing_type_body(jf, call_pos)
-    if type_body is not None:
+    if type_body is not None and declares_field(jf, type_body, base):
         t_start, t_end = type_body
         for am in assign_re.finditer(jf.text[t_start:t_end]):
+            if is_local_declaration(jf, t_start + am.start(), base):
+                continue
             literals.update(literals_and_consts_in_expr(am.group(1)))
         if literals:
             return ResolveResult(literals=literals)
@@ -1643,10 +1723,72 @@ def self_test_enum_code_cross_record_mismatch_ghosts() -> int:
         return 0
 
 
+def self_test_sibling_local_does_not_widen_to_field() -> int:
+    """Pattern C's type-body widening must credit only writes to the FIELD, not a same-named
+    LOCAL in a sibling method.
+
+    The scratch tree has a genuine field ``mechanism`` (written ``"field_write"`` in one
+    method, read at the emission site in another -- the legitimate Pattern C shape this
+    widening exists for) AND an unrelated sibling method declaring its own local
+    ``String mechanism = "sibling_only";``. Only ``CAT.field_write`` is documented.
+
+    Correct behaviour: the field write resolves, the sibling local does not, so there is no
+    drift (rc == 0). Before ``is_local_declaration``, the widened scan credited BOTH literals,
+    producing a spurious ``CAT.sibling_only`` pair -- which would then silently VALIDATE a doc
+    row that no code emits (and here, being undocumented, reports as false drift).
+
+    Mutation-checked: dropping the ``is_local_declaration`` skip makes this return rc == 1
+    (``CAT.sibling_only`` undocumented); dropping the ``declares_field`` gate leaves the
+    legitimate field resolution intact, which is why BOTH halves are tested here."""
+    print("self-test: constructing a scratch tree with a field and a same-named sibling local...")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "swath-core" / "src" / "main" / "java" / "dev" / "swath" / "z"
+        src.mkdir(parents=True)
+        (src / "Sib.java").write_text(
+            "package io.varve.swath.z;\n"
+            "class Sib {\n"
+            "    private final Metrics metrics;\n"
+            "    private String mechanism;\n"
+            "    Sib(Metrics metrics) { this.metrics = metrics; }\n"
+            "    void prepare() {\n"
+            "        mechanism = \"field_write\";\n"
+            "    }\n"
+            "    void emit() {\n"
+            "        metrics.recordStealReason(\"CAT\", mechanism);\n"
+            "    }\n"
+            "    void unrelated() {\n"
+            "        String mechanism = \"sibling_only\";\n"
+            "        System.out.println(mechanism);\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        docs = root / "docs" / "internals"
+        docs.mkdir(parents=True)
+        (docs / "metrics-internals.md").write_text(
+            "# doc\n\n"
+            f"{TABLE_START}\n"
+            "| category | reason | status |\n"
+            "|---|---|---|\n"
+            "| `CAT` | `field_write` | |\n"
+            f"{TABLE_END}\n",
+            encoding="utf-8",
+        )
+        rc = run_check(root)
+        if rc != 0:
+            print("self-test FAILED: a same-named local in a sibling method was credited to the "
+                   f"field's emission site (expected exit 0, got {rc})", file=sys.stderr)
+            return 1
+        print("self-test: sibling-method local no longer credited to a same-named field. PASS")
+        return 0
+
+
 def self_test() -> int:
     results = [
         self_test_ghost_and_undocumented(),
         self_test_hoisted_enum_local_pattern(),
+        self_test_sibling_local_does_not_widen_to_field(),
         self_test_family_concat_documented(),
         self_test_family_concat_undocumented(),
         self_test_family_row_ghost(),
