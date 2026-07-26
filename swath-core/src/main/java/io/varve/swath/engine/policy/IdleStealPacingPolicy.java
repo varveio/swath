@@ -9,8 +9,10 @@ package io.varve.swath.engine.policy;
  * The fleet-wide idle-steal backoff's PACING arithmetic (algorithms.md §3 / {@code
  * IdleStealBackoff}'s javadoc), extracted from it: consecutive non-productive steal attempts
  * exponentially space the next attempt for the whole fleet, reset immediately by a created child,
- * claimed work, or a non-empty page commit. Pure function of an {@link IdleStealPacingState} and an
- * injected {@link DecisionClock} read — no lock, no {@code RunMetrics}, no field of its own.
+ * claimed work, or a non-empty page commit. Pure function of an {@link IdleStealPacingState} and a
+ * caller-supplied {@code nowNanos} — this class owns NO clock: {@code IdleStealBackoff} reads the
+ * ambient time through its own {@link DecisionClock} and passes the timestamp in as an argument. Its
+ * only fields are the two tuned constants below; no lock, no {@code RunMetrics}, no mutable state.
  *
  * <p><b>The one-attempt SLOT does not move.</b> {@code IdleStealBackoff} still owns {@code
  * attemptInFlight}'s ownership/release/ledger-broadcast mechanics entirely; this class only ever

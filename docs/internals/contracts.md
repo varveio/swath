@@ -509,16 +509,14 @@ not reducible to the call totals alone; their single-threaded shape is pinned by
 goldens instead, which is a check on VALUES, not on conservation under a race.
 
 **The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
-deterministic function of its view — **with one open, disclosed exception: issue #30**, where
-`StealAttemptView.alphabetDigest` carries the victim's live `AlphabetDigest` rather than a snapshot
-of it, so a concurrent page commit can change what the pivot cascade reads mid-decision. That
-exception is outside what the audit below enforces (mutable primitive arrays are legal under all
-three of its checks), and it is the reason the snapshot rule stated earlier in this section does not
-yet hold for the thief's pivot path. It is a faithfully-preserved pre-extraction behavior, not a
-regression, and no I1–I12 invariant depends on it; what it blocks is replay equivalence. Everything
-below describes what IS mechanically enforced: no ambient clock, no ambient randomness, and — the clause the
-audit's original grep-shaped brief did not have, and so missed two of the three leaks the campaign
-actually found (issues #19, #22) — no ambient *collaborator* state either. Concretely, no type
+deterministic function of its view — **except for `StealAttemptView.alphabetDigest`, issue #30,
+detailed above**, which this audit does **not** catch: mutable primitive arrays are legal under all
+three of the checks below, so a view field holding shared mutable state passes them cleanly. Read a
+green run as "none of the three shapes below is present", not as "every decision is a function of
+its view". Everything that follows describes what IS mechanically enforced: no ambient clock, no
+ambient randomness, and — the clause the audit's original grep-shaped brief did not have, and so
+missed two of the three leaks the campaign actually found (issues #19, #22) — no ambient
+*collaborator* state either. Concretely, no type
 reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
 `io.varve.swath.engine.policy`, plus the transitive closure of every field-reachable
 `io.varve.swath.*` type (so `AlphabetDigest`, reached only via `StealAttemptView.alphabetDigest()`,

@@ -94,6 +94,10 @@ import org.junit.jupiter.api.Test;
  * instance does not.
  *
  * <h3>Known gaps (disclosed, not closed)</h3>
+ * Two, and they fail in opposite directions: gap 1 is unclosable by any static check, gap 2 is
+ * closable and simply not closed yet.
+ *
+ * <p><b>Gap 1 — AN INJECTED IMPLEMENTATION'S BODY IS UNREACHABLE (unclosable).</b>
  * A static check over this codebase's actual classes/sources cannot reach an implementation the
  * codebase does not yet contain. Concretely: {@link DecisionRng}/{@link DecisionClock} are
  * legitimately INJECTED interfaces (that is the whole point of issues #20's/its idle-steal twin's
@@ -107,7 +111,7 @@ import org.junit.jupiter.api.Test;
  * implementation must be pure by its own construction and review, not because this test would catch
  * an impure one. The two evasions an independent review
  * pass found and this test now closes (a {@code ThreadLocal}-typed field; a lambda-captured {@code
- * RunMetrics}) are the two static-analysis gaps that WERE closable; this one is not.
+ * RunMetrics}) are two static-analysis gaps that WERE closable; this one is not.
  *
  * <p><b>Gap 2 — SHARED MUTABLE STATE REACHED THROUGH A VIEW IS LEGAL HERE (issue #30, OPEN).</b> All
  * three checks target a specific shape: a held collaborator reference, mutated {@code

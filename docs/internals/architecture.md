@@ -49,15 +49,15 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
-**Known seam exceptions:** ONE remains open (issue #30, below). `engine.policy`'s convention is that
-a policy is a deterministic function of its view (no I/O, no ambient randomness, no ambient
-collaborator state) and returns reason enums for the executor to record (so AGENTS.md's
-counter-per-path law stays mechanically checkable against the decision enum). This section carried
-three exceptions across the policy-seam refactor; those three are now closed, and the determinism
-audit (`DecisionPathPurityTest`) enforces the convention mechanically against the three SHAPES they
-took — a held collaborator reference, mutated `java.util.concurrent.atomic` state, a direct ambient
-clock/randomness call. It does **not** cover every shape: issue #30 is a fourth that the audit
-provably misses, and is disclosed rather than enforced (see below, and that test's "Known gaps"):
+**Known seam exceptions:** three closed, one open. `engine.policy`'s convention is that a policy is a
+deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
+and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
+mechanically checkable against the decision enum). The policy-seam refactor closed the three
+exceptions this section used to carry, and the determinism audit (`DecisionPathPurityTest`) now
+enforces the convention mechanically against the three SHAPES they took. A fourth, issue #30, is
+open and is **disclosed rather than enforced** — see the block after the list.
+
+The three CLOSED exceptions:
 
 - `OwnerSplitGovernor`'s confetti feedback gate probe-counter side effect (issue #22) — `decide(view)`
   is now a genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
@@ -67,9 +67,10 @@ provably misses, and is disclosed rather than enforced (see below, and that test
   (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live default as
   `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source as before, so
   live-run behavior is unchanged (goldens verified byte-identical) — while tests and a future
-  simulator inject a reproducible one. `IdleStealPacingPolicy` applied the same fix proactively for
-  the fleet-wide idle-steal backoff's ambient `System.nanoTime()` read: injected as `DecisionClock`,
-  with `IdleStealBackoff` supplying the engine's live `System::nanoTime` default. A per-worker seeded
+  simulator inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
+  proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
+  `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
+  `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded
   generator for live-run determinism is a separate, not-yet-made owner decision.
 - `AlphabetDigest` (carried through in `StealAttemptView`, consumed by `StealMath.interpolate(...,
   digest, collector)`) held its own `RunMetrics` reference and fired `ALPHABET.*` fallback counters
@@ -78,9 +79,9 @@ provably misses, and is disclosed rather than enforced (see below, and that test
   `ThiefPolicy`'s pivot cascade / `OwnerSplitGovernor`'s carve, exactly like every other engagement;
   `AlphabetDigest` holds no metrics reference of any kind.
 
-**OPEN — `StealAttemptView.alphabetDigest` is a live reference, not a snapshot (issue #30).** The
-view is documented as an immutable snapshot the policy decides over, and for every other field it
-is. `alphabetDigest` is the victim's actual `AlphabetDigest` instance: its `long[][] mask` /
+**The OPEN one — `StealAttemptView.alphabetDigest` is a live reference, not a snapshot (issue #30).**
+The view is documented as an immutable snapshot the policy decides over, and for every other field
+it is. `alphabetDigest` is the victim's actual `AlphabetDigest` instance: its `long[][] mask` /
 `boolean[] clean` are final *references* with mutable *contents*, and a concurrent page commit on
 the victim can change what the digest reports between view construction and `ThiefPolicy`'s
 dereference of it. **Production behavior is unaffected by the extraction** — the pre-extraction code
@@ -89,7 +90,7 @@ of what the policy decided, so no I1–I12 invariant is at risk. What it costs i
 recorded `(view, decision)` pair is not reproducible from the recorded view alone, so
 replay-equivalence — the property the simulator is being built on — does not hold for the pivot
 cascade until #30 is closed. Treat "deterministic function of its view" as holding for every policy
-path except this one.
+path except this one. contracts.md §2.1 carries the full mechanism and the per-field audit row.
 
 The determinism audit's enforcement test (`DecisionPathPurityTest`, `swath-core`) scans the policy
 package plus the transitive closure of every field-reachable `io.varve.swath.*` type for a held
