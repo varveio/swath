@@ -377,9 +377,31 @@ steal():
   commit resets this pacing; enqueue/decrement/progress signals still wake
   parked workers, so quiescence detection and the progress-gated liveness fix
   are unchanged.
+- **Per-victim futility pacing is a separate, narrower mechanism — deliberately
+  not merged with the fleet-wide backoff below.** `WorkerState.recordFutileSteal`
+  trips a per-victim cooldown after `FUTILITY_PACE_THRESHOLD` (4) *consecutive*
+  futile outcomes against THAT victim (`cursor_passed_pivot`/`bound_moved`/
+  `bisect_budget_exhausted`), for a bounded-exponential number of steal-selection
+  skips (cap 64), reset only by that victim's own productive progress
+  (`markStolen`). A productive sibling stays fully stealable throughout — this
+  paces hammering one racing drainer, never the fleet. **Implementation split
+  (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the trip/
+  bounded-exponential-growth/decay/reset arithmetic is
+  `io.varve.swath.engine.policy.FutilityPacingPolicy`, pure functions of one
+  `int` at a time; `WorkerState` still owns every `AtomicInteger` read/write, in
+  the same order and with the same lock-free-per-field discipline as before —
+  see `docs/internals/contracts.md` §2.1 for the concurrency argument for why
+  this stays per-field rather than one combined view.
 - **At most one speculative steal attempt is in flight fleet-wide, and the bound
   is strict.** *Pacing state* (backoff level, next-attempt instant) and *slot
-  ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`: the
+  ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`. The
+  pacing arithmetic (the exponential growth/cap and the park-remaining
+  computation) is `io.varve.swath.engine.policy.IdleStealPacingPolicy`, with the
+  ambient clock read injected through `DecisionClock` (mirroring `DecisionRng`'s
+  treatment of randomness) — `IdleStealBackoff` supplies the live
+  `System::nanoTime` default. The one-attempt SLOT itself — its ownership,
+  release, and the `RunMetrics` reference — is executor infrastructure and does
+  **not** move into the policy package. The
   slot belongs to the worker that acquired it and is released only by that worker,
   in a `finally` covering the whole acquired region — so no escape from the
   metrics, logging, victim curation or child enqueue inside it can strand the slot

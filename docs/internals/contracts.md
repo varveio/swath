@@ -280,6 +280,22 @@ closes.
   is read once, entirely inside the caller's `ws.lock()` hold (`WorkStealingScan.runClaim` holds it
   across the whole method, unchanged from pre-extraction) — **before** `governor.decide` runs the
   whole gate chain.
+- **Pacing has no `View` record at all — two mechanisms, two different reasons, two different
+  shapes.** `WorkerState`'s per-victim futility counters (`consecutiveFutileSteals`/`futilityTrips`/
+  `stealPacingSkips`) are lock-free `AtomicInteger`s two racing thieves can touch with no shared
+  monitor at all (`recordFutileSteal`/`stealPaced`/`consumePacingSkip` are never called under
+  `lock()`), so `FutilityPacingPolicy` reads and returns exactly **one** `int` at a time — the value
+  each `AtomicInteger`'s own atomic op (`incrementAndGet`/`updateAndGet`) already produced — never a
+  combined snapshot of the three. `IdleStealBackoff`'s fleet-wide pacing state, by contrast, is
+  `synchronized` on every accessor, so its two former plain fields (`consecutiveNonProductive`,
+  `nextAttemptNanos`) collapse safely into one immutable `IdleStealPacingState`, read and replaced as
+  a whole inside the SAME `synchronized` method that used to touch both fields directly — the
+  monitor, not field-level atomicity, supplies the guarantee there, so combining changes nothing.
+  **The rule: monitor-protected state may be combined into one record; lock-free per-field atomics
+  may not.** Neither policy reads `RunMetrics`, a clock, or a lock directly;
+  `IdleStealPacingPolicy`'s ambient-time read is injected via `DecisionClock` (mirrors `DecisionRng`'s
+  treatment of randomness) — `IdleStealBackoff` supplies the live `System::nanoTime` default,
+  unchanged from before.
 
 **Mutation timing.** A `VictimMutation`/`OwnerSplitMutation` is never applied by the policy itself —
 only the executor mutates a live `WorkerState`, via `Thief.applyMutations`/`OwnerSelfSplit.applyMutations`,
@@ -301,6 +317,11 @@ and only in response to a `mutations()` list the policy returned alongside its d
 - `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` is the one exception with **no** widened window at
   all: `governor.decide(view)` and `applyMutations(decision.mutations())` both run back-to-back inside
   the same `ws.lock()` hold, so decide-then-apply is a single lock scope, not two.
+- The per-victim futility-pacing counters and the fleet-wide idle-steal pacing state are mutated by
+  the EXECUTOR objects that have always owned them (`WorkerState`, `IdleStealBackoff`), at the
+  identical call sites and under the identical (lock-free / monitor) discipline as before this
+  extraction — `FutilityPacingPolicy`/`IdleStealPacingPolicy` never touch a live field themselves,
+  only compute the next value(s) the caller then writes.
 
 **Engagements are exactly-once by the same mechanism.** `applyEngagements` is called at the identical
 points `applyMutations` is (selection-scoped once per `steal()` call; per-attempt once per
@@ -326,6 +347,8 @@ brand-new view — it never replays a discarded action's engagements).
 | `OwnerSplitView` | `H`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged |
 | `OwnerSplitView` | `outstanding` | read only if the demand gate was actually reached — i.e. only after the remaining-est-floor and rate-limit gates had already passed | read unconditionally at view construction, for every self-split attempt, whether or not the demand gate will be consulted | **WIDENED** — already disclosed at `OwnerSelfSplit`'s `outstanding` field javadoc; a heuristic input, so this changes only which page-commit's snapshot the demand gate happens to see, never correctness |
 | `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, not a comparable "view field" | read via `confettiFeedback.snapshot()`, once, at view construction, inside `ws.lock()` | see issue #22's own commit for the full concurrency-relaxation disclosure; not re-litigated here |
+| N/A (no `View`) | `WorkerState` futility counters: `consecutiveFutileSteals`,`futilityTrips`,`stealPacingSkips` | lock-free, unlocked, one `AtomicInteger` op at a time, inline in `recordFutileSteal`/`markStolen`/`stealPaced`/`consumePacingSkip` | identical call sites, identical op sequence — `FutilityPacingPolicy` supplies only the trip-check/cooldown-formula/decay/reset VALUES each op already computed inline; no combined read of the three | unchanged |
+| N/A (no `View`) | `IdleStealBackoff` pacing state: `consecutiveNonProductive`,`nextAttemptNanos` | plain (non-atomic) fields, read/written only inside this object's own `synchronized` methods | collapsed into one `IdleStealPacingState`, read-and-replaced as a whole, still only inside the same `synchronized` methods | unchanged — monitor-protected, so combining the two fields into one record here is safe (see the shape-asymmetry paragraph above); contrast the futility-counter row directly above it |
 
 **The two `Thief`-side widenings in the table above are judged benign, but the judgment is the
 reviewer's to check, not the implementer's to make silently:**
