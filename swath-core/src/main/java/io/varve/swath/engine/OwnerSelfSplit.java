@@ -170,7 +170,7 @@ final class OwnerSelfSplit {
         ConfettiFeedbackGate.Snapshot confettiSnapshot = confettiFeedback.snapshot();
         OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
                 selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
-                ws.alphabetDigest(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
+                ws.alphabetDigest().snapshot(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
                         confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
         applyEngagements(decision.engagements());

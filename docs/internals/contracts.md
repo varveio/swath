@@ -439,7 +439,7 @@ window could ever race against.
 | `VictimView` | `pacingSkipAvailable` / `CONSUME_PACING_SKIP` | `stealPaced()`: check-and-decrement in **one** call, inline per-candidate — no other candidate's work intervenes between check and consume | check (`pacingSkipAvailable()`) at view-construction time; consume (`consumePacingSkip()`) applied only after `selectVictim` has scanned the **whole** pool | **WIDENED** — see below |
 | `StealAttemptView` | `victimNodeId`,`lo` | read once, at attempt start, executor-local (the chosen victim's identity/immutable bound; never contended) | same | unchanged |
 | `StealAttemptView` | `cursor`,`hi` (via `victim.snapshot()`) | lock-guarded pair read, same call site | lock-guarded pair read, same call site | unchanged |
-| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) — but see issue #30 below: `alphabetDigest` is a reference to a LIVE, concurrently-mutated object, not a value, in both versions |
+| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) — and, since issue #30 (below), `alphabetDigest` is a frozen `AlphabetDigest.Snapshot` taken at that construction point rather than a reference to the live, concurrently-mutated digest |
 | `StealAttemptView` | `unchangedSinceNonProductiveSteal(snap)` | pure comparison, immediately after the snapshot | same | unchanged |
 | `StealAttemptView` | `keysEmitted` | not read by the per-attempt cascade in either version (only `VictimView.keysEmitted`, a distinct field, feeds `estRemaining` at selection) | same | unchanged (dead field either way) |
 | `StealAttemptView` | `consecutiveZeroFanoutStructureProbes`,`consecutiveTimedOutStructureProbes` | read live at the structure-probe-suppression check, **after** this attempt's own far-ahead/step-back key-probe round trip(s) had already completed | cached at view construction, **before** any probe in this attempt has run; the structure-probe-suppression check consults the same cached value later | **WIDENED** — see below |
@@ -475,22 +475,34 @@ reviewer's to check, not the implementer's to make silently:**
   identical direction/consequence shape as the structure-probe-suppression window immediately above
   (a wasted or a missed probe), never a gap, overlap, or duplicate split.
 
-**A live reference, not a snapshot: `StealAttemptView.alphabetDigest` (issue #30, not fixed here).**
-Every claim elsewhere in this section that a view is a coherent, immutable read the policy decides
-over assumes the view's fields are values or copies. `StealAttemptView.alphabetDigest` is not: it is
-the victim's own live `AlphabetDigest` instance, and that instance's backing arrays
-(`long[][] mask`, `boolean[] clean`) are mutated by concurrent page commits on the SAME victim
-(`WorkerState#recordPage` → `AlphabetDigest#observe`) while this attempt's decision is still in
-progress — `ThiefPolicy` dereferences the digest again later in the cascade, so a page commit that
-lands between view construction and that later dereference changes what the digest reports. This is
-the one field in this document that is genuinely a live reference, not a snapshot: it falsifies both
-"state the executor owns is snapshotted into views" (above) and the stronger claim that a policy's
-decision is a deterministic function of its recorded view — which also means a recorded
-`(view, decision)` pair is not, in general, reproducible from the golden alone for this one field. Not
-a regression (the pre-extraction code also read the digest live at decision time — this is a
-faithfully-preserved pre-existing non-determinism), and no I1–I12 invariant is at risk (the split CAS
-re-validates independently of what the policy decided). Recorded and left open as **issue #30**, not
-fixed here.
+**Was a live reference, now a snapshot: `alphabetDigest` (issue #30, CLOSED).** Every claim elsewhere
+in this section that a view is a coherent, immutable read the policy decides over assumes the view's
+fields are values or copies. `StealAttemptView.alphabetDigest`/`OwnerSplitView.alphabetDigest` was the
+one field for which that was false: it was the victim's own live `AlphabetDigest` instance, whose
+backing arrays (`long[][] mask`, `boolean[] clean`) are mutated by concurrent page commits on the SAME
+victim (`WorkerState#recordPage` → `AlphabetDigest#observe`) while the decision was still in progress —
+`ThiefPolicy` dereferences the digest later in the cascade, so a page commit landing between view
+construction and that dereference changed what the digest reported. It falsified both "state the
+executor owns is snapshotted into views" (above) and the stronger claim that a policy's decision is a
+deterministic function of its recorded view.
+
+Both views now carry an immutable `AlphabetDigest.Snapshot` that the executor freezes at view
+construction, so every field in this document is a value or a copy and a recorded `(view, decision)`
+pair is reproducible from the golden alone. The whole digest is a fixed 8 positions × 2 words plus 8
+clean flags, so freezing it is one `long[16]` and a packed `int` — one small allocation per steal
+attempt and per owner-split consult. Consult semantics are unchanged byte-for-byte, including *which*
+`ALPHABET.*` fallback fires: the live digest and its snapshot share a single implementation of the
+consult, and the snapshot carries `clean` explicitly rather than inferring it from an all-zero mask
+(a dirty position and a merely-unobserved one both have a zero mask but report
+`fallback_out_of_window` and `window_gap` respectively). A torn read while snapshotting is still
+possible and still benign — `ByteMidpoint` re-validates any chosen scalar for safety and strict
+betweenness, so a torn word can only shift the pivot's balance inside valid bounds. What the fix
+eliminated is not tearing but mutation *after* the view was recorded.
+
+This was never a production-behavior defect (the pre-extraction code also read the digest live at
+decision time — a faithfully-preserved pre-existing non-determinism) and no I1–I12 invariant was ever
+at risk (the split CAS re-validates independently of what the policy decided). It is now enforced
+mechanically by `DecisionPathPurityTest#viewsCarryNoLiveExecutorState`.
 
 One counter-conservation test exercising this contention directly —
 `ThiefStealReasonConservationTest` — reconciles `swath.steal_reason` totals against the number of
@@ -509,22 +521,28 @@ not reducible to the call totals alone; their single-threaded shape is pinned by
 goldens instead, which is a check on VALUES, not on conservation under a race.
 
 **The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
-deterministic function of its view — **except for `StealAttemptView.alphabetDigest`, issue #30,
-detailed above**, which this audit does **not** catch: mutable primitive arrays are legal under all
-three of the checks below, so a view field holding shared mutable state passes them cleanly. Read a
-green run as "none of the three shapes below is present", not as "every decision is a function of
-its view". Everything that follows describes what IS mechanically enforced: no ambient clock, no
+deterministic function of its view. Three of the four checks below target ambient state; issue #30's
+shape — a view component holding shared mutable arrays, legal under all three — needed the fourth,
+`viewsCarryNoLiveExecutorState`, which walks every policy-package record's component types
+transitively and rejects any that exposes a mutator or hands out its own array. Read a green run as
+"none of the four shapes below is present"; the residual blind spots (an injected implementation's
+body; a mutator that returns a value; a value type aliasing an array its caller keeps writing to) are
+disclosed in that test's javadoc. Everything that follows describes what IS mechanically enforced: no
+ambient clock, no
 ambient randomness, and — the clause the audit's original grep-shaped brief did not have, and so
 missed two of the three leaks the campaign actually found (issues #19, #22) — no ambient
 *collaborator* state either. Concretely, no type
 reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
 `io.varve.swath.engine.policy`, plus the transitive closure of every field-reachable
-`io.varve.swath.*` type (so `AlphabetDigest`, reached only via `StealAttemptView.alphabetDigest()`,
-is in scope despite living in `io.varve.swath.engine`) — may **hold** a `RunMetrics`/`TraceSink`
-reference as a field, or **mutate** `java.util.concurrent.atomic` state, or **call** an ambient
-clock/randomness API directly. `DecisionPathPurityTest` (`swath-core`) enforces this mechanically:
-a field-type closure walk for the first two (the exact shape issues #19 and #22 took), a
-comment-stripped source scan of the same closure for the third (issue #20's shape). An explicit,
+`io.varve.swath.*` type (so `AlphabetDigest.Snapshot`, reached only via
+`StealAttemptView.alphabetDigest()`, is in scope despite living in `io.varve.swath.engine`) — may
+**hold** a `RunMetrics`/`TraceSink` reference as a field, or **mutate**
+`java.util.concurrent.atomic` state, or **call** an ambient clock/randomness API directly, or
+**expose** a mutator on a value a policy decides over. `DecisionPathPurityTest` (`swath-core`)
+enforces this mechanically: a field-type closure walk for the first two (the exact shape issues #19
+and #22 took), a comment-stripped source scan of the same closure for the third (issue #20's shape),
+and a record-component closure walk rejecting mutators and array-returning accessors for the fourth
+(issue #30's shape). An explicit,
 caller-supplied parameter is not "ambient" and stays legal either way — `EngineToggles#recordOffMarks`
 takes a `RunMetrics` parameter but is called only from executor code, never a `decide()` path, and
 every `Engagement`/`VictimMutation` collector already threaded through this interface is the same

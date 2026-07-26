@@ -35,7 +35,10 @@ import io.varve.swath.engine.AlphabetDigest;
  * @param observedDensityRatio the owner's observed local-vs-average density ratio ({@code
  *                          WorkerState#observedDensityRatio()} — pure, zero-I/O, raw/pre-toggle)
  * @param alphabetDigest    the owner's observed per-position alphabet, consumed by the
- *                          alphabet-aware pivot synthesis
+ *                          alphabet-aware pivot synthesis — frozen at view construction, so this
+ *                          record is a coherent point-in-time read in every component (issue #30;
+ *                          it used to be the owner's LIVE digest, whose arrays a concurrent page
+ *                          commit mutates)
  * @param confetti          a coherent read of the confetti feedback gate's counters at this
  *                          page-commit (issue #22: the executor snapshots {@code
  *                          ConfettiFeedbackGate} once when building this view, so the governor's
@@ -51,6 +54,6 @@ public record OwnerSplitView(
         long outstanding,
         double densityFraction,
         double observedDensityRatio,
-        AlphabetDigest alphabetDigest,
+        AlphabetDigest.Snapshot alphabetDigest,
         ConfettiObservation confetti) {
 }

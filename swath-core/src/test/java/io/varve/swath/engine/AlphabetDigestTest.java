@@ -94,7 +94,7 @@ final class AlphabetDigestTest {
             d.observe(b(k));
         }
         byte[] plain = StealMath.interpolate(b("p9"), b("pB"), 0.5);
-        byte[] aware = StealMath.interpolate(b("p9"), b("pB"), 0.5, d);
+        byte[] aware = StealMath.interpolate(b("p9"), b("pB"), 0.5, d.snapshot());
 
         assertThat(plain).as("plain midpoint lands in the dead zone").isEqualTo(b("p="));
         assertThat(aware).as("alphabet-aware pivot lands on the observed 'A'").isEqualTo(b("pA"));
@@ -109,7 +109,7 @@ final class AlphabetDigestTest {
         d.observe(b("p9"));
         d.observe(b("pB"));   // nothing observed strictly between '9' and 'B'
         for (double f : new double[] {0.1, 0.5, 0.75, 0.9}) {
-            assertThat(StealMath.interpolate(b("p9"), b("pB"), f, d))
+            assertThat(StealMath.interpolate(b("p9"), b("pB"), f, d.snapshot()))
                     .as("unpopulated gap → identical to the no-digest pivot at f=%s", f)
                     .isEqualTo(StealMath.interpolate(b("p9"), b("pB"), f));
         }
@@ -139,8 +139,8 @@ final class AlphabetDigestTest {
         for (String k : new String[] {"p9", "pA", "pB"}) {
             d.observe(b(k));
         }
-        byte[] farAhead = StealMath.interpolate(b("p9"), b("pB"), 0.75, d);
-        byte[] stepBackWithDigest = StealMath.interpolate(b("p9"), b("pB"), 0.5, d);
+        byte[] farAhead = StealMath.interpolate(b("p9"), b("pB"), 0.75, d.snapshot());
+        byte[] stepBackWithDigest = StealMath.interpolate(b("p9"), b("pB"), 0.5, d.snapshot());
         byte[] stepBackNoDigest = StealMath.interpolate(b("p9"), b("pB"), 0.5);
 
         assertThat(stepBackWithDigest)

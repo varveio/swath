@@ -227,7 +227,7 @@ public final class Thief {
             WorkerState.Snapshot snap = victim.snapshot();
             StealAttemptView attemptView = new StealAttemptView(
                     victim.nodeId(), victim.lo(), snap.cursor(), snap.hi(), victim.keysEmitted(),
-                    victim.densityFraction(), victim.alphabetDigest(),
+                    victim.densityFraction(), victim.alphabetDigest().snapshot(),
                     victim.unchangedSinceNonProductiveSteal(snap),
                     victim.consecutiveZeroFanoutProbes(), victim.consecutiveTimedOutStructureProbes());
 
