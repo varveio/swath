@@ -5,6 +5,8 @@
  */
 package io.varve.swath.engine;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -12,6 +14,7 @@ import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.DecisionRng;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
+import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
@@ -70,7 +73,16 @@ import org.junit.jupiter.api.Test;
  *       thief-edge-cases, thief-cascade-mechanisms (6)</li>
  *   <li>{@code owner_self_split}: deep-narrow, flat-wide, explosion-1to1, partition-key-value,
  *       owner-split-gates (5)</li>
- *   <li>{@code seed.seed_specs}: deep-narrow, flat-wide, explosion-1to1, partition-key-value (4)</li>
+ *   <li>{@code seed.seed_specs}: deep-narrow, flat-wide, explosion-1to1, partition-key-value (4 FILES
+ *       — a distinct count from the per-branch mark coverage immediately below, which this same
+ *       campaign found conflated three times before converging: {@code HybridSeedPlanner} fires 22
+ *       distinct {@code SEED.*} marks (21 via {@code mark()}, recounted directly from source, plus the
+ *       {@code radix_bands} magnitude counter), of which these 4 fixtures' goldens pin only 6 —
+ *       {@code delimiter_seeded}/{@code descent_cuts_subsampled}/{@code frontier_level_ordered}/
+ *       {@code frontier_reordered}/{@code mass_weighted_subsample}/{@code top_complete}, recounted from
+ *       the committed JSONL, not hand-counted. The other ~16 are exercised instead by
+ *       {@code SeedStepTest}/{@code SeedMassAwareDescentTest} and this package's other dedicated seed
+ *       tests, never by a decision-trace golden — see decision-trace-goldens.md's known gaps)</li>
  *   <li>{@code pacing.steal_paced}: pacing-trip-and-recover, pacing-below-threshold,
  *       pacing-multi-victim-isolation (3)</li>
  * </ul>
@@ -114,9 +126,17 @@ import org.junit.jupiter.api.Test;
  * encoding a 1-in-64 flake that had simply never fired, not a genuine (view → decision) property.
  *
  * <p>{@code owner_self_split}'s per-fixture count above is the same trap the thief mechanism
- * count exists to avoid: it says nothing about which of {@link OwnerSplitGovernor}'s SIX gates
- * (algorithms.md §3.3) each event actually exercises. The per-gate count (grepping the committed
- * goldens' {@code reason_deltas}, not hand-counted):
+ * count exists to avoid: it says nothing about which of {@link OwnerSplitGovernor}'s gate chain
+ * (algorithms.md §3.3) each event actually exercises. {@link OwnerSplitSkipReason} has SEVEN
+ * constants: six genuine suppression gates (REMAINING_EST_FLOOR/RATE_LIMITED/DEMAND_GATED/
+ * FLOOR_REFLECTED_BLOCKED/CONFETTI_SUPPRESSED/UNSPLITTABLE_PIVOT) plus OPEN_FRONTIER, which its own
+ * javadoc says is deliberately NOT a gate declining a carve (a structural path an unbounded range
+ * takes, uncounted by design) — an earlier version of this section said "SIX gates" and omitted
+ * OPEN_FRONTIER/UNSPLITTABLE_PIVOT from that count, since corrected. The bullet list below covers
+ * all seven {@code OwnerSplitSkipReason} values plus the two Carve-side outcomes
+ * ({@code confetti_probe}, the successful-carve {@code self_published}) — nine bullets, not "gates"
+ * uniformly, since two of them are outcomes of a carve succeeding, not a gate declining one. The
+ * per-outcome count (grepping the committed goldens' {@code reason_deltas}, not hand-counted):
  * <ul>
  *   <li>{@code OPEN_FRONTIER} (silent by design, no counter — see {@code OwnerSplitSkipReason}'s
  *       javadoc): 1 event, 1 fixture (owner-split-gates)</li>
@@ -142,7 +162,15 @@ import org.junit.jupiter.api.Test;
  *       probe slot, so the RECORDED call's view shows {@code probe_seq: 15} and lands on the
  *       {@code PROBE_K}-th (16th) over-threshold consult — the recorded view is what makes this a
  *       property of the scenario rather than an accident of how many {@code decide()} calls
- *       happened to precede it (the failure mode issue #22 described, before its fix)</li>
+ *       happened to precede it (the failure mode issue #22 described, before its fix). The RECORDED
+ *       event alone cannot detect a failure to actually consume the probe slot on this carve (an
+ *       independent review's finding): {@code view}/{@code decision}/{@code reason_deltas} are all
+ *       identical whether or not {@code CONSUME_CONFETTI_PROBE_SLOT} was applied, since the engagement
+ *       and the decision are recorded from the GOVERNOR's return value, not from the gate's post-call
+ *       state. So this scenario also asserts, OUTSIDE the golden, that {@code probeSeq} actually
+ *       advanced to 16 after the call and that the very next over-threshold consult is genuinely
+ *       {@code SUPPRESSED} rather than another probe carve — see the assertions immediately following
+ *       this scenario's {@code recordOwnerSplitAttempt} call</li>
  *   <li>{@code UNSPLITTABLE_PIVOT}: 1 event, 1 fixture (owner-split-gates) — the byte-adjacent
  *       {@code (cursorTo, hi]} recipe below, mirroring {@code
  *       ThiefPolicyCascadeTest#unsplittable_terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds}'s
@@ -280,9 +308,22 @@ final class DecisionTraceGoldenTest {
         oneShotSteal(fx, List.of(WorkerStates.of(1, b("hot/00"), b("hot0"), null)),
                 fetcher("m1"), StubCheckpointStore.returning(1L), b("hot/"));
 
-        // 4. Victim selection: the wider remaining span wins.
+        // 4. Victim selection: the wider remaining span wins. Also carries a THIRD, futility-paced
+        //    candidate (node 4) purely so the recorded pool view actually shows a true
+        //    pacing_skip_available at least once in this fixture matrix -- an earlier version of this
+        //    recorder's poolView omitted the field entirely, so a mutant forcing
+        //    pacingSkipAvailable=false in Thief's view construction evaded every fixture here
+        //    byte-identically (an independent review's finding); selection skips a paced candidate
+        //    outright, so node 4 changes neither which victim wins (node 3, unchanged) nor the
+        //    outcome, only adding one STEAL.futility_paced engagement/CONSUME_PACING_SKIP mutation to
+        //    this event's own reason_deltas -- the deliberate, reviewed regeneration this scenario's
+        //    addition causes.
+        WorkerState pacedJunk = WorkerStates.of(4, b("j"), b("j"), b("k"));
+        for (int i = 0; i < WorkerState.FUTILITY_PACE_THRESHOLD; i++) {
+            pacedJunk.recordFutileSteal();
+        }
         oneShotSteal(fx, List.of(WorkerStates.of(2, b("a"), b("a"), b("c")),
-                WorkerStates.of(3, b("a"), b("a"), b("z"))),
+                WorkerStates.of(3, b("a"), b("a"), b("z")), pacedJunk),
                 fetcher("m1"), StubCheckpointStore.returning(99L));
 
         // 5. Far-ahead pivot commit: a dense trailing page pushes the fraction to 0.75.
@@ -692,6 +733,26 @@ final class DecisionTraceGoldenTest {
         long[] selfSplit9 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, probeGov, probed, b("d/002500"), selfSplit9, m9, t9);
 
+        // Post-call assertions, deliberately OUTSIDE the golden: the recorded event above is silent on
+        // whether CONSUME_CONFETTI_PROBE_SLOT was actually applied after the carve -- the view is a
+        // BEFORE-call snapshot (probe_seq: 15) and the decision/reason_deltas come from the governor's
+        // return value, which is identical whether or not the executor went on to apply the returned
+        // mutation. A mutant that applies OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT only when the
+        // decision is a Skip (never a Carve) leaves this scenario's recorded event byte-identical but
+        // sticks probeSeq at 15 forever, turning every later over-threshold call into another probe
+        // instead of the intended one-in-PROBE_K cadence -- caught here, not by the golden.
+        assertThat(probeGov.confettiSnapshot().probeSeq())
+                .as("the confetti probe slot was consumed by this carve, advancing probeSeq from 15 to 16")
+                .isEqualTo(16L);
+        WorkerState nextOverThreshold = denseVictim(11, "d/00", "d/05");
+        long[] selfSplitNext = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        OwnerSelfSplit.OwnerSplitTrace nextResult =
+                probeGov.maybeOwnerSelfSplit(nextOverThreshold.nodeId(), nextOverThreshold, b("d/002500"), selfSplitNext);
+        assertThat(nextResult)
+                .as("with the slot correctly consumed, the very next over-threshold call must land back "
+                        + "on CONFETTI_SUPPRESSED, not another probe carve")
+                .isNull();
+
         GoldenTrace.writeOrVerify(fx);
     }
 
@@ -977,6 +1038,23 @@ final class DecisionTraceGoldenTest {
         fx.record(event);
     }
 
+    /**
+     * The recorded pool view: one entry per {@link WorkerState}, mirroring every field {@link
+     * io.varve.swath.engine.policy.VictimView} itself carries ({@code node_id}/{@code lo}/{@code
+     * cursor}/{@code hi}/{@code keys_emitted}/{@code unsplittable}/{@code pacing_skip_available}) —
+     * widened from an earlier version that recorded only {@code node_id}/{@code lo}/{@code cursor}/
+     * {@code hi}/{@code unsplittable}, which an independent review found let a mutant that forces
+     * {@code pacingSkipAvailable=false} in executor view construction evade this fixture matrix
+     * entirely (the recorded event stayed byte-identical either way). This does NOT close the whole
+     * gap that review found (issue #25): {@link io.varve.swath.engine.policy.StealAttemptView}'s
+     * fields that exist only for the CHOSEN victim's per-attempt view (density fraction, alphabet
+     * digest state, the unchanged-since-non-productive-steal flag, both structure-probe streaks) are
+     * still not recorded here at all — see decision-trace-goldens.md's known-gaps list for why
+     * (AlphabetDigest exposes no accessor to any package outside {@code io.varve.swath.engine} for a
+     * stable, comparable JSON representation, and which victim even HAS a per-attempt view is decided
+     * only after {@code selectVictim} runs, so capturing it pre-call means recording it for every
+     * candidate, not just the eventual choice).
+     */
     private static ObjectNode poolView(List<WorkerState> pool) {
         ObjectNode view = GoldenTrace.newNode();
         ArrayNode candidates = view.putArray("pool");
@@ -986,7 +1064,9 @@ final class DecisionTraceGoldenTest {
             GoldenTrace.putHex(c, "lo", w.lo());
             GoldenTrace.putHex(c, "cursor", w.cursor());
             GoldenTrace.putHex(c, "hi", w.hi());
+            c.put("keys_emitted", w.keysEmitted());
             c.put("unsplittable", w.unsplittable());
+            c.put("pacing_skip_available", w.pacingSkipAvailable());
             candidates.add(c);
         }
         return view;
