@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Drives {@link HybridSeedPlanner}/{@link SeedDescent} against a RECORDED sequence of
  * {@link SeedProbeOutcome}s with <b>zero I/O</b> — no {@code PageFetcher}, no {@code ListPage}, no
- * {@code SeedStep} — the proof that the seam is real (seam-notes.md/B5): a hypothetical second
+ * {@code SeedStep} — the proof that the seam is real (seam-notes.md): a hypothetical second
  * planner (a seed-diet policy, a hints-file planner) would be tested against this exact same
  * {@link SeedAction}/{@link SeedProbeOutcome} contract. Each test below exercises a distinct phase
  * transition of the descent's explicit state machine (TOP -> optional TOP_EXTRA -> DESCENT, which for
