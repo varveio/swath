@@ -388,6 +388,326 @@ def param_names(params_str: str) -> list[str]:
     return names
 
 
+# ---------------------------------------------------------------------------
+# Type index: record components + "coded enums" (an enum with a no-arg `code()`
+# accessor, whose constants each carry a literal string as their first constructor
+# argument -- io.varve.swath.engine.policy's PivotMechanism/RetryReason/NoVictimReason/
+# UnsplittableReason all follow this shape). Built once per `run_check` and threaded
+# through resolution so a call-site expression shaped `receiver.accessor().code()` (an
+# enum-typed record-component accessor chain) resolves by ENUMERATING the enum type's
+# declared constants rather than chasing where the receiver's runtime value came from --
+# per seam-notes.md's policy split, the reasons are now closed enums, and a new constant
+# can't hide from an enumeration the way it could hide from dataflow tracing.
+# ---------------------------------------------------------------------------
+
+def split_typed_params(orig: str, scrub_text: str) -> list[tuple[str, str]]:
+    """Split a record/method parameter list into ``(simple_type, name)`` pairs, splitting
+    on commas at ``()[]{}<>`` depth 0 in `scrub_text` (so a generic type argument's own
+    comma, e.g. a hypothetical ``Map<String, Integer>`` component, never splits)."""
+    parts = []
+    depth = 0
+    start = 0
+    for i, c in enumerate(scrub_text):
+        if c in "([{<":
+            depth += 1
+        elif c in ")]}>":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(orig[start:i].strip())
+            start = i + 1
+    tail = orig[start:].strip()
+    if tail or parts:
+        parts.append(tail)
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        p = re.sub(r"\bfinal\b", "", p).strip()
+        tokens = p.replace("[]", " ").split()
+        if len(tokens) < 2:
+            continue
+        name = tokens[-1]
+        type_str = " ".join(tokens[:-1])
+        simple = re.sub(r"<.*>", "", type_str, flags=re.DOTALL).strip()
+        simple = simple.rsplit(".", 1)[-1]
+        out.append((simple, name))
+    return out
+
+
+RECORD_DECL_RE = re.compile(r"\brecord\s+(\w+)\s*\(")
+ENUM_DECL_RE = re.compile(r"\benum\s+(\w+)\b[^{;]*\{")
+CONST_DECL_RE = re.compile(r"(?<![.\w])([A-Z][A-Z0-9_]*)\s*\(")
+
+
+def find_top_level_terminator(scrub_text: str, start: int, end: int, terminator: str) -> int:
+    """The index of the first `terminator` char at `()[]{}` depth 0 in
+    `scrub_text[start:end]`, or `end` if none (the whole span is the search region)."""
+    depth = 0
+    for i in range(start, end):
+        c = scrub_text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == terminator and depth == 0:
+            return i
+    return end
+
+
+@dataclass
+class TypeIndex:
+    # RecordTypeName -> {componentName: simpleComponentTypeName}, in declaration order.
+    record_components: dict[str, dict[str, str]] = field(default_factory=dict)
+    # "Coded enum" TypeName -> {constantName: literalCode}. Only enums with a no-arg
+    # `code()` method are included -- a plain `Outcome`-style enum (no `code()`) is not.
+    coded_enums: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+def build_type_index(files: dict[Path, JavaFile]) -> TypeIndex:
+    record_components: dict[str, dict[str, str]] = {}
+    coded_enums: dict[str, dict[str, str]] = {}
+    span_by_open = {}
+    for jf in files.values():
+        span_by_open_here = {o: c for (o, c) in jf.spans}
+
+        for m in RECORD_DECL_RE.finditer(jf.scrub):
+            open_idx = m.end() - 1
+            close_idx = find_matching_paren(jf.scrub, open_idx)
+            if close_idx is None:
+                continue
+            comps: dict[str, str] = {}
+            for type_name, comp_name in split_typed_params(
+                    jf.text[open_idx + 1:close_idx], jf.scrub[open_idx + 1:close_idx]):
+                comps[comp_name] = type_name
+            record_components[m.group(1)] = comps
+
+        for m in ENUM_DECL_RE.finditer(jf.scrub):
+            brace_open = m.end() - 1
+            brace_close = span_by_open_here.get(brace_open)
+            if brace_close is None:
+                continue
+            body = jf.scrub[brace_open + 1:brace_close]
+            if not re.search(r"(?<![.\w])code\s*\(\s*\)", body):
+                continue  # not a "coded" enum -- no code() accessor, so nothing to enumerate
+            const_region_end = find_top_level_terminator(
+                jf.scrub, brace_open + 1, brace_close, ";")
+            consts: dict[str, str] = {}
+            for cm in CONST_DECL_RE.finditer(jf.scrub, brace_open + 1, const_region_end):
+                c_open = cm.end() - 1
+                c_close = find_matching_paren(jf.scrub, c_open)
+                if c_close is None or c_close > const_region_end:
+                    continue
+                lits = literals_in_expr(jf.text[c_open + 1:c_close])
+                if lits:
+                    consts[cm.group(1)] = lits[0]
+            if consts:
+                coded_enums[m.group(1)] = consts
+    return TypeIndex(record_components=record_components, coded_enums=coded_enums)
+
+
+FOR_EACH_TYPE_RE_TMPL = r"for\s*\(\s*(\w+)\s+{ident}\s*:"
+INSTANCEOF_BIND_RE_TMPL = r"\binstanceof\s+(\w+)\s+{ident}\b"
+PLAIN_DECL_TYPE_RE_TMPL = r"(?<![.\w])(\w+)\s+{ident}\s*=(?!=)"
+
+
+def find_local_type(jf: JavaFile, pos: int, ident: str) -> str | None:
+    """The declared/bound simple type name of local `ident` at `pos`'s enclosing method,
+    trying (in order) a formal PARAMETER of that method (e.g. `Thief#commit`'s `Commit
+    commit` parameter -- easy to miss since a parameter's name can coincide with the
+    method's own, as it does there), a for-each element declaration, an `instanceof`
+    pattern binding, and a plain local declaration -- the shapes this codebase's emission
+    sites actually bind a record-typed local through. Returns `None` if none match (the
+    identifier is e.g. a field, or bound in a shape this does not recognize)."""
+    method = enclosing_method(jf, pos)
+    if method is None:
+        return None
+    _, mparams, body_start, body_end, _ = method
+    for type_name, name in split_typed_params(mparams, scrub(mparams)):
+        if name == ident:
+            return type_name
+    body = jf.scrub[body_start:body_end]
+    ident_esc = re.escape(ident)
+    for tmpl in (FOR_EACH_TYPE_RE_TMPL, INSTANCEOF_BIND_RE_TMPL, PLAIN_DECL_TYPE_RE_TMPL):
+        m = re.search(tmpl.format(ident=ident_esc), body)
+        if m:
+            return m.group(1)
+    return None
+
+
+ACCESSOR_CHAIN_CODE_RE = re.compile(r"^(\w+)\.(\w+)\(\)\.code\(\)$")
+QUALIFIED_CONST_CODE_RE = re.compile(r"^(\w+)\.([A-Z][A-Za-z0-9_]*)\.code\(\)$")
+ACCESSOR_CALL_RE = re.compile(r"^(\w+)\.(\w+)\(\)$")
+
+
+def resolve_enum_code_expr(jf: JavaFile, call_pos: int, expr: str,
+                            type_index: TypeIndex) -> set[str] | None:
+    """Resolve an enum-`.code()` expression by ENUMERATING the enum type's constants,
+    never by chasing which constant flows to this call site (a new constant therefore
+    cannot hide from it -- see this module's Type-index section docstring):
+
+      * ``receiver.accessor().code()`` -- `receiver`'s declared type (see
+        `find_local_type`) must be a record with a component named `accessor` whose
+        declared type is a "coded enum"; resolves to ALL of that enum's codes.
+      * ``EnumType.CONSTANT.code()`` -- a qualified constant reference; resolves to just
+        that one constant's code, exactly as `Outcome.NO_VICTIM` resolves to `NO_VICTIM`
+        via the existing qualified-constant rule.
+
+    Returns `None` (not a recognized enum-`.code()` shape) for anything else, falling
+    through to the existing rules unchanged.
+    """
+    m = QUALIFIED_CONST_CODE_RE.match(expr)
+    if m:
+        type_name, const_name = m.group(1), m.group(2)
+        consts = type_index.coded_enums.get(type_name)
+        if consts and const_name in consts:
+            return {consts[const_name]}
+        return None
+    m = ACCESSOR_CHAIN_CODE_RE.match(expr)
+    if m:
+        receiver, accessor = m.group(1), m.group(2)
+        recv_type = find_local_type(jf, call_pos, receiver)
+        if recv_type is None:
+            return None
+        comps = type_index.record_components.get(recv_type)
+        if not comps or accessor not in comps:
+            return None
+        enum_type = comps[accessor]
+        consts = type_index.coded_enums.get(enum_type)
+        if not consts:
+            return None
+        return set(consts.values())
+    return None
+
+
+def resolve_two_args(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int, a0: str, a1: str,
+                      type_index: TypeIndex, depth: int = 0) -> tuple[set[tuple[str, str]], str | None]:
+    """Resolve one call/construction site's two argument expressions into a CORRELATED set
+    of (arg0, arg1) pairs -- applying every rule that keeps the two positions linked
+    (record-accessor pairs via construction sites, same-wrapper-method params via
+    callers) before ever falling back to an independent cross product. This is the single
+    place both `resolve_call_pairs` (a `recordStealReason`/`stealReasonCounter` emission
+    site) and `resolve_correlated_pair_via_sites` (one step of either correlation rule,
+    which itself calls back into this for the site it just found) resolve a 2-arg site --
+    so correlation composes across multiple hops (e.g. `new Engagement(category, reason)`
+    inside `addEngagement`, whose `category`/`reason` are THAT method's params, correlated
+    again via ITS callers) instead of only ever applying once.
+
+    `depth` bounds the correlation recursion itself (construction site -> wrapper params
+    -> wrapper's callers -> ...), separate from `MAX_RECURSION` (which bounds a single
+    symbolic VALUE's own dataflow chase in `resolve_single_arg`) -- pathological mutual
+    wrapping could otherwise recurse without end.
+    """
+    if depth > MAX_RECURSION:
+        return set(), f"{jf.path}:{jf.line_of(call_pos)}: correlation recursion limit resolving `{a0}`, `{a1}`"
+
+    def is_symbolic(e: str) -> bool:
+        e = e.strip()
+        if re.match(r'^"((?:[^"\\]|\\.)*)"$', e):
+            return False
+        if literals_in_expr(e):
+            return False
+        return True
+
+    a0s, a1s = a0.strip(), a1.strip()
+    if is_symbolic(a0s) and is_symbolic(a1s):
+        rec_result = try_resolve_record_accessor_pair(files, jf, call_pos, a0s, a1s, type_index, depth)
+        if rec_result is not None:
+            return rec_result
+        base0 = a0s
+        m0 = NAME_DOT_NAME_RE.match(a0s)
+        if m0:
+            base0 = m0.group(1)
+        base1 = a1s
+        m1 = NAME_DOT_NAME_RE.match(a1s)
+        if m1:
+            base1 = m1.group(1)
+        if BARE_IDENT_RE.match(base0) and BARE_IDENT_RE.match(base1):
+            method = enclosing_method(jf, call_pos)
+            if method is not None:
+                mname, mparams, _, _, is_private = method
+                params = param_names(mparams)
+                if base0 in params and base1 in params:
+                    scope = {jf.path: jf} if is_private else files
+                    return resolve_correlated_pair(scope, mname, params.index(base0),
+                                                    params.index(base1), type_index, depth + 1)
+
+    r0 = resolve_single_arg(files, jf, call_pos, a0s, 0, type_index)
+    r1 = resolve_single_arg(files, jf, call_pos, a1s, 0, type_index)
+    warns = [w for w in (r0.warning, r1.warning) if w]
+    warning = "; ".join(warns) if warns else None
+    pairs = {(c, r) for c in (r0.literals or set()) for r in (r1.literals or set())}
+    return pairs, warning
+
+
+def resolve_correlated_pair_via_sites(files: dict[Path, JavaFile], call_re: re.Pattern,
+                                       idx0: int, idx1: int, type_index: TypeIndex,
+                                       label: str, depth: int) -> tuple[set[tuple[str, str]], str | None]:
+    """Shared correlated-pair machinery: for every call site matching `call_re` (a wrapper
+    method call, or a record's implicit constructor invocation), resolve the two argument
+    expressions at `idx0`/`idx1` via `resolve_two_args` (TOGETHER, not as an independent
+    cross product -- see the module docstring's point 5, and `resolve_two_args`'s own
+    docstring for why this must recurse through it rather than call
+    `resolve_single_arg` on each position independently) and union the resulting pairs
+    across every site. Used both by `resolve_correlated_pair` (wrapper methods) and
+    `try_resolve_record_accessor_pair` (record construction sites)."""
+    pairs: set[tuple[str, str]] = set()
+    warnings: list[str] = []
+    for jf in files.values():
+        for cm in call_re.finditer(jf.scrub):
+            open_idx = cm.end() - 1
+            close_idx = find_matching_paren(jf.scrub, open_idx)
+            if close_idx is None:
+                continue
+            if (open_idx, close_idx) in jf.decl_param_spans:
+                continue
+            inner_orig = jf.text[open_idx + 1:close_idx]
+            inner_scrub = jf.scrub[open_idx + 1:close_idx]
+            args = split_top_level(inner_orig, inner_scrub)
+            if max(idx0, idx1) >= len(args):
+                continue
+            site_pairs, warn = resolve_two_args(files, jf, cm.start(), args[idx0], args[idx1],
+                                                 type_index, depth)
+            if warn or not site_pairs:
+                warnings.append(f"{jf.path}:{jf.line_of(cm.start())}: "
+                                 f"could not resolve correlated pair for {label}(...)")
+                continue
+            pairs |= site_pairs
+    return pairs, ("; ".join(warnings) if warnings else None)
+
+
+def try_resolve_record_accessor_pair(
+        files: dict[Path, JavaFile], jf: JavaFile, call_pos: int, a0: str, a1: str,
+        type_index: TypeIndex, depth: int = 0) -> tuple[set[tuple[str, str]], str | None] | None:
+    """If `a0`/`a1` are both no-arg accessor calls on the SAME local (``e.category()`` /
+    ``e.reason()``) whose declared type (see `find_local_type`) is a record with
+    components matching those accessor names, resolve the pair by finding every
+    ``new RecordType(...)`` construction site in the tree and correlating its
+    constructor args at the matching positions (e.g. `Engagement`'s construction sites
+    are the ``addEngagement("X", "y")`` call sites, reached transitively through
+    `Engagement`'s constructor params -- the same wrapper-method machinery already
+    used for `Thief.record`, just entered via a constructor instead of a method).
+    Returns `None` (not this shape) for anything else."""
+    m0 = ACCESSOR_CALL_RE.match(a0)
+    m1 = ACCESSOR_CALL_RE.match(a1)
+    if not m0 or not m1:
+        return None
+    recv0, acc0 = m0.group(1), m0.group(2)
+    recv1, acc1 = m1.group(1), m1.group(2)
+    if recv0 != recv1:
+        return None
+    recv_type = find_local_type(jf, call_pos, recv0)
+    if recv_type is None:
+        return None
+    comps = type_index.record_components.get(recv_type)
+    if not comps or acc0 not in comps or acc1 not in comps:
+        return None
+    names = list(comps.keys())
+    idx0, idx1 = names.index(acc0), names.index(acc1)
+    call_re = re.compile(r"(?<![A-Za-z0-9_])new\s+" + re.escape(recv_type) + r"\s*\(")
+    return resolve_correlated_pair_via_sites(files, call_re, idx0, idx1, type_index,
+                                              label=f"new {recv_type}", depth=depth + 1)
+
+
 def literals_in_expr(expr: str) -> list[str]:
     return [m.group(1) for m in STRING_LITERAL_RE.finditer(expr)]
 
@@ -416,7 +736,7 @@ class ResolveResult:
 
 
 def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
-                        expr: str, depth: int) -> ResolveResult:
+                        expr: str, depth: int, type_index: TypeIndex) -> ResolveResult:
     expr = expr.strip()
     # Rule 1: a single simple string literal.
     m = re.match(r'^"((?:[^"\\]|\\.)*)"$', expr)
@@ -426,6 +746,14 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
     m = QUALIFIED_CONST_RE.match(expr)
     if m:
         return ResolveResult(literals={m.group(1)})
+    # Rule 1.6: an enum-typed `.code()` expression -- either a qualified constant
+    # (`NoVictimReason.NO_SPLITTABLE_VICTIM.code()`) or a record-component accessor chain
+    # on a local of a recognized type (`noVictim.reason().code()`, `commit.mechanism()
+    # .code()`). Resolved by ENUMERATING the enum type's constants, not by tracing the
+    # value -- see `resolve_enum_code_expr`.
+    enum_lits = resolve_enum_code_expr(jf, call_pos, expr, type_index)
+    if enum_lits is not None:
+        return ResolveResult(literals=enum_lits)
     # Rule 1.7: a symbolic key wrapped in a trailing string-literal affix, e.g.
     # `name + "_off"` -> the family token `<*>_off` (checked before Rule 2 so the
     # affix is not contributed as a bare-suffix literal). See `resolve_family_concat`.
@@ -455,7 +783,7 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
     params = param_names(mparams)
     if base in params:
         scope = {jf.path: jf} if is_private else files
-        return resolve_via_callers(scope, mname, params.index(base), depth)
+        return resolve_via_callers(scope, mname, params.index(base), depth, type_index)
     # Pattern A: local variable -- scan assignments within the method body. Each RHS is
     # resolved for both literal shapes (quoted string OR qualified enum constant), so an
     # enum-typed local hoisted across branches (e.g. `pendingOutcome`) is traced exactly
@@ -473,7 +801,7 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
 
 
 def resolve_via_callers(files: dict[Path, JavaFile], method_name: str, param_idx: int,
-                         depth: int) -> ResolveResult:
+                         depth: int, type_index: TypeIndex) -> ResolveResult:
     literals: set[str] = set()
     warnings: list[str] = []
     call_re = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(method_name) + r"\s*\(")
@@ -490,7 +818,7 @@ def resolve_via_callers(files: dict[Path, JavaFile], method_name: str, param_idx
             args = split_top_level(inner_orig, inner_scrub)
             if param_idx >= len(args):
                 continue
-            r = resolve_single_arg(files, jf, cm.start(), args[param_idx], depth + 1)
+            r = resolve_single_arg(files, jf, cm.start(), args[param_idx], depth + 1, type_index)
             literals |= r.literals
             if r.warning:
                 warnings.append(r.warning)
@@ -509,83 +837,24 @@ class EmissionSite:
 
 
 def resolve_call_pairs(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
-                        args: list[str]) -> EmissionSite:
+                        args: list[str], type_index: TypeIndex) -> EmissionSite:
     line = jf.line_of(call_pos)
     if len(args) != 2:
         return EmissionSite(jf.path, line, set(),
                              f"{jf.path}:{line}: expected 2 args, found {len(args)}: {args}")
-
-    def is_symbolic(e: str) -> bool:
-        e = e.strip()
-        if re.match(r'^"((?:[^"\\]|\\.)*)"$', e):
-            return False
-        if literals_in_expr(e):
-            return False
-        return True
-
-    a0, a1 = args[0].strip(), args[1].strip()
-    if is_symbolic(a0) and is_symbolic(a1):
-        # Both symbolic: check whether both are params of the *same* enclosing
-        # wrapper method -- if so resolve them per-call-site (correlated), not as
-        # an independent cross product (see module docstring, point 5).
-        base0 = a0
-        m0 = NAME_DOT_NAME_RE.match(a0)
-        if m0:
-            base0 = m0.group(1)
-        base1 = a1
-        m1 = NAME_DOT_NAME_RE.match(a1)
-        if m1:
-            base1 = m1.group(1)
-        if BARE_IDENT_RE.match(base0) and BARE_IDENT_RE.match(base1):
-            method = enclosing_method(jf, call_pos)
-            if method is not None:
-                mname, mparams, _, _, is_private = method
-                params = param_names(mparams)
-                if base0 in params and base1 in params:
-                    scope = {jf.path: jf} if is_private else files
-                    pairs, warn = resolve_correlated_pair(scope, mname, params.index(base0),
-                                                           params.index(base1))
-                    return EmissionSite(jf.path, line, pairs, warn)
-
-    r0 = resolve_single_arg(files, jf, call_pos, a0, 0)
-    r1 = resolve_single_arg(files, jf, call_pos, a1, 0)
-    warns = [w for w in (r0.warning, r1.warning) if w]
-    warning = "; ".join(warns) if warns else None
-    pairs = {(c, r) for c in (r0.literals or set()) for r in (r1.literals or set())}
+    pairs, warning = resolve_two_args(files, jf, call_pos, args[0], args[1], type_index)
     return EmissionSite(jf.path, line, pairs, warning)
 
 
 def resolve_correlated_pair(files: dict[Path, JavaFile], method_name: str,
-                             idx0: int, idx1: int) -> tuple[set[tuple[str, str]], str | None]:
-    pairs: set[tuple[str, str]] = set()
-    warnings: list[str] = []
+                             idx0: int, idx1: int, type_index: TypeIndex,
+                             depth: int = 0) -> tuple[set[tuple[str, str]], str | None]:
     call_re = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(method_name) + r"\s*\(")
-    for jf in files.values():
-        for cm in call_re.finditer(jf.scrub):
-            open_idx = cm.end() - 1
-            close_idx = find_matching_paren(jf.scrub, open_idx)
-            if close_idx is None:
-                continue
-            if (open_idx, close_idx) in jf.decl_param_spans:
-                continue
-            inner_orig = jf.text[open_idx + 1:close_idx]
-            inner_scrub = jf.scrub[open_idx + 1:close_idx]
-            args = split_top_level(inner_orig, inner_scrub)
-            if max(idx0, idx1) >= len(args):
-                continue
-            r0 = resolve_single_arg(files, jf, cm.start(), args[idx0], MAX_RECURSION)
-            r1 = resolve_single_arg(files, jf, cm.start(), args[idx1], MAX_RECURSION)
-            if r0.warning or r1.warning or not r0.literals or not r1.literals:
-                warnings.append(f"{jf.path}:{jf.line_of(cm.start())}: "
-                                 f"could not resolve correlated pair for {method_name}(...)")
-                continue
-            for c in r0.literals:
-                for r in r1.literals:
-                    pairs.add((c, r))
-    return pairs, ("; ".join(warnings) if warnings else None)
+    return resolve_correlated_pair_via_sites(files, call_re, idx0, idx1, type_index,
+                                              label=method_name, depth=depth)
 
 
-def find_emission_sites(files: dict[Path, JavaFile]) -> list[EmissionSite]:
+def find_emission_sites(files: dict[Path, JavaFile], type_index: TypeIndex) -> list[EmissionSite]:
     sites = []
     call_re = re.compile(
         r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(n) for n in EMIT_METHOD_NAMES) + r")\s*\(")
@@ -613,7 +882,7 @@ def find_emission_sites(files: dict[Path, JavaFile]) -> list[EmissionSite]:
             inner_orig = jf.text[open_idx + 1:close_idx]
             inner_scrub = jf.scrub[open_idx + 1:close_idx]
             args = split_top_level(inner_orig, inner_scrub)
-            sites.append(resolve_call_pairs(files, jf, cm.start(), args))
+            sites.append(resolve_call_pairs(files, jf, cm.start(), args, type_index))
     return sites
 
 
@@ -693,7 +962,8 @@ def run_check(repo_root: Path) -> int:
     files: dict[Path, JavaFile] = {}
     for src_root in existing_roots:
         files.update(load_java_files(src_root))
-    sites = find_emission_sites(files)
+    type_index = build_type_index(files)
+    sites = find_emission_sites(files, type_index)
 
     code_pairs: set[tuple[str, str]] = set()
     warnings: list[str] = []
@@ -979,6 +1249,134 @@ def self_test_family_row_ghost() -> int:
         return 0
 
 
+def self_test_enum_code_accessor_pattern() -> int:
+    """Regression for the policy-seam shape that broke this guard against the real
+    thief-brain extraction: a closed enum with a no-arg ``code()`` accessor (mirroring
+    ``PivotMechanism``/``RetryReason``/``NoVictimReason``/``UnsplittableReason``), reached
+    two ways -- an `instanceof`-pattern-bound local's record-component accessor chain
+    (``outcome.reason().code()``, mirroring ``noVictim.reason().code()``/``commit
+    .mechanism().code()``) and a qualified constant (``Reason.ALPHA.code()``, mirroring
+    ``NoVictimReason.NO_SPLITTABLE_VICTIM.code()``). Before the enum-enumeration rule,
+    BOTH shapes fell through to a non-literal warning and the code's live `CAT.alpha`/
+    `CAT.beta` pairs never resolved, ghosting their doc rows even though they were
+    faithfully documented (rc == 1). Asserts rc == 0 with no warning."""
+    print("self-test: constructing a scratch tree with an enum-.code() accessor chain...")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "swath-core" / "src" / "main" / "java" / "dev" / "swath" / "w"
+        src.mkdir(parents=True)
+        (src / "W.java").write_text(
+            "package io.varve.swath.w;\n"
+            "class W {\n"
+            "    enum Reason {\n"
+            "        ALPHA(\"alpha\"), BETA(\"beta\");\n"
+            "        private final String code;\n"
+            "        Reason(String code) { this.code = code; }\n"
+            "        public String code() { return code; }\n"
+            "    }\n"
+            "    record Outcome(Reason reason) {}\n"
+            "    void run(Metrics metrics, Object selection) {\n"
+            "        if (selection instanceof Outcome outcome) {\n"
+            "            metrics.recordStealReason(\"CAT\", outcome.reason().code());\n"
+            "        }\n"
+            "        metrics.recordStealReason(\"CAT\", Reason.ALPHA.code());\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        docs = root / "docs" / "internals"
+        docs.mkdir(parents=True)
+        (docs / "metrics-internals.md").write_text(
+            "# doc\n\n"
+            f"{TABLE_START}\n"
+            "| category | reason | status |\n"
+            "|---|---|---|\n"
+            "| `CAT` | `alpha` | |\n"
+            "| `CAT` | `beta` | |\n"
+            f"{TABLE_END}\n",
+            encoding="utf-8",
+        )
+        rc = run_check(root)
+        if rc != 0:
+            print(f"self-test FAILED: expected exit 0 (no drift), got {rc}", file=sys.stderr)
+            return 1
+        print("self-test: enum-.code() accessor chain and qualified-constant .code() "
+              "both resolved by enumeration, no false ghosts. PASS")
+        return 0
+
+
+def self_test_record_accessor_pair_via_collection() -> int:
+    """Regression for the OTHER policy-seam shape that broke this guard: a two-String-
+    component record iterated in a collection loop (``for (Mark m : marks) {
+    metrics.recordStealReason(m.category(), m.reason()); }``, mirroring `Thief
+    .applyEngagements`'s loop over `List<Engagement>`), whose actual literal pairs live
+    at the record's construction sites reached only THROUGH a wrapper method's own
+    params (mirroring `ThiefPolicy.addEngagement`). Before this resolved, the pair fell
+    through to a non-literal warning; naively resolving `category()`/`reason()`
+    independently (rather than correlated through the construction site AND its
+    wrapper) would instead silently cross-product unrelated categories and reasons
+    together -- this asserts the exact correlated pairs, not just rc == 0, so that
+    regression cannot hide behind a coincidentally-clean exit code."""
+    print("self-test: constructing a scratch tree with a record-accessor pair over a collection...")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "swath-core" / "src" / "main" / "java" / "dev" / "swath" / "v"
+        src.mkdir(parents=True)
+        (src / "V.java").write_text(
+            "package io.varve.swath.v;\n"
+            "import java.util.List;\n"
+            "class V {\n"
+            "    record Mark(String category, String reason) {}\n"
+            "    private final Metrics metrics;\n"
+            "    V(Metrics metrics) { this.metrics = metrics; }\n"
+            "    void emit(List<Mark> marks) {\n"
+            "        for (Mark m : marks) {\n"
+            "            metrics.recordStealReason(m.category(), m.reason());\n"
+            "        }\n"
+            "    }\n"
+            "    private void addMark(List<Mark> out, String category, String reason) {\n"
+            "        out.add(new Mark(category, reason));\n"
+            "    }\n"
+            "    void caller(List<Mark> out) {\n"
+            "        addMark(out, \"CAT\", \"one\");\n"
+            "        addMark(out, \"OTHER\", \"two\");\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        docs = root / "docs" / "internals"
+        docs.mkdir(parents=True)
+        (docs / "metrics-internals.md").write_text(
+            "# doc\n\n"
+            f"{TABLE_START}\n"
+            "| category | reason | status |\n"
+            "|---|---|---|\n"
+            "| `CAT` | `one` | |\n"
+            "| `OTHER` | `two` | |\n"
+            f"{TABLE_END}\n",
+            encoding="utf-8",
+        )
+        rc = run_check(root)
+        if rc != 0:
+            print(f"self-test FAILED: expected exit 0 (no drift), got {rc}", file=sys.stderr)
+            return 1
+        # Not just rc == 0: assert the resolved pairs are exactly the correlated ones,
+        # so a future change that resolves category()/reason() independently (silently
+        # cross-producting CAT.two/OTHER.one into existence) is still caught even though
+        # both would happen to also be "documented" in a table listing all four.
+        files = load_java_files(root / "swath-core" / "src" / "main" / "java")
+        type_index = build_type_index(files)
+        sites = find_emission_sites(files, type_index)
+        pairs = {p for s in sites for p in s.pairs}
+        expected = {("CAT", "one"), ("OTHER", "two")}
+        if pairs != expected:
+            print(f"self-test FAILED: expected exactly {expected}, resolved {pairs}", file=sys.stderr)
+            return 1
+        print("self-test: record-accessor pair over a collection resolved via construction "
+              "sites, correlated (not cross-producted). PASS")
+        return 0
+
+
 def self_test() -> int:
     results = [
         self_test_ghost_and_undocumented(),
@@ -986,6 +1384,8 @@ def self_test() -> int:
         self_test_family_concat_documented(),
         self_test_family_concat_undocumented(),
         self_test_family_row_ghost(),
+        self_test_enum_code_accessor_pattern(),
+        self_test_record_accessor_pair_via_collection(),
     ]
     return 1 if any(results) else 0
 
