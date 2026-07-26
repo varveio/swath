@@ -20,6 +20,20 @@ import org.junit.jupiter.api.Test;
  */
 class FutilityPacingPolicyTest {
 
+    /**
+     * Tuned constants, pinned by LITERAL, not merely referenced symbolically. Every other test in
+     * this class reads {@code FUTILITY_PACE_THRESHOLD}/{@code FUTILITY_PACE_MAX_COOLDOWN} off the
+     * constant itself (e.g. {@code trips(FUTILITY_PACE_THRESHOLD)}), so a change to either constant
+     * is invisible to them -- they would stay green testing the NEW value against itself. These are
+     * tuned, load-bearing values (the cooldown trip point and its cap); an accidental edit should
+     * fail a build, not silently retune the engine.
+     */
+    @Test
+    void tunedConstantsArePinnedToTheirLiteralValues() {
+        assertThat(FutilityPacingPolicy.FUTILITY_PACE_THRESHOLD).isEqualTo(4);
+        assertThat(FutilityPacingPolicy.FUTILITY_PACE_MAX_COOLDOWN).isEqualTo(64);
+    }
+
     /** Below {@code FUTILITY_PACE_THRESHOLD}, a futile outcome never trips the cooldown. */
     @Test
     void tripsIsFalseBelowTheThreshold() {

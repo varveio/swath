@@ -23,6 +23,18 @@ import org.junit.jupiter.api.Test;
  */
 final class ConfettiFeedbackGateTest {
 
+    /**
+     * A tuned constant, pinned by LITERAL. {@code OwnerSplitGovernorTest}'s gate tests reference it
+     * only symbolically (via comments spelling out "8", never an assertion against the constant
+     * itself), so a change to the warmup floor is invisible to them. This is the confetti-feedback
+     * gate's warmup sample floor (issue #22) — an accidental edit should fail a build, not silently
+     * retune when the gate starts trusting its own ground truth.
+     */
+    @Test
+    void minSampleIsPinnedToItsLiteralValue() {
+        assertThat(ConfettiFeedbackGate.MIN_SAMPLE).isEqualTo(8);
+    }
+
     // -------------------------------------------------------------------------------------------
     // recordCompletion / snapshot: the tagged-completion tallies accumulate correctly.
     // -------------------------------------------------------------------------------------------

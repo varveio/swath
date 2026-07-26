@@ -84,6 +84,22 @@ class OwnerSplitGovernorTest {
     }
 
     // -------------------------------------------------------------------------
+    // Tuned constants: pinned by LITERAL, not merely referenced symbolically. Every gate test below
+    // reads these constants off OwnerSplitGovernor itself (e.g. `SELF_SPLIT_MIN_PAGES_BETWEEN`), so a
+    // change to the constant is invisible to them -- they'd stay green testing the NEW value against
+    // itself. These four are tuned, load-bearing thresholds; an accidental edit should fail a build,
+    // not silently retune the engine.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void tunedConstantsArePinnedToTheirLiteralValues() {
+        assertThat(OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES).isEqualTo(4);
+        assertThat(OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN).isEqualTo(32);
+        assertThat(OwnerSplitGovernor.SUPPRESS_THRESHOLD).isEqualTo(0.5);
+        assertThat(OwnerSplitGovernor.PROBE_K).isEqualTo(16);
+    }
+
+    // -------------------------------------------------------------------------
     // Open frontier: structural, not a suppression -- never counted (see OwnerSplitSkipReason).
     // -------------------------------------------------------------------------
 

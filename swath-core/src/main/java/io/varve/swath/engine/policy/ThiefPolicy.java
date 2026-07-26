@@ -38,26 +38,31 @@ public final class ThiefPolicy implements StealPolicy {
      * The cap on extra {@code delimiter=/} probes the parent-empty sliver's adaptive back-out issues
      * past the first (coarsest) level — one steal attempt fires at most this many {@code + 1}
      * structure probes on that path.
+     *
+     * <p>Package-private (not {@code private}), like {@link OwnerSplitGovernor}'s
+     * {@code SUPPRESS_THRESHOLD}/{@code PROBE_K} — so {@code ThiefPolicyConstantsTest} can pin its
+     * literal value directly, the same reason every tuned constant in this file below is
+     * package-private rather than {@code private}.
      */
-    private static final int MAX_STRUCTURE_BACKOUT_LEVELS = 3;
+    static final int MAX_STRUCTURE_BACKOUT_LEVELS = 3;
 
     /** Safety margin, in halvings, added to the log-scaled empty-upper bisection budget. */
-    private static final int EMPTY_UPPER_BISECTION_MARGIN = 6;
+    static final int EMPTY_UPPER_BISECTION_MARGIN = 6;
 
     /** Bytes (from the {@code (cursor, hi)} divergence position) used to estimate the bisection gap width. */
-    private static final int BAND_WIDTH_SUFFIX_BYTES = 2;
+    static final int BAND_WIDTH_SUFFIX_BYTES = 2;
 
     /** Fallback gap width for the open frontier's bisection budget (no upper bound to measure against). */
-    private static final long OPEN_FRONTIER_BAND_WIDTH_FALLBACK = 40L;
+    static final long OPEN_FRONTIER_BAND_WIDTH_FALLBACK = 40L;
 
     /** Consecutive zero-fan-out structure probes against one victim before probing suppresses there. */
-    private static final int STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD = 8;
+    static final int STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD = 8;
 
     /** Consecutive TIMED-OUT structure probes against one victim before probing suppresses there. */
-    private static final int STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD = 2;
+    static final int STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD = 2;
 
     /** While suppressed, still issue 1-in-N structure probes so late-appearing structure recovers. */
-    private static final int STRUCTURE_SUPPRESS_RETRY_DIVISOR = 64;
+    static final int STRUCTURE_SUPPRESS_RETRY_DIVISOR = 64;
 
     /** The ⊥ sentinel (cursor at range start) as bytes, for byte comparisons/{@link ByteMidpoint}. */
     private static final byte[] BOTTOM = new byte[0];
