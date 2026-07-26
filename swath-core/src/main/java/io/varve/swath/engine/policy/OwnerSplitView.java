@@ -36,6 +36,10 @@ import io.varve.swath.engine.AlphabetDigest;
  *                          WorkerState#observedDensityRatio()} — pure, zero-I/O, raw/pre-toggle)
  * @param alphabetDigest    the owner's observed per-position alphabet, consumed by the
  *                          alphabet-aware pivot synthesis
+ * @param confetti          a coherent read of the confetti feedback gate's counters at this
+ *                          page-commit (issue #22: the executor snapshots {@code
+ *                          ConfettiFeedbackGate} once when building this view, so the governor's
+ *                          decision is a pure function of it — no live gate reference crosses in)
  */
 public record OwnerSplitView(
         byte[] hi,
@@ -47,5 +51,6 @@ public record OwnerSplitView(
         long outstanding,
         double densityFraction,
         double observedDensityRatio,
-        AlphabetDigest alphabetDigest) {
+        AlphabetDigest alphabetDigest,
+        ConfettiObservation confetti) {
 }

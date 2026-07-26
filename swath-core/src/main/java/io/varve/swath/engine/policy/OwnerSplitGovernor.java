@@ -20,20 +20,17 @@ import java.util.List;
  * an ordering/comparator/key-codec abstraction for a hypothetical second source (rule of three —
  * see seam-notes.md).
  *
- * <p><b>The confetti feedback gate is a collaborator, not owned state here.</b> {@link
- * ConfettiFeedbackGate#decide()} is consulted mid-chain as ordinary decision logic (a read of its
- * own already-recorded atomics — no I/O), but its tagged-child completion classification ({@code
- * recordCompletion}) is an event fired from a totally different call site (node completion,
- * engine-wide) tied to real node ids and {@code WorkerState} this package never sees — so the
- * executor ({@code OwnerSelfSplit}) owns constructing the one run-scoped instance and feeding it
- * completions; this governor only ever reads it.
- *
- * <p><b>Known non-determinism (issue #22, not fixed here).</b> That "read" is not perfectly pure:
- * {@link ConfettiFeedbackGate#decide()} also increments its own probe counter as a side effect of
- * being called, so two {@link #decide(OwnerSplitView)} calls with a bitwise-identical view can
- * differ on every {@code PROBE_K}-th over-threshold call. Pre-existing (this extraction moved it
- * verbatim, introduced nothing) — see {@code architecture.md}'s "Known seam exceptions" alongside
- * issues #19/#20; belongs to the determinism-audit slice.
+ * <p><b>The confetti feedback gate is pure measurement, not a collaborator consulted for a
+ * decision (issue #22's fix).</b> This class owns the classification math entirely: {@code
+ * SUPPRESS_THRESHOLD}/{@code PROBE_K} live here, and {@link #decide} reads the run's tagged-child
+ * tallies and probe sequence off {@link OwnerSplitView#confetti()} — a plain value the executor
+ * snapshots off {@code ConfettiFeedbackGate} once per call — instead of consulting a live gate
+ * reference. {@code decide(view)} is now a genuine pure function of its argument: nothing here
+ * mutates shared state, so the over-threshold branch instead RETURNS a {@link
+ * OwnerSplitMutation#CONSUME_CONFETTI_PROBE_SLOT} mutation for the executor to apply to the real
+ * gate, on both outcomes ({@code SUPPRESSED} and the periodic probe) — mirroring the gate's own
+ * former {@code decide()}, which incremented its probe counter unconditionally once over
+ * threshold, before checking which of the two outcomes it landed on.
  */
 public final class OwnerSplitGovernor implements OwnerSplitPolicy {
 
@@ -51,32 +48,35 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
      * ({@code WorkerState#markStolen()}) which already bounds carves to ≤1 per emitted page.
      */
     public static final long SELF_SPLIT_MIN_PAGES_BETWEEN = 32;
+    /**
+     * Suppress once the observed confetti rate is STRICTLY above this fraction (moved here from
+     * {@code ConfettiFeedbackGate} by issue #22's fix — this is the classification decision, the
+     * gate now only measures).
+     */
+    static final double SUPPRESS_THRESHOLD = 0.5;
+    /** Let every K-th would-be-suppressed carve through anyway, to keep the feedback alive. */
+    static final long PROBE_K = 16;
 
     private final EngineToggles toggles;
     private final int workerCount;
     private final int maxKeys;
-    private final ConfettiFeedbackGate confettiFeedback;
 
     /**
-     * @param toggles          the {@code --engine-toggle} ablation namespace this run was constructed with
-     * @param workerCount      the fixed configured worker count {@code Tmax} (the demand gate's threshold)
-     * @param maxKeys          the page size (the remaining-est floor's and the observed-mass floor's unit)
-     * @param confettiFeedback the run-scoped realized-child-mass feedback gate this run shares with the
-     *                         executor's tagged-child completion classification
+     * @param toggles     the {@code --engine-toggle} ablation namespace this run was constructed with
+     * @param workerCount the fixed configured worker count {@code Tmax} (the demand gate's threshold)
+     * @param maxKeys     the page size (the remaining-est floor's and the observed-mass floor's unit)
      */
-    public OwnerSplitGovernor(EngineToggles toggles, int workerCount, int maxKeys,
-                              ConfettiFeedbackGate confettiFeedback) {
+    public OwnerSplitGovernor(EngineToggles toggles, int workerCount, int maxKeys) {
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.workerCount = workerCount;
         this.maxKeys = maxKeys;
-        this.confettiFeedback = confettiFeedback;
     }
 
     @Override
     public OwnerSplitDecision decide(OwnerSplitView view) {
         byte[] H = view.hi();
         if (H == null) {
-            return new Skip(OwnerSplitSkipReason.OPEN_FRONTIER, List.of());
+            return new Skip(OwnerSplitSkipReason.OPEN_FRONTIER, List.of(), List.of());
         }
         byte[] cursorTo = view.cursorTo();
         byte[] lo = view.lo();
@@ -89,12 +89,13 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             // Remaining work too small to be worth a proactive carve — issue #16.
             return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())));
+                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())),
+                    List.of());
         }
         if (view.committed() - view.lastSelfSplitPage() < SELF_SPLIT_MIN_PAGES_BETWEEN) {
             // Rate-limit: O(1) self-splits per drain, not one per page.
             return new Skip(OwnerSplitSkipReason.RATE_LIMITED,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code())));
+                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code())), List.of());
         }
         List<Engagement> engagements = new ArrayList<>();
         // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live
@@ -107,7 +108,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // range at the identical cost either way. See docs/internals/metrics-internals.md §5.
         if (workerCount > 1 && view.outstanding() >= (long) workerCount) {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.DEMAND_GATED.code()));
-            return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements);
+            return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements, List.of());
         }
         // Far-ahead pivot fraction from the worker's own zero-cost density (>= 0.5 ⇒ >= byteMidpoint).
         // The child owns the far tail — so floor that tail above two pages: even below the demand gate an
@@ -119,23 +120,31 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         double densityRatio = toggles.observedDensityRatio(view.observedDensityRatio());
         if (StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys)) {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code()));
-            return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements);
+            return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of());
         }
         // CONFETTI FEEDBACK GATE. The gates above reason from upstream estimates (est/densityRatio);
         // on a keyspace whose tail thins out over most of the observed span those estimates still
         // pass a carve whose REALIZED mass turns out confetti-sized. Once the run has accumulated
         // enough tagged-child evidence (MIN_SAMPLE), a high observed confetti rate suppresses further
         // carving directly from that ground truth — with a periodic probe so a keyspace that later
-        // turns genuinely dense recovers on its own. See ConfettiFeedbackGate's javadoc and
+        // turns genuinely dense recovers on its own. This is now pure arithmetic over the view's own
+        // ConfettiObservation snapshot (issue #22) — see ConfettiFeedbackGate's javadoc and
         // docs/internals/metrics-internals.md §5.
+        List<OwnerSplitMutation> mutations = List.of();
         if (toggles.confettiFeedback()) {
-            ConfettiFeedbackGate.Decision decision = confettiFeedback.decide();
-            if (decision == ConfettiFeedbackGate.Decision.SUPPRESSED) {
-                engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
-                return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements);
-            }
-            if (decision == ConfettiFeedbackGate.Decision.PROBE) {
-                engagements.add(new Engagement("OWNER_SPLIT", "confetti_probe"));
+            ConfettiObservation obs = view.confetti();
+            if (obs.taggedTotal() >= ConfettiFeedbackGate.MIN_SAMPLE) {
+                double rate = (double) obs.taggedConfetti() / (double) obs.taggedTotal();
+                if (rate > SUPPRESS_THRESHOLD) {
+                    List<OwnerSplitMutation> probeSlot = List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
+                    if ((obs.probeSeq() + 1) % PROBE_K == 0) {
+                        engagements.add(new Engagement("OWNER_SPLIT", "confetti_probe"));
+                        mutations = probeSlot;   // let the carve continue; consumed once it commits
+                    } else {
+                        engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
+                        return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot);
+                    }
+                }
             }
         }
         // Synthesize the pivot at fraction f in the observed-alphabet rank space so it lands on a
@@ -149,7 +158,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             // shared prefix, the same measurement/reality gap algorithms.md §3.2 documents for the
             // thief side — see OwnerSplitSkipReason#UNSPLITTABLE_PIVOT's javadoc.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code()));
-            return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements);
+            return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements, mutations);
         }
         // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a
         // populated value (differs from the plain code-point interpolate at the same fraction)? Recorded
@@ -195,6 +204,6 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                 engagements.add(new Engagement("OWNER_SPLIT", "pivot_reflect_lifted"));
             }
         }
-        return new Carve(m, engagements);
+        return new Carve(m, engagements, mutations);
     }
 }

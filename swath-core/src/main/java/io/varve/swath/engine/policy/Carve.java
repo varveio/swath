@@ -14,7 +14,10 @@ import java.util.List;
  * executor-owned outcome, never a {@link Carve} vs {@link Skip} choice this decision makes (mirrors
  * {@link Commit}'s own late-loser note).
  *
- * @param pivot the pivot {@code m} to split at ({@code cursorTo < m <= hi})
+ * @param pivot     the pivot {@code m} to split at ({@code cursorTo < m <= hi})
+ * @param mutations non-empty exactly when the confetti feedback gate's periodic probe let this
+ *                  carve through past its over-threshold branch ({@code confetti_probe})
  */
-public record Carve(byte[] pivot, List<Engagement> engagements) implements OwnerSplitDecision {
+public record Carve(byte[] pivot, List<Engagement> engagements, List<OwnerSplitMutation> mutations)
+        implements OwnerSplitDecision {
 }

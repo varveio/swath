@@ -8,9 +8,11 @@ package io.varve.swath.engine;
 import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.SplitSpec;
 import io.varve.swath.engine.policy.Carve;
+import io.varve.swath.engine.policy.ConfettiObservation;
 import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.engine.policy.OwnerSplitDecision;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
+import io.varve.swath.engine.policy.OwnerSplitMutation;
 import io.varve.swath.engine.policy.OwnerSplitPolicy;
 import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.engine.policy.OwnerSplitView;
@@ -50,8 +52,9 @@ import org.slf4j.LoggerFactory;
  * run-scoped ledger of the children it has carved: {@link #maybeOwnerSelfSplit} <b>tags</b> a child
  * before publishing it, and {@link #onNodeCompleted} — invoked once whichever worker eventually
  * drains that child finishes — <b>classifies</b> the completed child's realized mass as confetti or
- * substantial and folds that ground truth into the {@link ConfettiFeedbackGate} the governor's next
- * carve reads. See {@link #ownerSplitTaggedChildren} for the claim/drain/remove-before-tag ordering
+ * substantial and folds that ground truth into the {@link ConfettiFeedbackGate}, snapshotted into
+ * every subsequent view the governor's next carve considers. See {@link #ownerSplitTaggedChildren}
+ * for the claim/drain/remove-before-tag ordering
  * that makes each tag consumed exactly once (even under stealing), and {@code
  * docs/internals/metrics-internals.md} §5 for the feedback rationale.
  *
@@ -98,8 +101,10 @@ final class OwnerSelfSplit {
      * because {@code childId} is already validated non-aborted and {@code enqueueChild} cannot fail.
      * The id is removed and classified exactly once per process run at {@link #onNodeCompleted}, by
      * whichever worker drains it, so double-classification is impossible even under stealing. Only
-     * populated when {@code toggles.confettiFeedback()} is on. Shared with {@link #governor}, which
-     * only ever reads it via {@link ConfettiFeedbackGate#decide()} — see that class's javadoc.
+     * populated when {@code toggles.confettiFeedback()} is on. This class snapshots the gate's
+     * counters into every {@link OwnerSplitView} it builds (issue #22: {@link #governor} never
+     * holds a live reference to it) and applies {@link #governor}'s {@code
+     * CONSUME_CONFETTI_PROBE_SLOT} mutation back onto it — see that class's javadoc.
      *
      * <p><b>Process-local, never durable.</b> Like {@link WorkerState#hasSplit()} and the gate's own
      * counters, this set lives only in heap and is never checkpointed. On resume a child tagged
@@ -125,7 +130,7 @@ final class OwnerSelfSplit {
         this.outstanding = outstanding;
         this.effectiveT = effectiveT;
         this.enqueueChild = enqueueChild;
-        this.governor = new OwnerSplitGovernor(toggles, workerCount, maxKeys, confettiFeedback);
+        this.governor = new OwnerSplitGovernor(toggles, workerCount, maxKeys);
     }
 
     /**
@@ -162,11 +167,14 @@ final class OwnerSelfSplit {
         // would-be-incremented value here, rather than incrementing unconditionally, preserves that
         // exactly while still letting the governor's decide() be the sole gate-chain decision point.
         long committed = (H == null) ? selfSplit[0] : ++selfSplit[0];
+        ConfettiFeedbackGate.Snapshot confettiSnapshot = confettiFeedback.snapshot();
         OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
                 selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
-                ws.alphabetDigest());
+                ws.alphabetDigest(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
+                        confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
         applyEngagements(decision.engagements());
+        applyMutations(decision.mutations());
         if (decision instanceof Skip skip) {
             if (skip.reason() == OwnerSplitSkipReason.DEMAND_GATED) {
                 ws.recordDemandGated();   // per-range tally for the slow-range dump
@@ -216,6 +224,18 @@ final class OwnerSelfSplit {
     private void applyEngagements(List<Engagement> engagements) {
         for (Engagement e : engagements) {
             metrics.recordStealReason(e.category(), e.reason());
+        }
+    }
+
+    /**
+     * Apply every {@link OwnerSplitMutation} the governor returned to the real collaborator it
+     * names — the policy never touches {@link ConfettiFeedbackGate} directly (issue #22).
+     */
+    private void applyMutations(List<OwnerSplitMutation> mutations) {
+        for (OwnerSplitMutation m : mutations) {
+            if (m == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT) {
+                confettiFeedback.consumeProbeSlot();
+            }
         }
     }
 

@@ -8,7 +8,6 @@ package io.varve.swath.engine.policy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.AlphabetDigest;
-import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.WorkerState;
@@ -21,7 +20,9 @@ import org.junit.jupiter.api.Test;
  * §3.3): one test per gate, hitting both sides of its boundary — mirrors {@code
  * ThiefPolicySelectionTest}/{@code ThiefPolicyCascadeTest}'s shape. Drives {@link
  * OwnerSplitGovernor#decide} directly against hand-built {@link OwnerSplitView}s — no engine, no
- * lock, no I/O.
+ * lock, no I/O, and (since issue #22's fix) no live {@code ConfettiFeedbackGate} either: the
+ * confetti check's warmup/threshold/probe-cycle boundary is exercised as pure arithmetic over a
+ * {@link ConfettiObservation}, exactly like every other view field.
  *
  * <p>The observed-mass child-tail floor and the reflection clamp/lift are pure {@link StealMath}
  * predicates already boundary-tested in isolation ({@code OwnerSplitChildMassFloorTest}, {@code
@@ -34,6 +35,9 @@ class OwnerSplitGovernorTest {
     private static final int MAX_KEYS = 100;
     private static final int WORKER_COUNT = 4;
 
+    /** Warmup (below {@code MIN_SAMPLE}): the confetti check never engages. */
+    private static final ConfettiObservation NO_CONFETTI_SIGNAL = new ConfettiObservation(0, 0, 0);
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }
@@ -43,28 +47,35 @@ class OwnerSplitGovernorTest {
         return new WorkerState(0, lo, lo, hi, null).alphabetDigest();
     }
 
-    private static OwnerSplitGovernor governor(EngineToggles toggles, int workerCount, ConfettiFeedbackGate gate) {
-        return new OwnerSplitGovernor(toggles, workerCount, MAX_KEYS, gate);
+    private static OwnerSplitGovernor governor(EngineToggles toggles, int workerCount) {
+        return new OwnerSplitGovernor(toggles, workerCount, MAX_KEYS);
     }
 
     private static OwnerSplitGovernor governor() {
-        return governor(EngineToggles.DEFAULT, WORKER_COUNT, new ConfettiFeedbackGate());
+        return governor(EngineToggles.DEFAULT, WORKER_COUNT);
     }
 
     /**
      * A single-byte-key view: {@code lo="a"}, {@code hi="z"}, {@code cursorTo="n"} — chosen so
      * {@code est = keysEmitted * (12/13)} exactly (in double precision), letting {@link
-     * #REMAINING_EST_FLOOR_BOUNDARY_KEYS} straddle the {@code 4*maxKeys=400} floor with an exact
-     * integer {@code keysEmitted}. Every OTHER gate test below uses a keysEmitted far from that
-     * boundary (clearly above it) so the est floor never interferes.
+     * #remainingEstFloorBlocksAtExactlyTheThreshold} straddle the {@code 4*maxKeys=400} floor with
+     * an exact integer {@code keysEmitted}. Every OTHER gate test below uses a keysEmitted far from
+     * that boundary (clearly above it) so the est floor never interferes.
      */
     private static OwnerSplitView view(long keysEmitted, long committed, long lastSelfSplitPage, long outstanding,
-            double densityFraction, double observedDensityRatio) {
+            double densityFraction, double observedDensityRatio, ConfettiObservation confetti) {
         byte[] lo = b("a");
         byte[] hi = b("z");
         byte[] cursorTo = b("n");
         return new OwnerSplitView(hi, lo, cursorTo, keysEmitted, committed, lastSelfSplitPage, outstanding,
-                densityFraction, observedDensityRatio, coldDigest(lo, hi));
+                densityFraction, observedDensityRatio, coldDigest(lo, hi), confetti);
+    }
+
+    /** As the 7-arg {@link #view}, with no confetti signal (warmup — the common case below). */
+    private static OwnerSplitView view(long keysEmitted, long committed, long lastSelfSplitPage, long outstanding,
+            double densityFraction, double observedDensityRatio) {
+        return view(keysEmitted, committed, lastSelfSplitPage, outstanding, densityFraction, observedDensityRatio,
+                NO_CONFETTI_SIGNAL);
     }
 
     /** A view whose est is far above every floor (~92,307 pages) and every other gate cleared. */
@@ -79,13 +90,14 @@ class OwnerSplitGovernorTest {
     @Test
     void openFrontierSkipsSilentlyRegardlessOfEveryOtherField() {
         OwnerSplitView frontierView = new OwnerSplitView(null, b("a"), b("n"), 100_000L, 0, 0, 0, 0.5, 1.0,
-                coldDigest(b("a"), null));
+                coldDigest(b("a"), null), NO_CONFETTI_SIGNAL);
 
         OwnerSplitDecision decision = governor().decide(frontierView);
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.OPEN_FRONTIER);
         assertThat(decision.engagements()).as("open frontier is silent").isEmpty();
+        assertThat(decision.mutations()).isEmpty();
     }
 
     @Test
@@ -194,7 +206,7 @@ class OwnerSplitGovernorTest {
     void demandGateNeverEngagesWithASingleWorker() {
         // workerCount == 1: "buys zero parallelism" is moot (no thief exists), so the gate is
         // skipped even at a saturated outstanding count.
-        OwnerSplitGovernor solo = governor(EngineToggles.DEFAULT, 1, new ConfettiFeedbackGate());
+        OwnerSplitGovernor solo = governor(EngineToggles.DEFAULT, 1);
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 999L, 0.5, 0.0);
 
         OwnerSplitDecision decision = solo.decide(v);
@@ -225,48 +237,28 @@ class OwnerSplitGovernorTest {
     @Test
     void observedMassFloorClearsAUniformTail() {
         // densityRatio (1.0, uniform) >= f: the floor reduces to the plain (1-f)*est span, which is
-        // huge here. Confetti-suppressed immediately after (a pre-warmed gate) proves it passed through.
-        ConfettiFeedbackGate warm = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            warm.recordCompletion(true);
-        }
-        OwnerSplitGovernor g = governor(EngineToggles.DEFAULT, WORKER_COUNT, warm);
-        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0);
+        // huge here. Confetti-suppressed immediately after (total>=MIN_SAMPLE, rate over threshold)
+        // proves it passed through.
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(8, 8, 0));
 
-        OwnerSplitDecision decision = g.decide(v);
+        OwnerSplitDecision decision = governor().decide(v);
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
     }
 
     // -------------------------------------------------------------------------
-    // Confetti feedback gate (ConfettiFeedbackGate#decide, consulted as a collaborator).
+    // Confetti feedback: pure arithmetic over ConfettiObservation (issue #22 -- no live gate).
     // -------------------------------------------------------------------------
 
     @Test
-    void confettiFeedbackSuppressesOnceTheObservedRateTripsTheGate() {
-        ConfettiFeedbackGate warm = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            warm.recordCompletion(true);   // 100% confetti -> over threshold
-        }
-        OwnerSplitGovernor g = governor(EngineToggles.DEFAULT, WORKER_COUNT, warm);
-        OwnerSplitView v = clearedView(OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0);
-
-        OwnerSplitDecision decision = g.decide(v);
-
-        assertThat(decision).isInstanceOf(Skip.class);
-        Skip skip = (Skip) decision;
-        assertThat(skip.reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
-        assertThat(decision.engagements()).containsExactly(new Engagement("OWNER_SPLIT", "confetti_suppressed"));
-    }
-
-    @Test
     void confettiFeedbackCarvesDuringWarmup() {
-        // A fresh gate (below MIN_SAMPLE) always CARVEs -- proceeds to pivot synthesis. Adjacent
-        // cursor/hi (no safe key strictly between) proves it passed through to the terminal
+        // total < MIN_SAMPLE (8): always CARVEs -- proceeds to pivot synthesis. Adjacent cursor/hi
+        // (no safe key strictly between) proves it passed through to the terminal
         // unsplittable-pivot check, not stopping at confetti.
         OwnerSplitGovernor g = governor();
-        OwnerSplitView v = unsplittablePivotView();
+        OwnerSplitView v = unsplittablePivotView(NO_CONFETTI_SIGNAL);
 
         OwnerSplitDecision decision = g.decide(v);
 
@@ -275,16 +267,32 @@ class OwnerSplitGovernorTest {
         assertThat(decision.engagements())
                 .as("warmup CARVE itself adds no engagement; only the terminal unsplittable-pivot gate does")
                 .containsExactly(new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
+        assertThat(decision.mutations()).as("warmup never touches the probe sequence").isEmpty();
+    }
+
+    @Test
+    void confettiFeedbackSuppressesOnceTheObservedRateTripsTheGate() {
+        // total=8=MIN_SAMPLE, confetti=8 -> rate=1.0>0.5 (over threshold); probeSeq=0 -> (0+1)%16=1
+        // != 0 -> SUPPRESSED (the first-ever over-threshold consult, never a probe-boundary accident).
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(8, 8, 0));
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).isInstanceOf(Skip.class);
+        Skip skip = (Skip) decision;
+        assertThat(skip.reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
+        assertThat(decision.engagements()).containsExactly(new Engagement("OWNER_SPLIT", "confetti_suppressed"));
+        assertThat(decision.mutations())
+                .as("the over-threshold branch always consumes a probe slot, on EITHER outcome")
+                .containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
     }
 
     @Test
     void confettiFeedbackOffNeverConsultsTheGateEvenWhenItWouldSuppress() {
-        ConfettiFeedbackGate warm = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            warm.recordCompletion(true);
-        }
-        OwnerSplitGovernor g = governor(EngineToggles.DEFAULT.withConfettiFeedback(false), WORKER_COUNT, warm);
-        OwnerSplitView v = unsplittablePivotView();
+        // Same over-threshold observation as the suppress test above, but the toggle is off.
+        OwnerSplitGovernor g = governor(EngineToggles.DEFAULT.withConfettiFeedback(false), WORKER_COUNT);
+        OwnerSplitView v = unsplittablePivotView(new ConfettiObservation(8, 8, 0));
 
         OwnerSplitDecision decision = g.decide(v);
 
@@ -292,6 +300,35 @@ class OwnerSplitGovernorTest {
         assertThat(((Skip) decision).reason())
                 .as("confetti_feedback=off bypasses the gate entirely, even though it would suppress")
                 .isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
+        assertThat(decision.mutations()).isEmpty();
+    }
+
+    @Test
+    void confettiProbeSlotLetsTheCarveThroughAtTheProbeKBoundary() {
+        // total=16, confetti=12 -> rate=0.75>0.5 (over threshold); probeSeq=15 -> (15+1)%16==0 -> PROBE.
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(16, 12, 15));
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).isInstanceOf(Carve.class);
+        Carve carve = (Carve) decision;
+        assertThat(carve.engagements()).contains(new Engagement("OWNER_SPLIT", "confetti_probe"));
+        assertThat(carve.mutations()).containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
+    }
+
+    @Test
+    void confettiSuppressedOneShortOfTheProbeKBoundary() {
+        // Same over-threshold rate, but probeSeq=14 -> (14+1)%16=15 != 0 -> SUPPRESSED.
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(16, 12, 14));
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).isInstanceOf(Skip.class);
+        Skip skip = (Skip) decision;
+        assertThat(skip.reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
+        assertThat(skip.mutations()).containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
     }
 
     // -------------------------------------------------------------------------
@@ -306,7 +343,7 @@ class OwnerSplitGovernorTest {
      * away from the double-precision-underflow-to-zero the {@code +0x00} extension would hit,
      * so a huge {@code keysEmitted} clears every earlier gate.
      */
-    private static OwnerSplitView unsplittablePivotView() {
+    private static OwnerSplitView unsplittablePivotView(ConfettiObservation confetti) {
         byte[] lo = new byte[0];
         byte[] cursorTo = b("a");
         byte[] hi = new byte[] {'a', 0x01};
@@ -314,12 +351,12 @@ class OwnerSplitGovernorTest {
         assertThat(est).as("fixture precondition: est clears the remaining-est floor")
                 .isGreaterThan((double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * MAX_KEYS);
         return new OwnerSplitView(hi, lo, cursorTo, 10_000_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L,
-                0L, 0.5, 1.0, coldDigest(lo, hi));
+                0L, 0.5, 1.0, coldDigest(lo, hi), confetti);
     }
 
     @Test
     void terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds() {
-        OwnerSplitDecision decision = governor().decide(unsplittablePivotView());
+        OwnerSplitDecision decision = governor().decide(unsplittablePivotView(NO_CONFETTI_SIGNAL));
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
@@ -338,5 +375,6 @@ class OwnerSplitGovernorTest {
         assertThat(KeyBytes.compareUnsigned(v.cursorTo(), carve.pivot())).isLessThan(0);
         assertThat(KeyBytes.compareUnsigned(carve.pivot(), v.hi())).isLessThanOrEqualTo(0);
         assertThat(carve.engagements()).anyMatch(e -> e.category().equals("ALPHABET"));
+        assertThat(carve.mutations()).isEmpty();
     }
 }

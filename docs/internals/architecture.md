@@ -36,7 +36,7 @@ dependency rules, and the decisions behind them — see
 | `model` | `io.varve.swath.model` | Core types: `KeyBytes` (raw byte key + unsigned comparator), sealed `ListEntry` (`ObjectEntry`, `CommonPrefixEntry`, `DeleteMarkerEntry`), `PageBatch`, `ByteMidpoint` (UTF-8-safe pivot math) |
 | `store` | `io.varve.swath.store` | Internal, unsupported v0.1 seams: `PageFetcher.fetchPage(PageRequest) → ListPage`; `StoreCapabilities` descriptor (v0.1 reads only `maxKeysCap` in `RangeScanner`; no router ships); `PaginationKind` (KEY vs OPAQUE_MARKER) |
 | `store.s3` | `io.varve.swath.store.s3` | S3 implementation: `S3PageFetcher` (SDK v2 sync, `encoding-type=url`; the SDK's `DecodeUrlEncodedResponseInterceptor` decodes response keys, read via `getBytes(UTF_8)`), `S3ClientFactory` |
-| `engine` | `io.varve.swath.engine` | `WorkStealingScan` (worklist + fixed VT pool), `RangeScanner` (`runRange` loop), `Thief` (steal executor mechanics: pool→view/snapshot translation, RPC issuing, the lock-guarded CAS hand-off, metrics/trace emission — the pivot cascade itself is `engine.policy`'s), `OwnerSelfSplit` (owner-side self-split executor mechanics: `WorkerState`→view translation, the durable split CAS, the child hand-off, the tagged-child confetti-completion lifecycle — the gate chain itself is `engine.policy`'s), `ConfettiFeedbackGate` (the realized-child-mass feedback collaborator both `OwnerSelfSplit` and `engine.policy`'s owner-split governor consult), `StealMath` (`byteMidpoint`, `extrapolate`, victim-selection math), `WorkerState` (per-worker cursor/hi/lock), `ConcurrencyGauge` (AIMD), `SeedStep` (shallow `delimiter=/` seed pass), `SeedMode` (`SHALLOW`/`NONE`/`HINTS`) |
+| `engine` | `io.varve.swath.engine` | `WorkStealingScan` (worklist + fixed VT pool), `RangeScanner` (`runRange` loop), `Thief` (steal executor mechanics: pool→view/snapshot translation, RPC issuing, the lock-guarded CAS hand-off, metrics/trace emission — the pivot cascade itself is `engine.policy`'s), `OwnerSelfSplit` (owner-side self-split executor mechanics: `WorkerState`→view translation, the durable split CAS, the child hand-off, the tagged-child confetti-completion lifecycle — the gate chain itself is `engine.policy`'s), `ConfettiFeedbackGate` (the realized-child-mass feedback MEASUREMENT `OwnerSelfSplit` maintains and snapshots into every view; the classification decision itself lives in `engine.policy`'s owner-split governor — issue #22), `StealMath` (`byteMidpoint`, `extrapolate`, victim-selection math), `WorkerState` (per-worker cursor/hi/lock), `ConcurrencyGauge` (AIMD), `SeedStep` (shallow `delimiter=/` seed pass), `SeedMode` (`SHALLOW`/`NONE`/`HINTS`) |
 | `engine.policy` | `io.varve.swath.engine.policy` | The policy seam (swath-notes' 2026-07-26 simulator campaign): `StealPolicy`/`StealAttempt`/`ThiefPolicy` — victim selection and the full pivot cascade (§3 below); `OwnerSplitPolicy`/`OwnerSplitGovernor` — the owner-side proactive self-split's gate chain (§3.3) — as source-agnostic decision interfaces (views/decisions/probe outcomes carry keys as bytes, counts, streaks, and policy-domain enums only — no `store.ListPage` or other protocol type). `Thief` drives `ThiefPolicy` through a request/response loop, issuing every RPC it requests; `OwnerSelfSplit` drives `OwnerSplitGovernor` with one call per page-commit (owner-split is zero-probe, so there is no request/response loop). Two slices of the wider policy-seam track land here — `WorkerState` pacing/`SeedStep` are unextracted. |
 | `checkpoint` | `io.varve.swath.checkpoint` | `CheckpointStore` interface; `SqliteCheckpointStore` (single writer thread, WAL, `commitPage`, `splitNode`); node/run state types |
 | `output` | `io.varve.swath.output` | `EntryFormatter` (sealed), text formatters (`JsonlFormatter`, `TsvFormatter`, `AlignedFormatter`), `OutputStage`, `ControlCharEscaper` |
@@ -52,26 +52,21 @@ dependency rules, and the decisions behind them — see
 **Known seam exceptions:** `engine.policy`'s convention is that a policy is a deterministic
 function of its view (no I/O, no ambient randomness) and returns reason enums for the executor to
 record (so AGENTS.md's counter-per-path law stays mechanically checkable against the decision
-enum) — three pre-existing gaps against that convention were carried into `ThiefPolicy`/
-`OwnerSplitGovernor` unchanged (moved verbatim, not introduced, and not fixed here — all three are
-behavior-adjacent-refactor territory, out of scope for an extraction slice):
+enum) — two pre-existing gaps against that convention were carried into `ThiefPolicy` unchanged
+(moved verbatim, not introduced, and not fixed here — both are behavior-adjacent-refactor territory,
+out of scope for an extraction slice). `OwnerSplitGovernor`'s own former exception (issue #22: the
+confetti feedback gate's probe-counter side effect) is CLOSED — `decide(view)` is now a genuine
+pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the classification math
+and the `ConfettiFeedbackGate` collaborator now divide the work.
 - `AlphabetDigest` (carried through in `StealAttemptView`, consumed by
   `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires `ALPHABET.*`
   fallback counters directly from inside `chooseScalar`. Issue #19.
 - `ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
   `ThreadLocalRandom.current()` (the 1-in-64 escape hatch), so that one decision is not
   reproducible from the view alone. Issue #20.
-- `OwnerSplitGovernor`'s confetti feedback gate consult (`ConfettiFeedbackGate#decide`) mutates
-  and reads a `probeCounter` (`incrementAndGet`) to decide `PROBE` vs `SUPPRESSED`, so two calls
-  with a bitwise-identical `OwnerSplitView` can differ on every `PROBE_K`-th over-threshold call —
-  `decide()` is not a pure function of its view. Pre-existing (byte-identical before and after this
-  extraction); the collaborator staying in `io.varve.swath.engine` rather than moving into the
-  policy package (see `OwnerSplitGovernor`'s javadoc) is unaffected — the probe mechanism itself is
-  deliberate and correct, only where its counter lives relative to this convention is the gap.
-  Issue #22.
 
-All three fixes belong in the determinism-audit slice, which already owns injected-clock/seeded-RNG
-purity for this interface.
+Both remaining fixes belong in the determinism-audit slice, which already owns injected-clock/
+seeded-RNG purity for this interface.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.

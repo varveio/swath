@@ -8,13 +8,13 @@ package io.varve.swath.engine;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * The realized-child-mass feedback gate for owner self-split. The floor
- * ({@link StealMath#childTailBelowObservedMassFloor}) already reasons about the child tail's realized
- * mass, but only from UPSTREAM estimates ({@code est}/{@code densityRatio}, both extrapolated
- * from the in-cluster density already emitted) — on a keyspace whose code-point tail thins out
- * hard past the drained cluster, those estimates still pass carves whose
- * REALIZED emitted mass turns out confetti-sized (typically a single page), because the estimate
- * has no way to see the mostly-empty tail it is extrapolating across.
+ * The realized-child-mass feedback gate for owner self-split: pure MEASUREMENT state, not
+ * decision logic. The floor ({@link StealMath#childTailBelowObservedMassFloor}) already reasons
+ * about the child tail's realized mass, but only from UPSTREAM estimates ({@code est}/{@code
+ * densityRatio}, both extrapolated from the in-cluster density already emitted) — on a keyspace
+ * whose code-point tail thins out hard past the drained cluster, those estimates still pass
+ * carves whose REALIZED emitted mass turns out confetti-sized (typically a single page), because
+ * the estimate has no way to see the mostly-empty tail it is extrapolating across.
  *
  * <p>This gate closes that loop with GROUND TRUTH: it tracks, across every owner-split child
  * this run has tagged, how many turned out confetti versus substantial. A tagged child is
@@ -31,54 +31,53 @@ import java.util.concurrent.atomic.AtomicLong;
  * confetti leaf — exactly the pathology this gate targets (there the 1-page children
  * never split further; they just end).
  *
- * <p>Once at least {@link #MIN_SAMPLE} tagged children have completed (a warmup — too few
- * samples is not evidence), a confetti rate above {@link #SUPPRESS_THRESHOLD} suppresses further
- * owner-split carving outright. A {@code PROBE_K}-th would-be-suppressed carve is let through
- * anyway (a cheap round-robin counter, not gated on anything else) so the feedback loop cannot
- * starve itself permanently: if the keyspace later turns genuinely dense again, that probe's own
- * realized mass folds back in and the observed rate falls, resuming ordinary carving without any
- * external intervention.
+ * <p><b>Issue #22's fix moved the classification math out of this class.</b> Once at least {@link
+ * #MIN_SAMPLE} tagged children have completed (a warmup — too few samples is not evidence),
+ * {@code io.varve.swath.engine.policy}'s {@code OwnerSplitGovernor} reads a {@link #snapshot()} of
+ * this gate's counters and decides, as a pure function of the view, whether the observed confetti
+ * rate suppresses further owner-split carving — with a periodic probe so a keyspace that later
+ * turns genuinely dense recovers on its own. This class now only ever MEASURES (accumulates
+ * {@link #recordCompletion} calls and hands back a coherent {@link #snapshot()}) and, at the
+ * executor's direction, {@linkplain #consumeProbeSlot() advances the probe sequence} — it makes no
+ * decision of its own. {@link #MIN_SAMPLE} is still declared here (rather than moved alongside
+ * {@code SUPPRESS_THRESHOLD}/{@code PROBE_K}, both of which did move) because it is referenced by
+ * engine-level tests that construct realistic warmup scenarios against this gate directly, with no
+ * reason to know about the policy package.
  *
- * <p>{@link #MIN_SAMPLE}/{@link #SUPPRESS_THRESHOLD}/{@link #PROBE_K} are hand-picked constants,
- * not yet tuned by a sweep. One instance per {@link WorkStealingScan} (run-scoped); every
- * method is safe for concurrent callers (workers race to both complete tagged children and
- * attempt owner-splits).
+ * <p>One instance per {@link WorkStealingScan} (run-scoped); every method is safe for concurrent
+ * callers (workers race to both complete tagged children and attempt owner-splits).
  *
- * <p>Public so {@code io.varve.swath.engine.policy}'s owner-split governor can hold this same
- * run-scoped instance as a collaborator and consult {@link #decide()} as part of its own pure
- * per-call decision (a deterministic read of this gate's already-recorded atomics, no I/O). The
- * tagged-child lifecycle — {@link #recordCompletion}, and {@link OwnerSelfSplit}'s
- * claim/drain/remove-before-tag bookkeeping that feeds it — stays executor-owned: classification
- * happens at node completion, an event entirely outside the per-carve decision this gate is
- * consulted from, tied to real node ids and {@link WorkerState} the policy package never sees
- * (seam-notes.md's source-agnostic rule).
+ * <p>Public so {@code io.varve.swath.engine.policy}'s owner-split governor package can read a
+ * {@link #snapshot()} of this same run-scoped instance. The tagged-child lifecycle — {@link
+ * #recordCompletion}, and {@link OwnerSelfSplit}'s claim/drain/remove-before-tag bookkeeping that
+ * feeds it — stays executor-owned: classification happens at node completion, an event entirely
+ * outside the per-carve decision this gate's measurements feed, tied to real node ids and {@link
+ * WorkerState} the policy package never sees (seam-notes.md's source-agnostic rule).
  */
 public final class ConfettiFeedbackGate {
 
     /** Warmup floor: below this many tagged-child completions there is no basis to suppress. */
     public static final long MIN_SAMPLE = 8;
-    /** Suppress once the observed confetti rate is STRICTLY above this fraction. */
-    static final double SUPPRESS_THRESHOLD = 0.5;
-    /** Let every K-th would-be-suppressed carve through anyway, to keep the feedback alive. */
-    static final long PROBE_K = 16;
 
     private final AtomicLong taggedTotal = new AtomicLong();
     private final AtomicLong taggedConfetti = new AtomicLong();
-    private final AtomicLong probeCounter = new AtomicLong();
+    private final AtomicLong probeSeq = new AtomicLong();
 
-    /** The carve-time decision {@link #decide()} returns. */
-    public enum Decision {
-        /** Carve normally — below warmup, or the observed rate is at/under the threshold. */
-        CARVE,
-        /** The rate is over threshold, but this is the {@code PROBE_K}-th attempt — let it through. */
-        PROBE,
-        /** The rate is over threshold and this attempt is not the probe slot — suppress the carve. */
-        SUPPRESSED
+    /**
+     * A coherent read of this gate's counters at one instant, in the same order {@code decide()}
+     * used to read them (total, then confetti) before issue #22's fix moved the classification math
+     * to {@code OwnerSplitGovernor}. {@code probeSeq} is the run's current probe sequence number —
+     * the count of {@link #consumeProbeSlot()} calls so far, i.e. the number of PRIOR over-threshold
+     * consults, whatever their outcome. Three independent counters, not a single atomic snapshot: a
+     * torn read across them only nudges which page-commit sees the rate/probe-slot transition,
+     * never correctness (mirrors the density EWMA's own lock-free read tolerance).
+     */
+    public record Snapshot(long taggedTotal, long taggedConfetti, long probeSeq) {
     }
 
     /**
      * Fold one tagged owner-split child's completion classification (ground truth) into the
-     * run-level rate the NEXT {@link #decide()} call reads. Called at most once per tagged
+     * run-level rate the NEXT {@link #snapshot()} reflects. Called at most once per tagged
      * child (the caller removes it from the tagged set before calling, so double-completion is
      * impossible). Public so a test outside {@code io.varve.swath.engine} can warm this
      * collaborator up directly (e.g. the owner-split governor's own table-driven tests).
@@ -90,19 +89,28 @@ public final class ConfettiFeedbackGate {
         }
     }
 
-    /** The carve-time decision, evaluated fresh against the current observed rate. */
-    public Decision decide() {
-        long total = taggedTotal.get();
-        if (total < MIN_SAMPLE) {
-            return Decision.CARVE;   // warmup: not enough realized-mass evidence yet
-        }
-        double rate = (double) taggedConfetti.get() / (double) total;
-        if (rate <= SUPPRESS_THRESHOLD) {
-            return Decision.CARVE;   // observed confetti rate is acceptable
-        }
-        // Over threshold: every PROBE_K-th such attempt is let through as a probe so the gate
-        // cannot starve its own feedback signal (a keyspace that turns dense again recovers).
-        long n = probeCounter.incrementAndGet();
-        return (n % PROBE_K == 0) ? Decision.PROBE : Decision.SUPPRESSED;
+    /** A coherent read of this run's tagged-completion tallies and current probe sequence. */
+    public Snapshot snapshot() {
+        return new Snapshot(taggedTotal.get(), taggedConfetti.get(), probeSeq.get());
+    }
+
+    /**
+     * Advance the probe sequence: called by the executor exactly when {@code
+     * OwnerSplitGovernor}'s decision carries a {@code CONSUME_CONFETTI_PROBE_SLOT} mutation — i.e.
+     * every time the governor's confetti check crossed into its over-threshold branch, regardless
+     * of whether that consult landed on {@code SUPPRESSED} or the periodic probe (mirrors {@code
+     * decide()}'s old unconditional {@code probeCounter.incrementAndGet()} in that branch, byte-for-
+     * byte). Two workers racing this call can read the SAME {@link #snapshot()} before either
+     * advances it and so land on the same probe slot — the gate is run-scoped while {@code
+     * WorkerState#lock()} is per-worker, so nothing serializes two owners' consults against each
+     * other the way {@code decide()}'s single call used to. The counter itself never loses an
+     * increment (it is still a plain {@code incrementAndGet}); only which SPECIFIC consult lands on
+     * a shared slot can vary under a race. See {@code OwnerSplitGovernor}'s commit message (the
+     * fix for issue #22) for why this relaxation is acceptable: nothing in I1-I12 touches probe
+     * cadence, and this class's own javadoc already called the mechanism "a cheap round-robin
+     * counter, not gated on anything else".
+     */
+    public void consumeProbeSlot() {
+        probeSeq.incrementAndGet();
     }
 }

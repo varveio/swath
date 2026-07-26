@@ -10,134 +10,75 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 /**
- * Direct unit coverage of {@link ConfettiFeedbackGate}'s bookkeeping — the warmup
- * floor, the threshold boundary, and the every-{@code PROBE_K}-th probe escape — plus
- * {@link OwnerSelfSplit#isConfettiChild}, the confetti-vs-substantial classification predicate the
- * gate's realized-mass evidence is built from: a tagged child is confetti only if it BOTH has a
- * small own tally AND never itself split. Exercised directly (package-private, pure arithmetic +
- * atomics, no engine machinery) so the exact decision sequence is pinned without driving the whole
- * engine to a precise realized-mass distribution. This is an ordinary unit guard of the gate's
- * bookkeeping, not the adversarial skewed-keyspace regression, which lives in a separate suite.
+ * Direct unit coverage of {@link ConfettiFeedbackGate}'s bookkeeping — {@link
+ * ConfettiFeedbackGate#recordCompletion}/{@link ConfettiFeedbackGate#snapshot} and {@link
+ * ConfettiFeedbackGate#consumeProbeSlot} — plus {@link OwnerSelfSplit#isConfettiChild}, the
+ * confetti-vs-substantial classification predicate the gate's realized-mass evidence is built
+ * from: a tagged child is confetti only if it BOTH has a small own tally AND never itself split.
+ * Exercised directly (pure counters, no engine machinery). Issue #22's fix moved the
+ * warmup/threshold/probe-cycle DECISION logic out of this class entirely — that boundary coverage
+ * now lives in {@code io.varve.swath.engine.policy.OwnerSplitGovernorTest}, which exercises it as
+ * pure arithmetic over a {@code ConfettiObservation} view field, not against a live gate.
  */
 final class ConfettiFeedbackGateTest {
 
     // -------------------------------------------------------------------------------------------
-    // Warmup: below MIN_SAMPLE, always CARVE regardless of how confetti-heavy the observed rate is.
+    // recordCompletion / snapshot: the tagged-completion tallies accumulate correctly.
     // -------------------------------------------------------------------------------------------
 
     @Test
-    void belowMinSampleAlwaysCarvesEvenAtOneHundredPercentConfetti() {
+    void freshGateSnapshotsAllZero() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // MIN_SAMPLE - 1 all-confetti completions: still warming up, no basis to suppress yet.
-        for (long i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE - 1; i++) {
-            gate.recordCompletion(true);
-            assertThat(gate.decide())
-                    .as("warmup sample %d/%d: must still carve", i + 1, ConfettiFeedbackGate.MIN_SAMPLE)
-                    .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
-        }
+        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0));
     }
 
     @Test
-    void exactlyMinSampleAllConfettiTripsTheGate() {
+    void recordCompletionAccumulatesTotalAndConfettiSeparately() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (long i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);
+        gate.recordCompletion(true);
+        gate.recordCompletion(true);
+        gate.recordCompletion(false);
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).as("every completion counts toward the total").isEqualTo(3);
+        assertThat(snap.taggedConfetti()).as("only the confetti-classified ones count here").isEqualTo(2);
+    }
+
+    @Test
+    void recordCompletionNeverTouchesProbeSeq() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        for (int i = 0; i < 20; i++) {
+            gate.recordCompletion(i % 2 == 0);
         }
-        // rate = 1.0 > 0.5 threshold, warmup satisfied (total == MIN_SAMPLE) -> the gate engages
-        // (first over-threshold decide() is attempt #1, not a multiple of PROBE_K -> SUPPRESSED).
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
+        assertThat(gate.snapshot().probeSeq())
+                .as("completions and the probe sequence are independent counters")
+                .isZero();
     }
 
     // -------------------------------------------------------------------------------------------
-    // Threshold boundary: rate <= SUPPRESS_THRESHOLD (0.5) never suppresses; strictly above does.
+    // consumeProbeSlot: advances probeSeq, independent of the completion tallies.
     // -------------------------------------------------------------------------------------------
 
     @Test
-    void rateAtExactlyThresholdDoesNotSuppress() {
+    void consumeProbeSlotAdvancesProbeSeqByOneEachCall() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // 4 confetti / 8 total = 0.5 == SUPPRESS_THRESHOLD exactly -> "<= threshold" carves.
-        for (int i = 0; i < 4; i++) {
-            gate.recordCompletion(true);
-        }
-        for (int i = 0; i < 4; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide())
-                .as("rate == threshold exactly must still carve (strictly-greater-than triggers suppression)")
-                .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
+        gate.consumeProbeSlot();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(1);
+        gate.consumeProbeSlot();
+        gate.consumeProbeSlot();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(3);
     }
 
     @Test
-    void rateJustAboveThresholdSuppresses() {
+    void consumeProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // 5 confetti / 8 total = 0.625 > 0.5 -> the gate engages.
+        gate.recordCompletion(true);
         for (int i = 0; i < 5; i++) {
-            gate.recordCompletion(true);
+            gate.consumeProbeSlot();
         }
-        for (int i = 0; i < 3; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-    }
-
-    // -------------------------------------------------------------------------------------------
-    // Probe escape: every PROBE_K-th would-be-suppressed decide() is let through as a PROBE.
-    // -------------------------------------------------------------------------------------------
-
-    @Test
-    void everyProbeKthSuppressedAttemptIsAProbe() {
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);   // 100% confetti -> always over threshold from here on
-        }
-        long probeK = ConfettiFeedbackGate.PROBE_K;
-        for (long attempt = 1; attempt <= probeK * 3; attempt++) {
-            ConfettiFeedbackGate.Decision decision = gate.decide();
-            if (attempt % probeK == 0) {
-                assertThat(decision).as("attempt %d is the %d-th probe slot", attempt, probeK)
-                        .isEqualTo(ConfettiFeedbackGate.Decision.PROBE);
-            } else {
-                assertThat(decision).as("attempt %d is not a probe slot", attempt)
-                        .isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-            }
-        }
-    }
-
-    @Test
-    void probeCounterIsIndependentOfRecordedCompletionsAfterWarmup() {
-        // Once suppressing, decide() alone (no further recordCompletion calls) still advances the
-        // probe counter -- the K-th call is a probe regardless of whether the run has recorded any
-        // MORE completions since warmup (the probe counter and the completion tally are separate).
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);
-        }
-        for (int i = 0; i < ConfettiFeedbackGate.PROBE_K - 1; i++) {
-            assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-        }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.PROBE);
-    }
-
-    // -------------------------------------------------------------------------------------------
-    // Recovery: a run of substantial (non-confetti) completions after the gate engaged brings the
-    // observed rate back at/under the threshold, and CARVE resumes without needing a probe to win.
-    // -------------------------------------------------------------------------------------------
-
-    @Test
-    void recordingEnoughSubstantialCompletionsRecoversTheRate() {
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);   // 8/8 confetti -> suppressing
-        }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-
-        // 8 more substantial completions -> 8 confetti / 16 total = 0.5 == threshold -> recovers.
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide())
-                .as("rate recovered to exactly the threshold -> carving resumes")
-                .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).isEqualTo(1);
+        assertThat(snap.taggedConfetti()).isEqualTo(1);
+        assertThat(snap.probeSeq()).isEqualTo(5);
     }
 
     // -------------------------------------------------------------------------------------------
