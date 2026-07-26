@@ -1152,6 +1152,19 @@ serial-paced, parallelizable, and throttled buckets; the tag shape
 (`{outcome,reason}`, a bounded ~30-50 value enum) keeps the meter set's
 cardinality low even though it now does extend the public meter contract.
 
+**Simulator port (deferred extraction).** `ConcurrencyGauge` above is, and remains, the only
+implementation of this section swath ships — nothing here is extracted or wired to a policy
+interface. `io.varve.swath.engine.policy.ConcurrencyPolicy` (swath-notes' 2026-07-26 simulator
+campaign, B7) instead documents the PORT a simulator's own faithful reimplementation carries: the
+reactive inputs above (success / 503 / timeout-shed / latency, each arriving with its own explicit
+timestamp rather than reading a clock), the two outputs (`effectiveT`, `isStealingAllowed`), and the
+internal windows/latches enumerated in that interface's javadoc that a faithful port must reproduce.
+Extraction of the real controller behind it is deliberately deferred — AIMD is the most
+timing-coupled mechanism in the engine (the clean-window cooldown, the jittered shed window, the
+relaxation valve, and the decaying latency baseline above all race under CAS), and the divergence
+risk of a simulator-side port was judged low enough not to justify carving the live controller out
+from under its concurrent callers.
+
 ---
 
 ## 6. Correctness argument

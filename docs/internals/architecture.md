@@ -82,6 +82,17 @@ source for a direct ambient clock/randomness call — so a class shaped like any
 exceptions above (in the policy package or reached through a view/decision/event field, regardless
 of which package it lives in) fails a mechanical check rather than waiting for the next review pass.
 
+**Port defined, not wired: `ConcurrencyPolicy`.** Unlike the five `engine.policy` types listed in the
+table row above, `ConcurrencyPolicy` (algorithms.md §5) has no engine implementation behind it —
+`ConcurrencyGauge` (`engine`, AIMD) stays exactly as it is, and nothing constructs, holds, or calls
+this interface. It exists solely so a simulator can carry its own faithful port of the AIMD
+controller behind a documented shape; extraction of the real controller is deliberately deferred
+(AIMD's clean-window cooldowns, shed windows, and valve pacing are the most timing-coupled mechanism
+in the engine, and the divergence risk of a simulator-side port was judged low). Because nothing
+holds it as a field, `DecisionPathPurityTest`'s closure walk never reaches an implementation of it —
+see that test's "Known gaps" javadoc and `ConcurrencyPolicy`'s own javadoc for what is, and is not,
+mechanically checked.
+
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.
 - `output_journal` / `--resume-output` — at-least-once stdout replay; deferred to v1.1.

@@ -101,10 +101,11 @@ import org.junit.jupiter.api.Test;
  * whose {@code nextInt}/{@code nanos} body reads a real clock or touches shared state, because that
  * implementation's concrete class is never reachable from the policy's field-type closure (a
  * policy holds only the INTERFACE-typed field, e.g. {@code ThiefPolicy}'s {@code rng: DecisionRng})
- * and the interface itself carries no such call. This matters beyond this test: the next slice
- * (an AIMD interface, deferred at B7 for exactly this "injected interface" shape) inherits the
- * identical gap — its caller-supplied implementation must be pure by its own construction and
- * review, not because this test would catch an impure one. The two evasions an independent review
+ * and the interface itself carries no such call. This matters beyond this test: {@link
+ * ConcurrencyPolicy} (B7's AIMD port, deliberately defined but not wired — algorithms.md §5) inherits
+ * the identical gap, sharpened by having no field anywhere of that type at all — its caller-supplied
+ * implementation must be pure by its own construction and review, not because this test would catch
+ * an impure one. The two evasions an independent review
  * pass found and this test now closes (a {@code ThreadLocal}-typed field; a lambda-captured {@code
  * RunMetrics}) are the two static-analysis gaps that WERE closable; this one is not.
  *
