@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,6 +45,7 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
+import picocli.CommandLine.Model.OptionSpec;
 
 /**
  * End-to-end coverage for {@link ResumeCommand#call()} via the {@code <dir>} run handle. Proves that
@@ -820,6 +822,34 @@ final class ResumeCommandTest {
     }
 
     /**
+     * {@code list} and {@code resume} must expose ONE declaration of these flags, not a copy each.
+     * The FREE classification is a security property and the help text is what tells an operator to
+     * re-pass the flag on resume; two copies can drift on either, and the drift would be silent —
+     * {@code --stats}/{@code --progress} are duplicated between {@link OutputOptions} and
+     * {@link ResumeCommand} today and nothing would catch them diverging. Pins the shared
+     * {@link BearerTokenOptions} so a later "just declare it on the command" edit fails here.
+     */
+    @Test
+    void bearerTokenOptionsAreOneDeclarationSharedByListAndResume() {
+        for (String name : List.of("--bearer-token-command", "--bearer-token-refresh-interval")) {
+            OptionSpec onList =
+                    App.commandLine().getSubcommands().get("list").getCommandSpec().findOption(name);
+            OptionSpec onResume =
+                    App.commandLine().getSubcommands().get("resume").getCommandSpec().findOption(name);
+            assertThat(onList).as("%s on list", name).isNotNull();
+            assertThat(onResume).as("%s on resume", name).isNotNull();
+            assertThat(((Field) onList.userObject()).getDeclaringClass())
+                    .as("%s on list must come from the shared declaration", name)
+                    .isEqualTo(BearerTokenOptions.class);
+            assertThat(((Field) onResume.userObject()).getDeclaringClass())
+                    .as("%s on resume must come from the shared declaration", name)
+                    .isEqualTo(BearerTokenOptions.class);
+            assertThat(onResume.description()).as("%s help text must not drift", name)
+                    .isEqualTo(onList.description());
+        }
+    }
+
+    /**
      * Because they are never persisted (above), re-passing them on {@code swath resume} is the ONLY
      * way a resumed run against a bearer-auth endpoint can authenticate — so the forwarding onto the
      * delegated {@link ListCommand} is load-bearing, not a convenience.
@@ -835,8 +865,8 @@ final class ResumeCommandTest {
 
         ResumeCommand cmd = new ResumeCommand();
         cmd.directory = outputDir;
-        cmd.bearerTokenCommand = "printf token";
-        cmd.bearerTokenRefreshInterval = "not-a-duration";
+        cmd.bearer.command = "printf token";
+        cmd.bearer.refreshInterval = "not-a-duration";
 
         assertThatThrownBy(cmd::call)
                 .isInstanceOf(InvalidConfigException.class)

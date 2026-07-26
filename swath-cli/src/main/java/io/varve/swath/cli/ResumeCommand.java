@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import picocli.CommandLine;
+import picocli.CommandLine.ArgGroup;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
@@ -89,27 +90,12 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
 
     /**
      * The bearer-token levers, forwarded to the delegated {@link ListCommand} like {@code --stats}
-     * and {@code --progress}, but for a different reason: they are the one piece of connection
-     * config a resume cannot restore from the checkpoint. Every other auth flag
-     * ({@code --profile}, {@code --region}, {@code --no-sign-request}) is {@link ResumeClass#STICKY}
-     * and soft-restored, but {@code --bearer-token-command} is a command string that a resumed run
-     * would <i>execute</i>. Persisting it would let whoever can write a checkpoint choose that
-     * command, so it is {@link ResumeClass#FREE} and never stored — which leaves re-passing it here
-     * as the only way a resumed run against a bearer-auth endpoint (e.g. GCS's XML API) can
-     * authenticate at all.
+     * and {@code --progress} — but shared with {@link ConnectionOptions} via one {@link
+     * BearerTokenOptions} declaration rather than re-declared here, because the two copies must not
+     * drift. See that class for why they are the one connection setting a resume cannot restore.
      */
-    @Resume(ResumeClass.FREE)
-    @Option(names = "--bearer-token-command", paramLabel = "CMD",
-            description = "Shell command whose stdout is a fresh OAuth bearer token, used instead of "
-                    + "AWS SigV4 signing for every request. Never stored in the checkpoint, so a "
-                    + "resumed run against a bearer-auth endpoint must re-pass it.")
-    String bearerTokenCommand;
-
-    @Resume(ResumeClass.FREE)
-    @Option(names = "--bearer-token-refresh-interval", paramLabel = "DURATION",
-            description = "How often to re-run --bearer-token-command for a fresh token (default: 45m). "
-                    + "Size it comfortably under the token source's real expiry.")
-    String bearerTokenRefreshInterval;
+    @ArgGroup(exclusive = false, validate = false)
+    final BearerTokenOptions bearer = new BearerTokenOptions();
 
     @Mixin
     final GlobalOptions global = new GlobalOptions();
@@ -168,8 +154,7 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         // The one connection setting the checkpoint deliberately does not carry (see the field's
         // javadoc): forward what the operator passed to `swath resume`, or leave it null for the
         // ordinary SigV4 path.
-        list.connection.bearerTokenCommand = bearerTokenCommand;
-        list.connection.bearerTokenRefreshInterval = bearerTokenRefreshInterval;
+        list.connection.bearer.copyFrom(bearer);
         // Important: `list` is driven directly via #call(), never through picocli's
         // own parse of the "list" subcommand -- its OWN @Mixin GlobalOptions instance never sees
         // whatever -q/-v the user actually passed to `swath resume`. Propagate explicitly,

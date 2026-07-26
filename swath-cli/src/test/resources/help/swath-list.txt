@@ -51,12 +51,11 @@ Output:
 Connection:
       --bearer-token-command=CMD
                              Shell command whose stdout is a fresh OAuth bearer
-                               token, used instead of AWS SigV4 signing for
-                               every request. Not stored in the checkpoint:
-                               re-pass it on `swath resume`. For GCS's XML API:
-                               --endpoint-url https://storage.googleapis.com
-                               --force-path-style --bearer-token-command
-                               'gcloud auth print-access-token'.
+                               token (e.g. 'gcloud auth print-access-token' for
+                               GCS's XML API), used instead of AWS SigV4
+                               signing for every request. Never stored in the
+                               checkpoint, so a resumed run against a
+                               bearer-auth endpoint must re-pass it.
       --bearer-token-refresh-interval=DURATION
                              How often to re-run --bearer-token-command for a
                                fresh token (default: 45m). Size it comfortably

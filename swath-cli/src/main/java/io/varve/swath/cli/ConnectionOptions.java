@@ -17,6 +17,7 @@ import io.varve.swath.store.s3.ProcessBearerTokenSupplier;
 import io.varve.swath.store.s3.S3Config;
 import java.net.URI;
 import java.time.Duration;
+import picocli.CommandLine.ArgGroup;
 import picocli.CommandLine.Option;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -69,24 +70,10 @@ final class ConnectionOptions {
     @Option(names = "--region", paramLabel = "REGION", description = "AWS region (else resolved from the environment).")
     String region;
 
-    // FREE, not STICKY like the auth flags above it: a STICKY row would persist the command
-    // STRING into the checkpoint's run_meta, and a later `swath resume` would execute whatever
-    // that file says. A checkpoint is data, not a trusted script — anyone who can write one
-    // could choose the command a resume runs. Re-pass the flag on resume instead.
-    @Resume(ResumeClass.FREE)
-    @Option(names = "--bearer-token-command", paramLabel = "CMD",
-            description = "Shell command whose stdout is a fresh OAuth bearer token, used instead of "
-                    + "AWS SigV4 signing for every request. Not stored in the checkpoint: re-pass it "
-                    + "on `swath resume`. For GCS's XML API: --endpoint-url "
-                    + "https://storage.googleapis.com --force-path-style --bearer-token-command "
-                    + "'gcloud auth print-access-token'.")
-    String bearerTokenCommand;
-
-    @Resume(ResumeClass.FREE)
-    @Option(names = "--bearer-token-refresh-interval", paramLabel = "DURATION",
-            description = "How often to re-run --bearer-token-command for a fresh token (default: 45m). "
-                    + "Size it comfortably under the token source's real expiry.")
-    String bearerTokenRefreshInterval;
+    // FREE, not STICKY like the auth flags above it, and shared with `swath resume` rather than
+    // re-declared there — see BearerTokenOptions for why both of those matter.
+    @ArgGroup(exclusive = false, validate = false)
+    final BearerTokenOptions bearer = new BearerTokenOptions();
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--concurrency", paramLabel = "N", description = "Maximum concurrent listing requests (default: 64).")
@@ -216,13 +203,13 @@ final class ConnectionOptions {
      * SigV4/{@code --profile} signing).
      */
     private BearerTokenSupplier resolveBearerTokenSupplier() throws InvalidConfigException {
-        if (bearerTokenCommand == null) {
+        if (bearer.command == null) {
             return null;
         }
-        Duration refreshInterval = bearerTokenRefreshInterval == null
+        Duration refreshInterval = bearer.refreshInterval == null
                 ? DEFAULT_BEARER_TOKEN_REFRESH_INTERVAL
-                : DurationParser.parse(bearerTokenRefreshInterval, "bearer-token-refresh-interval", false);
-        return new ProcessBearerTokenSupplier(bearerTokenCommand, refreshInterval);
+                : DurationParser.parse(bearer.refreshInterval, "bearer-token-refresh-interval", false);
+        return new ProcessBearerTokenSupplier(bearer.command, refreshInterval);
     }
 
     /**
