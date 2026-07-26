@@ -410,6 +410,16 @@ One counter-conservation test exercising this contention directly —
 `steal()` calls made under genuine multi-threaded racing (conservation only, never a specific
 interleaving; issue #18).
 
+**Per-slice verification bar (added 2026-07-26).** Alongside the decision-trace goldens
+(byte-identical, no regeneration) and `check-instrumentation-drift.py`'s own `--self-test`,
+`./gradlew spotlessCheck` — run across **every** module, not just `:swath-core` — belongs in each
+extraction slice's own verification, not only in CI. An unused import (`AlphabetDigest`, landed with
+issue #20's fix, six commits before the seed-planner slice) sat failing `spotlessCheck` through six
+independent review rounds: the tiered test budget's ban on `./gradlew build` (a deliberate speed
+tradeoff) was never paired with a substitute format/lint gate, so no slice this session ran one
+locally. `spotlessCheck` runs in single-digit seconds branch-wide — there is no speed argument for
+leaving it out.
+
 ---
 
 ## 3. SQLite checkpoint schema
