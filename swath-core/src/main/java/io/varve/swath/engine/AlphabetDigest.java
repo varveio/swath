@@ -37,8 +37,14 @@ import java.util.Arrays;
  * writes; a torn read is benign — the chooser's result is independently re-validated for safety and
  * strict betweenness by {@link ByteMidpoint}, so it can only shift the pivot's balance within valid
  * bounds, never break tiling correctness (mirrors the lock-free density read).
+ *
+ * <p>Public only so {@code io.varve.swath.engine.policy}'s {@code StealAttemptView} can carry a
+ * victim's digest through to the pivot cascade (policy-domain, no S3/protocol dependency — the
+ * same status as {@code StealMath}/{@code ByteMidpoint}); construction and mutation
+ * ({@link #observe}) stay package-private to {@code io.varve.swath.engine} — only
+ * {@link WorkerState} builds and feeds one.
  */
-final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
+public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
 
     /** Number of code-point positions tracked past the range divergence point (K, small). */
     static final int MAX_POSITIONS = 8;
