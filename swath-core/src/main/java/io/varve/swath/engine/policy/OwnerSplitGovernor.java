@@ -21,12 +21,19 @@ import java.util.List;
  * see seam-notes.md).
  *
  * <p><b>The confetti feedback gate is a collaborator, not owned state here.</b> {@link
- * ConfettiFeedbackGate#decide()} is consulted mid-chain as ordinary decision logic (a deterministic
- * read of its own already-recorded atomics — no I/O), but its tagged-child completion
- * classification ({@code recordCompletion}) is an event fired from a totally different call site
- * (node completion, engine-wide) tied to real node ids and {@code WorkerState} this package never
- * sees — so the executor ({@code OwnerSelfSplit}) owns constructing the one run-scoped instance and
- * feeding it completions; this governor only ever reads it.
+ * ConfettiFeedbackGate#decide()} is consulted mid-chain as ordinary decision logic (a read of its
+ * own already-recorded atomics — no I/O), but its tagged-child completion classification ({@code
+ * recordCompletion}) is an event fired from a totally different call site (node completion,
+ * engine-wide) tied to real node ids and {@code WorkerState} this package never sees — so the
+ * executor ({@code OwnerSelfSplit}) owns constructing the one run-scoped instance and feeding it
+ * completions; this governor only ever reads it.
+ *
+ * <p><b>Known non-determinism (issue #22, not fixed here).</b> That "read" is not perfectly pure:
+ * {@link ConfettiFeedbackGate#decide()} also increments its own probe counter as a side effect of
+ * being called, so two {@link #decide(OwnerSplitView)} calls with a bitwise-identical view can
+ * differ on every {@code PROBE_K}-th over-threshold call. Pre-existing (this extraction moved it
+ * verbatim, introduced nothing) — see {@code architecture.md}'s "Known seam exceptions" alongside
+ * issues #19/#20; belongs to the determinism-audit slice.
  */
 public final class OwnerSplitGovernor implements OwnerSplitPolicy {
 

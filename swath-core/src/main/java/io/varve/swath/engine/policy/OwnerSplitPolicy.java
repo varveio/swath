@@ -5,12 +5,19 @@
  */
 package io.varve.swath.engine.policy;
 
+import io.varve.swath.engine.ConfettiFeedbackGate;
+
 /**
  * <b>The policy seam</b> (swath-notes' 2026-07-26 simulator campaign): the owner-side proactive
- * self-split's gate chain (algorithms.md §3.3) as a deterministic decision over one page-commit's
- * {@link OwnerSplitView} — every clock read, lock, and durable-split CAS left to the executor
- * ({@code OwnerSelfSplit}). The engine and a future discrete-event simulator share this; each
- * supplies its own execution side.
+ * self-split's gate chain (algorithms.md §3.3) as a decision over one page-commit's {@link
+ * OwnerSplitView} — every clock read, lock, and durable-split CAS left to the executor ({@code
+ * OwnerSelfSplit}). The engine and a future discrete-event simulator share this; each supplies its
+ * own execution side.
+ *
+ * <p>Pure modulo one known exception: the confetti feedback gate collaborator ({@link
+ * ConfettiFeedbackGate#decide()}) mutates its own probe counter, so {@link #decide} is not yet a
+ * pure function of its view in every case — see {@code architecture.md}'s "Known seam exceptions"
+ * and issue #22 (not fixed here; belongs to the determinism-audit slice alongside issues #19/#20).
  *
  * <p>One call per page-commit consideration, unlike {@link StealPolicy}'s two-call shape — there is
  * no multi-round probe cascade here (owner-split is zero-probe by construction, algorithms.md §3.3):

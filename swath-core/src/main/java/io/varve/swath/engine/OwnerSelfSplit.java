@@ -71,8 +71,11 @@ final class OwnerSelfSplit {
     private final TraceSink trace;
     /**
      * The live-node demand-gate count ({@code outstanding.get()}), read AT USE TIME inside {@link
-     * #maybeOwnerSelfSplit} — never pre-evaluated at construction — so the governor's demand gate
-     * observes the count at the instant the carve is considered.
+     * #maybeOwnerSelfSplit} — never pre-evaluated at construction. Read at {@link OwnerSplitView}
+     * construction, before the governor's decision runs (ahead of the remaining-est floor and the
+     * rate limit, not "at the instant" the demand gate itself is reached) — a heuristic input, so
+     * this earlier-by-nanoseconds read never affects correctness, only which page-commit's snapshot
+     * the demand gate happens to see.
      */
     private final LongSupplier outstanding;
     /**

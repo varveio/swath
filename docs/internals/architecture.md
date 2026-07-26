@@ -52,17 +52,25 @@ dependency rules, and the decisions behind them — see
 **Known seam exceptions:** `engine.policy`'s convention is that a policy is a deterministic
 function of its view (no I/O, no ambient randomness) and returns reason enums for the executor to
 record (so AGENTS.md's counter-per-path law stays mechanically checkable against the decision
-enum) — two pre-existing gaps against that convention were carried into `ThiefPolicy` unchanged
-(moved verbatim, not introduced, and not fixed here — both are behavior-adjacent-refactor territory,
-out of scope for an extraction slice):
+enum) — three pre-existing gaps against that convention were carried into `ThiefPolicy`/
+`OwnerSplitGovernor` unchanged (moved verbatim, not introduced, and not fixed here — all three are
+behavior-adjacent-refactor territory, out of scope for an extraction slice):
 - `AlphabetDigest` (carried through in `StealAttemptView`, consumed by
   `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires `ALPHABET.*`
   fallback counters directly from inside `chooseScalar`. Issue #19.
 - `ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
   `ThreadLocalRandom.current()` (the 1-in-64 escape hatch), so that one decision is not
   reproducible from the view alone. Issue #20.
+- `OwnerSplitGovernor`'s confetti feedback gate consult (`ConfettiFeedbackGate#decide`) mutates
+  and reads a `probeCounter` (`incrementAndGet`) to decide `PROBE` vs `SUPPRESSED`, so two calls
+  with a bitwise-identical `OwnerSplitView` can differ on every `PROBE_K`-th over-threshold call —
+  `decide()` is not a pure function of its view. Pre-existing (byte-identical before and after this
+  extraction); the collaborator staying in `io.varve.swath.engine` rather than moving into the
+  policy package (see `OwnerSplitGovernor`'s javadoc) is unaffected — the probe mechanism itself is
+  deliberate and correct, only where its counter lives relative to this convention is the gap.
+  Issue #22.
 
-Both fixes belong in the determinism-audit slice, which already owns injected-clock/seeded-RNG
+All three fixes belong in the determinism-audit slice, which already owns injected-clock/seeded-RNG
 purity for this interface.
 
 **Dormant seams (built but not active in v0.1):**
