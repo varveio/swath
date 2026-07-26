@@ -410,6 +410,26 @@ One counter-conservation test exercising this contention directly —
 `steal()` calls made under genuine multi-threaded racing (conservation only, never a specific
 interleaving; issue #18).
 
+**The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
+deterministic function of its view: no ambient clock, no ambient randomness, and — the clause the
+audit's original grep-shaped brief did not have, and so missed two of the three leaks the campaign
+actually found (issues #19, #22) — no ambient *collaborator* state either. Concretely, no type
+reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
+`io.varve.swath.engine.policy`, plus the transitive closure of every field-reachable
+`io.varve.swath.*` type (so `AlphabetDigest`, reached only via `StealAttemptView.alphabetDigest()`,
+is in scope despite living in `io.varve.swath.engine`) — may **hold** a `RunMetrics`/`TraceSink`
+reference as a field, or **mutate** `java.util.concurrent.atomic` state, or **call** an ambient
+clock/randomness API directly. `DecisionPathPurityTest` (`swath-core`) enforces this mechanically:
+a field-type closure walk for the first two (the exact shape issues #19 and #22 took), a
+comment-stripped source scan of the same closure for the third (issue #20's shape). An explicit,
+caller-supplied parameter is not "ambient" and stays legal either way — `EngineToggles#recordOffMarks`
+takes a `RunMetrics` parameter but is called only from executor code, never a `decide()` path, and
+every `Engagement`/`VictimMutation` collector already threaded through this interface is the same
+shape. The two executor-side defaults that inject through `DecisionRng`/`DecisionClock` (`Thief`'s
+`ThreadLocalRandom` lambda, `IdleStealBackoff`'s `System::nanoTime`) live in classes never reached as
+a field of any policy-package type, so the closure never scans them — this is what keeps the
+exception legal without special-casing it in the test.
+
 **Per-slice verification bar (added 2026-07-26).** Alongside the decision-trace goldens
 (byte-identical, no regeneration) and `check-instrumentation-drift.py`'s own `--self-test`,
 `./gradlew spotlessCheck` — run across **every** module, not just `:swath-core` — belongs in each
