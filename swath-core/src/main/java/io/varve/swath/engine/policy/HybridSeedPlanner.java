@@ -7,8 +7,8 @@ package io.varve.swath.engine.policy;
 
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
-import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Deque;
