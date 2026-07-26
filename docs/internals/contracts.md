@@ -296,6 +296,27 @@ closes.
   `IdleStealPacingPolicy`'s ambient-time read is injected via `DecisionClock` (mirrors `DecisionRng`'s
   treatment of randomness) — `IdleStealBackoff` supplies the live `System::nanoTime` default,
   unchanged from before.
+- **The seed planner has no `View` at all — a third shape, for a third reason.** `SeedDescent`
+  (`HybridSeedPlanner`, algorithms.md §8) reads no live executor-owned state through a view of any
+  kind: unlike `WorkerState`/`IdleStealBackoff` — fields concurrent threads touch, which the policy
+  must never read directly — the descent's frontier, cut set, and probe/sample budget are private
+  state the `SeedDescent` instance owns outright from construction to its terminal `SeedPlan`.
+  Nothing else ever reads or writes them, because seeding runs single-threaded, entirely before any
+  worker starts — there is no live field to snapshot into a view in the first place, not merely a
+  view this extraction chose to omit. The one thing the executor (`SeedStep`) does still own and
+  translate is the page itself: it decodes each `ListPage` into a `SeedProbeOutcome` (source-agnostic
+  facts only — no `ListPage`/`KeyBytes`/`ListEntry` crosses the seam) before handing it to
+  `SeedDescent#onProbeResult`, exactly mirroring how `Thief` translates a probe response into a
+  `ProbeOutcome` — translating a page is executor mechanics either way; the difference is only that
+  the seed descent's OWN state, unlike a victim's, is never shared, so there is nothing on the far
+  side of that translation for a view to snapshot.
+
+  **The general rule the three shapes above illustrate: state the executor owns is snapshotted into
+  views and mutated only via the mutations a decision returns; state the policy owns outright needs
+  neither.** A future reader should not harmonize `VictimView`/`StealAttemptView`/`OwnerSplitView`,
+  the two pacing policies' plain-`int`-or-combined-record split, and the seed planner's view-less
+  shape into one uniform pattern — each is the correct shape for a different concurrency reality, and
+  collapsing them would misrepresent at least one.
 
 **Mutation timing.** A `VictimMutation`/`OwnerSplitMutation` is never applied by the policy itself —
 only the executor mutates a live `WorkerState`, via `Thief.applyMutations`/`OwnerSelfSplit.applyMutations`,
@@ -322,6 +343,10 @@ and only in response to a `mutations()` list the policy returned alongside its d
   identical call sites and under the identical (lock-free / monitor) discipline as before this
   extraction — `FutilityPacingPolicy`/`IdleStealPacingPolicy` never touch a live field themselves,
   only compute the next value(s) the caller then writes.
+- `SeedAction` (`RequestSeedProbe`/`SeedPlan`) carries no mutation list at all — the flip side of the
+  seed planner having no `View` (above): with no live executor-owned state to read, there is
+  symmetrically nothing for the executor to mutate on the descent's behalf afterward. `SeedStep`
+  applies only `engagements()`, never a mutation, at every step of its request/response loop.
 
 **Engagements are exactly-once by the same mechanism.** `applyEngagements` is called at the identical
 points `applyMutations` is (selection-scoped once per `steal()` call; per-attempt once per
@@ -331,9 +356,21 @@ internal `pendingEngagements`/`pendingMutations` (drained via `List.copyOf(...)`
 `StealAction` it hands back) prevent the policy itself from double-emitting across a multi-probe
 cascade; the executor's single-application-per-action loop prevents the executor from doing so either,
 including on every `Retry`/abort path (a retried attempt is a brand-new `Thief.steal()` call with a
-brand-new view — it never replays a discarded action's engagements).
+brand-new view — it never replays a discarded action's engagements). `HybridSeedPlanner`'s `Descent`
+carries the identical `pending`/`drain()` shape (a plain `List<Engagement>` rather than a pair, since
+there is no mutation list to drain alongside it) to the same effect: every classification mark the
+descent's explicit phase state machine fires — mid-descent, inside a `SAMPLE_CHILD`/`WEIGHT_SAMPLE`
+sub-loop, or only once the whole run's shape is known at `finalizePlan` — is queued and delivered
+exactly once, on whichever `SeedAction` (`RequestSeedProbe` or the terminal `SeedPlan`) is returned
+next; `SeedStep`'s own request/response loop applies each action's `engagements()` exactly once, the
+same discipline as `Thief`'s.
 
-**Field-by-field audit against `main` (pre-extraction) — every widened window, whether or not benign:**
+**Field-by-field audit against `main` (pre-extraction) — every widened window, whether or not benign.**
+The seed planner has no row here: a widened window is a concurrency-timing question (could a
+DIFFERENT thread's write land between when a view reads a field and when the field's live value is
+next observed?), and the seed descent has no concurrency dimension to widen — it runs single-threaded,
+entirely before any worker starts (algorithms.md §8), so there is no "other thread" a wider read
+window could ever race against.
 
 | View | Field(s) | Pre-extraction read timing | Post-extraction read timing | Classification |
 |---|---|---|---|---|

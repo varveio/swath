@@ -204,7 +204,7 @@ final class ShapeRegressionCorpusTest {
                         + "(mass-weighted subsampling reallocates WHICH cuts survive; it also now spends "
                         + "a single dominant-weight sampled cut's credit honestly ON ITSELF rather than "
                         + "letting it spill onto unrelated neighboring cuts (the scoped-tail fix — "
-                        + "see SeedStep#massWeightedSubsample), so the total picked count legitimately "
+                        + "see HybridSeedPlanner#massWeightedSubsample), so the total picked count legitimately "
                         + "lands further under targetSeeds than the old positionally-inflated walk did "
                         + "when one heavy region dominates the sampled weight)")
                 .isLessThanOrEqualTo(Math.min(4 * workers, 256) + 1)

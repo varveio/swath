@@ -11,6 +11,7 @@ import io.varve.swath.engine.policy.Commit;
 import io.varve.swath.engine.policy.DecisionRng;
 import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.engine.policy.FloorProbeOutcome;
+import io.varve.swath.engine.policy.HybridSeedPlanner;
 import io.varve.swath.engine.policy.KeyProbeOutcome;
 import io.varve.swath.engine.policy.KeyProbePhase;
 import io.varve.swath.engine.policy.MarkUnsplittable;
@@ -381,7 +382,8 @@ public final class Thief {
     private StructureProbeOutcome issueStructureProbe(WorkerState victim, RequestStructureProbe request)
             throws SwathException, InterruptedException {
         ListPage page = probeStructure(victim, new PageRequest(mode, ThiefPolicy.STRUCTURE_PROBE_MAX_KEYS,
-                request.probePrefix(), SeedStep.DELIMITER, request.startAfter(), null, null, null, null, 0));
+                request.probePrefix(), HybridSeedPlanner.DELIMITER, request.startAfter(), null, null, null,
+                null, 0));
         if (metrics != null) {
             metrics.recordDelimiterFanout(page.commonPrefixes().size());
             metrics.recordStructureProbeFetch();

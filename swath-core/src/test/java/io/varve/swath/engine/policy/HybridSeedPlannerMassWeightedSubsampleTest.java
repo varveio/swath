@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.engine;
+package io.varve.swath.engine.policy;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -17,15 +17,15 @@ import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>{@link SeedStep#massWeightedSubsample} does not let a single heavy-weight sampled cut trigger a
- * landslide of consecutive picks that starves whatever the sorted cut set holds further away.</b>
- * Deterministic reconstruction of a mass-weighted reduction's input shape
- * (feeds the cut list + weights directly — no probes, no {@link SeedStep} instance needed): many
- * light {@code contrib/}-style cuts (unsampled, default weight 1), ONE heavy sampled cut ({@link
- * SeedStep}'s {@code PROBE_PAGE} weight of 1000, the weight a truncated sampled child gets), followed
- * by many more light {@code projects/headers-testing/}-style cuts (also unsampled, weight 1) — the
- * exact shape a mass-weighted reduction sees once the descent has actually explored a heavy region
- * with just one confirmed-dense sample.
+ * <b>{@link HybridSeedPlanner#massWeightedSubsample} does not let a single heavy-weight sampled cut
+ * trigger a landslide of consecutive picks that starves whatever the sorted cut set holds further
+ * away.</b> Deterministic reconstruction of a mass-weighted reduction's input shape
+ * (feeds the cut list + weights directly — no probes, no {@link HybridSeedPlanner} instance needed):
+ * many light {@code contrib/}-style cuts (unsampled, default weight 1), ONE heavy sampled cut
+ * ({@link HybridSeedPlanner}'s {@code PROBE_PAGE} weight of 1000, the weight a page-capped sampled
+ * child gets), followed by many more light {@code projects/headers-testing/}-style cuts (also
+ * unsampled, weight 1) — the exact shape a mass-weighted reduction sees once the descent has actually
+ * explored a heavy region with just one confirmed-dense sample.
  *
  * <p>The pre-fix threshold walk advanced its next pick-threshold by a fixed {@code step} every pick,
  * so the ~1000 units of "credit" banked by the single heavy cut left the threshold far behind the
@@ -34,11 +34,11 @@ import org.junit.jupiter.api.Test;
  * those cuts' own weight. The fix anchors the next threshold to the weight actually accumulated at
  * each pick, so a heavy cut's credit cannot spill onto unrelated neighbors.
  */
-final class SeedStepMassWeightedSubsampleTest {
+final class HybridSeedPlannerMassWeightedSubsampleTest {
 
     private static final int CONTRIB_CUTS = 300;
     private static final int HEADERS_TESTING_CUTS = 300;
-    private static final long PROBE_PAGE_WEIGHT = 1000L;   // SeedStep.PROBE_PAGE
+    private static final long PROBE_PAGE_WEIGHT = 1000L;   // HybridSeedPlanner.PROBE_PAGE
 
     /**
      * {@code contrib/000} .. {@code contrib/299} (light, unsampled), then ONE heavy sampled cut
@@ -70,7 +70,7 @@ final class SeedStepMassWeightedSubsampleTest {
         TreeSet<byte[]> cuts = reconstructedCuts();
         int max = 100;   // well under n = 601, forces the over-cap reduction
 
-        List<byte[]> picked = SeedStep.massWeightedSubsample(cuts, max, heavyWeightOnly());
+        List<byte[]> picked = HybridSeedPlanner.massWeightedSubsample(cuts, max, heavyWeightOnly());
 
         List<byte[]> sortedCuts = new ArrayList<>(cuts);
         long headersTestingPicks = picked.stream()

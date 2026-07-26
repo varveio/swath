@@ -1236,6 +1236,24 @@ before any worker claims a range; the resulting nodes are inserted atomically vi
 a valid partition from the first durable moment or it does not exist at all). On
 `swath resume` the seed step is skipped (nodes already present).
 
+**Implementation split (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the
+whole shallow-mode descent below — the span-priority frontier, probe-budget accounting,
+per-level classification (narrow / partition fan-out / flat-wide radix banding / tiny-leaf
+explosion vs. heavy-cut via the sampled-sibling prior), and cut-set assembly plus the
+mass-weighted subsample to the target seed count — lives in
+`io.varve.swath.engine.policy.HybridSeedPlanner`, a source-agnostic `SeedPlanner` with no RPC,
+page decode, or node insertion of its own; a future seed-diet policy or hints-file planner is
+meant to slot in as an alternative `SeedPlanner` implementation behind the identical
+`SeedDescent` request/response contract. `io.varve.swath.engine.SeedStep` is the executor: it
+drives `HybridSeedPlanner`'s `SeedDescent` through a request/response loop (issuing every
+bounded `delimiter=/` probe it asks for, decoding each page into a source-agnostic
+`SeedProbeOutcome`), then tiles the finished cut set into fresh `NodeSpec` ranges and inserts
+them. Unlike the thief/owner-split policies, the seed descent has no `View` to read and no
+mutation to apply back — its frontier and probe budget are private state it owns outright,
+never shared, since seeding runs single-threaded before any worker starts (see `contracts.md`
+§2.1 for why that makes its shape a third, deliberately different one). See `architecture.md`'s
+component map for the package split.
+
 - **Default — `--tune seed.mode=shallow` (`delimiter=/` pass).** One (or, for very broad tops,
   1–2 levels of) `delimiter=/` listing returns top-level common prefixes
   `p1 < p2 < … < pk`. Seed ranges `(⊥, p1], (p1, p2], …, (pk, null]`. Now
