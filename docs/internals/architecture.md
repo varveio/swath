@@ -49,6 +49,15 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
+**Known seam exception:** `engine.policy`'s convention is that a policy returns reason enums and
+the executor records them (so AGENTS.md's counter-per-path law stays mechanically checkable
+against the decision enum) — but `AlphabetDigest` (carried through in `StealAttemptView`, consumed
+by `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires
+`ALPHABET.*` fallback counters directly from inside `chooseScalar`, a pre-existing leak this
+extraction did not introduce and does not fix (a behavior-adjacent refactor, out of scope here).
+Tracked as issue #19; the fix belongs in the determinism-audit slice, which already owns
+injected-clock/seeded-RNG purity for this same interface.
+
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.
 - `output_journal` / `--resume-output` — at-least-once stdout replay; deferred to v1.1.
