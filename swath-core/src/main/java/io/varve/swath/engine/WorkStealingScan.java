@@ -10,6 +10,7 @@ import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.Node;
 import io.varve.swath.checkpoint.PageCommit;
 import io.varve.swath.concurrent.Scope;
+import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.error.CancelledException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
@@ -598,13 +599,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                     runId, RunContext.workerIdOrNone(), claim.nodeId(), StealMath.describe(claim.lo()),
                     StealMath.describe(claim.hi()));
         }
-        WorkerState ws = new WorkerState(claim.nodeId(), claim.lo(), claim.cursor(), claim.hi(), metrics);
+        WorkerState ws = new WorkerState(claim.nodeId(), claim.lo(), claim.cursor(), claim.hi());
         AtomicLong pageSeq = new AtomicLong();
         // Owner-side self-split rate-limit state, mutated only by this worker's own (serial)
         // page-commit callback: [0] = committed non-empty pages so far, [1] = the page index of the
         // last self-split. Seeded so the first qualifying page may self-split immediately (ramp),
         // then gated to one per SELF_SPLIT_MIN_PAGES_BETWEEN pages.
-        long[] selfSplit = {0L, -OwnerSelfSplit.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        long[] selfSplit = {0L, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         livePool.add(ws);
         try {
             try {

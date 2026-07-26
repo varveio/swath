@@ -264,6 +264,15 @@ obtained — never *what* or *when* the loop emits — so I1 commit-before-emit
 A worker that has no `PENDING` node to claim, while other workers are still
 busy, becomes a **thief**.
 
+**Implementation split (the policy seam, contracts.md §2.1):** the
+pseudocode below is a decision-logic description, not a call-graph — victim selection and the
+whole pivot cascade (everything from "PLACE the pivot" through the structure/reflect/bisect/
+flat-leaf fallbacks) live in `io.varve.swath.engine.policy.ThiefPolicy`, a source-agnostic
+`StealPolicy` with no lock, clock, or RPC of its own. `io.varve.swath.engine.Thief` is the
+executor: it snapshots `(cursor, hi)` under the victim's lock, drives `ThiefPolicy` through a
+request/response loop (issuing every probe it asks for), then re-validates and runs the durable
+split CAS under the same lock. See `architecture.md`'s component map for the package split.
+
 ```
 steal():
   victim = argmax over live workers w of estRemaining(w)        // §3.2
@@ -368,9 +377,32 @@ steal():
   commit resets this pacing; enqueue/decrement/progress signals still wake
   parked workers, so quiescence detection and the progress-gated liveness fix
   are unchanged.
+- **Per-victim futility pacing is a separate, narrower mechanism — deliberately
+  not merged with the fleet-wide backoff below.** `WorkerState.recordFutileSteal`
+  trips a per-victim cooldown after `FUTILITY_PACE_THRESHOLD` (4) *consecutive*
+  futile outcomes against THAT victim (`cursor_passed_pivot`/`bound_moved`/
+  `bisect_budget_exhausted`), for a bounded-exponential number of steal-selection
+  skips (cap 64), reset only by that victim's own productive progress
+  (`markStolen`). A productive sibling stays fully stealable throughout — this
+  paces hammering one racing drainer, never the fleet. **Implementation split
+  (the policy seam, contracts.md §2.1):** the trip/
+  bounded-exponential-growth/decay/reset arithmetic is
+  `io.varve.swath.engine.policy.FutilityPacingPolicy`, pure functions of one
+  `int` at a time; `WorkerState` still owns every `AtomicInteger` read/write, in
+  the same order and with the same lock-free-per-field discipline as before —
+  see `docs/internals/contracts.md` §2.1 for the concurrency argument for why
+  this stays per-field rather than one combined view.
 - **At most one speculative steal attempt is in flight fleet-wide, and the bound
   is strict.** *Pacing state* (backoff level, next-attempt instant) and *slot
-  ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`: the
+  ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`. The
+  pacing arithmetic (the exponential growth/cap and the park-remaining
+  computation) is `io.varve.swath.engine.policy.IdleStealPacingPolicy`, which
+  owns no clock: `IdleStealBackoff` reads the ambient clock through its
+  `DecisionClock` (mirroring `DecisionRng`'s treatment of randomness, and
+  supplying the live `System::nanoTime` default) and passes the resulting
+  `nowNanos` in as a policy argument. The one-attempt SLOT itself — its ownership,
+  release, and the `RunMetrics` reference — is executor infrastructure and does
+  **not** move into the policy package. The
   slot belongs to the worker that acquired it and is released only by that worker,
   in a `finally` covering the whole acquired region — so no escape from the
   metrics, logging, victim curation or child enqueue inside it can strand the slot
@@ -697,6 +729,16 @@ two buckets they were measured on**; per-mechanism status follows.
   (`NO_VICTIM` dominates the steal outcomes) and the dense tail runs near-serial
   (`in_flight` collapses toward one) — a real trade-off the kill-switch exists
   to back out.
+  **Implementation split (the policy seam, contracts.md §2.1):** the gate chain below it — the remaining-est floor, the page
+  rate-limit, the demand gate, the observed-mass child-tail floor, the confetti
+  feedback gate, then pivot synthesis, the reflection clamp, and the reflect-lift —
+  is `io.varve.swath.engine.policy.OwnerSplitGovernor`, a source-agnostic
+  `OwnerSplitPolicy` with no lock/clock/RPC of its own: one page-commit's view in,
+  `Skip(reason)` or `Carve(pivot)` out. `io.varve.swath.engine.OwnerSelfSplit` is the
+  executor: it translates `WorkerState` into that view, then runs the durable
+  split CAS (`splitTxn`) and the child hand-off under the owner's own lock — the
+  same primitives §4.3 describes. See `architecture.md`'s component map for the
+  package split.
   **Demand-gated:** on a *saturated* bucket the worklist already has enough live
   nodes to keep every worker fed, so an owner self-split adds no parallelism and
   only over-fetches its child's terminal page. It therefore skips the carve when
@@ -1110,6 +1152,19 @@ serial-paced, parallelizable, and throttled buckets; the tag shape
 (`{outcome,reason}`, a bounded ~30-50 value enum) keeps the meter set's
 cardinality low even though it now does extend the public meter contract.
 
+**Simulator port (deferred extraction).** `ConcurrencyGauge` above is, and remains, the only
+implementation of this section swath ships — nothing here is extracted or wired to a policy
+interface. `io.varve.swath.engine.policy.ConcurrencyPolicy` (contracts.md §2.1)
+instead documents the PORT a simulator's own faithful reimplementation carries: the
+reactive inputs above (success / 503 / timeout-shed / latency, each arriving with its own explicit
+timestamp rather than reading a clock), the two outputs (`effectiveT`, `isStealingAllowed`), and the
+internal windows/latches enumerated in that interface's javadoc that a faithful port must reproduce.
+Extraction of the real controller behind it is deliberately deferred — AIMD is the most
+timing-coupled mechanism in the engine (the clean-window cooldown, the jittered shed window, the
+relaxation valve, and the decaying latency baseline above all race under CAS), and the divergence
+risk of a simulator-side port was judged low enough not to justify carving the live controller out
+from under its concurrent callers.
+
 ---
 
 ## 6. Correctness argument
@@ -1193,6 +1248,24 @@ before any worker claims a range; the resulting nodes are inserted atomically vi
 `CheckpointStore.insertNodes` (all-or-nothing, invariant I2 — the seed set is itself
 a valid partition from the first durable moment or it does not exist at all). On
 `swath resume` the seed step is skipped (nodes already present).
+
+**Implementation split (the policy seam, contracts.md §2.1):** the
+whole shallow-mode descent below — the span-priority frontier, probe-budget accounting,
+per-level classification (narrow / partition fan-out / flat-wide radix banding / tiny-leaf
+explosion vs. heavy-cut via the sampled-sibling prior), and cut-set assembly plus the
+mass-weighted subsample to the target seed count — lives in
+`io.varve.swath.engine.policy.HybridSeedPlanner`, a source-agnostic `SeedPlanner` with no RPC,
+page decode, or node insertion of its own; a future seed-diet policy or hints-file planner is
+meant to slot in as an alternative `SeedPlanner` implementation behind the identical
+`SeedDescent` request/response contract. `io.varve.swath.engine.SeedStep` is the executor: it
+drives `HybridSeedPlanner`'s `SeedDescent` through a request/response loop (issuing every
+bounded `delimiter=/` probe it asks for, decoding each page into a source-agnostic
+`SeedProbeOutcome`), then tiles the finished cut set into fresh `NodeSpec` ranges and inserts
+them. Unlike the thief/owner-split policies, the seed descent has no `View` to read and no
+mutation to apply back — its frontier and probe budget are private state it owns outright,
+never shared, since seeding runs single-threaded before any worker starts (see `contracts.md`
+§2.1 for why that makes its shape a third, deliberately different one). See `architecture.md`'s
+component map for the package split.
 
 - **Default — `--tune seed.mode=shallow` (`delimiter=/` pass).** One (or, for very broad tops,
   1–2 levels of) `delimiter=/` listing returns top-level common prefixes

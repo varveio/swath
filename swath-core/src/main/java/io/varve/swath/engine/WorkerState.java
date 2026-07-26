@@ -5,7 +5,7 @@
  */
 package io.varve.swath.engine;
 
-import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.engine.policy.FutilityPacingPolicy;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -96,15 +96,28 @@ public final class WorkerState {
      * ({@link #markStolen}). {@link #futilityTrips} grows the cooldown (bounded-exponential) for a
      * persistently-racing victim. All read/written without {@link #lock()} — a pure balance
      * heuristic, never correctness (a stale read only shifts when pacing engages by an attempt or two).
+     *
+     * <p><b>The trip/growth/decay/reset arithmetic itself lives in {@code
+     * io.varve.swath.engine.policy}'s {@link FutilityPacingPolicy}</b>, as pure functions over ONE
+     * {@code int} at a time — never a combined snapshot of these three fields. That is deliberate:
+     * these three {@code AtomicInteger}s have no lock over them (two thieves can race the SAME victim
+     * outside any lock), so each field's own atomic op is what currently guarantees no lost update;
+     * collapsing them into one immutable state record read-then-written-back would trade that
+     * per-field atomicity for a compound one this class never had. Contrast {@code
+     * IdleStealBackoff}'s fleet-wide pacing state, which IS collapsed into one record — every access
+     * there is already `synchronized`, so the monitor (not field-level atomics) is what supplies
+     * atomicity, and combining plain fields inside it changes nothing. The rule this repo follows:
+     * <b>monitor-protected state may be combined into one record; lock-free per-field atomics may
+     * not.</b>
      */
     private final AtomicInteger consecutiveFutileSteals = new AtomicInteger();
     private final AtomicInteger futilityTrips = new AtomicInteger();
     private final AtomicInteger stealPacingSkips = new AtomicInteger();
 
     /** Consecutive futile outcomes against one victim that trip a cooldown. */
-    static final int FUTILITY_PACE_THRESHOLD = 4;
+    static final int FUTILITY_PACE_THRESHOLD = FutilityPacingPolicy.FUTILITY_PACE_THRESHOLD;
     /** The cap on the bounded-exponential per-victim cooldown length, in steal-selection skips. */
-    static final int FUTILITY_PACE_MAX_COOLDOWN = 64;
+    static final int FUTILITY_PACE_MAX_COOLDOWN = FutilityPacingPolicy.FUTILITY_PACE_MAX_COOLDOWN;
 
     /**
      * Density digest — a tiny per-worker signal recorded as the
@@ -169,25 +182,20 @@ public final class WorkerState {
     private final AtomicLong demandGatedTally = new AtomicLong();
 
     /**
-     * The single construction path: wires {@code metrics} into the {@link AlphabetDigest} so its
-     * per-consult {@code ALPHABET.*} fallback engagement counters fire. {@code metrics} may be
-     * {@code null} — the seam a testkit object-mother uses for the many unit tests that drive a
-     * {@link Thief} directly against a hand-built victim with no metrics sink.
+     * The single construction path.
      *
-     * @param nodeId  the {@code listing_node} id this worker owns
-     * @param lo      the immutable lower bound {@code A} of {@code (lo, hi]} (the node's
-     *                {@code range_start}; used by the thief's frontier extrapolation, §3.1)
-     * @param cursor  the initial leading cursor (the node's resume cursor; {@code null} = ⊥)
-     * @param hi      the initial upper bound {@code B} ({@code null} = the open frontier)
-     * @param metrics per-run metrics holder, or {@code null} for a metrics-less unit test
+     * @param nodeId the {@code listing_node} id this worker owns
+     * @param lo     the immutable lower bound {@code A} of {@code (lo, hi]} (the node's
+     *               {@code range_start}; used by the thief's frontier extrapolation, §3.1)
+     * @param cursor the initial leading cursor (the node's resume cursor; {@code null} = ⊥)
+     * @param hi     the initial upper bound {@code B} ({@code null} = the open frontier)
      */
-    public WorkerState(long nodeId, byte[] lo, byte[] cursor, byte[] hi,
-                       RunMetrics metrics) {
+    public WorkerState(long nodeId, byte[] lo, byte[] cursor, byte[] hi) {
         this.nodeId = nodeId;
         this.lo = lo;
         this.cursor = new AtomicReference<>(cursor);
         this.hi = new AtomicReference<>(hi);
-        this.alphabet = new AlphabetDigest(lo, hi, metrics);
+        this.alphabet = new AlphabetDigest(lo, hi);
         // A fresh node hasn't emitted yet (emittedSinceSteal = false), so it is not a steal
         // victim until it commits its first non-empty page (see stealEligible()).
     }
@@ -434,7 +442,10 @@ public final class WorkerState {
      * this <b>while holding {@link #lock()}</b> at a successful hand-off.
      *
      * <p>A successful carve is this victim's productive progress, so it also clears any futility
-     * pacing ({@link #recordFutileSteal}) — a victim that just yielded a child is not a phantom drainer.
+     * pacing ({@link #recordFutileSteal}) — a victim that just yielded a child is not a phantom
+     * drainer. The reset-on-carve value ({@code io.varve.swath.engine.policy}'s {@link
+     * FutilityPacingPolicy#RESET}) is written to each counter independently, in the same order as
+     * before this class's arithmetic moved there — never a combined write.
      *
      * <p>Also sticks {@link #hasSplit} — the ONLY two call sites of this method are the
      * two ways a node can split (thief steal, owner self-split), so this is the single choke point for
@@ -442,9 +453,9 @@ public final class WorkerState {
      */
     public void markStolen() {
         emittedSinceSteal.set(false);
-        consecutiveFutileSteals.set(0);
-        futilityTrips.set(0);
-        stealPacingSkips.set(0);
+        consecutiveFutileSteals.set(FutilityPacingPolicy.RESET);
+        futilityTrips.set(FutilityPacingPolicy.RESET);
+        stealPacingSkips.set(FutilityPacingPolicy.RESET);
         hasSplit = true;
     }
 
@@ -507,29 +518,78 @@ public final class WorkerState {
      * a bounded-exponential number of steal-selection skips ({@link #stealPaced}), so idle thieves pace
      * their attempts against THIS specific racing drainer instead of hammering it every cycle — while a
      * productive sibling stays fully stealable (per-victim scope, never global).
+     *
+     * <p>The trip-threshold check and the bounded-exponential cooldown formula are {@code
+     * io.varve.swath.engine.policy}'s {@link FutilityPacingPolicy} (pure functions of one {@code int}
+     * each) — this method still owns every {@code AtomicInteger} call, in the same order as before
+     * that arithmetic moved out: one atomic {@code incrementAndGet} feeds the trip check, and (only on
+     * a trip) one more atomic {@code incrementAndGet} feeds the cooldown formula. No read-modify-write
+     * here ever spans two atomics, and no compound snapshot of the three counters is taken — see
+     * {@link FutilityPacingPolicy}'s javadoc for why that distinction is load-bearing here, unlike
+     * {@code IdleStealBackoff}'s monitor-protected pacing state.
      */
     public void recordFutileSteal() {
-        if (consecutiveFutileSteals.incrementAndGet() >= FUTILITY_PACE_THRESHOLD) {
-            consecutiveFutileSteals.set(0);
+        if (FutilityPacingPolicy.trips(consecutiveFutileSteals.incrementAndGet())) {
+            consecutiveFutileSteals.set(FutilityPacingPolicy.RESET);
             int trips = futilityTrips.incrementAndGet();
-            int cooldown = (int) Math.min((long) FUTILITY_PACE_MAX_COOLDOWN, 1L << Math.min(trips, 20));
-            stealPacingSkips.set(cooldown);
+            stealPacingSkips.set(FutilityPacingPolicy.cooldownForTrips(trips));
         }
     }
 
     /**
-     * Whether this victim is currently <b>paced</b> (in a futility cooldown) and should be skipped
-     * as a steal victim this attempt. Consumes one skip of the cooldown when it returns {@code true}, so
-     * the cooldown decays one steal-selection pass at a time and the victim becomes eligible again once
-     * it expires (or sooner, on productive progress via {@link #markStolen}). Read/mutated without
-     * {@link #lock()} — a benign race only ends a cooldown an attempt or two early.
+     * <b>Test-only: no production caller.</b> Production victim selection reads {@link
+     * #pacingSkipAvailable()} (a peek) at view-construction time and applies {@link
+     * #consumePacingSkip()} afterward, only for the candidates the policy's {@code
+     * io.varve.swath.engine.policy.Selection} actually marks paced — the split-in-two shape {@link
+     * #pacingSkipAvailable()}'s own javadoc describes. This method's combined check-and-decrement is
+     * the PRE-EXTRACTION shape those two
+     * methods replaced; it is kept only because {@code decision-trace-goldens.md}'s {@code
+     * pacing.steal_paced} fixtures drive it directly as a pure state machine (a deliberate test
+     * convenience, not a live code path) — an earlier version of this javadoc described it as if it
+     * were still the live per-attempt check ("should be skipped as a steal victim this attempt"),
+     * which is stale and corrected here.
+     *
+     * <p>Whether this victim is currently <b>paced</b> (in a futility cooldown). Consumes one skip of
+     * the cooldown when it returns {@code true}, so the cooldown decays one call at a time and the
+     * victim becomes eligible again once it expires (or sooner, on productive progress via {@link
+     * #markStolen}). Read/mutated without {@link #lock()} — a benign race only ends a cooldown a call
+     * or two early.
+     *
+     * <p>The paced-check and the decay step are {@link FutilityPacingPolicy#paced}/{@link
+     * FutilityPacingPolicy#decay} — the check is a plain (non-mutating) {@code get}, and the decay is
+     * a single atomic {@code updateAndGet}, identical in effect to the {@code decrementAndGet()} this
+     * replaced.
      */
     public boolean stealPaced() {
-        if (stealPacingSkips.get() <= 0) {
+        if (!FutilityPacingPolicy.paced(stealPacingSkips.get())) {
             return false;
         }
-        stealPacingSkips.decrementAndGet();
+        stealPacingSkips.updateAndGet(FutilityPacingPolicy::decay);
         return true;
+    }
+
+    /**
+     * Non-mutating half of {@link #stealPaced()}'s check: would it observe a cooldown skip right
+     * now? The policy seam's victim-selection view is read-only ({@code
+     * io.varve.swath.engine.policy}'s {@code VictimView} never touches live {@code WorkerState}), so
+     * building it needs a peek that doesn't also consume — the executor applies the matching
+     * {@link #consumePacingSkip()} afterward for exactly the candidates the policy says were paced,
+     * reproducing {@link #stealPaced()}'s combined check-and-decrement as two steps instead of one.
+     */
+    public boolean pacingSkipAvailable() {
+        return FutilityPacingPolicy.paced(stealPacingSkips.get());
+    }
+
+    /**
+     * Mutating half of {@link #stealPaced()}: consume one cooldown skip. Called by the executor in
+     * response to the policy's {@code VictimMutation.Kind#CONSUME_PACING_SKIP}, only ever for a
+     * candidate {@link #pacingSkipAvailable()} already found paced. Unconditional, via {@link
+     * FutilityPacingPolicy#decay} applied through a single atomic {@code updateAndGet} — identical in
+     * effect to the {@code decrementAndGet()} this replaced, including going negative on a stale
+     * consume (contracts.md §2.1's disclosed "pacing-skip window").
+     */
+    public void consumePacingSkip() {
+        stealPacingSkips.updateAndGet(FutilityPacingPolicy::decay);
     }
 
     // ---- Slow-range dump: per-range steal-reason tallies + drain-rate clock -------------

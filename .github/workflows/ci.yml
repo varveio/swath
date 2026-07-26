@@ -35,6 +35,16 @@ jobs:
       - name: Instrumentation-drift guard (§5)
         run: ./scripts/ci/check-instrumentation-drift.sh
 
+      # The guard itself is 1400+ lines of structural resolution logic (dataflow tracing,
+      # a TypeIndex over records/coded-enums, correlated-pair recursion) that a future
+      # refactor of the SCRIPT could quietly break without ever touching the Java it
+      # checks -- so its own self-test suite (scratch trees with injected drift/false
+      # positives) runs here too, not just on a maintainer's local machine. Fast and
+      # hermetic (builds its own temp trees; no repo Java is scanned), so this costs the
+      # job almost nothing.
+      - name: Instrumentation-drift guard self-test (§5)
+        run: ./scripts/ci/check-instrumentation-drift.sh --self-test
+
       - name: Set up JDK 25
         uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165  # v4
         with:

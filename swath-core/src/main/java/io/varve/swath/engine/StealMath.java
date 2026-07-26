@@ -5,10 +5,12 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.output.ControlCharEscaper;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -210,6 +212,31 @@ public final class StealMath {
     }
 
     /**
+     * Alphabet-aware variant of {@link #interpolate(byte[], byte[], double, AlphabetDigest)} that
+     * reports the digest's per-consult {@code ALPHABET.*} fallback reason (if any) into {@code
+     * collector} — a caller-owned {@link Engagement} list, never {@code RunMetrics} directly (issue
+     * #19's fix, contracts.md §2.1): {@code ThiefPolicy}'s pivot cascade and {@code
+     * OwnerSplitGovernor}'s carve each pass their own pending-engagement list, so the fallback is
+     * delivered to the executor exactly like every other engagement they already collect. Identical
+     * in every other respect to the two-argument-fewer overload above; a {@code null} {@code digest}
+     * or {@code collector} is exactly as inert as a {@code null} {@code digest} there.
+     */
+    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest,
+                                      List<Engagement> collector) {
+        if (hi == null) {
+            return null;
+        }
+        byte[] a = (lo == null) ? new byte[0] : lo;
+        if (KeyBytes.compareUnsigned(a, hi) >= 0) {
+            return null;
+        }
+        double frac = Math.min(1.0 - 1e-9, Math.max(1e-9, f));
+        ByteMidpoint.ScalarChooser chooser = (digest == null) ? null
+                : (cpIndex, loCp, hiCp, fraction) -> digest.chooseScalar(cpIndex, loCp, hiCp, fraction, collector);
+        return ByteMidpoint.between(a, hi, frac, chooser);
+    }
+
+    /**
      * Discriminate the <b>two distinct</b> {@code null} returns of {@link #extrapolate} for an
      * open-frontier victim (algorithms.md §3.1): is the victim merely <i>un-started</i> (cursor
      * still at {@code lo} — ⊥ for the root seed — so there is <b>no consumed span</b> to reflect
@@ -289,10 +316,12 @@ public final class StealMath {
      * splits are unaffected; on a thinning tail ({@code densityRatio < f}) the reachable tail
      * collapses to ~0 and the confetti carve is blocked. See metrics §5 for the derivation.
      *
-     * <p>Package-private static (pure arithmetic, no engine state) so a unit test can exercise the
-     * exact boundary without driving the whole engine to a precise input combination.
+     * <p>Public static (pure arithmetic, no engine state): a unit test can exercise the exact
+     * boundary without driving the whole engine to a precise input combination, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly (source-agnostic
+     * — no engine type crosses the package boundary).
      */
-    static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys) {
+    public static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys) {
         double reach = Math.min(1.0, densityRatio);       // thinning (ratio < 1) shrinks the reachable tail
         double realizedChildMass = est * Math.max(0.0, reach - f);
         return realizedChildMass <= 2.0 * (double) maxKeys;
@@ -305,11 +334,12 @@ public final class StealMath {
      * overshot the observed mass — AND (b) the clamped child tail {@code (mReflect, H]} still clears the
      * observed-mass {@link #childTailBelowObservedMassFloor floor}. On a uniform keyspace the
      * reflected pivot reaches at least as far as the far-ahead fraction ({@code mReflect >= m}), so the
-     * clamp never engages (f's skew is load-bearing there — do not clamp blind). Package-private static
-     * (pure arithmetic + byte compares, no engine state) so the exact decision is unit-testable without
-     * driving the whole engine to a precise pivot/density combination.
+     * clamp never engages (f's skew is load-bearing there — do not clamp blind). Public static
+     * (pure arithmetic + byte compares, no engine state): the exact decision is unit-testable without
+     * driving the whole engine to a precise pivot/density combination, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly.
      */
-    static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+    public static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                           double est, double densityRatio, int maxKeys) {
         if (mReflect == null
                 || KeyBytes.compareUnsigned(cursor, mReflect) >= 0
@@ -340,10 +370,11 @@ public final class StealMath {
      *       fission the child into confetti.</li>
      * </ol>
      * Any condition failing returns {@code false} and the caller publishes the unchanged carve at
-     * {@code m}. Package-private static (pure arithmetic + byte compares, no engine state) so the
-     * exact boundary is unit-testable without driving the whole engine to a degenerate-pivot shape.
+     * {@code m}. Public static (pure arithmetic + byte compares, no engine state): the exact
+     * boundary is unit-testable without driving the whole engine to a degenerate-pivot shape, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly.
      */
-    static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+    public static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                          double est, double densityRatio, int maxKeys) {
         double remSpan = spanIn(cursorTo, H, lo, H);
         double fKeptLo = spanIn(cursorTo, m, lo, H) / Math.max(1e-300, remSpan);

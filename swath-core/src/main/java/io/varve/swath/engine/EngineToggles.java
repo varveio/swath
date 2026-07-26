@@ -5,6 +5,7 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.observability.RunMetrics;
 import java.util.ArrayList;
@@ -294,18 +295,30 @@ public record EngineToggles(
 
     /**
      * The far-ahead pivot fraction for a bounded range ({@code hi != null}) at the two sites that
-     * otherwise call {@link WorkerState#densityFraction()} directly ({@link Thief} and {@link
-     * WorkStealingScan}'s owner-split site). {@code far_ahead=off} wins over {@code density_ewma}
-     * (checked first) — fixing the plain byte-midpoint takes precedence over any EWMA substitute.
+     * otherwise call {@link WorkerState#densityFraction()} directly ({@link Thief}'s policy and
+     * {@link WorkStealingScan}'s owner-split site). {@code far_ahead=off} wins over {@code
+     * density_ewma} (checked first) — fixing the plain byte-midpoint takes precedence over any EWMA
+     * substitute. Delegates to {@link #farAheadFraction(double)}, the primitive form the policy
+     * package (source-agnostic — no {@link WorkerState}) calls directly with an already-read
+     * {@link WorkerState#densityFraction()} value.
      */
     public double farAheadFraction(WorkerState victim) {
+        return farAheadFraction(victim.densityFraction());
+    }
+
+    /**
+     * The primitive form of {@link #farAheadFraction(WorkerState)}: {@code densityFraction} is
+     * {@link WorkerState#densityFraction()}'s already-computed value (pure, zero-I/O), so this
+     * overload needs no {@link WorkerState} — the one {@code io.varve.swath.engine.policy} calls.
+     */
+    public double farAheadFraction(double densityFraction) {
         if (!farAhead) {
             return PLAIN_MIDPOINT_FRACTION;
         }
         if (!densityEwma) {
             return DENSITY_EWMA_OFF_FRACTION;
         }
-        return victim.densityFraction();
+        return densityFraction;
     }
 
     /**
@@ -322,12 +335,26 @@ public record EngineToggles(
     }
 
     /**
-     * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest)} when {@code
-     * alphabet_pivots} is on, else the plain code-point {@link StealMath#interpolate(byte[],
-     * byte[], double)} overload (no digest consult) — the same substitution at both call sites
-     * (Thief and the owner-split site).
+     * The primitive form of {@link #observedDensityRatio(WorkerState)}: {@code rawObservedDensityRatio}
+     * is {@link WorkerState#observedDensityRatio()}'s already-computed value (pure, zero-I/O), so this
+     * overload needs no {@link WorkerState} — the one {@code io.varve.swath.engine.policy}'s owner-split
+     * governor calls, mirroring {@link #farAheadFraction(double)}.
      */
-    public byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest) {
-        return alphabetPivots ? StealMath.interpolate(lo, hi, f, digest) : StealMath.interpolate(lo, hi, f);
+    public double observedDensityRatio(double rawObservedDensityRatio) {
+        return densityEwma ? rawObservedDensityRatio : Double.POSITIVE_INFINITY;
+    }
+
+    /**
+     * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest, List)} when {@code
+     * alphabet_pivots} is on, else the plain code-point {@link StealMath#interpolate(byte[],
+     * byte[], double)} overload (no digest consult, so {@code collector} never receives a fallback
+     * mark either) — the same substitution at both call sites (Thief and the owner-split site).
+     * {@code collector} is the caller's own pending-{@link Engagement} list (issue #19's fix): the
+     * digest reports its fallback there, never to {@code RunMetrics} directly.
+     */
+    public byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest, List<Engagement> collector) {
+        return alphabetPivots
+                ? StealMath.interpolate(lo, hi, f, digest, collector)
+                : StealMath.interpolate(lo, hi, f);
     }
 }

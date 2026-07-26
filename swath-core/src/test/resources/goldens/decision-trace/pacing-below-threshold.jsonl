@@ -1,0 +1,2 @@
+{"site":"pacing.steal_paced","fixture":"pacing-below-threshold","seq":0,"view":{"node_id":1,"script_victim":"below-threshold","step_in_script":0},"decision":{"paced":false}}
+{"site":"pacing.steal_paced","fixture":"pacing-below-threshold","seq":1,"view":{"node_id":1,"script_victim":"below-threshold","step_in_script":1},"decision":{"paced":false}}

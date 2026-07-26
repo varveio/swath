@@ -146,6 +146,7 @@ surprises:
 | `WorkStealingScanSmokeTest` | default | Fast PERF-1 smoke: ~2k skewed keyspace, work-stealing balances, exactly-once |
 | `WorkStealingScanPerf1Test` | `perf` | Full PERF-1: 99%-skewed 100k keyspace, balance + O(W·log ρ) probe overhead |
 | `ParquetPerf2Test` | `perf` | Full PERF-2: 100k keys, measured peak heap < §7.2 budget, no VT pinning |
+| `DecisionTraceGoldenTest` | default | Policy-seam safety net: `Thief.steal`/`OwnerSelfSplit.maybeOwnerSelfSplit`/`WorkerState.stealPaced`/`SeedStep.seedSpecs` (view, decision) sequences replayed against committed JSONL goldens, diffed on drift — see [`decision-trace-goldens.md`](decision-trace-goldens.md) |
 
 ## Tag convention (so heavy tests can't sneak into the default suite)
 - `@Tag("integration")` — needs a real store/Docker (Testcontainers: LocalStack, and

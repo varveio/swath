@@ -1,0 +1,4 @@
+{"site":"pacing.steal_paced","fixture":"pacing-multi-victim-isolation","seq":0,"view":{"node_id":1,"script_victim":"victim-a-tripped","step_in_script":0},"decision":{"paced":true}}
+{"site":"pacing.steal_paced","fixture":"pacing-multi-victim-isolation","seq":1,"view":{"node_id":2,"script_victim":"victim-b-fresh","step_in_script":0},"decision":{"paced":false}}
+{"site":"pacing.steal_paced","fixture":"pacing-multi-victim-isolation","seq":2,"view":{"node_id":1,"script_victim":"victim-a-tripped","step_in_script":1},"decision":{"paced":true}}
+{"site":"pacing.steal_paced","fixture":"pacing-multi-victim-isolation","seq":3,"view":{"node_id":2,"script_victim":"victim-b-fresh","step_in_script":1},"decision":{"paced":false}}

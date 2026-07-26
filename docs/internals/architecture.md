@@ -36,7 +36,8 @@ dependency rules, and the decisions behind them — see
 | `model` | `io.varve.swath.model` | Core types: `KeyBytes` (raw byte key + unsigned comparator), sealed `ListEntry` (`ObjectEntry`, `CommonPrefixEntry`, `DeleteMarkerEntry`), `PageBatch`, `ByteMidpoint` (UTF-8-safe pivot math) |
 | `store` | `io.varve.swath.store` | Internal, unsupported v0.1 seams: `PageFetcher.fetchPage(PageRequest) → ListPage`; `StoreCapabilities` descriptor (v0.1 reads only `maxKeysCap` in `RangeScanner`; no router ships); `PaginationKind` (KEY vs OPAQUE_MARKER) |
 | `store.s3` | `io.varve.swath.store.s3` | S3 implementation: `S3PageFetcher` (SDK v2 sync, `encoding-type=url`; the SDK's `DecodeUrlEncodedResponseInterceptor` decodes response keys, read via `getBytes(UTF_8)`), `S3ClientFactory` |
-| `engine` | `io.varve.swath.engine` | `WorkStealingScan` (worklist + fixed VT pool), `RangeScanner` (`runRange` loop), `Thief` (steal/probe/split incl. bounded `delimiter=/` structure probe), `StealMath` (`byteMidpoint`, `extrapolate`, victim selection), `WorkerState` (per-worker cursor/hi/lock), `ConcurrencyGauge` (AIMD), `SeedStep` (shallow `delimiter=/` seed pass), `SeedMode` (`SHALLOW`/`NONE`/`HINTS`) |
+| `engine` | `io.varve.swath.engine` | `WorkStealingScan` (worklist + fixed VT pool), `RangeScanner` (`runRange` loop), `Thief` (steal executor mechanics: pool→view/snapshot translation, RPC issuing, the lock-guarded CAS hand-off, metrics/trace emission — the pivot cascade itself is `engine.policy`'s), `OwnerSelfSplit` (owner-side self-split executor mechanics: `WorkerState`→view translation, the durable split CAS, the child hand-off, the tagged-child confetti-completion lifecycle — the gate chain itself is `engine.policy`'s), `ConfettiFeedbackGate` (the realized-child-mass feedback MEASUREMENT `OwnerSelfSplit` maintains and snapshots into every view; the classification decision itself lives in `engine.policy`'s owner-split governor — issue #22), `StealMath` (`byteMidpoint`, `extrapolate`, victim-selection math), `WorkerState` (per-worker cursor/hi/lock; its futility-pacing counters own the `AtomicInteger` read/writes, the trip/growth/decay/reset arithmetic itself is `engine.policy`'s `FutilityPacingPolicy`), `IdleStealBackoff` (the fleet-wide one-attempt slot: ownership/release/`RunMetrics` — the pacing-window arithmetic itself is `engine.policy`'s `IdleStealPacingPolicy`), `ConcurrencyGauge` (AIMD), `SeedStep` (shallow `delimiter=/` seed pass executor: issues every probe `engine.policy`'s `HybridSeedPlanner` requests, decodes pages, tiles the finished cut set into `NodeSpec`s — the descent itself is `engine.policy`'s), `SeedMode` (`SHALLOW`/`NONE`/`HINTS`) |
+| `engine.policy` | `io.varve.swath.engine.policy` | The policy seam: `StealPolicy`/`StealAttempt`/`ThiefPolicy` — victim selection and the full pivot cascade (§3 below); `OwnerSplitPolicy`/`OwnerSplitGovernor` — the owner-side proactive self-split's gate chain (§3.3); `FutilityPacingPolicy` — the per-victim futility-cooldown trip/growth/decay/reset arithmetic, pure functions of one `int` at a time (never a combined view — see `contracts.md` §2.1); `IdleStealPacingPolicy`/`IdleStealPacingState`/`IdleStealPacingDecision` — the fleet-wide idle-steal backoff's pacing-window arithmetic, a combined immutable state record (safe because every access stays inside `IdleStealBackoff`'s own `synchronized` methods) — as source-agnostic decision interfaces (views/decisions/probe outcomes carry keys as bytes, counts, streaks, and policy-domain enums only — no `store.ListPage` or other protocol type). `Thief` drives `ThiefPolicy` through a request/response loop, issuing every RPC it requests; `OwnerSelfSplit` drives `OwnerSplitGovernor` with one call per page-commit (owner-split is zero-probe, so there is no request/response loop). `SeedPlanner`/`SeedDescent`/`HybridSeedPlanner` — the seed step's descent (§8: span-priority frontier, probe-budget accounting, per-level classification, cut-set assembly) as a source-agnostic decision interface, with no `View` and no mutation list at all (its frontier/cut-set/probe-budget state is never shared — see `contracts.md` §2.1's third-shape note); `SeedStep` drives it through the identical request/response shape `Thief` uses for `ThiefPolicy`, decoding each page into a `SeedProbeOutcome` before handing it to `SeedDescent#onProbeResult`. |
 | `checkpoint` | `io.varve.swath.checkpoint` | `CheckpointStore` interface; `SqliteCheckpointStore` (single writer thread, WAL, `commitPage`, `splitNode`); node/run state types |
 | `output` | `io.varve.swath.output` | `EntryFormatter` (sealed), text formatters (`JsonlFormatter`, `TsvFormatter`, `AlignedFormatter`), `OutputStage`, `ControlCharEscaper` |
 | `output.parquet` | `io.varve.swath.output.parquet` | `ParquetWriterPool` (2–4 writers, decoupled from listing concurrency), `PartWriter` (size-rotated parts, footer fsync), `Manifest` (atomic `manifest.json`), `ParquetSchema`, `ParquetResume` |
@@ -47,6 +48,71 @@ dependency rules, and the decisions behind them — see
 | `cli` | `io.varve.swath.cli` | `App` (Picocli root), `ListCommand`, `ResumeCommand`, `ExitCodes`, `S3Uri` |
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
+
+**Known seam exceptions:** three closed, one open. `engine.policy`'s convention is that a policy is a
+deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
+and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
+mechanically checkable against the decision enum). The policy-seam refactor closed the three
+exceptions this section used to carry, and the determinism audit (`DecisionPathPurityTest`) now
+enforces the convention mechanically against the three SHAPES they took. A fourth, issue #30, is
+open and is **disclosed rather than enforced** — see the block after the list.
+
+The three CLOSED exceptions:
+
+- `OwnerSplitGovernor`'s confetti feedback gate probe-counter side effect (issue #22) — `decide(view)`
+  is now a genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
+  classification math and the `ConfettiFeedbackGate` collaborator now divide the work.
+- `ThiefPolicy`'s structure-probe suppression recovery reaching for ambient
+  `ThreadLocalRandom.current()` (issue #20) — the draw is now injected as a `DecisionRng`
+  (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live default as
+  `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source as before, so
+  live-run behavior is unchanged (goldens verified byte-identical) — while tests and a future
+  simulator inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
+  proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
+  `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
+  `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded
+  generator for live-run determinism is a separate, not-yet-made owner decision.
+- `AlphabetDigest` (carried through in `StealAttemptView`, consumed by `StealMath.interpolate(...,
+  digest, collector)`) held its own `RunMetrics` reference and fired `ALPHABET.*` fallback counters
+  directly from inside `chooseScalar` (issue #19) — CLOSED: the fallback reason is now an
+  `AlphabetFallback` enum reported through a caller-owned `List<Engagement>` collector threaded from
+  `ThiefPolicy`'s pivot cascade / `OwnerSplitGovernor`'s carve, exactly like every other engagement;
+  `AlphabetDigest` holds no metrics reference of any kind.
+
+**The OPEN one — `StealAttemptView.alphabetDigest` is a live reference, not a snapshot (issue #30).**
+The view is documented as an immutable snapshot the policy decides over, and for every other field
+it is. `alphabetDigest` is the victim's actual `AlphabetDigest` instance: its `long[][] mask` /
+`boolean[] clean` are final *references* with mutable *contents*, and a concurrent page commit on
+the victim can change what the digest reports between view construction and `ThiefPolicy`'s
+dereference of it. **Production behavior is unaffected by the extraction** — the pre-extraction code
+read the digest live at the same point, and the split CAS re-validate keeps tiling safe regardless
+of what the policy decided, so no I1–I12 invariant is at risk. What it costs is the *claim*: a
+recorded `(view, decision)` pair is not reproducible from the recorded view alone, so
+replay-equivalence — the property the simulator is being built on — does not hold for the pivot
+cascade until #30 is closed. Treat "deterministic function of its view" as holding for every policy
+path except this one. contracts.md §2.1 carries the full mechanism and the per-field audit row.
+
+The determinism audit's enforcement test (`DecisionPathPurityTest`, `swath-core`) scans the policy
+package plus the transitive closure of every field-reachable `io.varve.swath.*` type for a held
+`RunMetrics`/`TraceSink` reference or `java.util.concurrent.atomic` state, and the same closure's
+source for a direct ambient clock/randomness call — so a class shaped like any of the three CLOSED
+exceptions above (in the policy package or reached through a view/decision/event field, regardless
+of which package it lives in) fails a mechanical check rather than waiting for the next review pass.
+**Issue #30's shape is outside that audit**: mutable primitive arrays and volatile fields are legal
+under all three checks, so a view field holding shared mutable state passes cleanly. Closing #30
+should extend the test to reject view-reachable mutable array state, so the next instance is caught
+mechanically rather than by review.
+
+**Port defined, not wired: `ConcurrencyPolicy`.** Unlike the five `engine.policy` types listed in the
+table row above, `ConcurrencyPolicy` (algorithms.md §5) has no engine implementation behind it —
+`ConcurrencyGauge` (`engine`, AIMD) stays exactly as it is, and nothing constructs, holds, or calls
+this interface. It exists solely so a simulator can carry its own faithful port of the AIMD
+controller behind a documented shape; extraction of the real controller is deliberately deferred
+(AIMD's clean-window cooldowns, shed windows, and valve pacing are the most timing-coupled mechanism
+in the engine, and the divergence risk of a simulator-side port was judged low). Because nothing
+holds it as a field, `DecisionPathPurityTest`'s closure walk never reaches an implementation of it —
+see that test's "Known gaps" javadoc and `ConcurrencyPolicy`'s own javadoc for what is, and is not,
+mechanically checked.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.

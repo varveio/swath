@@ -5,10 +5,12 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.AlphabetFallback;
+import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.model.ByteMidpoint;
-import io.varve.swath.observability.RunMetrics;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Per-worker <b>observed-alphabet digest</b> for rank-space pivot interpolation. A tiny, zero-API
@@ -37,8 +39,14 @@ import java.util.Arrays;
  * writes; a torn read is benign — the chooser's result is independently re-validated for safety and
  * strict betweenness by {@link ByteMidpoint}, so it can only shift the pivot's balance within valid
  * bounds, never break tiling correctness (mirrors the lock-free density read).
+ *
+ * <p>Public only so {@code io.varve.swath.engine.policy}'s {@code StealAttemptView} can carry a
+ * victim's digest through to the pivot cascade (policy-domain, no S3/protocol dependency — the
+ * same status as {@code StealMath}/{@code ByteMidpoint}); construction and mutation
+ * ({@link #observe}) stay package-private to {@code io.varve.swath.engine} — only
+ * {@link WorkerState} builds and feeds one.
  */
-final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
+public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
 
     /** Number of code-point positions tracked past the range divergence point (K, small). */
     static final int MAX_POSITIONS = 8;
@@ -55,21 +63,10 @@ final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
     private final boolean[] clean = new boolean[MAX_POSITIONS];
     /** Publication fence: bumped (last) after every mutating {@link #observe}; read first by readers. */
     private volatile int generation;
-    /**
-     * Optional sink for the per-consult {@code ALPHABET.*} fallback engagement counters
-     * ({@code fallback_out_of_window}/{@code fallback_no_room}/{@code window_gap}) — {@code null} on the
-     * unit-test constructor, wired only through the production {@link WorkerState} path.
-     */
-    private final RunMetrics metrics;
 
     AlphabetDigest(byte[] lo, byte[] hi) {
-        this(lo, hi, null);
-    }
-
-    AlphabetDigest(byte[] lo, byte[] hi, RunMetrics metrics) {
         Arrays.fill(clean, true);
         this.base = commonPrefixCodePoints(decode(lo), decode(hi));
-        this.metrics = metrics;
     }
 
     /**
@@ -117,24 +114,49 @@ final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
 
     @Override
     public int chooseScalar(int cpIndex, int loCp, int hiCp, double fraction) {
+        return chooseScalar(cpIndex, loCp, hiCp, fraction, null);
+    }
+
+    /**
+     * The alphabet-aware consult, reporting any {@code ALPHABET.*} fallback reason into {@code
+     * collector} instead of a {@code RunMetrics} field of this class's own (issue #19's fix): a
+     * {@code decide()}-reachable consult must never hold or touch {@code RunMetrics} itself, so the
+     * caller — {@code StealMath#interpolate(byte[], byte[], double, AlphabetDigest, List)}, threaded
+     * from {@code ThiefPolicy}'s pivot cascade or {@code OwnerSplitGovernor}'s carve — supplies its
+     * own pending-{@link Engagement} list and hands it to the executor exactly like every other
+     * engagement (contracts.md §2.1). A {@code null} collector (the {@link
+     * ByteMidpoint.ScalarChooser} override above, and every existing unit test that drives this
+     * method directly) records nothing — behavior-preserving by construction, since a consult fires
+     * at most one fallback either way.
+     */
+    int chooseScalar(int cpIndex, int loCp, int hiCp, double fraction, List<Engagement> collector) {
         int g = generation;                     // acquire: see the mask/clean writes published before it
         if (g < 0) {                            // (never; silences "unused" — the read is the fence)
             return NO_SCALAR;
         }
         int pos = cpIndex - base;
         if (pos < 0 || pos >= MAX_POSITIONS || !clean[pos]) {
-            recordFallback("fallback_out_of_window");   // consult fell outside the tracked/clean window
+            // consult fell outside the tracked/clean window
+            if (collector != null) {
+                collector.add(new Engagement("ALPHABET", AlphabetFallback.FALLBACK_OUT_OF_WINDOW.code()));
+            }
             return NO_SCALAR;
         }
         int from = Math.max(LO_SCALAR, (loCp < 0) ? LO_SCALAR : loCp + 1);   // strictly > loCp
         int to = Math.min(HI_SCALAR, hiCp - 1);                              // strictly < hiCp
         if (from > to) {
-            recordFallback("fallback_no_room");         // no room for any scalar strictly in (loCp, hiCp)
+            // no room for any scalar strictly in (loCp, hiCp)
+            if (collector != null) {
+                collector.add(new Engagement("ALPHABET", AlphabetFallback.FALLBACK_NO_ROOM.code()));
+            }
             return NO_SCALAR;
         }
         int n = countBits(pos, from, to);
         if (n == 0) {
-            recordFallback("window_gap");               // no observed value populates the (loCp, hiCp) gap
+            // no observed value populates the (loCp, hiCp) gap
+            if (collector != null) {
+                collector.add(new Engagement("ALPHABET", AlphabetFallback.WINDOW_GAP.code()));
+            }
             return NO_SCALAR;
         }
         int target = (int) Math.floor(fraction * n);
@@ -173,13 +195,6 @@ final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
             }
         }
         return NO_SCALAR;   // unreachable: k < countBits(pos, from, to)
-    }
-
-    /** Record a per-consult {@code ALPHABET.<reason>} fallback engagement counter (§5). */
-    private void recordFallback(String reason) {
-        if (metrics != null) {
-            metrics.recordStealReason("ALPHABET", reason);
-        }
     }
 
     /**

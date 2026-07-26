@@ -7,137 +7,198 @@ package io.varve.swath.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.concurrent.CyclicBarrier;
 import org.junit.jupiter.api.Test;
 
 /**
- * Direct unit coverage of {@link ConfettiFeedbackGate}'s bookkeeping — the warmup
- * floor, the threshold boundary, and the every-{@code PROBE_K}-th probe escape — plus
- * {@link OwnerSelfSplit#isConfettiChild}, the confetti-vs-substantial classification predicate the
- * gate's realized-mass evidence is built from: a tagged child is confetti only if it BOTH has a
- * small own tally AND never itself split. Exercised directly (package-private, pure arithmetic +
- * atomics, no engine machinery) so the exact decision sequence is pinned without driving the whole
- * engine to a precise realized-mass distribution. This is an ordinary unit guard of the gate's
- * bookkeeping, not the adversarial skewed-keyspace regression, which lives in a separate suite.
+ * Direct unit coverage of {@link ConfettiFeedbackGate}'s bookkeeping — {@link
+ * ConfettiFeedbackGate#recordCompletion}/{@link ConfettiFeedbackGate#snapshot} and {@link
+ * ConfettiFeedbackGate#consumeProbeSlot} — plus {@link OwnerSelfSplit#isConfettiChild}, the
+ * confetti-vs-substantial classification predicate the gate's realized-mass evidence is built
+ * from: a tagged child is confetti only if it BOTH has a small own tally AND never itself split.
+ * Exercised directly (pure counters, no engine machinery). Issue #22's fix moved the
+ * warmup/threshold/probe-cycle DECISION logic out of this class entirely — that boundary coverage
+ * now lives in {@code io.varve.swath.engine.policy.OwnerSplitGovernorTest}, which exercises it as
+ * pure arithmetic over a {@code ConfettiObservation} view field, not against a live gate.
  */
 final class ConfettiFeedbackGateTest {
 
-    // -------------------------------------------------------------------------------------------
-    // Warmup: below MIN_SAMPLE, always CARVE regardless of how confetti-heavy the observed rate is.
-    // -------------------------------------------------------------------------------------------
-
+    /**
+     * A tuned constant, pinned by LITERAL. {@code OwnerSplitGovernorTest}'s gate tests reference it
+     * only symbolically (via comments spelling out "8", never an assertion against the constant
+     * itself), so a change to the warmup floor is invisible to them. This is the confetti-feedback
+     * gate's warmup sample floor (issue #22) — an accidental edit should fail a build, not silently
+     * retune when the gate starts trusting its own ground truth.
+     */
     @Test
-    void belowMinSampleAlwaysCarvesEvenAtOneHundredPercentConfetti() {
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // MIN_SAMPLE - 1 all-confetti completions: still warming up, no basis to suppress yet.
-        for (long i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE - 1; i++) {
-            gate.recordCompletion(true);
-            assertThat(gate.decide())
-                    .as("warmup sample %d/%d: must still carve", i + 1, ConfettiFeedbackGate.MIN_SAMPLE)
-                    .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
-        }
-    }
-
-    @Test
-    void exactlyMinSampleAllConfettiTripsTheGate() {
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (long i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);
-        }
-        // rate = 1.0 > 0.5 threshold, warmup satisfied (total == MIN_SAMPLE) -> the gate engages
-        // (first over-threshold decide() is attempt #1, not a multiple of PROBE_K -> SUPPRESSED).
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
+    void minSampleIsPinnedToItsLiteralValue() {
+        assertThat(ConfettiFeedbackGate.MIN_SAMPLE).isEqualTo(8);
     }
 
     // -------------------------------------------------------------------------------------------
-    // Threshold boundary: rate <= SUPPRESS_THRESHOLD (0.5) never suppresses; strictly above does.
+    // recordCompletion / snapshot: the tagged-completion tallies accumulate correctly.
     // -------------------------------------------------------------------------------------------
 
     @Test
-    void rateAtExactlyThresholdDoesNotSuppress() {
+    void freshGateSnapshotsAllZero() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // 4 confetti / 8 total = 0.5 == SUPPRESS_THRESHOLD exactly -> "<= threshold" carves.
-        for (int i = 0; i < 4; i++) {
-            gate.recordCompletion(true);
-        }
-        for (int i = 0; i < 4; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide())
-                .as("rate == threshold exactly must still carve (strictly-greater-than triggers suppression)")
-                .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
+        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0));
     }
 
     @Test
-    void rateJustAboveThresholdSuppresses() {
+    void recordCompletionAccumulatesTotalAndConfettiSeparately() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        // 5 confetti / 8 total = 0.625 > 0.5 -> the gate engages.
+        gate.recordCompletion(true);
+        gate.recordCompletion(true);
+        gate.recordCompletion(false);
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).as("every completion counts toward the total").isEqualTo(3);
+        assertThat(snap.taggedConfetti()).as("only the confetti-classified ones count here").isEqualTo(2);
+    }
+
+    @Test
+    void recordCompletionNeverTouchesProbeSeq() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        for (int i = 0; i < 20; i++) {
+            gate.recordCompletion(i % 2 == 0);
+        }
+        assertThat(gate.snapshot().probeSeq())
+                .as("completions and the probe sequence are independent counters")
+                .isZero();
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // consumeProbeSlot: advances probeSeq, independent of the completion tallies.
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    void consumeProbeSlotAdvancesProbeSeqByOneEachCall() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.consumeProbeSlot();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(1);
+        gate.consumeProbeSlot();
+        gate.consumeProbeSlot();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(3);
+    }
+
+    @Test
+    void consumeProbeSlotNeverTouchesTheCompletionTallies() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.recordCompletion(true);
         for (int i = 0; i < 5; i++) {
-            gate.recordCompletion(true);
+            gate.consumeProbeSlot();
         }
-        for (int i = 0; i < 3; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).isEqualTo(1);
+        assertThat(snap.taggedConfetti()).isEqualTo(1);
+        assertThat(snap.probeSeq()).isEqualTo(5);
     }
 
     // -------------------------------------------------------------------------------------------
-    // Probe escape: every PROBE_K-th would-be-suppressed decide() is let through as a PROBE.
+    // Concurrency (issue #22's disclosed relaxation): snapshot-then-consumeProbeSlot is two
+    // separate calls, so two racing workers can share a pre-increment snapshot. The two tests below
+    // split the disclosure's two claims apart, because a single test claiming BOTH turned out to
+    // prove only one of them: a mutated, non-atomic consumeProbeSlot() (probeSeq.set(probeSeq.get()
+    // + 1) in place of incrementAndGet()) still passed the forced-race test below 20/20 runs -- its
+    // own "no increment lost" assertion never caught the mutant, because racing to increment right
+    // after one barrier release rarely produces enough genuine contention to lose one.
+    //   - concurrentConsumeProbeSlotSharesThePreIncrementReadUnderAForcedRace demonstrates ONLY the
+    //     DETERMINISTIC half: a CyclicBarrier forces every racer's snapshot() read to happen-before
+    //     every racer's consumeProbeSlot() call, so all racers PROVABLY observe the same
+    //     pre-increment probeSeq (the shared-slot drift the disclosure describes, reproduced on
+    //     demand rather than hoped for) -- never a scheduler-luck interleaving assertion (issue #18).
+    //   - concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad is the PROBABILISTIC half:
+    //     plain concurrent stress, no forced ordering, asserting only the final conserved total.
+    //     Measured against the same non-atomic mutant above: 100% (20/20) detection at this test's
+    //     32 threads x 5,000 calls; a materially weaker 5% (1/20) at the previously-committed 16 x 200.
+    // Neither test is a proof of atomicity -- no racing test can establish that to certainty (issue
+    // #18 again, one level up: don't let a test imply a proof it can't deliver). The AUTHORITATIVE
+    // conservation guarantee is that consumeProbeSlot() is a plain AtomicLong#incrementAndGet(), BY
+    // INSPECTION -- see that method's own javadoc in ConfettiFeedbackGate.
     // -------------------------------------------------------------------------------------------
 
     @Test
-    void everyProbeKthSuppressedAttemptIsAProbe() {
+    void concurrentConsumeProbeSlotSharesThePreIncrementReadUnderAForcedRace() throws Exception {
+        // One barrier forces EVERY racer's snapshot() read to happen-before ANY racer's
+        // consumeProbeSlot() call: the barrier only releases once all `racers` threads have
+        // reached it, i.e. once every read has already completed -- so this is not hoping for a
+        // lucky interleaving, it is structurally guaranteed by CyclicBarrier's own happens-before
+        // semantics that all reads observe probeSeq == 0.
+        int racers = 8;
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);   // 100% confetti -> always over threshold from here on
+        CyclicBarrier allReadsDone = new CyclicBarrier(racers);
+        long[] observedBeforeIncrement = new long[racers];
+        Thread[] threads = new Thread[racers];
+        for (int i = 0; i < racers; i++) {
+            int idx = i;
+            threads[i] = new Thread(() -> {
+                observedBeforeIncrement[idx] = gate.snapshot().probeSeq();
+                await(allReadsDone);
+                gate.consumeProbeSlot();
+            });
         }
-        long probeK = ConfettiFeedbackGate.PROBE_K;
-        for (long attempt = 1; attempt <= probeK * 3; attempt++) {
-            ConfettiFeedbackGate.Decision decision = gate.decide();
-            if (attempt % probeK == 0) {
-                assertThat(decision).as("attempt %d is the %d-th probe slot", attempt, probeK)
-                        .isEqualTo(ConfettiFeedbackGate.Decision.PROBE);
-            } else {
-                assertThat(decision).as("attempt %d is not a probe slot", attempt)
-                        .isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-            }
+        for (Thread t : threads) {
+            t.start();
         }
+        for (Thread t : threads) {
+            t.join();
+        }
+
+        assertThat(observedBeforeIncrement)
+                .as("every racer's read happened before any racer's increment (barrier-forced), so "
+                        + "all %d racers observed the SAME pre-increment probeSeq -- the exact shared-slot "
+                        + "drift this gate's javadoc discloses, reproduced on demand rather than hoped for",
+                        racers)
+                .containsOnly(0L);
+        // Incidentally still conserved here too -- but this SPECIFIC forced setup does not reliably
+        // catch a non-atomic consumeProbeSlot() (a mutated implementation passed this exact check
+        // 20/20 runs): see concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad below for
+        // the probabilistic coverage that does, and consumeProbeSlot's own javadoc for the
+        // by-inspection guarantee neither test can substitute for.
+        assertThat(gate.snapshot().probeSeq())
+                .as("incidentally conserved under this forced setup too, though not what it is designed "
+                        + "to catch (see the comment above)")
+                .isEqualTo(racers);
     }
 
     @Test
-    void probeCounterIsIndependentOfRecordedCompletionsAfterWarmup() {
-        // Once suppressing, decide() alone (no further recordCompletion calls) still advances the
-        // probe counter -- the K-th call is a probe regardless of whether the run has recorded any
-        // MORE completions since warmup (the probe counter and the completion tally are separate).
+    void concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad() throws Exception {
+        // No forced ordering here -- plain concurrent stress, asserting only the final conserved
+        // total (never an interleaving-dependent check). PROBABILISTIC coverage, not a proof: this
+        // is the test that actually caught the non-atomic mutant described in the comment block
+        // above, at a measured 100% (20/20) detection rate at these thread/call counts -- a
+        // materially weaker 5% (1/20) at the previously-committed 16 x 200. Raised here so this
+        // test carries real (if still imperfect, per issue #18's "no racing test can prove
+        // atomicity" caveat) probabilistic weight rather than a mostly-decorative one.
+        int threadCount = 32;
+        int callsPerThread = 5000;
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);
+        Thread[] threads = new Thread[threadCount];
+        for (int i = 0; i < threadCount; i++) {
+            threads[i] = new Thread(() -> {
+                for (int c = 0; c < callsPerThread; c++) {
+                    gate.consumeProbeSlot();
+                }
+            });
         }
-        for (int i = 0; i < ConfettiFeedbackGate.PROBE_K - 1; i++) {
-            assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
+        for (Thread t : threads) {
+            t.start();
         }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.PROBE);
+        for (Thread t : threads) {
+            t.join();
+        }
+
+        assertThat(gate.snapshot().probeSeq())
+                .as("every consumeProbeSlot() call across every thread is counted exactly once")
+                .isEqualTo((long) threadCount * callsPerThread);
     }
 
-    // -------------------------------------------------------------------------------------------
-    // Recovery: a run of substantial (non-confetti) completions after the gate engaged brings the
-    // observed rate back at/under the threshold, and CARVE resumes without needing a probe to win.
-    // -------------------------------------------------------------------------------------------
-
-    @Test
-    void recordingEnoughSubstantialCompletionsRecoversTheRate() {
-        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(true);   // 8/8 confetti -> suppressing
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await();
+        } catch (Exception e) {
+            throw new AssertionError(e);
         }
-        assertThat(gate.decide()).isEqualTo(ConfettiFeedbackGate.Decision.SUPPRESSED);
-
-        // 8 more substantial completions -> 8 confetti / 16 total = 0.5 == threshold -> recovers.
-        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
-            gate.recordCompletion(false);
-        }
-        assertThat(gate.decide())
-                .as("rate recovered to exactly the threshold -> carving resumes")
-                .isEqualTo(ConfettiFeedbackGate.Decision.CARVE);
     }
 
     // -------------------------------------------------------------------------------------------

@@ -5,6 +5,10 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.DecisionClock;
+import io.varve.swath.engine.policy.IdleStealPacingDecision;
+import io.varve.swath.engine.policy.IdleStealPacingPolicy;
+import io.varve.swath.engine.policy.IdleStealPacingState;
 import io.varve.swath.observability.RunMetrics;
 
 /**
@@ -28,21 +32,56 @@ import io.varve.swath.observability.RunMetrics;
  * an attempt that outlives it — not the mechanism that ends an ordinary wait, and not merely a
  * lost-signal fallback. Polling at the base interval instead is pure denial churn.
  * Enqueue/decrement signals still wake parked workers, so this never delays quiescence detection.
+ *
+ * <p><b>The pacing arithmetic (growth/reset/park-remaining) is {@code
+ * io.varve.swath.engine.policy}'s {@link IdleStealPacingPolicy}</b>, a pure function of an {@link
+ * IdleStealPacingState} and an injected {@link DecisionClock} read — the SAME {@code
+ * System::nanoTime} the engine always read, just no longer read from inside the policy itself
+ * (mirrors {@code DecisionRng}'s treatment of randomness). The fleet-wide one-attempt SLOT
+ * ({@code attemptInFlight}, its ownership/release, and this class's own {@link RunMetrics}
+ * reference) stays right here — executor infrastructure, never a policy concern.
+ *
+ * <p><b>Why the pacing state is one combined record here, unlike {@code WorkerState}'s per-victim
+ * futility counters.</b> {@code consecutiveNonProductive}/{@code nextAttemptNanos} used to be plain
+ * (non-atomic) fields, and every method that touches them is already {@code synchronized} on this
+ * instance — the monitor, not field-level atomicity, is what makes their combined read-then-write
+ * safe. Collapsing them into one immutable {@link IdleStealPacingState}, read and replaced as a
+ * whole inside the SAME synchronized method that used to touch the two fields directly, changes
+ * nothing about that guarantee. Contrast {@code WorkerState}'s futility-pacing counters, which are
+ * lock-free {@code AtomicInteger}s two racing thieves can touch with no shared monitor at all — a
+ * combined snapshot there would trade away the per-field atomicity those fields currently rely on
+ * for a compound one they never had, so that extraction stays per-field (see {@code
+ * FutilityPacingPolicy}'s javadoc). The rule: <b>monitor-protected state may be combined into one
+ * record; lock-free per-field atomics may not.</b> Every read and write of {@link #pacingState}
+ * below stays inside this class's existing {@code synchronized} methods — it never escapes the
+ * monitor, so it is never a torn-read hazard the plain fields it replaced didn't already avoid by
+ * the same lock.
  */
 final class IdleStealBackoff {
-    private final long baseNanos;
-    private final long capNanos;
     private final long attemptParkNanos;
     private final RunMetrics metrics;
-    private int consecutiveNonProductive;
-    private long nextAttemptNanos;
+    private final IdleStealPacingPolicy pacingPolicy;
+    private final DecisionClock clock;
+    private IdleStealPacingState pacingState = IdleStealPacingState.INITIAL;
     private boolean attemptInFlight;
 
     IdleStealBackoff(long baseNanos, long capNanos, long attemptParkNanos, RunMetrics metrics) {
-        this.baseNanos = baseNanos;
-        this.capNanos = capNanos;
+        this(baseNanos, capNanos, attemptParkNanos, metrics, System::nanoTime);
+    }
+
+    /**
+     * As the 4-arg constructor, but with a caller-supplied {@link DecisionClock} instead of the
+     * engine's live ambient {@code System::nanoTime} default — for tests (and a future simulator)
+     * that need a controllable clock. The 4-arg constructor delegates here with {@code
+     * System::nanoTime}, the SAME ambient source the engine read before this fix — deliberately zero
+     * behavior delta for every live run; only where the ambient-ness lives (an executor concern now,
+     * not inside the policy package) changed.
+     */
+    IdleStealBackoff(long baseNanos, long capNanos, long attemptParkNanos, RunMetrics metrics, DecisionClock clock) {
         this.attemptParkNanos = attemptParkNanos;
         this.metrics = metrics;
+        this.pacingPolicy = new IdleStealPacingPolicy(baseNanos, capNanos);
+        this.clock = clock;
     }
 
     synchronized boolean tryAcquireAttemptSlot() {
@@ -50,7 +89,7 @@ final class IdleStealBackoff {
             deny("in_flight");
             return false;
         }
-        if (System.nanoTime() < nextAttemptNanos) {
+        if (pacingPolicy.decide(pacingState, clock.nanoTime()) == IdleStealPacingDecision.PACED) {
             deny("paced");
             return false;
         }
@@ -96,11 +135,8 @@ final class IdleStealBackoff {
     }
 
     synchronized void recordNonProductive() {
-        int shift = Math.min(consecutiveNonProductive, 16);
-        consecutiveNonProductive++;
-        long delay = Math.min(capNanos, baseNanos << shift);
-        nextAttemptNanos = System.nanoTime() + delay;
-        metrics.setIdleBackoffLevel(consecutiveNonProductive);
+        pacingState = pacingPolicy.onNonProductive(pacingState, clock.nanoTime());
+        metrics.setIdleBackoffLevel(pacingState.consecutiveNonProductive());
     }
 
     /**
@@ -113,11 +149,10 @@ final class IdleStealBackoff {
         // Only a genuine recovery-from-backoff (level was already >0) counts as a "reset" —
         // this is also called on every ordinary claim (§ nextClaim), which would otherwise
         // dominate the counter with routine churn and drown the signal.
-        if (consecutiveNonProductive > 0) {
+        if (pacingState.consecutiveNonProductive() > 0) {
             metrics.recordIdleBackoffReset();
         }
-        consecutiveNonProductive = 0;
-        nextAttemptNanos = 0L;
+        pacingState = pacingPolicy.onReset();
         metrics.setIdleBackoffLevel(0);
     }
 
@@ -127,10 +162,6 @@ final class IdleStealBackoff {
             // ledger — so wait on that signal, not on a ~5 ms poll that can only re-deny.
             return attemptParkNanos;
         }
-        long remaining = nextAttemptNanos - System.nanoTime();
-        if (remaining <= 0L) {
-            return baseNanos;
-        }
-        return remaining;
+        return pacingPolicy.parkNanos(pacingState, clock.nanoTime());
     }
 }

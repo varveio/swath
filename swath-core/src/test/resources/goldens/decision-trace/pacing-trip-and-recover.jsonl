@@ -1,0 +1,3 @@
+{"site":"pacing.steal_paced","fixture":"pacing-trip-and-recover","seq":0,"view":{"node_id":1,"script_victim":"trip-and-recover","step_in_script":0},"decision":{"paced":true}}
+{"site":"pacing.steal_paced","fixture":"pacing-trip-and-recover","seq":1,"view":{"node_id":1,"script_victim":"trip-and-recover","step_in_script":1},"decision":{"paced":true}}
+{"site":"pacing.steal_paced","fixture":"pacing-trip-and-recover","seq":2,"view":{"node_id":1,"script_victim":"trip-and-recover","step_in_script":2},"decision":{"paced":false}}
