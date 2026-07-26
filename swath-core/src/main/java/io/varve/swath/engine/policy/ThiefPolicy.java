@@ -373,6 +373,12 @@ public final class ThiefPolicy implements StealPolicy {
                     && view.consecutiveTimedOutStructureProbes() < STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD) {
                 return true;
             }
+            // Known seam exception (issue #20, same category as AlphabetDigest's metrics leak,
+            // architecture.md's "Known seam exception" note): ambient ThreadLocalRandom, moved
+            // verbatim from Thief's own structureProbesEnabled -- not a behavior change, but it
+            // means this decision is not reproducible from the view alone. The fix (an injected
+            // seeded RNG) belongs to the determinism-audit slice, which already owns this class
+            // of gap for this same interface.
             return ThreadLocalRandom.current().nextInt(STRUCTURE_SUPPRESS_RETRY_DIVISOR) == 0;
         }
 

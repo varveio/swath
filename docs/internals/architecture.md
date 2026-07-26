@@ -49,14 +49,21 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
-**Known seam exception:** `engine.policy`'s convention is that a policy returns reason enums and
-the executor records them (so AGENTS.md's counter-per-path law stays mechanically checkable
-against the decision enum) — but `AlphabetDigest` (carried through in `StealAttemptView`, consumed
-by `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires
-`ALPHABET.*` fallback counters directly from inside `chooseScalar`, a pre-existing leak this
-extraction did not introduce and does not fix (a behavior-adjacent refactor, out of scope here).
-Tracked as issue #19; the fix belongs in the determinism-audit slice, which already owns
-injected-clock/seeded-RNG purity for this same interface.
+**Known seam exceptions:** `engine.policy`'s convention is that a policy is a deterministic
+function of its view (no I/O, no ambient randomness) and returns reason enums for the executor to
+record (so AGENTS.md's counter-per-path law stays mechanically checkable against the decision
+enum) — two pre-existing gaps against that convention were carried into `ThiefPolicy` unchanged
+(moved verbatim, not introduced, and not fixed here — both are behavior-adjacent-refactor territory,
+out of scope for an extraction slice):
+- `AlphabetDigest` (carried through in `StealAttemptView`, consumed by
+  `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires `ALPHABET.*`
+  fallback counters directly from inside `chooseScalar`. Issue #19.
+- `ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
+  `ThreadLocalRandom.current()` (the 1-in-64 escape hatch), so that one decision is not
+  reproducible from the view alone. Issue #20.
+
+Both fixes belong in the determinism-audit slice, which already owns injected-clock/seeded-RNG
+purity for this interface.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.

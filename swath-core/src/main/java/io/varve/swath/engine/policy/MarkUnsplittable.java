@@ -9,8 +9,8 @@ import java.util.List;
 
 /**
  * The victim has a terminal {@code null} pivot — no safe key strictly between its bounds
- * (algorithms.md §3). Always carries a {@link SetUnsplittable} mutation so the executor caches it
- * on the real {@code WorkerState} and never re-probes a dead range.
+ * (algorithms.md §3). Always carries a {@code VictimMutation.Kind#SET_UNSPLITTABLE} mutation so
+ * the executor caches it on the real {@code WorkerState} and never re-probes a dead range.
  */
 public record MarkUnsplittable(UnsplittableReason reason, List<Engagement> engagements,
                                List<VictimMutation> mutations) implements StealAction {
