@@ -8,6 +8,7 @@ package io.varve.swath.engine.policy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.AlphabetDigest;
+import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.WorkerState;
@@ -43,8 +44,8 @@ class OwnerSplitGovernorTest {
     }
 
     /** A cold (no observations) digest — the same starting state a fresh {@link WorkerState} has. */
-    private static AlphabetDigest coldDigest(byte[] lo, byte[] hi) {
-        return new WorkerState(0, lo, lo, hi).alphabetDigest();
+    private static AlphabetDigest.Snapshot coldDigest(byte[] lo, byte[] hi) {
+        return new WorkerState(0, lo, lo, hi).alphabetDigest().snapshot();
     }
 
     private static OwnerSplitGovernor governor(EngineToggles toggles, int workerCount) {
@@ -333,7 +334,9 @@ class OwnerSplitGovernorTest {
         assertThat(decision).isInstanceOf(Carve.class);
         Carve carve = (Carve) decision;
         assertThat(carve.engagements()).contains(new Engagement("OWNER_SPLIT", "confetti_probe"));
-        assertThat(carve.mutations()).containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
+        // CLAIM, not CONSUME (issue #31): the executor must serialize this carve against every other
+        // owner that decided PROBE from the same probeSeq snapshot.
+        assertThat(carve.mutations()).containsExactly(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT);
     }
 
     @Test
@@ -348,6 +351,87 @@ class OwnerSplitGovernorTest {
         Skip skip = (Skip) decision;
         assertThat(skip.reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
         assertThat(skip.mutations()).containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
+    }
+
+    /**
+     * <b>Issue #31's regression test.</b> Reproduces the multiplication DETERMINISTICALLY — no threads,
+     * no scheduler luck — by driving the real interleaving the race produces: N owners each build a
+     * view from the SAME {@code probeSeq} snapshot (they all read the run-scoped gate before any of
+     * them advances it, which per-worker locks do nothing to prevent) and each asks the real governor
+     * and the real gate what to do.
+     *
+     * <p>Every one of them decides {@code PROBE} — that half is inherent to {@code decide()} being a
+     * pure function of its view, and is asserted here rather than treated as surprising. What must hold
+     * is that exactly ONE of their carves is admitted. Before the fix the decision carried an
+     * unconditional {@code CONSUME_CONFETTI_PROBE_SLOT} and all N carved, multiplying precisely the
+     * confetti-sized carves the gate exists to suppress; now it carries {@code
+     * CLAIM_CONFETTI_PROBE_SLOT} and {@link ConfettiFeedbackGate#claimProbeSlot(long)} admits one.
+     *
+     * <p>Also pins the accounting the pre-#22 fused {@code incrementAndGet()} gave: the sequence
+     * advances once per consult, winner or loser, so N racers starting at {@code s} leave it at
+     * {@code s + N} — a losing claim is suppressed, not dropped.
+     */
+    @Test
+    void concurrentProbeConsultsSharingOneSlotAdmitExactlyOneCarve() {
+        int racers = 4;
+        long sharedProbeSeq = OwnerSplitGovernor.PROBE_K - 1;   // (probeSeq + 1) % PROBE_K == 0 -> PROBE
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        for (int i = 0; i < sharedProbeSeq; i++) {
+            gate.consumeProbeSlot();
+        }
+        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE * 2; i++) {
+            gate.recordCompletion(i % 4 != 0);   // rate = 0.75 > SUPPRESS_THRESHOLD
+        }
+        ConfettiFeedbackGate.Snapshot snapshot = gate.snapshot();
+        assertThat(snapshot.probeSeq()).as("fixture: every racer snapshots the same slot boundary")
+                .isEqualTo(sharedProbeSeq);
+
+        int carvesAdmitted = 0;
+        for (int i = 0; i < racers; i++) {
+            // Each racer decides from the snapshot it took BEFORE any of them advanced the sequence.
+            OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                    new ConfettiObservation(snapshot.taggedTotal(), snapshot.taggedConfetti(),
+                            snapshot.probeSeq()));
+            OwnerSplitDecision decision = governor().decide(v);
+
+            assertThat(decision).as("racer %s: every consult sharing the slot decides PROBE", i)
+                    .isInstanceOf(Carve.class);
+            assertThat(decision.mutations())
+                    .as("racer %s: the carve must be conditional on winning the slot", i)
+                    .containsExactly(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT);
+            // Exactly what the executor does with a Carve carrying CLAIM (OwnerSelfSplit).
+            if (gate.claimProbeSlot(snapshot.probeSeq())) {
+                carvesAdmitted++;
+            }
+        }
+
+        assertThat(carvesAdmitted)
+                .as("exactly one carve per probe slot -- the pre-#22 guarantee, restored")
+                .isEqualTo(1);
+        assertThat(gate.snapshot().probeSeq())
+                .as("every consult consumed a slot, winner or loser (what the fused incrementAndGet did)")
+                .isEqualTo(sharedProbeSeq + racers);
+    }
+
+    /**
+     * A probe consult that then loses its carve to the pivot checks downgrades {@code CLAIM} to the
+     * unconditional {@code CONSUME} (issue #31): a claim only means something when there is a carve to
+     * admit or exclude, and the slot is spent either way. Without the downgrade the executor would
+     * leave that consult's slot unconsumed, so the next consult would re-probe off a stale sequence.
+     */
+    @Test
+    void aProbeConsultThatLosesItsCarveDowngradesTheClaimToAnUnconditionalConsume() {
+        // Over threshold (8/8 = 1.0) at the slot boundary, on the view whose pivot is unsplittable.
+        OwnerSplitView v = unsplittablePivotView(
+                new ConfettiObservation(8, 8, OwnerSplitGovernor.PROBE_K - 1));
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).isInstanceOf(Skip.class);
+        assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
+        assertThat(decision.engagements()).contains(new Engagement("OWNER_SPLIT", "confetti_probe"));
+        assertThat(decision.mutations())
+                .containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
     }
 
     // -------------------------------------------------------------------------

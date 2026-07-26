@@ -9,7 +9,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -94,8 +97,9 @@ import org.junit.jupiter.api.Test;
  * instance does not.
  *
  * <h3>Known gaps (disclosed, not closed)</h3>
- * Two, and they fail in opposite directions: gap 1 is unclosable by any static check, gap 2 is
- * closable and simply not closed yet.
+ * One remains: gap 1 is unclosable by any static check. Gap 2 (issue #30) is now closed by
+ * {@link #viewsCarryNoLiveExecutorState()}, whose own narrower residual blind spots are recorded on
+ * that method rather than here.
  *
  * <p><b>Gap 1 — AN INJECTED IMPLEMENTATION'S BODY IS UNREACHABLE (unclosable).</b>
  * A static check over this codebase's actual classes/sources cannot reach an implementation the
@@ -113,21 +117,19 @@ import org.junit.jupiter.api.Test;
  * pass found and this test now closes (a {@code ThreadLocal}-typed field; a lambda-captured {@code
  * RunMetrics}) are two static-analysis gaps that WERE closable; this one is not.
  *
- * <p><b>Gap 2 — SHARED MUTABLE STATE REACHED THROUGH A VIEW IS LEGAL HERE (issue #30, OPEN).</b> All
- * three checks target a specific shape: a held collaborator reference, mutated {@code
- * java.util.concurrent.atomic} state, a direct ambient clock/randomness call. <b>Mutable primitive
- * arrays and volatile fields are legal under every one of them</b>, so a view field holding state
- * another thread mutates passes this test cleanly. That is not hypothetical: {@code
- * StealAttemptView.alphabetDigest} carries the victim's LIVE {@link
+ * <p><b>Gap 2 — SHARED MUTABLE STATE REACHED THROUGH A VIEW (issue #30) — CLOSED.</b> The three
+ * ambient-state checks each target a specific shape: a held collaborator reference, mutated {@code
+ * java.util.concurrent.atomic} state, a direct ambient clock/randomness call. Mutable primitive
+ * arrays and volatile fields are legal under every one of them, so a view field holding state
+ * another thread mutates used to pass this test cleanly — and did: {@code
+ * StealAttemptView.alphabetDigest} carried the victim's LIVE {@link
  * io.varve.swath.engine.AlphabetDigest}, whose {@code long[][] mask}/{@code boolean[] clean} are
  * final references with mutable contents that {@code WorkerState#recordPage} writes on every page
- * commit — so the pivot cascade can read different digest state than the view was constructed with,
- * and a recorded {@code (view, decision)} pair is not reproducible from the recorded view alone.
- * This is the fourth member of the #19/#20/#22 family and the only one that directly breaks replay
- * equivalence. It is a faithfully-preserved pre-extraction behavior, not a regression — production
- * behavior and every I1–I12 invariant are unaffected. <b>Closing #30 should extend this test to
- * reject view-reachable mutable array state</b>, which converts this gap from disclosed to enforced;
- * until then, do not read a green run here as "every policy decision is a function of its view."
+ * commit. {@link #viewsCarryNoLiveExecutorState()} now covers that shape, and the views carry an
+ * immutable {@code AlphabetDigest.Snapshot} instead. Verified by reintroducing the leak — a view
+ * component typed to the live digest — and confirming ONLY the new check turns red (naming both
+ * {@code observe(byte[])} and {@code maskWords()}) while these three stay green, which is the
+ * property that made this a distinct gap rather than a redundant check.
  *
  * <p><b>Verified against three historical/independently-found leaks</b> (see this test's own commit
  * messages): temporarily reintroducing #19's {@code RunMetrics} field on {@code AlphabetDigest} and
@@ -221,6 +223,61 @@ final class DecisionPathPurityTest {
                 .isEmpty();
     }
 
+    /**
+     * <b>Issue #30's enforcement.</b> Every {@code io.varve.swath.*} type reachable from a policy
+     * record's components — the views a policy decides over and the decisions it returns — must have a
+     * READ-ONLY API: no non-static, non-private {@code void} instance method, and no non-private method
+     * handing out an array. Both shapes are what "this value is live executor state, not a snapshot"
+     * looks like from the outside.
+     *
+     * <p>This is what #30 was: {@code StealAttemptView} carried the victim's live {@code
+     * AlphabetDigest}, whose {@code void observe(byte[])} the owner thread calls on every page commit,
+     * so the pivot cascade could read state the recorded view never contained. The three older checks
+     * all pass on that shape — a mutable {@code long[][]}/{@code boolean[]} is not an ambient
+     * collaborator, not {@code j.u.c.atomic}, not a {@code ThreadLocal} — which is why this one exists.
+     * The fix froze the component to an {@code AlphabetDigest.Snapshot}, whose API is a single
+     * {@code int}-returning consult.
+     *
+     * <p><b>What this does NOT catch</b> (state it, do not read a green run as more): a mutator that
+     * returns a value rather than {@code void}; a value type constructed by ALIASING an array its
+     * caller retains and keeps writing to; and reflection. The array-return half closes the "hands out
+     * its own internals" shape, and {@code void}-returning mutators are the only shape a pure value
+     * type has no legitimate use for — together they cover the family #30 belongs to, not every
+     * conceivable leak.
+     */
+    @Test
+    void viewsCarryNoLiveExecutorState() throws Exception {
+        Set<Class<?>> reachable = policyRecordComponentClosure();
+        assertThat(reachable).as("the walk must reach outside the policy package (e.g. "
+                        + "AlphabetDigest.Snapshot, carried by StealAttemptView/OwnerSplitView) -- "
+                        + "otherwise it is not exercising the shape issue #30 was")
+                .anyMatch(c -> !c.getPackageName().equals(POLICY_PACKAGE));
+        List<String> violations = new ArrayList<>();
+        for (Class<?> type : reachable) {
+            for (Method m : type.getDeclaredMethods()) {
+                if (m.isSynthetic() || Modifier.isStatic(m.getModifiers())
+                        || Modifier.isPrivate(m.getModifiers())) {
+                    continue;
+                }
+                if (m.getReturnType() == void.class) {
+                    violations.add(type.getName() + "#" + m.getName() + " : void instance method "
+                            + "(a mutator -- a value a policy decides over has no use for one)");
+                } else if (m.getReturnType().isArray() && !type.isRecord()) {
+                    // A record's own generated accessor legitimately returns its byte[] key-bound
+                    // components; a NON-record value type handing out an array is exposing internals.
+                    violations.add(type.getName() + "#" + m.getName() + " : returns "
+                            + m.getReturnType().getSimpleName() + " (hands out its own mutable state)");
+                }
+            }
+        }
+        assertThat(violations)
+                .as("no type reachable from a policy view/decision may expose a mutator or hand out its "
+                        + "own array state -- issue #30 was exactly this (StealAttemptView holding the "
+                        + "victim's LIVE AlphabetDigest, mutated by void observe(byte[]) on every page "
+                        + "commit), and reverting that fix must turn this red")
+                .isEmpty();
+    }
+
     @Test
     void decisionPathReadsNoAmbientClockOrRandomness() throws Exception {
         Set<Path> sourceFiles = new TreeSet<>();
@@ -300,6 +357,61 @@ final class DecisionPathPurityTest {
             }
         }
         return visited;
+    }
+
+    /**
+     * Every {@code io.varve.swath.*} type reachable from a policy-package RECORD's components,
+     * transitively — the value shapes that cross the seam in either direction (views in, decisions
+     * out). Records are discovered rather than listed by name, so a view added later is covered
+     * without touching this test.
+     */
+    private static Set<Class<?>> policyRecordComponentClosure()
+            throws IOException, URISyntaxException, ClassNotFoundException {
+        Set<Class<?>> visited = new HashSet<>();
+        Deque<Class<?>> frontier = new ArrayDeque<>();
+        for (Class<?> c : classesInPackage(POLICY_PACKAGE)) {
+            if (c.isRecord()) {
+                frontier.add(c);
+            }
+        }
+        assertThat(frontier).as("the policy package must expose records (the views/decisions), or this "
+                        + "check walks nothing").hasSizeGreaterThan(10);
+        while (!frontier.isEmpty()) {
+            Class<?> c = frontier.poll();
+            if (c == null || !visited.add(c)) {
+                continue;
+            }
+            for (RecordComponent rc : c.isRecord() ? c.getRecordComponents() : new RecordComponent[0]) {
+                for (Class<?> candidate : componentRelevantTypes(rc)) {
+                    Class<?> leaf = candidate.isArray() ? candidate.getComponentType() : candidate;
+                    if (leaf.getPackageName().startsWith(PROJECT_PACKAGE_PREFIX) && !visited.contains(leaf)) {
+                        frontier.add(leaf);
+                    }
+                }
+            }
+            // A sealed/abstract component type (e.g. ProbeOutcome) reaches its permitted concrete
+            // shapes only through its own subtypes -- follow them, or a leak hiding in one is invisible.
+            for (Class<?> sub : c.isSealed() ? c.getPermittedSubclasses() : new Class<?>[0]) {
+                if (!visited.contains(sub)) {
+                    frontier.add(sub);
+                }
+            }
+        }
+        return visited;
+    }
+
+    /** A record component's declared type, plus (for a parameterized type) each {@code Class} argument. */
+    private static List<Class<?>> componentRelevantTypes(RecordComponent rc) {
+        List<Class<?>> out = new ArrayList<>();
+        out.add(rc.getType());
+        if (rc.getGenericType() instanceof ParameterizedType pt) {
+            for (Type arg : pt.getActualTypeArguments()) {
+                if (arg instanceof Class<?> cls) {
+                    out.add(cls);
+                }
+            }
+        }
+        return out;
     }
 
     /** The field's own declared type, plus (for a parameterized type) each {@code Class} type argument. */

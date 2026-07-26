@@ -199,7 +199,7 @@ public final class StealMath {
      * {@code digest}, or a position with no clean alphabet signal (cold start / non-ASCII keyspace),
      * falls back <b>byte-for-byte</b> to {@link #interpolate(byte[], byte[], double)}.
      */
-    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest) {
+    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest.Snapshot digest) {
         if (hi == null) {
             return null;
         }
@@ -212,7 +212,7 @@ public final class StealMath {
     }
 
     /**
-     * Alphabet-aware variant of {@link #interpolate(byte[], byte[], double, AlphabetDigest)} that
+     * Alphabet-aware variant of {@link #interpolate(byte[], byte[], double, AlphabetDigest.Snapshot)} that
      * reports the digest's per-consult {@code ALPHABET.*} fallback reason (if any) into {@code
      * collector} — a caller-owned {@link Engagement} list, never {@code RunMetrics} directly (issue
      * #19's fix, contracts.md §2.1): {@code ThiefPolicy}'s pivot cascade and {@code
@@ -221,7 +221,7 @@ public final class StealMath {
      * in every other respect to the two-argument-fewer overload above; a {@code null} {@code digest}
      * or {@code collector} is exactly as inert as a {@code null} {@code digest} there.
      */
-    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest,
+    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest.Snapshot digest,
                                       List<Engagement> collector) {
         if (hi == null) {
             return null;

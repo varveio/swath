@@ -68,7 +68,7 @@ duplicates of a cut already present) — `0`/`0` for a level whose prefixes were
 | `tiny_leaf_explosion` | truncated WITH common prefixes. Two distinct sub-cases share this label (a known, intended overlap): **(a) the TOP-level probe (index 0)** — ANY truncated top with common prefixes gets this classification regardless of whether the names are `key=value/`-shaped, but it is NOT left whole: the top level's cuts were already captured (`addCutsCounted` runs before the truncation check, unconditionally), so it still tiles via the GENERIC top-level cap (`cuts_kept > 0`, up to `min(1000, 4*W)` ranges — `SeedStepRootFanoutBudgetTest` pins this). **(b) a descended SUB-level (index ≥ 1)** whose common prefixes are plain (non-`key=value/`) directory names — a true 1:1 directory explosion genuinely left whole for work-stealing (`cuts_kept == 0`), never enumerated further. |
 | `fanout_tiled` | a DESCENDED SUB-LEVEL ONLY (never the top-level probe, index 0 — see the `tiny_leaf_explosion` row) that is truncated WITH common prefixes shaped like Hive/Spark `key=value/` partition directories — tiled at seed time along a `W`-capped subset of those already-probed prefixes (`cuts_kept > 0`), instead of the earlier break-and-discard. A root-level (`key=value/`-named or not) truncated fan-out never reaches this classification or its `W` cap; it is bounded by the generic top-level `4*W` cap instead (see the `tiny_leaf_explosion` row (a)). |
 | `flat_wide` | truncated, NO common prefixes, only direct objects — a dense-flat-region radix-banding CANDIDATE. |
-| `dense_root_radix_banded` | a `flat_wide` region that was ACTUALLY radix-banded (only known after the whole seed collection is in hand — a run-level disposition promoted onto that one level's entry). |
+| `dense_root_radix_banded` | a `flat_wide` region that was ACTUALLY radix-banded (only known after the whole seed collection is in hand — a run-level disposition promoted onto that one level's entry). The promotion matches the level by prefix equality, so the top-level entry of a whole-bucket scan records the NORMALIZED empty prefix rather than the raw `null` the API also accepts — before issue #29/#33 was fixed a dense flat ROOT reached by a literal-`null` prefix kept the `flat_wide` label while the run-level `SEED.dense_root_radix_banded` counter fired, the two artifacts disagreeing. Unreachable from the CLI, which normalizes in `S3Uri`. |
 | `delimiter_seeded` | the TOP level only, when the run's overall shape is the generic plain-tiled case (no dense-root/tiny-leaf subtype applied anywhere) — mirrors the run-level `SEED.delimiter_seeded` classification above. |
 
 Reconstructs a bucket's seed-time structure-probe trajectory (which levels were probed, what each
@@ -261,7 +261,11 @@ taxonomy so the signal set stays comparable:
     (a warmup — too few samples is not evidence), an observed confetti rate strictly above
     `SUPPRESS_THRESHOLD=0.5` suppresses further carving, recording `OWNER_SPLIT.confetti_suppressed`
     per suppressed attempt. Every `PROBE_K=16`-th would-be-suppressed attempt is let through anyway
-    (`OWNER_SPLIT.confetti_probe`) so the gate can never starve its own feedback signal — a keyspace
+    (`OWNER_SPLIT.confetti_probe`) so the gate can never starve its own feedback signal — and exactly
+    **one** carve per probe slot, even when several owners consult the run-scoped gate concurrently and
+    all decide the same slot is theirs: the executor resolves the winner with a `compareAndSet` on the
+    sequence each of them snapshotted, and the losers record `confetti_suppressed` (issue #31; before
+    that fix all of them carved) — a keyspace
     that later turns genuinely dense again recovers on its own once enough probes/completions pull the
     rate back at/under the threshold. `MIN_SAMPLE`/`SUPPRESS_THRESHOLD`/`PROBE_K` are hand-picked
     constants, not yet backed by a tuning sweep. Post-hoc, the

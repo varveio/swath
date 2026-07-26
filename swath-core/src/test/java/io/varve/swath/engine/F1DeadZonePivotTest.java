@@ -63,7 +63,7 @@ final class F1DeadZonePivotTest {
         AlphabetDigest d = new AlphabetDigest(b("u/0"), b("u/f"));
         Set<Integer> alphabet = observeLeadingChars(d, "0123456789abcdef");
         // (9, c) straddles the classic hex dead zone: every grid f puts the plain midpoint off-alphabet.
-        assertDeadZoneAvoided(d, alphabet, b("u/9"), b("u/c"));
+        assertDeadZoneAvoided(d.snapshot(), alphabet, b("u/9"), b("u/c"));
     }
 
     /**
@@ -75,7 +75,7 @@ final class F1DeadZonePivotTest {
     void sparseDecimalPivotsAvoidUnpopulatedDigits() {
         AlphabetDigest d = new AlphabetDigest(b("u/0"), b("u/9"));
         Set<Integer> alphabet = observeLeadingChars(d, "147");
-        assertDeadZoneAvoided(d, alphabet, b("u/1"), b("u/9"));
+        assertDeadZoneAvoided(d.snapshot(), alphabet, b("u/1"), b("u/9"));
     }
 
     /**
@@ -87,7 +87,7 @@ final class F1DeadZonePivotTest {
     void base64PivotsAvoidTheDeadZone() {
         AlphabetDigest d = new AlphabetDigest(b("u/0"), b("u/z"));
         Set<Integer> alphabet = observeLeadingChars(d, "ABCXYZabcxyz0189+/");
-        assertDeadZoneAvoided(d, alphabet, b("u/Y"), b("u/c"));
+        assertDeadZoneAvoided(d.snapshot(), alphabet, b("u/Y"), b("u/c"));
     }
 
     /**
@@ -96,7 +96,8 @@ final class F1DeadZonePivotTest {
      * the plain (no-digest) pivot lands OFF the alphabet while the aware pivot stays on it (and the two
      * pivots differ) — the direct proof the digest changed the placement onto a real value.
      */
-    private static void assertDeadZoneAvoided(AlphabetDigest d, Set<Integer> alphabet, byte[] lo, byte[] hi) {
+    private static void assertDeadZoneAvoided(AlphabetDigest.Snapshot d, Set<Integer> alphabet, byte[] lo,
+            byte[] hi) {
         boolean sawDeadZoneContrast = false;
         for (double f : F_GRID) {
             byte[] aware = StealMath.interpolate(lo, hi, f, d);
@@ -160,7 +161,7 @@ final class F1DeadZonePivotTest {
         dirty.observe(b("u/7"));                                     // a clean hex observation...
         dirty.observe("u/é".getBytes(StandardCharsets.UTF_8));      // ...then a multi-byte scalar at index 2 → not-clean
         for (double f : F_GRID) {
-            assertThat(StealMath.interpolate(b("u/9"), b("u/c"), f, dirty))
+            assertThat(StealMath.interpolate(b("u/9"), b("u/c"), f, dirty.snapshot()))
                     .as("cleanless digest == plain interpolate at f=%s", f)
                     .isEqualTo(StealMath.interpolate(b("u/9"), b("u/c"), f));
         }
@@ -176,7 +177,7 @@ final class F1DeadZonePivotTest {
         d.observe(b("u/9"));
         d.observe(b("u/a"));   // nothing observed strictly between '9' and 'a' (the hex dead zone)
         for (double f : F_GRID) {
-            assertThat(StealMath.interpolate(b("u/9"), b("u/a"), f, d))
+            assertThat(StealMath.interpolate(b("u/9"), b("u/a"), f, d.snapshot()))
                     .as("unpopulated gap == plain interpolate at f=%s", f)
                     .isEqualTo(StealMath.interpolate(b("u/9"), b("u/a"), f));
         }
@@ -194,6 +195,7 @@ final class F1DeadZonePivotTest {
         AlphabetDigest d = new AlphabetDigest(b("u/0"), b("u/f"));
         String hex = "0123456789abcdef";
         Set<Integer> alphabet = observeLeadingChars(d, hex);
+        AlphabetDigest.Snapshot frozen = d.snapshot();   // what a policy actually consults (issue #30)
 
         for (int i = 0; i < hex.length(); i++) {
             for (int j = i + 1; j < hex.length(); j++) {
@@ -206,7 +208,7 @@ final class F1DeadZonePivotTest {
                     }
                 }
                 for (double f : F_GRID) {
-                    byte[] aware = StealMath.interpolate(lo, hi, f, d);
+                    byte[] aware = StealMath.interpolate(lo, hi, f, frozen);
                     byte[] plain = StealMath.interpolate(lo, hi, f);
                     assertThat(aware).as("aware non-null (%s,%s) f=%s", hex.charAt(i), hex.charAt(j), f).isNotNull();
                     assertThat(isValidUtf8(aware)).as("aware valid UTF-8 (%s,%s) f=%s", hex.charAt(i), hex.charAt(j), f).isTrue();

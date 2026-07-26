@@ -389,16 +389,30 @@ and only in response to a `mutations()` list the policy returned alongside its d
   (pacing skips, futility/no-pivot/structure-probe tallies) — never a field the split CAS's guard
   clause reads.
 - `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` **is WIDENED — an earlier version of this section
-  claimed it was the one exception with no widened window at all, which is wrong and is retracted
-  here.** `governor.decide(view)` and `applyMutations(decision.mutations())` do run back-to-back
-  inside the same `ws.lock()` hold, but `ws.lock()` is **per-worker** while the mutation's target,
-  `ConfettiFeedbackGate`, is **run-scoped** — two different owners self-splitting concurrently hold
-  two *different* worker locks, so nothing serializes their consults against each other the way one
-  shared lock would. `ConfettiFeedbackGate#consumeProbeSlot()`'s own javadoc says this outright: "the
-  gate is run-scoped while `WorkerState#lock()` is per-worker, so nothing serializes two owners'
-  consults against each other". See the audit table's `ConfettiObservation` row below (now WIDENED,
-  not a deflection) and **issue #31**, which found this relaxation can multiply probe carves under
-  contention, not merely shift which consult lands on a slot.
+  claimed it was the one exception with no widened window at all, which is wrong and was retracted.**
+  `governor.decide(view)` and `applyMutations(...)` do run back-to-back inside the same `ws.lock()`
+  hold, but `ws.lock()` is **per-worker** while the mutation's target, `ConfettiFeedbackGate`, is
+  **run-scoped** — two different owners self-splitting concurrently hold two *different* worker locks,
+  so nothing serializes their consults against each other the way one shared lock would.
+  **Issue #31 found what that costs and is now fixed:** N owners sharing a `probeSeq` snapshot at a
+  slot boundary all decided PROBE and all CARVED, multiplying exactly the confetti-sized carves the
+  gate exists to suppress — not merely shifting which consult landed on the slot. A probe carve now
+  carries `CLAIM_CONFETTI_PROBE_SLOT` instead, and the executor resolves it against the run-scoped
+  gate before recording anything, admitting exactly one carve per slot and suppressing the rest exactly
+  as the pre-#22 fused `incrementAndGet()` did. `ConfettiFeedbackGate#claimProbeSlot` is a
+  **consume-and-claim**, not a bare CAS: a `compareAndSet` against the snapshotted value elects the one
+  winner, and a caller that loses that CAS then advances the sequence with an `incrementAndGet` of its
+  own — so the sequence advances once per over-threshold consult, winner or loser, which is what makes
+  a loser *suppressed* rather than *dropped*. (An earlier version of this bullet called it "a single
+  `compareAndSet` on the snapshotted value", which contradicted the winner-or-loser sentence that
+  followed it — a bare CAS would advance the sequence only for the winner. Caught by CodeRabbit on
+  PR #34; the method's own javadoc always stated both halves.)
+  **This does not re-couple `decide()` to interleaving.** The decision stays a pure function of its
+  view; the conditionality is explicit *in* the decision rather than an executor override — the same
+  shape as the split CAS's own `SPLIT_ABORTED` path, where a decided carve can still be declined by an
+  atomic the executor owns. The read window itself (the audit table's `ConfettiObservation` row below)
+  remains WIDENED, and remains a heuristic input: which page-commit's snapshot the rate check sees can
+  still vary, which changes probe *cadence*, never carve *count*.
 - The per-victim futility-pacing counters and the fleet-wide idle-steal pacing state are mutated by
   the EXECUTOR objects that have always owned them (`WorkerState`, `IdleStealBackoff`), at the
   identical call sites and under the identical (lock-free / monitor) discipline as before this
@@ -439,14 +453,14 @@ window could ever race against.
 | `VictimView` | `pacingSkipAvailable` / `CONSUME_PACING_SKIP` | `stealPaced()`: check-and-decrement in **one** call, inline per-candidate — no other candidate's work intervenes between check and consume | check (`pacingSkipAvailable()`) at view-construction time; consume (`consumePacingSkip()`) applied only after `selectVictim` has scanned the **whole** pool | **WIDENED** — see below |
 | `StealAttemptView` | `victimNodeId`,`lo` | read once, at attempt start, executor-local (the chosen victim's identity/immutable bound; never contended) | same | unchanged |
 | `StealAttemptView` | `cursor`,`hi` (via `victim.snapshot()`) | lock-guarded pair read, same call site | lock-guarded pair read, same call site | unchanged |
-| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) — but see issue #30 below: `alphabetDigest` is a reference to a LIVE, concurrently-mutated object, not a value, in both versions |
+| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) — and, since issue #30 (below), `alphabetDigest` is a frozen `AlphabetDigest.Snapshot` taken at that construction point rather than a reference to the live, concurrently-mutated digest |
 | `StealAttemptView` | `unchangedSinceNonProductiveSteal(snap)` | pure comparison, immediately after the snapshot | same | unchanged |
 | `StealAttemptView` | `keysEmitted` | not read by the per-attempt cascade in either version (only `VictimView.keysEmitted`, a distinct field, feeds `estRemaining` at selection) | same | unchanged (dead field either way) |
 | `StealAttemptView` | `consecutiveZeroFanoutStructureProbes`,`consecutiveTimedOutStructureProbes` | read live at the structure-probe-suppression check, **after** this attempt's own far-ahead/step-back key-probe round trip(s) had already completed | cached at view construction, **before** any probe in this attempt has run; the structure-probe-suppression check consults the same cached value later | **WIDENED** — see below |
 | `OwnerSplitView` | `hi`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged (corrected: the record component and this row's field are `hi`, not `H` — an earlier version of this row misnamed it) |
 | `OwnerSplitView` | `cursorTo`,`committed`,`lastSelfSplitPage` | read once, inside `ws.lock()`; `cursorTo` is this page-commit's just-advanced cursor, `committed`/`lastSelfSplitPage` are the owner-split rate-limit's caller-owned bookkeeping (`selfSplit[0]`/`selfSplit[1]` in the executor) — plain counts, never shared, never touched by another thread | same | unchanged (executor-local; no other thread ever reads or writes these) |
 | `OwnerSplitView` | `outstanding` | read only if the demand gate was actually reached — i.e. only after the remaining-est-floor and rate-limit gates had already passed | read unconditionally at view construction, for every self-split attempt, whether or not the demand gate will be consulted | **WIDENED** — already disclosed at `OwnerSelfSplit`'s `outstanding` field javadoc; a heuristic input, so this changes only which page-commit's snapshot the demand gate happens to see, never correctness |
-| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, gated behind the remaining-work/rate/demand/floor checks already having passed (verified against `main`'s pre-extraction `maybeOwnerSelfSplit`: the confetti check ran only after those four gates) | read via `confettiFeedback.snapshot()` at method entry (`OwnerSelfSplit.java:170`), BEFORE the remaining-work, rate, demand, and floor gates run inside `governor.decide(view)` | **WIDENED** — a heuristic input (changes only which page-commit's snapshot the confetti-rate check sees). See issue **#31** for the separate, more serious widening on the paired mutation this same relaxation enables (`CONSUME_CONFETTI_PROBE_SLOT`, discussed above) — that one can change carve *count*, not merely which snapshot is read |
+| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, gated behind the remaining-work/rate/demand/floor checks already having passed (verified against `main`'s pre-extraction `maybeOwnerSelfSplit`: the confetti check ran only after those four gates) | read via `confettiFeedback.snapshot()` at method entry (`OwnerSelfSplit.java:170`), BEFORE the remaining-work, rate, demand, and floor gates run inside `governor.decide(view)` | **WIDENED** — a heuristic input (changes only which page-commit's snapshot the confetti-rate check sees, i.e. probe cadence). The paired mutation this same relaxation enabled could change carve *count* — issue **#31**, fixed by the probe-slot CLAIM discussed above; what remains widened here is only the rate read |
 | N/A (no `View`) | `WorkerState` futility counters: `consecutiveFutileSteals`,`futilityTrips`,`stealPacingSkips` | lock-free, unlocked, one `AtomicInteger` op at a time, inline in `recordFutileSteal`/`markStolen`/`stealPaced`/`consumePacingSkip` | identical call sites, identical op sequence — `FutilityPacingPolicy` supplies only the trip-check/cooldown-formula/decay/reset VALUES each op already computed inline; no combined read of the three | unchanged |
 | N/A (no `View`) | `IdleStealBackoff` pacing state: `consecutiveNonProductive`,`nextAttemptNanos` | plain (non-atomic) fields, read/written only inside this object's own `synchronized` methods | collapsed into one `IdleStealPacingState`, read-and-replaced as a whole, still only inside the same `synchronized` methods | unchanged — monitor-protected, so combining the two fields into one record here is safe (see the shape-asymmetry paragraph above); contrast the futility-counter row directly above it |
 | N/A (no `View`, mutation-only) | `consecutiveZeroFanoutStructureProbes` increment/reset (`RECORD_ZERO_FANOUT_STRUCTURE_PROBE`/`RESET_ZERO_FANOUT_STRUCTURE_PROBES`) | applied synchronously and inline in `structurePivot`, immediately after the probe response's fan-out was counted (verified against `main`'s pre-extraction `Thief#structurePivot`) | queued as a mutation by `ThiefPolicy#pickStructureBoundary` (`ThiefPolicy.java:435-438`) on the `StealAction` it returns; not applied until `Thief`'s `while(true)` loop comes back around and calls `applyMutations` on the NEXT action (`Thief.java:238`) — i.e. one full loop iteration after the response was counted | **WIDENED** — a third `Thief`-side widening, judged benign on the same grounds as the two below (see the bullet list immediately following this table) |
@@ -475,22 +489,34 @@ reviewer's to check, not the implementer's to make silently:**
   identical direction/consequence shape as the structure-probe-suppression window immediately above
   (a wasted or a missed probe), never a gap, overlap, or duplicate split.
 
-**A live reference, not a snapshot: `StealAttemptView.alphabetDigest` (issue #30, not fixed here).**
-Every claim elsewhere in this section that a view is a coherent, immutable read the policy decides
-over assumes the view's fields are values or copies. `StealAttemptView.alphabetDigest` is not: it is
-the victim's own live `AlphabetDigest` instance, and that instance's backing arrays
-(`long[][] mask`, `boolean[] clean`) are mutated by concurrent page commits on the SAME victim
-(`WorkerState#recordPage` → `AlphabetDigest#observe`) while this attempt's decision is still in
-progress — `ThiefPolicy` dereferences the digest again later in the cascade, so a page commit that
-lands between view construction and that later dereference changes what the digest reports. This is
-the one field in this document that is genuinely a live reference, not a snapshot: it falsifies both
-"state the executor owns is snapshotted into views" (above) and the stronger claim that a policy's
-decision is a deterministic function of its recorded view — which also means a recorded
-`(view, decision)` pair is not, in general, reproducible from the golden alone for this one field. Not
-a regression (the pre-extraction code also read the digest live at decision time — this is a
-faithfully-preserved pre-existing non-determinism), and no I1–I12 invariant is at risk (the split CAS
-re-validates independently of what the policy decided). Recorded and left open as **issue #30**, not
-fixed here.
+**Was a live reference, now a snapshot: `alphabetDigest` (issue #30, CLOSED).** Every claim elsewhere
+in this section that a view is a coherent, immutable read the policy decides over assumes the view's
+fields are values or copies. `StealAttemptView.alphabetDigest`/`OwnerSplitView.alphabetDigest` was the
+one field for which that was false: it was the victim's own live `AlphabetDigest` instance, whose
+backing arrays (`long[][] mask`, `boolean[] clean`) are mutated by concurrent page commits on the SAME
+victim (`WorkerState#recordPage` → `AlphabetDigest#observe`) while the decision was still in progress —
+`ThiefPolicy` dereferences the digest later in the cascade, so a page commit landing between view
+construction and that dereference changed what the digest reported. It falsified both "state the
+executor owns is snapshotted into views" (above) and the stronger claim that a policy's decision is a
+deterministic function of its recorded view.
+
+Both views now carry an immutable `AlphabetDigest.Snapshot` that the executor freezes at view
+construction, so every field in this document is a value or a copy and a recorded `(view, decision)`
+pair is reproducible from the golden alone. The whole digest is a fixed 8 positions × 2 words plus 8
+clean flags, so freezing it is one `long[16]` and a packed `int` — one small allocation per steal
+attempt and per owner-split consult. Consult semantics are unchanged byte-for-byte, including *which*
+`ALPHABET.*` fallback fires: the live digest and its snapshot share a single implementation of the
+consult, and the snapshot carries `clean` explicitly rather than inferring it from an all-zero mask
+(a dirty position and a merely-unobserved one both have a zero mask but report
+`fallback_out_of_window` and `window_gap` respectively). A torn read while snapshotting is still
+possible and still benign — `ByteMidpoint` re-validates any chosen scalar for safety and strict
+betweenness, so a torn word can only shift the pivot's balance inside valid bounds. What the fix
+eliminated is not tearing but mutation *after* the view was recorded.
+
+This was never a production-behavior defect (the pre-extraction code also read the digest live at
+decision time — a faithfully-preserved pre-existing non-determinism) and no I1–I12 invariant was ever
+at risk (the split CAS re-validates independently of what the policy decided). It is now enforced
+mechanically by `DecisionPathPurityTest#viewsCarryNoLiveExecutorState`.
 
 One counter-conservation test exercising this contention directly —
 `ThiefStealReasonConservationTest` — reconciles `swath.steal_reason` totals against the number of
@@ -509,22 +535,28 @@ not reducible to the call totals alone; their single-threaded shape is pinned by
 goldens instead, which is a check on VALUES, not on conservation under a race.
 
 **The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
-deterministic function of its view — **except for `StealAttemptView.alphabetDigest`, issue #30,
-detailed above**, which this audit does **not** catch: mutable primitive arrays are legal under all
-three of the checks below, so a view field holding shared mutable state passes them cleanly. Read a
-green run as "none of the three shapes below is present", not as "every decision is a function of
-its view". Everything that follows describes what IS mechanically enforced: no ambient clock, no
+deterministic function of its view. Three of the four checks below target ambient state; issue #30's
+shape — a view component holding shared mutable arrays, legal under all three — needed the fourth,
+`viewsCarryNoLiveExecutorState`, which walks every policy-package record's component types
+transitively and rejects any that exposes a mutator or hands out its own array. Read a green run as
+"none of the four shapes below is present"; the residual blind spots (an injected implementation's
+body; a mutator that returns a value; a value type aliasing an array its caller keeps writing to) are
+disclosed in that test's javadoc. Everything that follows describes what IS mechanically enforced: no
+ambient clock, no
 ambient randomness, and — the clause the audit's original grep-shaped brief did not have, and so
 missed two of the three leaks the campaign actually found (issues #19, #22) — no ambient
 *collaborator* state either. Concretely, no type
 reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
 `io.varve.swath.engine.policy`, plus the transitive closure of every field-reachable
-`io.varve.swath.*` type (so `AlphabetDigest`, reached only via `StealAttemptView.alphabetDigest()`,
-is in scope despite living in `io.varve.swath.engine`) — may **hold** a `RunMetrics`/`TraceSink`
-reference as a field, or **mutate** `java.util.concurrent.atomic` state, or **call** an ambient
-clock/randomness API directly. `DecisionPathPurityTest` (`swath-core`) enforces this mechanically:
-a field-type closure walk for the first two (the exact shape issues #19 and #22 took), a
-comment-stripped source scan of the same closure for the third (issue #20's shape). An explicit,
+`io.varve.swath.*` type (so `AlphabetDigest.Snapshot`, reached only via
+`StealAttemptView.alphabetDigest()`, is in scope despite living in `io.varve.swath.engine`) — may
+**hold** a `RunMetrics`/`TraceSink` reference as a field, or **mutate**
+`java.util.concurrent.atomic` state, or **call** an ambient clock/randomness API directly, or
+**expose** a mutator on a value a policy decides over. `DecisionPathPurityTest` (`swath-core`)
+enforces this mechanically: a field-type closure walk for the first two (the exact shape issues #19
+and #22 took), a comment-stripped source scan of the same closure for the third (issue #20's shape),
+and a record-component closure walk rejecting mutators and array-returning accessors for the fourth
+(issue #30's shape). An explicit,
 caller-supplied parameter is not "ambient" and stays legal either way — `EngineToggles#recordOffMarks`
 takes a `RunMetrics` parameter but is called only from executor code, never a `decide()` path, and
 every `Engagement`/`VictimMutation` collector already threaded through this interface is the same

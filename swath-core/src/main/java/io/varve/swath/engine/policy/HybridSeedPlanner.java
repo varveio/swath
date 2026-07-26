@@ -285,7 +285,16 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 // pre-cut into radix bands.
                 flatWideRegion = (topPageCapped && topObjectCount > 0)
                         ? (prefix == null ? new byte[0] : prefix) : null;
-                decisions.add(new SeedLevelDecision(prefix, topFanout, topPageCapped,
+                // Record the NORMALIZED region as this level's prefix when there is one (issue #33):
+                // finalizeDecisions() matches the banded level by Arrays.equals(d.prefix(),
+                // flatWideRegion), and a whole-bucket scan arrives here with prefix == null while the
+                // region above is normalized to new byte[0]. Storing the raw null made
+                // Arrays.equals(null, new byte[0]) false, so a dense flat ROOT kept the flat_wide label
+                // and never took the dense_root_radix_banded rewrite its run-level mark already fired.
+                // Every descent level already stores the same currentDir it puts in flatWideRegion, so
+                // this makes the root consistent with them rather than special-casing it.
+                decisions.add(new SeedLevelDecision(flatWideRegion != null ? flatWideRegion : prefix,
+                        topFanout, topPageCapped,
                         flatWideRegion != null ? "flat_wide" : "narrow", topCounts[0], topCounts[1]));
                 return finalizePlan();
             }

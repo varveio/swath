@@ -121,13 +121,17 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
      * The alphabet-aware consult, reporting any {@code ALPHABET.*} fallback reason into {@code
      * collector} instead of a {@code RunMetrics} field of this class's own (issue #19's fix): a
      * {@code decide()}-reachable consult must never hold or touch {@code RunMetrics} itself, so the
-     * caller — {@code StealMath#interpolate(byte[], byte[], double, AlphabetDigest, List)}, threaded
+     * caller — {@code StealMath#interpolate(byte[], byte[], double, Snapshot, List)}, threaded
      * from {@code ThiefPolicy}'s pivot cascade or {@code OwnerSplitGovernor}'s carve — supplies its
      * own pending-{@link Engagement} list and hands it to the executor exactly like every other
      * engagement (contracts.md §2.1). A {@code null} collector (the {@link
      * ByteMidpoint.ScalarChooser} override above, and every existing unit test that drives this
      * method directly) records nothing — behavior-preserving by construction, since a consult fires
      * at most one fallback either way.
+     *
+     * <p>This is the LIVE read, kept for the direct pure-math unit tests and for
+     * {@link ByteMidpoint.ScalarChooser} conformance. <b>No decision path reaches it</b> — a policy
+     * consults a {@link #snapshot()} instead (issue #30).
      */
     int chooseScalar(int cpIndex, int loCp, int hiCp, double fraction, List<Engagement> collector) {
         int g = generation;                     // acquire: see the mask/clean writes published before it
@@ -135,7 +139,101 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
             return NO_SCALAR;
         }
         int pos = cpIndex - base;
-        if (pos < 0 || pos >= MAX_POSITIONS || !clean[pos]) {
+        boolean inWindow = pos >= 0 && pos < MAX_POSITIONS;
+        return choose(inWindow ? mask[pos][0] : 0L,
+                inWindow ? mask[pos][1] : 0L,
+                inWindow && clean[pos],
+                loCp, hiCp, fraction, collector);
+    }
+
+    /**
+     * Freeze this digest's current per-position alphabet into an immutable value a policy can decide
+     * over — <b>issue #30's fix</b>.
+     *
+     * <p>A {@code StealAttemptView}/{@code OwnerSplitView} used to carry the victim's LIVE digest, so
+     * a concurrent {@code observe} on the owner could change what the pivot cascade read <i>after</i>
+     * the view was built: the decision was not a function of the recorded view, which is exactly the
+     * property the policy seam exists to provide (contracts.md §2.1) and the premise offline replay
+     * needs. The whole digest is a fixed 8 positions × 2 words plus 8 clean flags, so freezing it is
+     * one {@code long[16]} allocation and an {@code int} of packed flags — cheap enough to do per
+     * steal attempt and per owner-split consult.
+     *
+     * <p>Semantics are unchanged: a snapshot answers every consult byte-for-byte as the live digest
+     * would have at the instant it was taken, including <i>which</i> {@code ALPHABET.*} fallback
+     * fires. That is why {@code clean} is carried explicitly rather than inferred from an all-zero
+     * mask — a dirty position and a merely-unobserved one both have a zero mask but report
+     * {@code fallback_out_of_window} and {@code window_gap} respectively.
+     */
+    public Snapshot snapshot() {
+        int g = generation;                     // acquire: see the mask/clean writes published before it
+        if (g < 0) {                            // (never; silences "unused" — the read is the fence)
+            return new Snapshot(base, new long[MAX_POSITIONS * 2], 0);
+        }
+        long[] words = new long[MAX_POSITIONS * 2];
+        int cleanBits = 0;
+        for (int pos = 0; pos < MAX_POSITIONS; pos++) {
+            words[2 * pos] = mask[pos][0];
+            words[2 * pos + 1] = mask[pos][1];
+            if (clean[pos]) {
+                cleanBits |= 1 << pos;
+            }
+        }
+        return new Snapshot(base, words, cleanBits);
+    }
+
+    /**
+     * An immutable, point-in-time {@link AlphabetDigest} — the alphabet signal a <b>policy</b>
+     * decides over (issue #30). Constructed only by {@link AlphabetDigest#snapshot()}, which hands it
+     * a private array no one else retains, and it exposes no accessor for that array: a decision over
+     * a {@code Snapshot} is reproducible from the recorded view forever, whatever the owner thread
+     * does next.
+     *
+     * <p>A torn read is still possible <i>while snapshotting</i> (the owner may {@code observe}
+     * concurrently — the digest is deliberately read without the worker lock, as documented on the
+     * enclosing class). That is benign and unchanged: {@link ByteMidpoint} independently re-validates
+     * any chosen scalar for safety and strict betweenness, so a torn word can only shift the pivot's
+     * balance inside valid bounds. What the snapshot fixes is not tearing but MUTATION AFTER THE
+     * FACT — the decision now sees exactly one alphabet, the one recorded in the view.
+     */
+    public static final class Snapshot implements ByteMidpoint.ScalarChooser {
+
+        private final int base;
+        /** Flat presence masks, {@code words[2*pos]}/{@code words[2*pos+1]} — never handed out. */
+        private final long[] words;
+        /** Bit {@code pos} set iff that tracked position is alphabet-clean. */
+        private final int cleanBits;
+
+        private Snapshot(int base, long[] words, int cleanBits) {
+            this.base = base;
+            this.words = words;
+            this.cleanBits = cleanBits;
+        }
+
+        @Override
+        public int chooseScalar(int cpIndex, int loCp, int hiCp, double fraction) {
+            return chooseScalar(cpIndex, loCp, hiCp, fraction, null);
+        }
+
+        /** The frozen counterpart of {@link AlphabetDigest#chooseScalar(int, int, int, double, List)}. */
+        int chooseScalar(int cpIndex, int loCp, int hiCp, double fraction, List<Engagement> collector) {
+            int pos = cpIndex - base;
+            boolean inWindow = pos >= 0 && pos < MAX_POSITIONS;
+            return choose(inWindow ? words[2 * pos] : 0L,
+                    inWindow ? words[2 * pos + 1] : 0L,
+                    inWindow && (cleanBits >>> pos & 1) != 0,
+                    loCp, hiCp, fraction, collector);
+        }
+    }
+
+    /**
+     * The consult itself, over one position's two presence words — the SINGLE implementation shared
+     * by the live digest and its {@link Snapshot}, so the two can never answer differently. The
+     * caller has already resolved the tracked position and folded "outside the tracked window" into
+     * {@code clean == false} (both report {@code fallback_out_of_window}, as before).
+     */
+    private static int choose(long w0, long w1, boolean clean, int loCp, int hiCp, double fraction,
+            List<Engagement> collector) {
+        if (!clean) {
             // consult fell outside the tracked/clean window
             if (collector != null) {
                 collector.add(new Engagement("ALPHABET", AlphabetFallback.FALLBACK_OUT_OF_WINDOW.code()));
@@ -151,7 +249,7 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
             }
             return NO_SCALAR;
         }
-        int n = countBits(pos, from, to);
+        int n = countBits(w0, w1, from, to);
         if (n == 0) {
             // no observed value populates the (loCp, hiCp) gap
             if (collector != null) {
@@ -165,36 +263,54 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
         } else if (target >= n) {
             target = n - 1;
         }
-        return kthSetScalar(pos, from, to, target);
+        return kthSetScalar(w0, w1, from, to, target);
     }
 
     // -------------------------------------------------------------------------
     // Private helpers.
     // -------------------------------------------------------------------------
 
-    /** Count set presence bits in the inclusive scalar range {@code [from, to]} at {@code pos}. */
-    private int countBits(int pos, int from, int to) {
+    /**
+     * Is scalar {@code s} present, given one position's two presence words?
+     *
+     * <p>Throws rather than folding an out-of-range scalar into {@code w1}: the two words cover
+     * {@code [0, 128)} and every caller clamps {@code s} to {@code [LO_SCALAR, HI_SCALAR]} first, so
+     * this is unreachable — but the indexed form this replaced ({@code mask[pos][s >>> 6]} over a
+     * {@code long[2]}) would have thrown if that clamp ever regressed, and a silent wrong-word read
+     * is a worse failure than a loud one.
+     */
+    private static boolean present(long w0, long w1, int s) {
+        long word = switch (s >>> 6) {
+            case 0 -> w0;
+            case 1 -> w1;
+            default -> throw new IllegalArgumentException("scalar outside the tracked 128-bit mask: " + s);
+        };
+        return (word & (1L << (s & 63))) != 0L;
+    }
+
+    /** Count set presence bits in the inclusive scalar range {@code [from, to]}. */
+    private static int countBits(long w0, long w1, int from, int to) {
         int count = 0;
         for (int s = from; s <= to; s++) {
-            if ((mask[pos][s >>> 6] & (1L << (s & 63))) != 0L) {
+            if (present(w0, w1, s)) {
                 count++;
             }
         }
         return count;
     }
 
-    /** The {@code k}-th (0-based) set scalar in {@code [from, to]} at {@code pos}. */
-    private int kthSetScalar(int pos, int from, int to, int k) {
+    /** The {@code k}-th (0-based) set scalar in {@code [from, to]}. */
+    private static int kthSetScalar(long w0, long w1, int from, int to, int k) {
         int seen = 0;
         for (int s = from; s <= to; s++) {
-            if ((mask[pos][s >>> 6] & (1L << (s & 63))) != 0L) {
+            if (present(w0, w1, s)) {
                 if (seen == k) {
                     return s;
                 }
                 seen++;
             }
         }
-        return NO_SCALAR;   // unreachable: k < countBits(pos, from, to)
+        return NO_SCALAR;   // unreachable: k < countBits(w0, w1, from, to)
     }
 
     /**

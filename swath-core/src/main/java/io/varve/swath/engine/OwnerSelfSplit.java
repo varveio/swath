@@ -170,11 +170,29 @@ final class OwnerSelfSplit {
         ConfettiFeedbackGate.Snapshot confettiSnapshot = confettiFeedback.snapshot();
         OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
                 selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
-                ws.alphabetDigest(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
+                ws.alphabetDigest().snapshot(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
                         confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
+        // Resolve a claimed confetti probe slot FIRST, before a single engagement is recorded (issue
+        // #31). The governor decides PROBE purely from the probeSeq this view was built from, so every
+        // owner that snapshotted the same value decides PROBE -- and before this claim existed, all of
+        // them carved, multiplying exactly the confetti-sized carves the gate exists to suppress. The
+        // run-scoped gate admits exactly one; a loser is suppressed exactly as the pre-#22 fused
+        // increment suppressed it, which is why nothing may be recorded before the claim resolves: on
+        // that path none of the carve's downstream engagements (the ALPHABET verdict included) ever
+        // fired, so recording them first would credit a carve that never happened.
+        boolean probeSlotClaimed = false;
+        if (decision instanceof Carve
+                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)) {
+            if (confettiFeedback.claimProbeSlot(confettiSnapshot.probeSeq())) {
+                probeSlotClaimed = true;
+            } else {
+                metrics.recordStealReason("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code());
+                return null;
+            }
+        }
         applyEngagements(decision.engagements());
-        applyMutations(decision.mutations());
+        applyMutations(decision.mutations(), probeSlotClaimed);
         if (decision instanceof Skip skip) {
             if (skip.reason() == OwnerSplitSkipReason.DEMAND_GATED) {
                 ws.recordDemandGated();   // per-range tally for the slow-range dump
@@ -230,10 +248,17 @@ final class OwnerSelfSplit {
     /**
      * Apply every {@link OwnerSplitMutation} the governor returned to the real collaborator it
      * names — the policy never touches {@link ConfettiFeedbackGate} directly (issue #22).
+     *
+     * @param probeSlotClaimed whether a {@code CLAIM_CONFETTI_PROBE_SLOT} was already resolved (and so
+     *                         the sequence already advanced) by the winning claim at the call site.
+     *                         A CLAIM that reaches here unresolved — the governor abandoned the probe
+     *                         carve on its own pivot checks — degrades to the unconditional advance,
+     *                         so a consult advances the sequence exactly once either way (issue #31).
      */
-    private void applyMutations(List<OwnerSplitMutation> mutations) {
+    private void applyMutations(List<OwnerSplitMutation> mutations, boolean probeSlotClaimed) {
         for (OwnerSplitMutation m : mutations) {
-            if (m == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT) {
+            if (m == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT
+                    || (m == OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT && !probeSlotClaimed)) {
                 confettiFeedback.consumeProbeSlot();
             }
         }
