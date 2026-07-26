@@ -57,6 +57,39 @@ hardcoded value list, so it keeps working as the code evolves:
      reason)``, whose ``outcome``/``reason`` pairs must not be cross-producted.
   6. Anything else (can't find a literal anywhere) is reported as a WARNING
      ("non-literal call site") rather than failing the build -- a human checks it.
+
+Two more mechanisms sit alongside rules 1-6, added when some reasons became closed enums
+(io.varve.swath.engine.policy's PivotMechanism/RetryReason/NoVictimReason/
+UnsplittableReason) or a plain data record (Engagement) instead of bare literals:
+
+  7. A ``receiver.accessor().code()`` expression (an enum-typed record-component
+     accessor chain, e.g. ``noVictim.reason().code()``) or a qualified
+     ``EnumType.CONSTANT.code()`` reference resolves via a ``TypeIndex`` built once per
+     run: every ``record`` declaration's components, and every enum with a no-arg
+     ``code()`` method ("coded enum"), indexed to its constants' literal codes.
+     ``receiver``'s declared type is found the same way as rule 4's identifiers (a
+     local, an `instanceof` binding, a for-each element, or -- also checked here -- a
+     FORMAL PARAMETER of the enclosing method), then its accessor is looked up as a
+     record component; if that component's type is a coded enum, this resolves to ALL
+     of the enum's declared codes, by ENUMERATION rather than dataflow -- a new
+     constant cannot hide from it the way it could hide from rule 4's tracing.
+     CAVEAT (issue #21, not fixed): enumerating the whole enum credits every constant
+     to every category reaching it through any accessor chain, so if the same coded
+     enum type is ever the declared type of a same-named component shared across
+     MULTIPLE record types (or record/category pairings), this can validate a
+     (category, reason) doc row no code path actually emits, silently. Not triggered
+     today -- every coded enum here maps 1:1 to one component and one category
+     (verified) -- but a later slice adding more coded enums could trip it; the guard
+     does not yet disambiguate per-category, and this rule is where that fix belongs.
+  8. Two no-arg accessor calls on the SAME local, both symbolic (e.g. ``e.category()``
+     / ``e.reason()`` inside a ``for (Engagement e : engagements)`` loop) resolve via
+     every ``new RecordType(...)`` construction site for that local's record type,
+     correlating the constructor args at the matching component positions -- reusing
+     rule 5's correlated-pair machinery one level removed. A construction site's own
+     args are often themselves symbolic params of an enclosing wrapper (e.g.
+     ``ThiefPolicy.addEngagement(String category, String reason)``), so this recurses
+     back through rule 5 rather than resolving the two positions independently, which
+     would silently cross-product unrelated categories and reasons together.
 """
 
 from __future__ import annotations
@@ -466,7 +499,6 @@ class TypeIndex:
 def build_type_index(files: dict[Path, JavaFile]) -> TypeIndex:
     record_components: dict[str, dict[str, str]] = {}
     coded_enums: dict[str, dict[str, str]] = {}
-    span_by_open = {}
     for jf in files.values():
         span_by_open_here = {o: c for (o, c) in jf.spans}
 
