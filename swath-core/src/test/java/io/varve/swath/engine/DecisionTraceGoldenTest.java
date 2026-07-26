@@ -610,26 +610,32 @@ final class DecisionTraceGoldenTest {
      * successful split's child is enqueued back into the live pool (via {@link Thief.ChildSink}) with
      * its resume cursor at the pivot — matching production's {@code WorkStealingScan.enqueueChild}
      * (cursor == lo, never {@code null}: see {@code Thief.ChildSink}'s own javadoc, "the child's resume
-     * cursor is m"). Between rounds, {@link #drainOneRound} advances every still-splittable candidate
-     * a little (a real bounded page fetch against the same keyspace, folded into its density digest via
-     * {@link WorkerState#recordPage}), so later attempts steal from a genuinely progressively-consumed
-     * pool — not a repeatedly-reset, always-fresh one — the same single-thief-at-a-time choreography a
-     * real fleet's idle loop performs one attempt at a time, without the scheduler nondeterminism a
-     * multi-thief storm would introduce.
+     * cursor is m"). {@link #drainOneRound} advances every still-splittable candidate a little BEFORE
+     * every attempt, including the first (a real bounded page fetch against the same keyspace, folded
+     * into both the density EWMA and the observed-alphabet digest via {@link WorkerState#recordPage} —
+     * see that method), so later attempts steal from a genuinely progressively-consumed pool — not a
+     * repeatedly-reset, always-fresh one — the same single-thief-at-a-time choreography a real fleet's
+     * idle loop performs one attempt at a time, without the scheduler nondeterminism a multi-thief
+     * storm would introduce. This mirrors production directly: a worker is only ever thief-visible once
+     * it is progress-gated eligible ({@link WorkerState#stealEligible()}, set by {@link
+     * WorkerState#setCursor} and consulted by {@code WorkStealingScan.eligibleVictims()}), i.e. only
+     * after it has committed at least one page — draining before round 0 too, not just between rounds,
+     * keeps every steal attempt here facing a worker production would actually offer one.
      *
-     * <p>The root worker's {@code lo} is anchored at the keyspace's OWN minimum key (never the
-     * global {@code ⊥}): a bounded root worker with {@code lo == ⊥} only arises pre-seed (already
-     * covered by {@code thief-edge-cases}' unstarted/exhausted-frontier scenarios), and code-point
-     * byte-midpoint has no density signal yet on a fresh worker, so a {@code (⊥, hi]} window can
-     * place the very first pivot in the dead space between {@code ⊥} and wherever this keyspace's
-     * real data actually starts — a real, recognized phenomenon ({@code PIVOT_BYTE.dead_zone}), but
-     * one that (depending on exactly where it lands relative to {@code ByteMidpoint}'s {@code
-     * MIN_SAFE} floor) can leave a permanently-empty zombie sub-range that is never cached
-     * unsplittable (empty-upper exhaustion is deliberately always transient, algorithms.md §11 edge
-     * 11) and so keeps outranking a genuinely productive sibling in victim selection every round —
-     * exactly the kind of nominal-not-real coverage this fixture exists to avoid. Anchoring {@code
-     * lo} at the keyspace's real minimum matches what a post-seed range actually looks like (the
-     * shallow seed only ever cuts at real structure) and keeps every round's pivot inside real data.
+     * <p>The root worker's {@code lo} is anchored at the keyspace's OWN minimum key (never the global
+     * {@code ⊥}). This is NOT about the pivot itself — {@code Thief}'s bounded-range pivot placement
+     * ({@code cForPivot = (cursor == null) ? BOTTOM : cursor}, then {@code interpolate(cForPivot, H,
+     * ...)}) reads the CURSOR, never {@code lo}, so a {@code ⊥} lo has no direct effect there. What it
+     * drives is {@link StealMath#spanIn}, which {@link WorkerState#recordPage} calls to normalize each
+     * drained page against the FULL {@code (lo, hi]} window: with {@code lo == ⊥} that window spans
+     * from the keyspace's absolute floor, so a page drained from deep inside the real data measures as
+     * a vanishingly small fraction of it — the density EWMA collapses toward zero, {@link
+     * WorkerState#densityFraction()} never clears its {@code 0.5} floor, and every density-gated
+     * mechanism (far-ahead, step-back, reflect, flat-leaf) never engages. Anchoring {@code lo} at the
+     * keyspace's real minimum keeps that denominator meaningful. This matches what an INTERIOR
+     * post-split range looks like in production (a split child's {@code lo} is always a real prior
+     * pivot) — not the very first seed range, which genuinely does carry {@code lo == ⊥}
+     * (see {@code deep-narrow.jsonl}'s {@code seed.seed_specs} event: {@code ranges[0].lo == null}).
      */
     private void thiefCascade(GoldenTrace.Fixture fx, List<byte[]> keyspace, byte[] scanPrefix, byte[] hi,
                                int attempts) throws SwathException, InterruptedException {
@@ -784,10 +790,10 @@ final class DecisionTraceGoldenTest {
 
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink trace = new RecordingTraceSink();
-        // lo anchored at the keyspace's own minimum (never the global ⊥) — the same dead-zone/span
-        // reasoning as thiefCascade's rootLo: est/density math measures span WITHIN (lo, hi], so a
-        // ⊥ lo spreads it over the empty byte-space below this shape's real data and collapses the
-        // signal regardless of massScale.
+        // lo anchored at the keyspace's own minimum (never the global ⊥) — the same StealMath.spanIn
+        // reasoning as thiefCascade's rootLo (see that method's javadoc): est/density math normalizes
+        // against the full (lo, hi] window, so a ⊥ lo spreads it over the empty byte-space below this
+        // shape's real data and collapses the signal regardless of massScale.
         WorkerState ws = WorkerStates.of(500, lo, lo, hi);
         ws.addKeysEmitted(keysEmitted);
         ws.recordPage(lo, cursorTo, keysEmitted);

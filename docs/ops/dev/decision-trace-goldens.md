@@ -160,6 +160,20 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   bug in the recorder. When issue #16's counter lands, regenerating goldens is
   **expected and required** in that same change; the drift it produces there is
   the safety net catching the deliberate behavior addition, not a regression.
+- **The `flat-wide` fixture no longer pins the long-zero-padded-id flat shape.**
+  It moved from `Keyspaces.singlePrefixFlat`'s 8-digit zero-padded counter to a
+  local 3-digit one proportionate to its 400-key scale (see `flatWideKeys`'s
+  javadoc): at 400 keys the 8-digit format left the flat-leaf density
+  reflection extrapolating over a window ~250,000× larger than the real data,
+  so every round landed within one code point of the cursor — nominal, not
+  real, cascade coverage. The 3-digit swap was the right call for THIS
+  fixture's purpose (`Keyspaces.singlePrefixFlat`'s 8-digit padding exists for
+  a different, deliberately adversarial test elsewhere), but it means the
+  corpus no longer has any golden pinning a "long zero-padded id, sparse
+  relative to its own digit width" flat shape — a real pattern in migrated or
+  legacy-tool-generated datasets — and nothing else in this fixture matrix
+  covers it. Disclosed here rather than silently dropped; not planned to be
+  closed as part of this safety net.
 
 ## Coverage matrix
 
