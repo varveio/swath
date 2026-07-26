@@ -8,6 +8,7 @@ package io.varve.swath.store.s3;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.observability.SafeInput;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
@@ -95,5 +96,45 @@ class ProcessBearerTokenSupplierTest {
         assertThatThrownBy(supplier::token)
                 .isInstanceOf(BearerTokenCommandException.class)
                 .hasMessageContaining("did not exit within");
+    }
+
+    /**
+     * The command must not be recoverable from a stringified supplier. {@link S3Config} is a record
+     * holding this supplier, so {@code S3Config.toString()} recurses in here — one {@code
+     * log.debug("config {}", config)} downstream would otherwise print the operator's
+     * {@code --bearer-token-command}, and nothing obliges that command to merely MINT a token
+     * ({@code 'echo <token>'} is a plausible spelling). The default {@code Object.toString()} would
+     * make this pass by accident; the explicit override makes it hold by construction, and this
+     * test fails if someone deletes it or turns the class into a record.
+     */
+    @Test
+    void toStringRedactsTheCommandAndSurvivesBeingNestedInAnS3ConfigRecord() {
+        var supplier = new ProcessBearerTokenSupplier("echo eyJhbGciOiJSUzI1NiRealTokenHere",
+                Duration.ofMinutes(45));
+
+        assertThat(supplier.toString())
+                .doesNotContain("eyJhbGci")
+                .doesNotContain("echo")
+                .contains(SafeInput.REDACTED_SECRET);
+
+        // The realistic leak path: the supplier stringified as a component of the config record.
+        S3Config config = new S3Config(
+                null, null, false,
+                S3Config.DEFAULT_MAX_PARALLEL,
+                S3Config.DEFAULT_MAX_ATTEMPTS,
+                S3Config.DEFAULT_ATTEMPT_TIMEOUT,
+                S3Config.DEFAULT_API_CALL_TIMEOUT,
+                null,
+                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT,
+                supplier);
+        assertThat(config.toString()).doesNotContain("eyJhbGci").doesNotContain("echo");
+    }
+
+    /** The resolved token must not be recoverable from a stringified identity either. */
+    @Test
+    void identityToStringRedactsTheToken() {
+        assertThat(new BearerTokenIdentity("eyJhbGciOiJSUzI1NiRealTokenHere").toString())
+                .doesNotContain("eyJhbGci")
+                .contains(SafeInput.REDACTED_SECRET);
     }
 }

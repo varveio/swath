@@ -63,6 +63,20 @@ public final class ProcessBearerTokenSupplier implements BearerTokenSupplier {
         return cachedToken;
     }
 
+    /**
+     * Redacts the command, and exists for that reason alone. {@link S3Config} is a record holding
+     * this supplier, so {@code S3Config.toString()} recurses in here — one {@code log.debug("config
+     * {}", config)} anywhere downstream would otherwise put the operator's
+     * {@code --bearer-token-command} in a log, and nothing obliges that command to merely MINT a
+     * token ({@code 'echo <token>'} is a plausible spelling). Without this override the default
+     * {@code Object.toString()} makes that safe by accident; this makes it safe by construction.
+     */
+    @Override
+    public String toString() {
+        return "ProcessBearerTokenSupplier[command=" + SafeInput.REDACTED_SECRET
+                + ", refreshInterval=" + refreshInterval + "]";
+    }
+
     private String run() {
         Process process;
         try {
