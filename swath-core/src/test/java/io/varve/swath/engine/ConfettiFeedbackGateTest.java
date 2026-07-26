@@ -81,6 +81,72 @@ final class ConfettiFeedbackGateTest {
         assertThat(gate.snapshot().probeSeq()).isEqualTo(3);
     }
 
+    // -------------------------------------------------------------------------------------------
+    // claimProbeSlot: exactly one winner per slot, and a loser still consumes one (issue #31).
+    // -------------------------------------------------------------------------------------------
+
+    /**
+     * The exclusivity {@code claimProbeSlot} exists to provide: N consults that all snapshotted the
+     * same {@code probeSeq} — what N owners racing this run-scoped gate behind their own per-worker
+     * locks actually produce — yield exactly one winner. Deterministic by construction: every claim
+     * passes the same stale expectation, which is precisely the state a real race leaves them in.
+     */
+    @Test
+    void onlyOneOfManyConsultsSharingASnapshotWinsTheSlot() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.consumeProbeSlot();
+        gate.consumeProbeSlot();
+        long shared = gate.snapshot().probeSeq();
+
+        int winners = 0;
+        for (int i = 0; i < 5; i++) {
+            if (gate.claimProbeSlot(shared)) {
+                winners++;
+            }
+        }
+
+        assertThat(winners).as("exactly one claim per slot value").isEqualTo(1);
+        assertThat(gate.snapshot().probeSeq())
+                .as("winner and losers alike consume a slot, so the sequence advances once per consult "
+                        + "-- byte-for-byte what the pre-#22 fused incrementAndGet did")
+                .isEqualTo(shared + 5);
+    }
+
+    /** A claim against an already-advanced sequence always loses, and still consumes its slot. */
+    @Test
+    void aClaimAgainstAStaleSequenceLosesAndStillConsumes() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.consumeProbeSlot();          // probeSeq = 1; a claim expecting 0 is stale
+
+        assertThat(gate.claimProbeSlot(0)).isFalse();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(2);
+    }
+
+    /** A claim matching the current sequence wins and advances it by exactly one. */
+    @Test
+    void aClaimMatchingTheCurrentSequenceWinsAndAdvancesItOnce() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+
+        assertThat(gate.claimProbeSlot(0)).isTrue();
+        assertThat(gate.snapshot().probeSeq()).isEqualTo(1);
+    }
+
+    /** Claiming never touches the completion tallies the rate is computed from. */
+    @Test
+    void claimProbeSlotNeverTouchesTheCompletionTallies() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.recordCompletion(true);
+        gate.recordCompletion(false);
+
+        gate.claimProbeSlot(0);
+        gate.claimProbeSlot(0);   // loses
+
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).isEqualTo(2);
+        assertThat(snap.taggedConfetti()).isEqualTo(1);
+        assertThat(snap.probeSeq()).isEqualTo(2);
+    }
+
     @Test
     void consumeProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();

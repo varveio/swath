@@ -104,11 +104,16 @@ public final class ConfettiFeedbackGate {
      * advances it and so land on the same probe slot — the gate is run-scoped while {@code
      * WorkerState#lock()} is per-worker, so nothing serializes two owners' consults against each
      * other the way {@code decide()}'s single call used to. The counter itself never loses an
-     * increment (it is still a plain {@code incrementAndGet}); only which SPECIFIC consult lands on
-     * a shared slot can vary under a race. See {@code OwnerSplitGovernor}'s commit message (the
-     * fix for issue #22) for why this relaxation is acceptable: nothing in I1-I12 touches probe
-     * cadence, and this class's own javadoc already called the mechanism "a cheap round-robin
-     * counter, not gated on anything else".
+     * increment (it is still a plain {@code incrementAndGet}).
+     *
+     * <p><b>Issue #31 corrected what that race costs.</b> An earlier version of this javadoc said
+     * "only which SPECIFIC consult lands on a shared slot can vary" — an understatement, and it is
+     * retracted here: N owners sharing a snapshot at a slot boundary all decided {@code PROBE} and so
+     * all CARVED, multiplying the confetti-sized carves this gate exists to suppress, rather than
+     * merely shifting cadence. That is fixed by {@link #claimProbeSlot(long)}, which the executor now
+     * calls for a decided probe carve; this method remains the unconditional advance for a consult
+     * that was suppressed outright (and for a probe consult whose carve the governor then abandoned
+     * on its own pivot checks).
      *
      * <p><b>The authoritative conservation guarantee is BY INSPECTION, not by any racing test:</b>
      * {@link #probeSeq} is a plain {@link java.util.concurrent.atomic.AtomicLong}, and {@link
@@ -140,5 +145,37 @@ public final class ConfettiFeedbackGate {
      */
     public void consumeProbeSlot() {
         probeSeq.incrementAndGet();
+    }
+
+    /**
+     * Claim the periodic probe slot the governor's decision landed on — <b>issue #31's fix</b>, and
+     * the step that restores "at most one carve per probe slot".
+     *
+     * <p>The governor decides {@code PROBE} from {@code (probeSeq + 1) % PROBE_K == 0} over the
+     * {@link #snapshot()} the executor took, so N owners that all snapshot the same {@code
+     * expectedProbeSeq} before any of them advances it ALL compute a probe hit and would all carve —
+     * multiplying exactly the confetti-sized carves this gate exists to prevent. Pre-#22 the fused
+     * {@code incrementAndGet()} handed each caller a distinct value, so exactly one carved and the
+     * other N−1 were suppressed. This restores that, without putting the decision back inside the
+     * gate: the governor still decides purely over its view, and the executor asks here whether its
+     * consult actually won the slot it decided on.
+     *
+     * <p>Exactly one concurrent caller can win a given {@code expectedProbeSeq} — a single
+     * {@code compareAndSet}. A loser still <b>consumes</b> a slot ({@code incrementAndGet}), because
+     * its consult happened: the sequence therefore advances once per over-threshold consult, winner
+     * or loser, which is byte-for-byte what the pre-#22 fused increment did (N racers at {@code s}
+     * left the counter at {@code s + N}, with only the caller that got {@code s + 1} probing).
+     *
+     * @param expectedProbeSeq the {@code probeSeq} the deciding view was built from
+     * @return {@code true} iff this consult won the slot and its carve may proceed; {@code false} iff
+     *         a concurrent consult took it, in which case this consult is suppressed exactly as the
+     *         pre-#22 code would have suppressed it
+     */
+    public boolean claimProbeSlot(long expectedProbeSeq) {
+        if (probeSeq.compareAndSet(expectedProbeSeq, expectedProbeSeq + 1)) {
+            return true;
+        }
+        probeSeq.incrementAndGet();   // lost the slot, but this consult still consumed one
+        return false;
     }
 }

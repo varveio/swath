@@ -261,7 +261,11 @@ taxonomy so the signal set stays comparable:
     (a warmup — too few samples is not evidence), an observed confetti rate strictly above
     `SUPPRESS_THRESHOLD=0.5` suppresses further carving, recording `OWNER_SPLIT.confetti_suppressed`
     per suppressed attempt. Every `PROBE_K=16`-th would-be-suppressed attempt is let through anyway
-    (`OWNER_SPLIT.confetti_probe`) so the gate can never starve its own feedback signal — a keyspace
+    (`OWNER_SPLIT.confetti_probe`) so the gate can never starve its own feedback signal — and exactly
+    **one** carve per probe slot, even when several owners consult the run-scoped gate concurrently and
+    all decide the same slot is theirs: the executor resolves the winner with a `compareAndSet` on the
+    sequence each of them snapshotted, and the losers record `confetti_suppressed` (issue #31; before
+    that fix all of them carved) — a keyspace
     that later turns genuinely dense again recovers on its own once enough probes/completions pull the
     rate back at/under the threshold. `MIN_SAMPLE`/`SUPPRESS_THRESHOLD`/`PROBE_K` are hand-picked
     constants, not yet backed by a tuning sweep. Post-hoc, the

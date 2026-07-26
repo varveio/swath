@@ -139,7 +139,14 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                     List<OwnerSplitMutation> probeSlot = List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
                     if ((obs.probeSeq() + 1) % PROBE_K == 0) {
                         engagements.add(new Engagement("OWNER_SPLIT", "confetti_probe"));
-                        mutations = probeSlot;   // let the carve continue; consumed once it commits
+                        // CLAIM, not CONSUME (issue #31): this decision is a pure function of the
+                        // probeSeq the view was built from, so every owner sharing that snapshot
+                        // decides PROBE here -- and all of them would carve. The executor resolves the
+                        // claim against the run-scoped gate and lets exactly one through, suppressing
+                        // the rest exactly as the pre-#22 fused increment did. If the pivot checks
+                        // below then abandon this carve, the Skip they return carries the
+                        // unconditional CONSUME instead, since no carve is left to serialize.
+                        mutations = List.of(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT);
                     } else {
                         engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
                         return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot);
@@ -158,7 +165,11 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             // shared prefix, the same measurement/reality gap algorithms.md §3.2 documents for the
             // thief side — see OwnerSplitSkipReason#UNSPLITTABLE_PIVOT's javadoc.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code()));
-            return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements, mutations);
+            // A probe consult that gets here has no carve left to serialize, so it degrades to the
+            // unconditional advance (issue #31): the slot was granted and spent, exactly as the
+            // pre-#22 fused increment spent it, and no other owner's carve is being excluded.
+            return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements,
+                    consumeInsteadOfClaim(mutations));
         }
         // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a
         // populated value (differs from the plain code-point interpolate at the same fraction)? Recorded
@@ -205,5 +216,17 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             }
         }
         return new Carve(m, engagements, mutations);
+    }
+
+    /**
+     * Downgrade a probe-slot CLAIM to the unconditional CONSUME, for a probe consult that ends in a
+     * {@link Skip} rather than a {@link Carve} (issue #31). A claim only means anything when there is a
+     * carve to admit or exclude; a skip has spent its slot either way. Any other mutation list — the
+     * empty one, or the {@code CONFETTI_SUPPRESSED} skip's own CONSUME — passes through unchanged.
+     */
+    private static List<OwnerSplitMutation> consumeInsteadOfClaim(List<OwnerSplitMutation> mutations) {
+        return mutations.contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)
+                ? List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT)
+                : mutations;
     }
 }

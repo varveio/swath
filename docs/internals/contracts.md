@@ -389,16 +389,25 @@ and only in response to a `mutations()` list the policy returned alongside its d
   (pacing skips, futility/no-pivot/structure-probe tallies) — never a field the split CAS's guard
   clause reads.
 - `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` **is WIDENED — an earlier version of this section
-  claimed it was the one exception with no widened window at all, which is wrong and is retracted
-  here.** `governor.decide(view)` and `applyMutations(decision.mutations())` do run back-to-back
-  inside the same `ws.lock()` hold, but `ws.lock()` is **per-worker** while the mutation's target,
-  `ConfettiFeedbackGate`, is **run-scoped** — two different owners self-splitting concurrently hold
-  two *different* worker locks, so nothing serializes their consults against each other the way one
-  shared lock would. `ConfettiFeedbackGate#consumeProbeSlot()`'s own javadoc says this outright: "the
-  gate is run-scoped while `WorkerState#lock()` is per-worker, so nothing serializes two owners'
-  consults against each other". See the audit table's `ConfettiObservation` row below (now WIDENED,
-  not a deflection) and **issue #31**, which found this relaxation can multiply probe carves under
-  contention, not merely shift which consult lands on a slot.
+  claimed it was the one exception with no widened window at all, which is wrong and was retracted.**
+  `governor.decide(view)` and `applyMutations(...)` do run back-to-back inside the same `ws.lock()`
+  hold, but `ws.lock()` is **per-worker** while the mutation's target, `ConfettiFeedbackGate`, is
+  **run-scoped** — two different owners self-splitting concurrently hold two *different* worker locks,
+  so nothing serializes their consults against each other the way one shared lock would.
+  **Issue #31 found what that costs and is now fixed:** N owners sharing a `probeSeq` snapshot at a
+  slot boundary all decided PROBE and all CARVED, multiplying exactly the confetti-sized carves the
+  gate exists to suppress — not merely shifting which consult landed on the slot. A probe carve now
+  carries `CLAIM_CONFETTI_PROBE_SLOT` instead, and the executor resolves it against the run-scoped
+  gate (`ConfettiFeedbackGate#claimProbeSlot`, a single `compareAndSet` on the snapshotted value)
+  before recording anything, admitting exactly one carve per slot and suppressing the rest exactly as
+  the pre-#22 fused `incrementAndGet()` did. The sequence still advances once per over-threshold
+  consult, winner or loser.
+  **This does not re-couple `decide()` to interleaving.** The decision stays a pure function of its
+  view; the conditionality is explicit *in* the decision rather than an executor override — the same
+  shape as the split CAS's own `SPLIT_ABORTED` path, where a decided carve can still be declined by an
+  atomic the executor owns. The read window itself (the audit table's `ConfettiObservation` row below)
+  remains WIDENED, and remains a heuristic input: which page-commit's snapshot the rate check sees can
+  still vary, which changes probe *cadence*, never carve *count*.
 - The per-victim futility-pacing counters and the fleet-wide idle-steal pacing state are mutated by
   the EXECUTOR objects that have always owned them (`WorkerState`, `IdleStealBackoff`), at the
   identical call sites and under the identical (lock-free / monitor) discipline as before this
@@ -446,7 +455,7 @@ window could ever race against.
 | `OwnerSplitView` | `hi`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged (corrected: the record component and this row's field are `hi`, not `H` — an earlier version of this row misnamed it) |
 | `OwnerSplitView` | `cursorTo`,`committed`,`lastSelfSplitPage` | read once, inside `ws.lock()`; `cursorTo` is this page-commit's just-advanced cursor, `committed`/`lastSelfSplitPage` are the owner-split rate-limit's caller-owned bookkeeping (`selfSplit[0]`/`selfSplit[1]` in the executor) — plain counts, never shared, never touched by another thread | same | unchanged (executor-local; no other thread ever reads or writes these) |
 | `OwnerSplitView` | `outstanding` | read only if the demand gate was actually reached — i.e. only after the remaining-est-floor and rate-limit gates had already passed | read unconditionally at view construction, for every self-split attempt, whether or not the demand gate will be consulted | **WIDENED** — already disclosed at `OwnerSelfSplit`'s `outstanding` field javadoc; a heuristic input, so this changes only which page-commit's snapshot the demand gate happens to see, never correctness |
-| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, gated behind the remaining-work/rate/demand/floor checks already having passed (verified against `main`'s pre-extraction `maybeOwnerSelfSplit`: the confetti check ran only after those four gates) | read via `confettiFeedback.snapshot()` at method entry (`OwnerSelfSplit.java:170`), BEFORE the remaining-work, rate, demand, and floor gates run inside `governor.decide(view)` | **WIDENED** — a heuristic input (changes only which page-commit's snapshot the confetti-rate check sees). See issue **#31** for the separate, more serious widening on the paired mutation this same relaxation enables (`CONSUME_CONFETTI_PROBE_SLOT`, discussed above) — that one can change carve *count*, not merely which snapshot is read |
+| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, gated behind the remaining-work/rate/demand/floor checks already having passed (verified against `main`'s pre-extraction `maybeOwnerSelfSplit`: the confetti check ran only after those four gates) | read via `confettiFeedback.snapshot()` at method entry (`OwnerSelfSplit.java:170`), BEFORE the remaining-work, rate, demand, and floor gates run inside `governor.decide(view)` | **WIDENED** — a heuristic input (changes only which page-commit's snapshot the confetti-rate check sees, i.e. probe cadence). The paired mutation this same relaxation enabled could change carve *count* — issue **#31**, fixed by the probe-slot CLAIM discussed above; what remains widened here is only the rate read |
 | N/A (no `View`) | `WorkerState` futility counters: `consecutiveFutileSteals`,`futilityTrips`,`stealPacingSkips` | lock-free, unlocked, one `AtomicInteger` op at a time, inline in `recordFutileSteal`/`markStolen`/`stealPaced`/`consumePacingSkip` | identical call sites, identical op sequence — `FutilityPacingPolicy` supplies only the trip-check/cooldown-formula/decay/reset VALUES each op already computed inline; no combined read of the three | unchanged |
 | N/A (no `View`) | `IdleStealBackoff` pacing state: `consecutiveNonProductive`,`nextAttemptNanos` | plain (non-atomic) fields, read/written only inside this object's own `synchronized` methods | collapsed into one `IdleStealPacingState`, read-and-replaced as a whole, still only inside the same `synchronized` methods | unchanged — monitor-protected, so combining the two fields into one record here is safe (see the shape-asymmetry paragraph above); contrast the futility-counter row directly above it |
 | N/A (no `View`, mutation-only) | `consecutiveZeroFanoutStructureProbes` increment/reset (`RECORD_ZERO_FANOUT_STRUCTURE_PROBE`/`RESET_ZERO_FANOUT_STRUCTURE_PROBES`) | applied synchronously and inline in `structurePivot`, immediately after the probe response's fan-out was counted (verified against `main`'s pre-extraction `Thief#structurePivot`) | queued as a mutation by `ThiefPolicy#pickStructureBoundary` (`ThiefPolicy.java:435-438`) on the `StealAction` it returns; not applied until `Thief`'s `while(true)` loop comes back around and calls `applyMutations` on the NEXT action (`Thief.java:238`) — i.e. one full loop iteration after the response was counted | **WIDENED** — a third `Thief`-side widening, judged benign on the same grounds as the two below (see the bullet list immediately following this table) |
