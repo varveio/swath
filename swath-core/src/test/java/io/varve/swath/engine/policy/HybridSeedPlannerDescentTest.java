@@ -259,4 +259,79 @@ final class HybridSeedPlannerDescentTest {
         // generic case (synthesized == 0, no special per-level classification anywhere).
         assertThat(plan.decisions().get(0).classification()).isEqualTo("delimiter_seeded");
     }
+
+    // -- Dense flat ROOT: the null-vs-empty prefix normalization (issue #33) ----------------------
+
+    /**
+     * A dense flat root — page-capped top, direct objects, no {@code commonPrefixes} — drives the
+     * whole bucket into {@code flatWideRegion} and gets radix-banded, so BOTH the run-level
+     * {@code dense_root_radix_banded} mark and the per-level classification rewrite must fire.
+     *
+     * <p><b>Issue #33.</b> Driven twice with the two spellings of "no listing prefix" the API accepts
+     * ({@code SeedStep}'s javadoc: "the listing prefix P ({@code null}/empty = whole bucket)"). The
+     * {@code null} spelling was the bug: {@code afterTop()} normalized the REGION to
+     * {@code new byte[0]} but recorded the raw {@code null} as the level's prefix, and
+     * {@code finalizeDecisions}' {@code Arrays.equals(null, new byte[0])} is false — so the level kept
+     * {@code flat_wide} while the run-level mark said banded, one artifact disagreeing with the other.
+     * The {@code new byte[0]} spelling always worked (same reference on both sides), and is asserted
+     * alongside so the fix is pinned as making the two spellings agree rather than as moving which one
+     * is broken. Both were uncovered before this test: no golden fixture records {@code flat_wide} or
+     * {@code dense_root_radix_banded}, and no policy-level suite exercised either.
+     */
+    @Test
+    void denseFlatRootIsClassifiedBandedForBothSpellingsOfAnAbsentListingPrefix() {
+        for (byte[] noPrefix : new byte[][] {null, EMPTY}) {
+            String spelling = (noPrefix == null) ? "null" : "empty";
+            HybridSeedPlanner planner = new HybridSeedPlanner(noPrefix, 4, EngineToggles.DEFAULT);
+
+            // Page-capped, no common prefixes, direct objects present -> isFlatWide at the root.
+            Function<RequestSeedProbe, SeedProbeOutcome> script =
+                    req -> new SeedProbeOutcome(List.of(), true, 1000, b("0000"));
+
+            List<RequestSeedProbe> issued = new ArrayList<>();
+            List<Engagement> engagements = new ArrayList<>();
+            SeedPlan plan = drive(planner.beginDescent(), script, issued, engagements);
+
+            assertThat(reasons(engagements))
+                    .as("[%s] the run-level banded mark fires (it always did — it is set off "
+                            + "synthesized, not off the prefix comparison)", spelling)
+                    .contains("dense_root_radix_banded");
+            assertThat(plan.synthesizedCuts())
+                    .as("[%s] the flat root was pre-cut into radix bands", spelling)
+                    .isGreaterThan(0);
+            assertThat(plan.decisions()).as("[%s] the single top-level entry", spelling).hasSize(1);
+            assertThat(plan.decisions().get(0).classification())
+                    .as("[%s] the per-level classification agrees with the run-level mark", spelling)
+                    .isEqualTo("dense_root_radix_banded");
+            assertThat(plan.decisions().get(0).prefix())
+                    .as("[%s] the level's prefix is recorded normalized, matching the region it "
+                            + "is matched against", spelling)
+                    .isEqualTo(EMPTY);
+        }
+    }
+
+    /**
+     * The same dense flat root with {@code radix_bands} OFF keeps {@code flat_wide}: issue #33's fix
+     * normalizes the recorded prefix, it does not make the rewrite unconditional. Without this, a
+     * "fix" that simply always stamped {@code dense_root_radix_banded} on a flat root would pass the
+     * test above.
+     */
+    @Test
+    void denseFlatRootKeepsFlatWideWhenRadixBandingIsOff() {
+        EngineToggles bandsOff = EngineToggles.DEFAULT.withRadixBands(false);
+        assertThat(bandsOff.radixBands()).isFalse();
+        HybridSeedPlanner planner = new HybridSeedPlanner(null, 4, bandsOff);
+
+        Function<RequestSeedProbe, SeedProbeOutcome> script =
+                req -> new SeedProbeOutcome(List.of(), true, 1000, b("0000"));
+
+        List<RequestSeedProbe> issued = new ArrayList<>();
+        List<Engagement> engagements = new ArrayList<>();
+        SeedPlan plan = drive(planner.beginDescent(), script, issued, engagements);
+
+        assertThat(plan.synthesizedCuts()).isZero();
+        assertThat(reasons(engagements)).contains("radix_bands_toggle_disabled")
+                .doesNotContain("dense_root_radix_banded");
+        assertThat(plan.decisions().get(0).classification()).isEqualTo("flat_wide");
+    }
 }
