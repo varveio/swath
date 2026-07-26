@@ -162,6 +162,10 @@ final class WorkStealingScanConstructorDefaultsTest {
         assertThat(defaults.retryConfig().policy())
                 .as("the implicit retry default is BOUNDED, not an owner-less unbounded ride-out")
                 .isEqualTo(RetryPolicy.BOUNDED);
+        assertThat(defaults.decisionRngSeed())
+                .as("the 7-arg compatibility constructor leaves decisionRngSeed null (the ambient "
+                        + "DecisionRng default), not some other coalesced value")
+                .isNull();
 
         EngineToggles ownerOff = EngineToggles.DEFAULT.withOwnerSplit(false);
         TraceSink sink = new RecordingTraceSink();
@@ -171,6 +175,58 @@ final class WorkStealingScanConstructorDefaultsTest {
         assertThat(explicit.toggles()).as("a non-null toggles seam is left untouched").isSameAs(ownerOff);
         assertThat(explicit.trace()).as("a non-null trace seam is left untouched").isSameAs(sink);
         assertThat(explicit.retryConfig()).as("a non-null retry seam is left untouched").isSameAs(ride);
+    }
+
+    // =========================================================================
+    // decisionRngSeed: opt-in wiring into Thief's ThiefPolicy (owner decision 2026-07-26)
+    // =========================================================================
+
+    /**
+     * {@link EngineContext#decisionRngSeed()} governs which of {@link Thief}'s two constructors
+     * {@link WorkStealingScan} calls — the null-check ternary itself has no OTHER observable (both
+     * branches build an otherwise-identical engine), so this reads the constructed {@code Thief}'s
+     * {@code ThiefPolicy}'s own {@code rng} field back via reflection — the sole {@link
+     * io.varve.swath.engine.policy.DecisionRng} consumer (contracts.md §2.1). A seed set on the
+     * context must land on a live {@link SeededDecisionRng}, not the ambient lambda default.
+     */
+    @Test
+    void decisionRngSeedWiresASeededDecisionRngIntoTheThiefsPolicy(@TempDir Path dir) throws Exception {
+        WorkStealingScan engine = construct(dir, "seeded-rng", denseFlat(10),
+                (f, s, id, p, m, seeds, metrics) -> new WorkStealingScan(
+                        new EngineContext(id, p, m, metrics, null, null, null).withDecisionRngSeed(42L),
+                        f, s, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY));
+        assertThat(thiefPolicyRng(engine))
+                .as("a non-null decisionRngSeed must wire a live SeededDecisionRng into ThiefPolicy")
+                .isInstanceOf(SeededDecisionRng.class);
+    }
+
+    /**
+     * The complementary default: an unset {@code decisionRngSeed} must leave {@code ThiefPolicy} on
+     * {@link Thief}'s own ambient default (NOT a {@link SeededDecisionRng}) — byte-identical to every
+     * run before this seam existed.
+     */
+    @Test
+    void unsetDecisionRngSeedLeavesTheThiefsPolicyOnTheAmbientDefault(@TempDir Path dir) throws Exception {
+        WorkStealingScan engine = construct(dir, "unseeded-rng", denseFlat(10),
+                (f, s, id, p, m, seeds, metrics) -> new WorkStealingScan(
+                        new EngineContext(id, p, m, metrics, null, null, null),
+                        f, s, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY));
+        assertThat(thiefPolicyRng(engine))
+                .as("an unset decisionRngSeed must NOT wire a SeededDecisionRng — Thief's own ambient "
+                        + "ThreadLocalRandom default stays live, unchanged from before this seam existed")
+                .isNotInstanceOf(SeededDecisionRng.class);
+    }
+
+    /** Drills {@code engine.thief.policy.rng} via reflection — the one field a {@link Thief}
+     *  constructor-overload choice actually changes. */
+    private static Object thiefPolicyRng(WorkStealingScan engine) throws Exception {
+        Object thief = field(engine, "thief");
+        Field policyField = Thief.class.getDeclaredField("policy");
+        policyField.setAccessible(true);
+        Object policy = policyField.get(thief);
+        Field rngField = policy.getClass().getDeclaredField("rng");
+        rngField.setAccessible(true);
+        return rngField.get(policy);
     }
 
     // =========================================================================
