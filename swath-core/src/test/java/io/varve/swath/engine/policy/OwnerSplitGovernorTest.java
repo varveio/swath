@@ -146,7 +146,7 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.RATE_LIMITED);
-        assertThat(decision.engagements()).as("uncounted (rate-limit gate)").isEmpty();
+        assertThat(decision.engagements()).containsExactly(new Engagement("OWNER_SPLIT", "rate_limited"));
     }
 
     @Test

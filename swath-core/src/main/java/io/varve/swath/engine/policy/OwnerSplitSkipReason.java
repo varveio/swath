@@ -30,7 +30,7 @@ public enum OwnerSplitSkipReason {
     /**
      * Fewer than {@code SELF_SPLIT_MIN_PAGES_BETWEEN} committed pages have passed since this
      * range's last published self-split — a genuine suppressed carve (the O(1)-per-drain
-     * rate-limit engaging), currently UNCOUNTED: no {@link Engagement} fires here yet.
+     * rate-limit engaging): {@code OWNER_SPLIT.rate_limited}.
      */
     RATE_LIMITED("rate_limited"),
     /** The demand/saturation gate suppressed the carve: {@code OWNER_SPLIT.demand_gated}. */

@@ -151,16 +151,6 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   production traffic (the public-bucket differential at the release gates,
   and any `--trace` captures from real runs) remains the backstop this golden
   suite does not replace.
-- **The owner-split governor's page-spacing rate limit is still silent.** `OwnerSplitGovernor`'s
-  `committed - lastSelfSplitPage < SELF_SPLIT_MIN_PAGES_BETWEEN` gate (`OwnerSplitSkipReason#RATE_LIMITED`)
-  returns `Skip` with no `Engagement` — no `recordStealReason` call reaches it. The goldens
-  correctly pin today's behavior (an empty `reason_deltas` object on the events that hit it),
-  which is a faithful golden of the current, gap-carrying code — not a bug in the recorder.
-  The remaining-work floor's twin gap closed as issue #16 (`OWNER_SPLIT.remaining_est_floor`,
-  `owner-split-gates.jsonl` seq 1 and `explosion-1to1.jsonl` seq 7 both gained that engagement
-  when it landed) — when the rate limit's counter lands, regenerating goldens is **expected and
-  required** in that same change; the drift it produces there is the safety net catching the
-  deliberate behavior addition, not a regression.
 - **The `flat-wide` fixture no longer pins the long-zero-padded-id flat shape.**
   It moved from `Keyspaces.singlePrefixFlat`'s 8-digit zero-padded counter to a
   local 3-digit one proportionate to its 400-key scale (see `flatWideKeys`'s

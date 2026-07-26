@@ -85,9 +85,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                     List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())));
         }
         if (view.committed() - view.lastSelfSplitPage() < SELF_SPLIT_MIN_PAGES_BETWEEN) {
-            // Rate-limit: O(1) self-splits per drain, not one per page. See OwnerSplitSkipReason's
-            // javadoc: uncounted today.
-            return new Skip(OwnerSplitSkipReason.RATE_LIMITED, List.of());
+            // Rate-limit: O(1) self-splits per drain, not one per page.
+            return new Skip(OwnerSplitSkipReason.RATE_LIMITED,
+                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code())));
         }
         List<Engagement> engagements = new ArrayList<>();
         // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live

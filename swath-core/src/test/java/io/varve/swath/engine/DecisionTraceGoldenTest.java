@@ -59,7 +59,7 @@ import org.junit.jupiter.api.Test;
  * {@code ./gradlew :swath-core:test --tests '*.DecisionTraceGoldenTest' -Dswath.goldens.update=true}
  * rewrites every fixture under {@code src/test/resources/goldens/decision-trace/}; review the diff
  * before committing. See {@code docs/ops/dev/decision-trace-goldens.md} (including its "known
- * gaps" section — real-bucket replay fixtures and the uninstrumented owner-split gates).
+ * gaps" section — real-bucket replay fixtures and the flat-wide fixture's coverage gap).
  *
  * <p><b>Coverage matrix</b> (decision site × fixture — every site appears in ≥3 fixtures):
  * <ul>
