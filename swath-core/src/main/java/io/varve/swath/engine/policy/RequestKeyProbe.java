@@ -15,7 +15,8 @@ import java.util.List;
  * @param pivot the candidate pivot {@code m} to probe
  * @param hi    the coherent snapshot bound {@code H} ({@code null} = open frontier — accepts any
  *              returned key)
+ * @param phase which cascade step this probe belongs to ({@link KeyProbePhase})
  */
-public record RequestKeyProbe(byte[] pivot, byte[] hi, List<Engagement> engagements, List<VictimMutation> mutations)
-        implements StealAction {
+public record RequestKeyProbe(byte[] pivot, byte[] hi, KeyProbePhase phase, List<Engagement> engagements,
+                              List<VictimMutation> mutations) implements StealAction {
 }

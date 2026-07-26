@@ -532,6 +532,27 @@ public final class WorkerState {
         return true;
     }
 
+    /**
+     * Non-mutating half of {@link #stealPaced()}'s check: would it observe a cooldown skip right
+     * now? The policy seam's victim-selection view is read-only ({@code
+     * io.varve.swath.engine.policy}'s {@code VictimView} never touches live {@code WorkerState}), so
+     * building it needs a peek that doesn't also consume — the executor applies the matching
+     * {@link #consumePacingSkip()} afterward for exactly the candidates the policy says were paced,
+     * reproducing {@link #stealPaced()}'s combined check-and-decrement as two steps instead of one.
+     */
+    public boolean pacingSkipAvailable() {
+        return stealPacingSkips.get() > 0;
+    }
+
+    /**
+     * Mutating half of {@link #stealPaced()}: consume one cooldown skip. Called by the executor in
+     * response to the policy's {@code VictimMutation.Kind#CONSUME_PACING_SKIP}, only ever for a
+     * candidate {@link #pacingSkipAvailable()} already found paced.
+     */
+    public void consumePacingSkip() {
+        stealPacingSkips.decrementAndGet();
+    }
+
     // ---- Slow-range dump: per-range steal-reason tallies + drain-rate clock -------------
 
     /** This range's creation instant ({@link System#nanoTime()}), for the drain-rate estimate. */

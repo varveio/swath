@@ -294,18 +294,30 @@ public record EngineToggles(
 
     /**
      * The far-ahead pivot fraction for a bounded range ({@code hi != null}) at the two sites that
-     * otherwise call {@link WorkerState#densityFraction()} directly ({@link Thief} and {@link
-     * WorkStealingScan}'s owner-split site). {@code far_ahead=off} wins over {@code density_ewma}
-     * (checked first) — fixing the plain byte-midpoint takes precedence over any EWMA substitute.
+     * otherwise call {@link WorkerState#densityFraction()} directly ({@link Thief}'s policy and
+     * {@link WorkStealingScan}'s owner-split site). {@code far_ahead=off} wins over {@code
+     * density_ewma} (checked first) — fixing the plain byte-midpoint takes precedence over any EWMA
+     * substitute. Delegates to {@link #farAheadFraction(double)}, the primitive form the policy
+     * package (source-agnostic — no {@link WorkerState}) calls directly with an already-read
+     * {@link WorkerState#densityFraction()} value.
      */
     public double farAheadFraction(WorkerState victim) {
+        return farAheadFraction(victim.densityFraction());
+    }
+
+    /**
+     * The primitive form of {@link #farAheadFraction(WorkerState)}: {@code densityFraction} is
+     * {@link WorkerState#densityFraction()}'s already-computed value (pure, zero-I/O), so this
+     * overload needs no {@link WorkerState} — the one {@code io.varve.swath.engine.policy} calls.
+     */
+    public double farAheadFraction(double densityFraction) {
         if (!farAhead) {
             return PLAIN_MIDPOINT_FRACTION;
         }
         if (!densityEwma) {
             return DENSITY_EWMA_OFF_FRACTION;
         }
-        return victim.densityFraction();
+        return densityFraction;
     }
 
     /**
