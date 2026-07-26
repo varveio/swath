@@ -165,15 +165,27 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   legacy-tool-generated datasets — and nothing else in this fixture matrix
   covers it. Disclosed here rather than silently dropped; not planned to be
   closed as part of this safety net.
-- **Three of `OwnerSplitGovernor`'s gates have no golden event.** The observed-mass
-  child-tail floor (`OwnerSplitSkipReason#FLOOR_REFLECTED_BLOCKED`) and the confetti
-  feedback gate's two outcomes (`CONFETTI_SUPPRESSED`, the `confetti_probe` engagement)
-  are all instrumented and boundary-tested in isolation (`OwnerSplitChildMassFloorTest`,
-  `ConfettiFeedbackGateTest`, `OwnerSplitGovernorTest`), but no recipe driving THIS
-  recorder (a single `OwnerSelfSplit` call against a hand-built `WorkerState`) has been
-  built to reach them — see `DecisionTraceGoldenTest`'s class-level Javadoc for the
-  full per-gate count. Not fixed here; disclosed so the gap is visible rather than
-  silently absent from an otherwise-complete-looking matrix.
+- **`OWNER_SPLIT.confetti_probe` is unpinnable until issue #22 is fixed — not merely
+  un-attempted.** `ConfettiFeedbackGate#decide()` mutates its own `probeCounter` via
+  `incrementAndGet()` and returns `SUPPRESSED` or `PROBE` depending on `n % PROBE_K`,
+  i.e. on how many times `decide()` has been called, not on the view
+  (`OwnerSplitGovernor`'s `decide(view)` is therefore not a pure function of its view
+  in this one case — see `architecture.md`'s "Known seam exceptions"). A golden
+  pinning the `PROBE` outcome would be pinning call-count parity: whatever recipe
+  reaches it today would encode an accident of how many `decide()` calls preceded it,
+  not a genuine property of the scenario, and could silently stop reproducing if
+  anything upstream of it in the same fixture changes how many times the gate is
+  consulted. This is the concrete cost of #22 landing as a purity nit rather than a
+  blocker: closing it (reproducible probe selection via an injected counter or
+  seeded RNG) is what would unlock a legitimate recipe here. The gate's OTHER
+  outcome, `CONFETTI_SUPPRESSED`, does not have this problem and is pinned
+  (`owner-split-gates.jsonl`'s scenario 8) — it is the deterministic FIRST call to
+  reach the gate's over-threshold branch on a freshly-warmed instance, not dependent
+  on any particular call count beyond "at least one, after warmup, before the 16th".
+  `OWNER_SPLIT.self_aborted` is also out of this recorder's reach, but for an
+  unrelated reason: every scenario's `StubCheckpointStore` always accepts the split,
+  so the abort path never triggers here — it is covered instead by
+  `OwnerSelfSplitContractTest`'s dedicated abort-path test (T2).
 
 ## Coverage matrix
 

@@ -109,6 +109,19 @@ import org.junit.jupiter.api.Test;
  *   <li>{@code REMAINING_EST_FLOOR}: 2 events, 2 fixtures (owner-split-gates, explosion-1to1)</li>
  *   <li>{@code RATE_LIMITED}: 1 event, 1 fixture (owner-split-gates)</li>
  *   <li>{@code DEMAND_GATED}: 2 events, 2 fixtures (owner-split-gates, flat-wide)</li>
+ *   <li>{@code FLOOR_REFLECTED_BLOCKED}: 1 event, 1 fixture (owner-split-gates) — a dense-head/
+ *       thinning-tail EWMA transition ({@code ObservedMassFloorContractTest}'s own recipe, driven
+ *       through this recorder instead of {@code StealMath.childTailBelowObservedMassFloor}
+ *       directly), decoupling the victim's own cursor (feeds {@code observedDensityRatio}) from
+ *       the separate post-commit {@code cursorTo} (feeds {@code est}), as scenarios 3-5 already do</li>
+ *   <li>{@code CONFETTI_SUPPRESSED}: 1 event, 1 fixture (owner-split-gates) — {@code
+ *       MIN_SAMPLE}=8 tagged children warmed to 100% confetti via the real {@code
+ *       maybeOwnerSelfSplit}/{@code onNodeCompleted} tag/classify cycle on a shared {@link
+ *       OwnerSelfSplit}, then one more call past warmup; deterministic because it is the FIRST
+ *       call to reach the gate's over-threshold branch on that instance (every warm-up call
+ *       itself returned {@code CARVE} without touching the probe counter) — see that scenario's
+ *       comment for why this is NOT the same accident-of-call-count risk {@code confetti_probe}
+ *       carries</li>
  *   <li>{@code UNSPLITTABLE_PIVOT}: 1 event, 1 fixture (owner-split-gates) — the byte-adjacent
  *       {@code (cursorTo, hi]} recipe below, mirroring {@code
  *       ThiefPolicyCascadeTest#unsplittable_terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds}'s
@@ -119,19 +132,23 @@ import org.junit.jupiter.api.Test;
  *       pivot_reflect_clamped} (owner-split-gates) and one {@code pivot_reflect_lifted}
  *       (partition-key-value)</li>
  * </ul>
- * {@code FLOOR_REFLECTED_BLOCKED} (the observed-mass child-tail floor) and the confetti feedback
- * gate's two outcomes ({@code CONFETTI_SUPPRESSED}, the {@code confetti_probe} engagement) are
- * NOT pinned by any fixture here — a real gap, not silently absent: the observed-mass floor and
- * the confetti gate's {@code MIN_SAMPLE}-warmup/probe state machine are already boundary-tested in
- * isolation ({@code OwnerSplitChildMassFloorTest}, {@code ConfettiFeedbackGateTest}) and wiring-tested
- * against {@link OwnerSplitGovernor} directly ({@code OwnerSplitGovernorTest}), but no recipe
- * driving THIS recorder (a single {@link OwnerSelfSplit} call against a hand-built {@link
- * WorkerState}) has been built to reach them — see {@code decision-trace-goldens.md}'s "known
- * gaps" section. {@code OWNER_SPLIT.self_aborted} (the durable-split CAS rejection) is likewise
- * absent here by construction: every scenario's {@code StubCheckpointStore} always accepts the
- * split, so the abort path is out of this single-attempt recorder's reach entirely — it is covered
- * instead by {@code OwnerSelfSplitContractTest}'s dedicated abort-path test (T2), which forces
- * every split to reject.
+ * Two branches remain genuinely out of this recorder's reach:
+ * <ul>
+ *   <li>The confetti feedback gate's {@code confetti_probe} engagement (the every-{@code
+ *       PROBE_K}-th over-threshold call let through) is UNPINNABLE until issue #22 is fixed, not
+ *       merely un-attempted: which of {@code SUPPRESSED}/{@code PROBE} {@code
+ *       ConfettiFeedbackGate#decide()} returns depends on {@code probeCounter.incrementAndGet() %
+ *       PROBE_K}, i.e. on how many times {@code decide()} has been called, not on the view — a
+ *       golden pinning it would be pinning call-count parity (encoding an accident of how many
+ *       {@code decide()} calls preceded it), exactly the non-determinism #22 describes. Fixing
+ *       #22 (reproducible probe selection via an injected counter or seeded RNG) is what unlocks
+ *       a legitimate recipe here. See {@code decision-trace-goldens.md}'s "known gaps".</li>
+ *   <li>{@code OWNER_SPLIT.self_aborted} (the durable-split CAS rejection) is absent here by
+ *       construction: every scenario's {@code StubCheckpointStore} always accepts the split, so
+ *       the abort path is out of this single-attempt recorder's reach entirely — it is covered
+ *       instead by {@code OwnerSelfSplitContractTest}'s dedicated abort-path test (T2), which
+ *       forces every split to reject.</li>
+ * </ul>
  */
 final class DecisionTraceGoldenTest {
 
@@ -535,6 +552,58 @@ final class DecisionTraceGoldenTest {
         long[] selfSplit6 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, ownerSelfSplit(m6, t6, 1, 100, () -> 0L, () -> 1),
                 unsplittable, unsplittableCursorTo, selfSplit6, m6, t6);
+
+        // 7. Observed-mass child-tail floor: a thinning tail blocks the carve even though est
+        //    clears the remaining-work floor. The victim's OWN cursor sits near hi ("y" of "a".."z")
+        //    so observedDensityRatio() has a real consumed span to compute from -- decoupled here
+        //    from the SEPARATE post-commit cursorTo ("e") the est/pivot math uses, exactly as
+        //    scenarios 3-5 decouple them. One dense recordPage seeds the trailing EWMA high, then a
+        //    long run of sparse pages decays it far below the range's overall average
+        //    (ObservedMassFloorContractTest's own recipe, reused here) -- observedDensityRatio()
+        //    lands near the sparse page's own local/overall ratio (~0.03), and farAheadFraction
+        //    bottoms out at its own floor (0.5), so childTailBelowObservedMassFloor's
+        //    reach-f collapses to <= 0 regardless of est's size -> OWNER_SPLIT.floor_reflected_blocked.
+        RunMetrics m7 = new RunMetrics(new SimpleMeterRegistry());
+        RecordingTraceSink t7 = new RecordingTraceSink();
+        WorkerState thinningTail = WorkerStates.of(7, b("a"), b("y"), b("z"));
+        thinningTail.addKeysEmitted(200);
+        thinningTail.recordPage(b("m"), b("n"), 500);   // dense head: seeds the EWMA high
+        for (int i = 0; i < 60; i++) {
+            thinningTail.recordPage(b("m"), b("x"), 3);   // sparse tail: decays the EWMA far below average
+        }
+        long[] selfSplit7 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        recordOwnerSplitAttempt(fx, ownerSelfSplit(m7, t7, 1, 100, () -> 0L, () -> 1),
+                thinningTail, b("e"), selfSplit7, m7, t7);
+
+        // 8. Confetti feedback gate suppresses: after MIN_SAMPLE (8) tagged owner-split children all
+        //    complete confetti-sized (never split, tiny own tally), the observed confetti rate
+        //    (100% > SUPPRESS_THRESHOLD) trips the gate. Warms a SHARED OwnerSelfSplit's
+        //    ConfettiFeedbackGate directly (maybeOwnerSelfSplit + onNodeCompleted, the exact
+        //    tag/classify cycle a real run drives) rather than through recordOwnerSplitAttempt, so
+        //    only the FINAL, gate-tripping call becomes a golden event -- the eight warm-up carves
+        //    themselves are ordinary denseVictim/self_published attempts, already pinned by
+        //    scenario 5. This is the FIRST call to reach the gate's over-threshold branch on this
+        //    fresh instance (every warm-up call itself returned CARVE via the warmup branch, which
+        //    never touches the probe counter), so the outcome is deterministic and not an accident
+        //    of call-count parity -- unlike PROBE, which depends on landing on exactly the
+        //    PROBE_K-th such call and is unpinnable until issue #22 (see decision-trace-goldens.md's
+        //    "known gaps") -> OWNER_SPLIT.confetti_suppressed.
+        RunMetrics m8 = new RunMetrics(new SimpleMeterRegistry());
+        RecordingTraceSink t8 = new RecordingTraceSink();
+        OwnerSelfSplit confettiGov = ownerSelfSplit(m8, t8, 1, 100, () -> 0L, () -> 1);
+        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
+            WorkerState warmVictim = denseVictim(100 + i, "d/00", "d/05");
+            long[] warmSelfSplit = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+            OwnerSelfSplit.OwnerSplitTrace warmResult =
+                    confettiGov.maybeOwnerSelfSplit(warmVictim.nodeId(), warmVictim, b("d/002500"), warmSelfSplit);
+            // A fresh, never-split, small-tally child classifies as confetti (isConfettiChild).
+            WorkerState completedChild =
+                    WorkerStates.of(warmResult.childId(), warmResult.pivot(), warmResult.pivot(), warmResult.hi());
+            confettiGov.onNodeCompleted(warmResult.childId(), completedChild);
+        }
+        WorkerState suppressed = denseVictim(9, "d/00", "d/05");
+        long[] selfSplit8 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        recordOwnerSplitAttempt(fx, confettiGov, suppressed, b("d/002500"), selfSplit8, m8, t8);
 
         GoldenTrace.writeOrVerify(fx);
     }
