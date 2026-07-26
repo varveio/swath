@@ -335,7 +335,7 @@ public final class ThiefPolicy implements StealPolicy {
                 if (midpoint != null && !Arrays.equals(midpoint, m)) {
                     m = midpoint;
                     mechanism = PivotMechanism.MIDPOINT;
-                    addEngagement("PIVOT", "step_back");
+                    addEngagement("PIVOT", PivotMechanism.STEP_BACK.code());
                     return requestKeyProbe(m, KeyProbePhase.STEP_BACK, Phase.AWAITING_STEP_BACK_KEY_PROBE);
                 }
             }
@@ -493,11 +493,11 @@ public final class ThiefPolicy implements StealPolicy {
         private StealAction afterReflectKeyProbe(KeyProbeOutcome outcome) {
             m = reflectPivot;
             if (outcome.nonEmpty()) {
-                addEngagement("PIVOT", "reflect_hit");
+                addEngagement("PIVOT", PivotMechanism.REFLECT_HIT.code());
                 mechanism = PivotMechanism.REFLECT;
                 return commit();
             }
-            addEngagement("PIVOT", "reflect_empty");
+            addEngagement("PIVOT", PivotMechanism.REFLECT_EMPTY.code());
             return beginBisection();
         }
 
