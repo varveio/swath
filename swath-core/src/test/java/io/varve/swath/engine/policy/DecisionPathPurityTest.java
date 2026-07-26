@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -42,27 +43,37 @@ import org.junit.jupiter.api.Test;
  * AlphabetDigest}'s {@code RunMetrics} field, in {@code io.varve.swath.engine}, reached only via
  * {@code StealAttemptView.alphabetDigest()}) or issue #22 ({@code OwnerSplitGovernor}'s {@code
  * ConfettiFeedbackGate} field — a policy-package field, but not matching any time/RNG API name
- * either). Both were found by human review. This test's two halves are shaped after those two
- * distinct failure modes instead:
+ * either). Both were found by human review. Three checks now cover the distinct failure modes
+ * found so far:
  *
  * <ul>
  *   <li>{@link #decisionPathHoldsNoAmbientCollaboratorState()} — a FIELD-TYPE closure walk (not a
  *       text scan): catches a class anywhere in the closure HOLDING a {@code RunMetrics}/{@code
- *       TraceSink} reference, or any {@code java.util.concurrent.atomic} type, as a field —
- *       precisely the shape both #19 and #22 took. The closure recursion is what makes it
- *       PACKAGE-INDEPENDENT: {@code AlphabetDigest} is reached (and its field checked) purely
- *       because {@code StealAttemptView} carries it, exactly the mechanism #19 needed and the
- *       original grep-shaped brief did not have.</li>
+ *       TraceSink} reference, any {@code java.util.concurrent.atomic} type, or a {@link
+ *       ThreadLocal} — precisely the shape #19 and #22 took (and, per an independent review pass,
+ *       a {@code ThreadLocal}-typed field also evaded this check until it was added here). The
+ *       closure recursion is what makes it PACKAGE-INDEPENDENT: {@code AlphabetDigest} is reached
+ *       (and its field checked) purely because {@code StealAttemptView} carries it, exactly the
+ *       mechanism #19 needed and the original grep-shaped brief did not have.</li>
  *   <li>{@link #decisionPathReadsNoAmbientClockOrRandomness()} — a comment/string-stripped SOURCE
  *       scan (reflection cannot see a method body's API calls) for the literal ambient-time/RNG
  *       call shapes, scoped to the SAME closure's source files — the mechanism issue #20 needed.
  *       Comments are stripped first because this codebase's own javadoc routinely NAMES these APIs
  *       while explaining why a class does NOT call them (e.g. {@code DecisionRng}'s own javadoc
  *       says {@code ThreadLocalRandom.current()} in prose) — an unstripped scan would false-positive
- *       on the very file documenting the fix.</li>
+ *       on the very file documenting the fix. {@code ThreadLocal} is matched on a WORD BOUNDARY
+ *       (not a bare substring) so it cannot double-report a {@code ThreadLocalRandom} occurrence.</li>
+ *   <li>{@link #policyPackageSourceNamesNoAmbientCollaboratorTypeDirectly()} — a source scan of the
+ *       policy package's OWN files (not the wider closure, to avoid false-positiving on {@code
+ *       EngineToggles#recordOffMarks}'s legitimate {@code RunMetrics} parameter — see below) for the
+ *       bare TYPE NAMES {@code RunMetrics}/{@code TraceSink} appearing anywhere in real code. Per an
+ *       independent review pass, a lambda field (e.g. a {@code Supplier} whose body constructs and
+ *       calls a {@code RunMetrics} it captured) evades the field-type closure walk entirely — a
+ *       lambda's synthetic implementation class is never a declared field type — but it still has to
+ *       NAME the type somewhere in that file to construct/receive it, which this scan catches.</li>
  * </ul>
  *
- * <p>Both tests assert the closure/source-set they scan is non-trivially populated FIRST — an
+ * <p>All three tests assert the closure/source-set they scan is non-trivially populated FIRST — an
  * empty scan is an empty (vacuous) pass, not a clean one (AGENTS.md's "mutate your own, report the
  * evidence" standard: this repo's own campaign found a barrier test and a conservation test that
  * passed only because they checked nothing real).
@@ -75,17 +86,38 @@ import org.junit.jupiter.api.Test;
  * construct/drive a policy, a policy never references them back) — so the closure never reaches
  * them and this test never scans their source. Likewise {@code EngineToggles#recordOffMarks}
  * legitimately takes a {@code RunMetrics} PARAMETER (called only from executor code — {@code
- * Thief}/{@code SeedStep}/{@code WorkStealingScan} — never from a {@code decide()} path): this
- * test checks field TYPES, not parameter types, precisely so an explicit, caller-supplied,
- * pass-through parameter (the same shape every {@code Engagement} collector already uses) stays
- * legal while an ambient FIELD reference does not.
+ * Thief}/{@code SeedStep}/{@code WorkStealingScan} — never from a {@code decide()} path): the
+ * field-type check looks at field TYPES, not parameter types, and the type-NAME source scan is
+ * scoped to the policy package only (where {@code EngineToggles} does not live), precisely so an
+ * explicit, caller-supplied, pass-through parameter (the same shape every {@code Engagement}
+ * collector already uses) stays legal while an ambient FIELD or a locally-constructed-and-touched
+ * instance does not.
  *
- * <p><b>Verified against both historical leaks</b> (see this test's own commit message): temporarily
- * reintroducing #19's {@code RunMetrics} field on {@code AlphabetDigest} and #22's {@code
- * ConfettiFeedbackGate} field on {@code OwnerSplitGovernor} each independently turned {@link
- * #decisionPathHoldsNoAmbientCollaboratorState()} red; reintroducing #20's direct {@code
+ * <h3>Known gaps (disclosed, not closed)</h3>
+ * A static check over this codebase's actual classes/sources cannot reach an implementation the
+ * codebase does not yet contain. Concretely: {@link DecisionRng}/{@link DecisionClock} are
+ * legitimately INJECTED interfaces (that is the whole point of issues #20's/its idle-steal twin's
+ * fix) — nothing here, or feasibly written statically, stops a caller supplying an implementation
+ * whose {@code nextInt}/{@code nanos} body reads a real clock or touches shared state, because that
+ * implementation's concrete class is never reachable from the policy's field-type closure (a
+ * policy holds only the INTERFACE-typed field, e.g. {@code ThiefPolicy}'s {@code rng: DecisionRng})
+ * and the interface itself carries no such call. This matters beyond this test: the next slice
+ * (an AIMD interface, deferred at B7 for exactly this "injected interface" shape) inherits the
+ * identical gap — its caller-supplied implementation must be pure by its own construction and
+ * review, not because this test would catch an impure one. The two evasions an independent review
+ * pass found and this test now closes (a {@code ThreadLocal}-typed field; a lambda-captured {@code
+ * RunMetrics}) are the two static-analysis gaps that WERE closable; this one is not.
+ *
+ * <p><b>Verified against three historical/independently-found leaks</b> (see this test's own commit
+ * messages): temporarily reintroducing #19's {@code RunMetrics} field on {@code AlphabetDigest} and
+ * #22's {@code ConfettiFeedbackGate} field on {@code OwnerSplitGovernor} each independently turned
+ * {@link #decisionPathHoldsNoAmbientCollaboratorState()} red; reintroducing #20's direct {@code
  * ThreadLocalRandom.current()} call in {@code ThiefPolicy} turned {@link
- * #decisionPathReadsNoAmbientClockOrRandomness()} red. All three reverted clean.
+ * #decisionPathReadsNoAmbientClockOrRandomness()} red; reintroducing a {@code ThreadLocal}-typed
+ * field on {@code OwnerSplitGovernor} turned {@link #decisionPathHoldsNoAmbientCollaboratorState()}
+ * red; reintroducing a lambda field on {@code OwnerSplitGovernor} that captures and calls a
+ * locally-constructed {@code RunMetrics} turned {@link
+ * #policyPackageSourceNamesNoAmbientCollaboratorTypeDirectly()} red. All reverted clean.
  */
 final class DecisionPathPurityTest {
 
@@ -101,10 +133,37 @@ final class DecisionPathPurityTest {
             "io.varve.swath.observability.TraceSink");
     private static final String FORBIDDEN_ATOMIC_PACKAGE = "java.util.concurrent.atomic";
 
+    /** One ambient-API text shape to scan stripped source for: a human label plus its match pattern. */
+    private record AmbientApiShape(String label, Pattern pattern) {
+        /** Matches the literal text anywhere (safe when the shape has no risk of being a substring
+         *  of a longer, legal identifier -- e.g. {@code "System.nanoTime("} always ends in a paren). */
+        static AmbientApiShape literal(String text) {
+            return new AmbientApiShape(text, Pattern.compile(Pattern.quote(text)));
+        }
+
+        /** Matches {@code identifier} only as a whole word (word-boundary on both sides), so a bare
+         *  {@code ThreadLocal} never double-reports inside a {@code ThreadLocalRandom} occurrence
+         *  (there is no word boundary between "ThreadLocal" and "Random" -- both are letters). */
+        static AmbientApiShape wholeWord(String identifier) {
+            return new AmbientApiShape(identifier, Pattern.compile("\\b" + Pattern.quote(identifier) + "\\b"));
+        }
+    }
+
     /** Ambient clock/randomness API call shapes (issue #20's own shape), matched on stripped source. */
-    private static final List<String> AMBIENT_TIME_RNG_CALL_SHAPES = List.of(
-            "System.nanoTime(", "System.currentTimeMillis(", "Math.random(",
-            "ThreadLocalRandom", "new Random(", "Instant.now(", "System.getenv(");
+    private static final List<AmbientApiShape> AMBIENT_TIME_RNG_CALL_SHAPES = List.of(
+            AmbientApiShape.literal("System.nanoTime("),
+            AmbientApiShape.literal("System.currentTimeMillis("),
+            AmbientApiShape.literal("Math.random("),
+            AmbientApiShape.literal("ThreadLocalRandom"),
+            AmbientApiShape.wholeWord("ThreadLocal"),
+            AmbientApiShape.literal("new Random("),
+            AmbientApiShape.literal("Instant.now("),
+            AmbientApiShape.literal("System.getenv("));
+
+    /** Ambient-collaborator TYPE NAMES a policy-package source may not even name (see class javadoc). */
+    private static final List<AmbientApiShape> FORBIDDEN_AMBIENT_TYPE_NAMES = List.of(
+            AmbientApiShape.wholeWord("RunMetrics"),
+            AmbientApiShape.wholeWord("TraceSink"));
 
     @Test
     void decisionPathHoldsNoAmbientCollaboratorState() throws Exception {
@@ -133,9 +192,10 @@ final class DecisionPathPurityTest {
         assertThat(violations)
                 .as("every decide()-reachable type (the policy package plus every field-reachable "
                         + "io.varve.swath.* type -- e.g. AlphabetDigest via StealAttemptView) must hold "
-                        + "no RunMetrics/TraceSink reference and mutate no java.util.concurrent.atomic "
-                        + "state -- issues #19 (AlphabetDigest's RunMetrics field) and #22 "
-                        + "(OwnerSplitGovernor's AtomicLong-backed ConfettiFeedbackGate field) were both "
+                        + "no RunMetrics/TraceSink reference, no ThreadLocal, and mutate no "
+                        + "java.util.concurrent.atomic state -- issues #19 (AlphabetDigest's RunMetrics "
+                        + "field), #22 (OwnerSplitGovernor's AtomicLong-backed ConfettiFeedbackGate "
+                        + "field), and a ThreadLocal-typed field found by independent review were all "
                         + "exactly this shape")
                 .isEmpty();
     }
@@ -154,9 +214,9 @@ final class DecisionPathPurityTest {
         List<String> violations = new ArrayList<>();
         for (Path src : sourceFiles) {
             String stripped = stripCommentsAndLiterals(Files.readString(src));
-            for (String shape : AMBIENT_TIME_RNG_CALL_SHAPES) {
-                if (stripped.contains(shape)) {
-                    violations.add(src + " calls `" + shape + "` directly");
+            for (AmbientApiShape shape : AMBIENT_TIME_RNG_CALL_SHAPES) {
+                if (shape.pattern().matcher(stripped).find()) {
+                    violations.add(src + " calls `" + shape.label() + "` directly");
                 }
             }
         }
@@ -166,6 +226,30 @@ final class DecisionPathPurityTest {
                         + "recovery reaching for ThreadLocalRandom.current() instead of the injected "
                         + "DecisionRng); DecisionRng/DecisionClock's injected-default suppliers "
                         + "(Thief/IdleStealBackoff) are executor-side and never enter this closure")
+                .isEmpty();
+    }
+
+    @Test
+    void policyPackageSourceNamesNoAmbientCollaboratorTypeDirectly() throws Exception {
+        Set<Path> sourceFiles = policyPackageSourceFiles();
+        assertThat(sourceFiles).as("must resolve real .java sources, or this test checks nothing")
+                .hasSizeGreaterThan(10);
+        List<String> violations = new ArrayList<>();
+        for (Path src : sourceFiles) {
+            String stripped = stripCommentsAndLiterals(Files.readString(src));
+            for (AmbientApiShape shape : FORBIDDEN_AMBIENT_TYPE_NAMES) {
+                if (shape.pattern().matcher(stripped).find()) {
+                    violations.add(src + " names `" + shape.label() + "` directly");
+                }
+            }
+        }
+        assertThat(violations)
+                .as("no policy-package source may even NAME RunMetrics/TraceSink in real code (beyond a "
+                        + "stripped comment) -- a lambda field that captures/constructs one of these to "
+                        + "record/trace directly is otherwise invisible to the field-type closure walk "
+                        + "above (a lambda's synthetic implementation class is never a declared field "
+                        + "type); this is a source-level backstop for that specific gap, not a full close "
+                        + "(see this test's class javadoc, \"Known gaps\")")
                 .isEmpty();
     }
 
@@ -219,6 +303,9 @@ final class DecisionPathPurityTest {
         if (FORBIDDEN_ATOMIC_PACKAGE.equals(leaf.getPackageName())) {
             return "java.util.concurrent.atomic mutation";
         }
+        if (ThreadLocal.class.isAssignableFrom(leaf)) {
+            return "ambient ThreadLocal state";
+        }
         return null;
     }
 
@@ -270,6 +357,21 @@ final class DecisionPathPurityTest {
                         out.add(Class.forName(className, false, cl));
                     }
                 }
+            }
+        }
+        return out;
+    }
+
+    /** Every {@code io.varve.swath.engine.policy} class's OWN {@code .java} source file (deduplicated
+     *  by file, since a top-level class's nested types share it) -- narrower than the transitive
+     *  closure, deliberately: see {@link #policyPackageSourceNamesNoAmbientCollaboratorTypeDirectly()}. */
+    private static Set<Path> policyPackageSourceFiles()
+            throws IOException, URISyntaxException, ClassNotFoundException {
+        Set<Path> out = new TreeSet<>();
+        for (Class<?> c : classesInPackage(POLICY_PACKAGE)) {
+            Path src = sourceFileOf(c);
+            if (src != null) {
+                out.add(src);
             }
         }
         return out;
