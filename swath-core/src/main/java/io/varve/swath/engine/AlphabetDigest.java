@@ -270,9 +270,22 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
     // Private helpers.
     // -------------------------------------------------------------------------
 
-    /** Is scalar {@code s} present, given one position's two presence words? */
+    /**
+     * Is scalar {@code s} present, given one position's two presence words?
+     *
+     * <p>Throws rather than folding an out-of-range scalar into {@code w1}: the two words cover
+     * {@code [0, 128)} and every caller clamps {@code s} to {@code [LO_SCALAR, HI_SCALAR]} first, so
+     * this is unreachable — but the indexed form this replaced ({@code mask[pos][s >>> 6]} over a
+     * {@code long[2]}) would have thrown if that clamp ever regressed, and a silent wrong-word read
+     * is a worse failure than a loud one.
+     */
     private static boolean present(long w0, long w1, int s) {
-        return (((s >>> 6) == 0 ? w0 : w1) & (1L << (s & 63))) != 0L;
+        long word = switch (s >>> 6) {
+            case 0 -> w0;
+            case 1 -> w1;
+            default -> throw new IllegalArgumentException("scalar outside the tracked 128-bit mask: " + s);
+        };
+        return (word & (1L << (s & 63))) != 0L;
     }
 
     /** Count set presence bits in the inclusive scalar range {@code [from, to]}. */

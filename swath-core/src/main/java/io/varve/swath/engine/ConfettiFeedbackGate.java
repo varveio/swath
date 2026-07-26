@@ -38,8 +38,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * rate suppresses further owner-split carving — with a periodic probe so a keyspace that later
  * turns genuinely dense recovers on its own. This class now only ever MEASURES (accumulates
  * {@link #recordCompletion} calls and hands back a coherent {@link #snapshot()}) and, at the
- * executor's direction, {@linkplain #consumeProbeSlot() advances the probe sequence} — it makes no
- * decision of its own. {@link #MIN_SAMPLE} is still declared here (rather than moved alongside
+ * executor's direction, advances the probe sequence — either unconditionally
+ * ({@link #consumeProbeSlot()}) or as the winner-take-one claim a decided probe carve needs
+ * ({@link #claimProbeSlot(long)}, issue #31). Neither is a decision of its own: WHICH outcome a
+ * consult is entitled to stays the governor's call over its view, and the claim only resolves which
+ * of several equally-entitled consults gets the one slot they are contending for. {@link #MIN_SAMPLE} is still declared here (rather than moved alongside
  * {@code SUPPRESS_THRESHOLD}/{@code PROBE_K}, both of which did move) because it is referenced by
  * engine-level tests that construct realistic warmup scenarios against this gate directly, with no
  * reason to know about the policy package.
