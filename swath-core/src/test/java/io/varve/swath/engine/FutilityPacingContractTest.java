@@ -17,6 +17,7 @@ import io.varve.swath.checkpoint.RunMeta;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.testkit.EngineContexts;
@@ -285,6 +286,52 @@ final class FutilityPacingContractTest {
                 .isEqualTo((long) WorkerState.FUTILITY_PACE_THRESHOLD);
         assertThat(reasons.getOrDefault("STEAL.futility_paced", 0L))
                 .as("the futile run tripped pacing and the victim was skipped (the mechanism engaged)")
+                .isGreaterThanOrEqualTo(1L);
+    }
+
+    /**
+     * The property the per-victim pacing policy exists to protect, asserted directly rather than
+     * implied by the sole-victim guard above: while a productive UNPACED sibling exists, a paced
+     * victim must NOT be selected — even when its {@code estRemaining} is by far the pool's argmax —
+     * and the steal must land on the sibling instead. This is the multi-victim steering behaviour
+     * {@code Thief}'s own comment pins ("steer thieves off a racing drainer and onto a productive
+     * sibling"); until now no test exercised a mixed paced/unpaced pool, so a regression that made
+     * pacing leak into selection ordering (or vice versa) would have passed the suite.
+     */
+    @Test
+    void pacedVictimIsNotChosenWhileAnUnpacedSiblingExists() throws SwathException, InterruptedException {
+        byte[] pacedHi = b("d/05");
+        WorkerState paced = WorkerStates.of(1, b("d/00"), b("d/01"), pacedHi);
+        paced.addKeysEmitted(1_000_000);           // by far the largest est — the argmax if not skipped
+        for (int i = 0; i < WorkerState.FUTILITY_PACE_THRESHOLD; i++) {
+            paced.recordFutileSteal();             // arm the cooldown directly; no probing needed
+        }
+        byte[] siblingHi = b("e/05");
+        WorkerState sibling = WorkerStates.of(2, b("e/00"), b("e/01"), siblingHi);
+        sibling.addKeysEmitted(10);                // tiny est, but unpaced — must still win selection
+
+        // Keys inside the sibling's (cursor, hi] so its pivot probe is populated and the split commits.
+        MockPageFetcher fetcher = MockPageFetcher.builder()
+                .keys(List.of(b("e/02"), b("e/03"), b("e/04")))
+                .build();
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        Thief thief = Thiefs.of(StubCheckpointStore.returning(99L), fetcher, 109L, new byte[0],
+                ListingMode.OBJECTS, new RecordingSink(), metrics);
+
+        assertThat(thief.steal(List.of(paced, sibling)))
+                .as("the steal succeeds against the unpaced sibling — the paced argmax neither wins "
+                        + "selection nor blocks the fleet")
+                .isEqualTo(Thief.Outcome.CHILD_CREATED);
+
+        assertThat(paced.hi())
+                .as("the paced victim's bound is untouched — it was skipped at selection, not split")
+                .isEqualTo(pacedHi);
+        assertThat(KeyBytes.compareUnsigned(sibling.hi(), siblingHi))
+                .as("the split landed on the sibling: its bound was narrowed below its original hi")
+                .isLessThan(0);
+        Map<String, Long> reasons = metrics.diagnostics(Duration.ZERO).stealReasons();
+        assertThat(reasons.getOrDefault("STEAL.futility_paced", 0L))
+                .as("the paced victim was skipped as paced even though its est is the pool's largest")
                 .isGreaterThanOrEqualTo(1L);
     }
 
