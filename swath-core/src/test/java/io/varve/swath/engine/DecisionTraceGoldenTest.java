@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.engine.policy.Carve;
+import io.varve.swath.engine.policy.DecisionRng;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.error.ListingException;
@@ -83,11 +84,11 @@ import org.junit.jupiter.api.Test;
  *   <li>{@code midpoint}: 2 events, 1 fixture</li>
  *   <li>{@code far_ahead}: 1 event, 1 fixture</li>
  *   <li>{@code step_back}: 12 events, 3 fixtures</li>
- *   <li>{@code bisect}: 2 events, 2 fixtures</li>
+ *   <li>{@code bisect}: 3 events, 3 fixtures</li>
  *   <li>{@code reflect} (committed hit): 4 events, 2 fixtures</li>
  *   <li>{@code reflect_hit} / {@code reflect_empty} (probe verdicts, whether or not reflect won the
  *       commit): 4 / 3 events, 2 / 3 fixtures</li>
- *   <li>{@code structure_probe} / {@code structure_capped}: 8 / 6 events, 3 / 2 fixtures</li>
+ *   <li>{@code structure_probe} / {@code structure_capped}: 9 / 6 events, 3 / 2 fixtures</li>
  *   <li>{@code adaptive_structure} / {@code adaptive_structure_capped}: 2 / 1 events, 2 / 1
  *       fixtures</li>
  *   <li>{@code flat_leaf}: 10 events, 2 fixtures</li>
@@ -100,6 +101,17 @@ import org.junit.jupiter.api.Test;
  * thiefCascadeMechanisms}: reaching it requires the parent-empty sliver's byte-ADJACENT
  * cursor/bound divergence (see {@code Thief#isCursorAdjacentSliver}) on top of a truncated
  * probe, a narrow enough combination that a second independent recipe was not attempted here.
+ *
+ * <p>{@code ThiefPolicy#structureProbingEnabled}'s over-threshold escape hatch — the 1-in-{@code
+ * STRUCTURE_SUPPRESS_RETRY_DIVISOR} draw once a victim's consecutive zero-fan-out streak reaches
+ * {@code STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD} — is now pinned on BOTH sides in {@code
+ * thiefCascadeMechanisms} (scenarios 8 and 9), only possible since issue #20 injected the draw as
+ * a {@link DecisionRng} rather than reaching for ambient {@code ThreadLocalRandom}: a stub
+ * returning 0 makes the draw hit (probing proceeds, {@code PIVOT.structure_probe} — the same
+ * terminal mechanism as an under-threshold victim); a stub returning any other value in range
+ * makes it miss ({@code STRUCTURE.suppressed_zero_fanout}, falling through to the
+ * structure-exhausted fallback). Before this fix a golden reaching the miss side would have been
+ * encoding a 1-in-64 flake that had simply never fired, not a genuine (view → decision) property.
  *
  * <p>{@code owner_self_split}'s per-fixture count above is the same trap the thief mechanism
  * count exists to avoid: it says nothing about which of {@link OwnerSplitGovernor}'s SIX gates
@@ -376,6 +388,35 @@ final class DecisionTraceGoldenTest {
         oneShotSteal(fx, List.of(adaptiveCappedVictim), MockPageFetcher.builder().keys(dateUuidWide).build(),
                 StubCheckpointStore.returning(94L));
 
+        // 8. Structure-probe suppression's escape hatch, retry-allowed side (issue #20): the SAME
+        //    uncapped shape as scenario 5, but the victim already carries a consecutive zero-fan-out
+        //    streak at STRUCTURE_ZERO_FANOUT_SUPPRESS_THRESHOLD (8) -- structureProbingEnabled's first
+        //    branch no longer short-circuits true, so it falls to the 1-in-64 draw. A stub
+        //    DecisionRng returning 0 makes the draw hit, so probing proceeds exactly as if the victim
+        //    were under threshold -> PIVOT.structure_probe, same terminal mechanism as scenario 5 --
+        //    only reachable now that the draw is injected rather than ambient.
+        List<byte[]> retryDirs = manyDirs("root3", 20);
+        WorkerState retryAllowedVictim = WorkerStates.of(7, b("root3/"), b("root3/005/obj00"), b("root3/zzz"));
+        retryAllowedVictim.addKeysEmitted(100);
+        for (int i = 0; i < 8; i++) {
+            retryAllowedVictim.recordZeroFanoutStructureProbe();
+        }
+        oneShotSteal(fx, List.of(retryAllowedVictim), MockPageFetcher.builder().keys(retryDirs).build(),
+                StubCheckpointStore.returning(95L), bound -> 0);
+
+        // 9. The same over-threshold streak, but the draw misses (a stub returning 1, any nonzero
+        //    value < 64) -> structureProbingEnabled returns false this attempt ->
+        //    STRUCTURE.suppressed_zero_fanout, falling through to the structure-exhausted fallback
+        //    (bisect/reflect/flat-leaf) instead of issuing a structure probe.
+        List<byte[]> suppressedDirs = manyDirs("root4", 20);
+        WorkerState suppressedVictim = WorkerStates.of(8, b("root4/"), b("root4/005/obj00"), b("root4/zzz"));
+        suppressedVictim.addKeysEmitted(100);
+        for (int i = 0; i < 8; i++) {
+            suppressedVictim.recordZeroFanoutStructureProbe();
+        }
+        oneShotSteal(fx, List.of(suppressedVictim), MockPageFetcher.builder().keys(suppressedDirs).build(),
+                StubCheckpointStore.returning(96L), bound -> 1);
+
         GoldenTrace.writeOrVerify(fx);
     }
 
@@ -440,6 +481,23 @@ final class DecisionTraceGoldenTest {
         // baked in, so wrap it in a probe-logging delegate instead.
         Thief thief = new Thief(store, new LoggingFetcher(rawFetcher, probes), RUN_ID, scanPrefix,
                 ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace);
+        recordStealAttempt(fx, thief, pool, store, metrics, probes, trace);
+    }
+
+    /**
+     * As the 4-arg {@link #oneShotSteal}, but with a caller-supplied {@link DecisionRng} instead of
+     * {@code Thief}'s live ambient default — for pinning {@code ThiefPolicy#structureProbingEnabled}'s
+     * 1-in-{@code STRUCTURE_SUPPRESS_RETRY_DIVISOR} escape hatch (issue #20), only possible now that
+     * the draw is injected rather than reaching for {@code ThreadLocalRandom.current()}.
+     */
+    private void oneShotSteal(GoldenTrace.Fixture fx, List<WorkerState> pool, MockPageFetcher rawFetcher,
+                               StubCheckpointStore store, DecisionRng rng)
+            throws SwathException, InterruptedException {
+        GoldenTrace.ProbeLog probes = new GoldenTrace.ProbeLog();
+        RecordingTraceSink trace = new RecordingTraceSink();
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        Thief thief = new Thief(store, new LoggingFetcher(rawFetcher, probes), RUN_ID, new byte[0],
+                ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace, rng);
         recordStealAttempt(fx, thief, pool, store, metrics, probes, trace);
     }
 
