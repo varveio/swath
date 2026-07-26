@@ -7,7 +7,7 @@ package io.varve.swath.engine.policy;
 
 /**
  * A per-VICTIM durable-state change the policy decided but does not itself apply — the policy
- * never sees live {@code WorkerState} (seam-notes.md), so every mutation to it is returned as data
+ * never sees live {@code WorkerState} (contracts.md §2.1), so every mutation to it is returned as data
  * for the executor to apply to the real object identified by {@link #victimNodeId()}. Every
  * {@link Kind} corresponds 1:1 to an existing {@code WorkerState} mutator; the extraction changes
  * who calls it, never what it does. A single record with a {@code Kind} tag, not a sealed

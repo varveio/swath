@@ -8,13 +8,13 @@ package io.varve.swath.engine.policy;
 import java.util.List;
 
 /**
- * <b>The policy seam</b> (swath-notes' 2026-07-26 simulator campaign): the thief's decision logic —
+ * <b>The policy seam</b> (contracts.md §2.1): the thief's decision logic —
  * victim selection plus the pivot cascade (algorithms.md §3, §3.1, §3.2, §3.3) — as a deterministic
  * state machine over observed events, with every clock read, thread, socket, and SQLite touch left
  * to the executor ({@code Thief}). The engine and a future discrete-event simulator share this;
  * each supplies its own execution side.
  *
- * <p><b>Source-agnostic (seam-notes.md, binding since before this interface's dispatch):</b> no
+ * <p><b>Source-agnostic (contracts.md §2.1, binding since before this interface's dispatch):</b> no
  * S3/protocol type (no SDK response class, no XML/wire type, no {@code io.varve.swath.store.ListPage})
  * crosses into this package's views, decisions, or probe outcomes — keys as raw bytes, counts,
  * streaks, and policy-domain enums only.

@@ -264,7 +264,7 @@ obtained — never *what* or *when* the loop emits — so I1 commit-before-emit
 A worker that has no `PENDING` node to claim, while other workers are still
 busy, becomes a **thief**.
 
-**Implementation split (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the
+**Implementation split (the policy seam, contracts.md §2.1):** the
 pseudocode below is a decision-logic description, not a call-graph — victim selection and the
 whole pivot cascade (everything from "PLACE the pivot" through the structure/reflect/bisect/
 flat-leaf fallbacks) live in `io.varve.swath.engine.policy.ThiefPolicy`, a source-agnostic
@@ -385,7 +385,7 @@ steal():
   skips (cap 64), reset only by that victim's own productive progress
   (`markStolen`). A productive sibling stays fully stealable throughout — this
   paces hammering one racing drainer, never the fleet. **Implementation split
-  (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the trip/
+  (the policy seam, contracts.md §2.1):** the trip/
   bounded-exponential-growth/decay/reset arithmetic is
   `io.varve.swath.engine.policy.FutilityPacingPolicy`, pure functions of one
   `int` at a time; `WorkerState` still owns every `AtomicInteger` read/write, in
@@ -728,8 +728,7 @@ two buckets they were measured on**; per-mechanism status follows.
   (`NO_VICTIM` dominates the steal outcomes) and the dense tail runs near-serial
   (`in_flight` collapses toward one) — a real trade-off the kill-switch exists
   to back out.
-  **Implementation split (the policy seam, swath-notes' 2026-07-26 simulator
-  campaign):** the gate chain below it — the remaining-est floor, the page
+  **Implementation split (the policy seam, contracts.md §2.1):** the gate chain below it — the remaining-est floor, the page
   rate-limit, the demand gate, the observed-mass child-tail floor, the confetti
   feedback gate, then pivot synthesis, the reflection clamp, and the reflect-lift —
   is `io.varve.swath.engine.policy.OwnerSplitGovernor`, a source-agnostic
@@ -1154,8 +1153,8 @@ cardinality low even though it now does extend the public meter contract.
 
 **Simulator port (deferred extraction).** `ConcurrencyGauge` above is, and remains, the only
 implementation of this section swath ships — nothing here is extracted or wired to a policy
-interface. `io.varve.swath.engine.policy.ConcurrencyPolicy` (swath-notes' 2026-07-26 simulator
-campaign, B7) instead documents the PORT a simulator's own faithful reimplementation carries: the
+interface. `io.varve.swath.engine.policy.ConcurrencyPolicy` (contracts.md §2.1)
+instead documents the PORT a simulator's own faithful reimplementation carries: the
 reactive inputs above (success / 503 / timeout-shed / latency, each arriving with its own explicit
 timestamp rather than reading a clock), the two outputs (`effectiveT`, `isStealingAllowed`), and the
 internal windows/latches enumerated in that interface's javadoc that a faithful port must reproduce.
@@ -1249,7 +1248,7 @@ before any worker claims a range; the resulting nodes are inserted atomically vi
 a valid partition from the first durable moment or it does not exist at all). On
 `swath resume` the seed step is skipped (nodes already present).
 
-**Implementation split (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the
+**Implementation split (the policy seam, contracts.md §2.1):** the
 whole shallow-mode descent below — the span-priority frontier, probe-budget accounting,
 per-level classification (narrow / partition fan-out / flat-wide radix banding / tiny-leaf
 explosion vs. heavy-cut via the sampled-sibling prior), and cut-set assembly plus the

@@ -19,7 +19,7 @@ import java.util.List;
  * a {@link StealPolicy}. Byte ordering is S3-lexicographic throughout — {@link StealMath} and
  * {@link ByteMidpoint} are called directly as the concrete things they are; this extraction
  * deliberately does not introduce an ordering/comparator/key-codec abstraction for a hypothetical
- * second source (rule of three — see seam-notes.md).
+ * second source (rule of three — see contracts.md §2.1).
  */
 public final class ThiefPolicy implements StealPolicy {
 

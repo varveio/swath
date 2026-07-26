@@ -10,7 +10,7 @@ package io.varve.swath.engine.policy;
  * victim selection: {@code cursor}/{@code hi} are not a coherent snapshot — the coherent read
  * happens only after a victim is chosen, and is carried separately by {@link StealAttemptView}.
  *
- * <p>Source-agnostic (seam-notes.md): no {@code WorkerState}, no protocol/wire type — keys as raw
+ * <p>Source-agnostic (contracts.md §2.1): no {@code WorkerState}, no protocol/wire type — keys as raw
  * bytes, counts, and booleans only, so the same view shape serves the engine and a future
  * discrete-event simulator alike.
  *

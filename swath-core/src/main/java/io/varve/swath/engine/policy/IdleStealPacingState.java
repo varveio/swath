@@ -10,7 +10,7 @@ package io.varve.swath.engine.policy;
  * IdleStealBackoff}'s {@code consecutiveNonProductive}/{@code nextAttemptNanos} pair, snapshotted
  * so {@link IdleStealPacingPolicy}'s exponential-backoff arithmetic is a pure function of it. Does
  * NOT carry the fleet-wide one-attempt SLOT ({@code attemptInFlight}) — that ownership/release
- * mechanism is executor infrastructure and stays in {@code IdleStealBackoff} (seam-notes.md; the
+ * mechanism is executor infrastructure and stays in {@code IdleStealBackoff} (contracts.md §2.1; the
  * pacing decision moves, the slot mechanics do not).
  *
  * @param consecutiveNonProductive the run of non-productive steal attempts so far, unbroken by a

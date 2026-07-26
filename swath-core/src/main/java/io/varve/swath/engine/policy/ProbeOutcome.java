@@ -9,7 +9,7 @@ package io.varve.swath.engine.policy;
  * The distilled, policy-domain result of a probe {@link StealAttempt} requested via
  * {@link StealAction} — derived executor-side from whatever the store's real page response was
  * (e.g. {@code io.varve.swath.store.ListPage}), which never itself crosses into this package
- * (seam-notes.md's source-agnostic constraint: no S3/protocol types in policy views, decisions, or
+ * (contracts.md §2.1's source-agnostic constraint: no S3/protocol types in policy views, decisions, or
  * events).
  *
  * <p>Each variant carries exactly the facts the cascade branches on for that probe kind — worked

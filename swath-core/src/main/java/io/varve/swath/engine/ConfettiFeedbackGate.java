@@ -52,7 +52,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * #recordCompletion}, and {@link OwnerSelfSplit}'s claim/drain/remove-before-tag bookkeeping that
  * feeds it — stays executor-owned: classification happens at node completion, an event entirely
  * outside the per-carve decision this gate's measurements feed, tied to real node ids and {@link
- * WorkerState} the policy package never sees (seam-notes.md's source-agnostic rule).
+ * WorkerState} the policy package never sees (contracts.md §2.1's source-agnostic rule).
  */
 public final class ConfettiFeedbackGate {
 

@@ -13,7 +13,7 @@ import io.varve.swath.engine.AlphabetDigest;
  * {@link StealAttemptView} (the thief's own reads) — this is the DRAINING worker's own range, not a
  * candidate picked from a pool.
  *
- * <p>Source-agnostic (seam-notes.md): no {@code WorkerState}, no protocol/wire type. {@code
+ * <p>Source-agnostic (contracts.md §2.1): no {@code WorkerState}, no protocol/wire type. {@code
  * committed}/{@code lastSelfSplitPage} are the owner-split rate-limit's caller-owned bookkeeping
  * ({@code selfSplit[0]}/{@code selfSplit[1]} in the executor) — plain counts, not live state.
  *

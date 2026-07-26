@@ -257,7 +257,7 @@ public final class SeedStep {
 
     /**
      * Distills a decoded page into the policy-domain {@link SeedProbeOutcome} the planner consumes —
-     * the source-agnostic seam (seam-notes.md): {@link ListPage}, {@link KeyBytes}, and
+     * the source-agnostic seam (contracts.md §2.1): {@link ListPage}, {@link KeyBytes}, and
      * {@link ListEntry} never cross into {@code io.varve.swath.engine.policy}.
      */
     private static SeedProbeOutcome toOutcome(ListPage page) {

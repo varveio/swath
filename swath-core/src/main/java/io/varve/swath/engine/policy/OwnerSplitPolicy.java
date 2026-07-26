@@ -6,7 +6,7 @@
 package io.varve.swath.engine.policy;
 
 /**
- * <b>The policy seam</b> (swath-notes' 2026-07-26 simulator campaign): the owner-side proactive
+ * <b>The policy seam</b> (contracts.md §2.1): the owner-side proactive
  * self-split's gate chain (algorithms.md §3.3) as a pure decision over one page-commit's {@link
  * OwnerSplitView} — every clock read, lock, durable-split CAS, and mutation of a shared
  * collaborator (the confetti feedback gate's probe sequence, issue #22) left to the executor
@@ -17,7 +17,7 @@ package io.varve.swath.engine.policy;
  * no multi-round probe cascade here (owner-split is zero-probe by construction, algorithms.md §3.3):
  * {@link #decide} runs the whole gate chain to a terminal {@link OwnerSplitDecision} in one call.
  *
- * <p>Source-agnostic (seam-notes.md, binding since before this interface's dispatch): no
+ * <p>Source-agnostic (contracts.md §2.1, binding since before this interface's dispatch): no
  * S3/protocol type crosses into this package's views or decisions — keys as raw bytes, counts, and
  * policy-domain types only.
  */

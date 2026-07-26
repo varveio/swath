@@ -6,7 +6,7 @@
 package io.varve.swath.engine.policy;
 
 /**
- * <b>The policy seam</b> (swath-notes' 2026-07-26 simulator campaign, B7): the AIMD concurrency
+ * <b>The policy seam</b> (contracts.md §2.1): the AIMD concurrency
  * controller's PORT, not its extraction. {@code ConcurrencyGauge} (engine; algorithms.md §5) remains
  * the only implementation this repo ships, unchanged by this interface — nothing in production
  * constructs, holds, or calls a {@code ConcurrencyPolicy}. AIMD is the most timing-coupled mechanism
@@ -23,9 +23,13 @@ package io.varve.swath.engine.policy;
  * {@link java.util.function.LongSupplier}, production {@code System::nanoTime}, threaded through
  * {@code GaugeClock}) internally at each of these call sites. An implementation of THIS interface
  * never does: the timestamp always arrives with the signal, so a discrete-event simulator can drive it
- * from its own virtual clock with no ambient read to fake. This pushes the "inject rather than reach"
- * discipline {@link DecisionRng}/{@link DecisionClock} already apply elsewhere in this package one step
- * further — an instant per call, not a clock to call.
+ * from its own virtual clock with no ambient read to fake. This mirrors the "inject rather than reach"
+ * discipline {@link DecisionRng} already applies elsewhere in this package (an injected interface a
+ * policy calls for a value, never the ambient default itself) and matches the idiom
+ * {@link IdleStealPacingPolicy} already uses (an explicit {@code nowNanos} parameter on every method —
+ * no clock held, none called) — not a step beyond either. {@link DecisionClock} is not the right
+ * comparison here: it is an executor-only seam held as a field only by {@code IdleStealBackoff}: no
+ * policy-package class, including {@code IdleStealPacingPolicy}, ever holds or calls one.
  *
  * <ul>
  *   <li>{@link #onSuccess(long)} — a completed page fetch that was NOT an S3 SlowDown ({@code

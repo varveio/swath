@@ -10,7 +10,7 @@ package io.varve.swath.engine.policy;
  * step-back, a density-reflection hit/miss, a suppressed structure probe) or at a terminal
  * decision. The executor records it verbatim via {@code RunMetrics#recordStealReason(category,
  * reason)} (AGENTS.md's instrument-every-algo-path counter-per-path law); the policy never touches
- * {@code RunMetrics} itself (source-agnostic / no I/O — seam-notes.md).
+ * {@code RunMetrics} itself (source-agnostic / no I/O — contracts.md §2.1).
  *
  * <p>{@link PivotMechanism}/{@link RetryReason}/{@link NoVictimReason}/{@link UnsplittableReason}
  * give type-safe closed vocabularies for the four headline decision categories; this generic

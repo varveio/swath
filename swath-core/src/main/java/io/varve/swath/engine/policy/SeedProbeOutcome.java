@@ -11,7 +11,7 @@ import java.util.List;
  * The distilled, policy-domain result of one bounded {@code delimiter=/} probe the descent requested
  * via {@link RequestSeedProbe} — derived executor-side from whatever the store's real page response
  * was ({@code io.varve.swath.store.ListPage}), which never itself crosses into this package
- * (seam-notes.md's source-agnostic constraint: no S3/protocol type in policy views, decisions, or
+ * (contracts.md §2.1's source-agnostic constraint: no S3/protocol type in policy views, decisions, or
  * probe outcomes).
  *
  * <p>Worked out from every classifier the descent runs (algorithms.md §8: {@code isFlatWide},

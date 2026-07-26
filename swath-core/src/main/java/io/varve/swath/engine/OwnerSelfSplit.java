@@ -42,7 +42,7 @@ import org.slf4j.LoggerFactory;
  * {@code docs/internals/walkthroughs.md} §4 and {@code docs/internals/algorithms.md} §3.3, §4.3.
  *
  * <p><b>The gate chain itself is {@link OwnerSplitGovernor}</b> (the {@code io.varve.swath.engine.policy}
- * seam, swath-notes' 2026-07-26 simulator campaign): a pure {@code view -> Skip(reason) | Carve(pivot)}
+ * seam, contracts.md §2.1): a pure {@code view -> Skip(reason) | Carve(pivot)}
  * decision over one page-commit's {@link OwnerSplitView}, with no lock/clock/RPC of its own. This
  * class is the executor: it translates {@link WorkerState} into the view, issues every RPC/mutation
  * the decision implies (metrics engagements, {@code splitNode}, the child hand-off), and owns every

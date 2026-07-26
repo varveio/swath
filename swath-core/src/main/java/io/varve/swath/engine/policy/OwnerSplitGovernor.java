@@ -18,7 +18,7 @@ import java.util.List;
  * as an {@link OwnerSplitPolicy}. Byte ordering is S3-lexicographic throughout — {@link StealMath}
  * is called directly as the concrete thing it is; this extraction deliberately does not introduce
  * an ordering/comparator/key-codec abstraction for a hypothetical second source (rule of three —
- * see seam-notes.md).
+ * see contracts.md §2.1).
  *
  * <p><b>The confetti feedback gate is pure measurement, not a collaborator consulted for a
  * decision (issue #22's fix).</b> This class owns the classification math entirely: {@code

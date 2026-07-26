@@ -102,7 +102,7 @@ import org.junit.jupiter.api.Test;
  * implementation's concrete class is never reachable from the policy's field-type closure (a
  * policy holds only the INTERFACE-typed field, e.g. {@code ThiefPolicy}'s {@code rng: DecisionRng})
  * and the interface itself carries no such call. This matters beyond this test: {@link
- * ConcurrencyPolicy} (B7's AIMD port, deliberately defined but not wired — algorithms.md §5) inherits
+ * ConcurrencyPolicy} (the AIMD port, deliberately defined but not wired — algorithms.md §5) inherits
  * the identical gap, sharpened by having no field anywhere of that type at all — its caller-supplied
  * implementation must be pure by its own construction and review, not because this test would catch
  * an impure one. The two evasions an independent review

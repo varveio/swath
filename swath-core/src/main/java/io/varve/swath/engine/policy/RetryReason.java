@@ -14,7 +14,7 @@ package io.varve.swath.engine.policy;
  * RETRYs ({@code bound_moved}, {@code cursor_passed_pivot}, {@code split_aborted}) and the
  * probe-throttle fail-fast ({@code probe_retry_cap_failfast}) stay executor-owned string literals —
  * they arise entirely from live lock/CAS/RPC-exception state the policy never sees (the executor
- * owns the lock, the snapshot→CAS re-validate, and RPC issuing — seam-notes.md).
+ * owns the lock, the snapshot→CAS re-validate, and RPC issuing — contracts.md §2.1).
  */
 public enum RetryReason {
     /** This victim's exact {@code (cursor, hi)} snapshot already proved non-productive. */

@@ -13,7 +13,7 @@ import io.varve.swath.engine.AlphabetDigest;
  * {@link Selection} picks a victim and <b>before</b> any pivot-cascade decision. Distinct from
  * {@link VictimView} (the speculative pool-wide selection read).
  *
- * <p>Source-agnostic (seam-notes.md): no {@code WorkerState}, no protocol/wire type.
+ * <p>Source-agnostic (contracts.md §2.1): no {@code WorkerState}, no protocol/wire type.
  * {@link AlphabetDigest} carries no S3/wire dependency either — it is a pure per-worker observed
  * per-position alphabet, the same policy-domain status as {@code StealMath}/{@code ByteMidpoint}.
  *
