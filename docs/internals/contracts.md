@@ -255,15 +255,26 @@ public final class Scope implements AutoCloseable { /* fork / joinAllOrThrow / c
 
 ### 2.1 The policy/executor split — view read timing, mutation timing, exactly-once engagements
 
-`io.varve.swath.engine.policy` (`StealPolicy`/`ThiefPolicy`, `OwnerSplitPolicy`/`OwnerSplitGovernor`)
-decides; `io.varve.swath.engine` (`Thief`, `OwnerSelfSplit`) is the only code that touches a lock, a
-clock, or the checkpoint CAS. The decision-trace goldens prove the two sides agree on *values*
+`io.varve.swath.engine.policy` (`StealPolicy`/`ThiefPolicy`, `OwnerSplitPolicy`/`OwnerSplitGovernor`,
+`FutilityPacingPolicy`/`IdleStealPacingPolicy`, `SeedPlanner`/`HybridSeedPlanner`) decides;
+`io.varve.swath.engine` (`Thief`, `OwnerSelfSplit`, `WorkerState`, `IdleStealBackoff`, `SeedStep`) is
+the only code that touches a lock, a clock, or the checkpoint CAS. The decision-trace goldens prove the two sides agree on *values*
 (sequential replay, byte-identical). They say nothing about *when*, under real concurrency, a view's
 fields were read relative to the lock scopes the pre-extraction monolith held them in — a policy
 deciding on a stale or torn read costs a wasted probe or a wrong-but-recoverable counter (the CAS
 re-validate in `commit()`/`maybeOwnerSelfSplit` still protects every tiling invariant, I1–I12), never
 a gap/overlap. That failure mode has no other written home, which is itself the gap this section
 closes.
+
+**The source-agnostic rule (the one normative statement of it — every `io.varve.swath.engine.policy`
+type's own javadoc cites this paragraph, not a copy of the rule).** Every view, decision, mutation,
+and probe-outcome type in `io.varve.swath.engine.policy` is source-agnostic: no `WorkerState`
+reference, no S3/protocol/wire type of any kind — keys as raw bytes, counts, booleans, and
+policy-domain enums only. This is what lets the same shapes serve both the live engine and a future
+discrete-event simulator without either one leaking into the other. Binding since before this
+document's own §2.1 existed (the policy-package interfaces were designed to this rule from their
+first commit); this paragraph is its one written, binding home in this repo — shipped javadoc must
+not cite a rule a reader of the public repo cannot read, so no class below cites anything else for it.
 
 **View construction — one pass, no lock, per view type:**
 
@@ -291,11 +302,53 @@ closes.
   `nextAttemptNanos`) collapse safely into one immutable `IdleStealPacingState`, read and replaced as
   a whole inside the SAME `synchronized` method that used to touch both fields directly — the
   monitor, not field-level atomicity, supplies the guarantee there, so combining changes nothing.
-  **The rule: monitor-protected state may be combined into one record; lock-free per-field atomics
-  may not.** Neither policy reads `RunMetrics`, a clock, or a lock directly;
-  `IdleStealPacingPolicy`'s ambient-time read is injected via `DecisionClock` (mirrors `DecisionRng`'s
-  treatment of randomness) — `IdleStealBackoff` supplies the live `System::nanoTime` default,
-  unchanged from before.
+  **The rule, restated: state whose transitions are independent per-field atomic read-modify-writes
+  must not be collapsed into a single combined write-back; a combined read-only view is unaffected.**
+  (An earlier version of this section stated the rule as "monitor-protected state may be combined;
+  lock-free per-field atomics may not" — read literally, that phrasing would make `VictimView` itself
+  non-compliant, since it combines four of `WorkerState`'s own lock-free per-field atomics
+  (`cursor`/`hi`/`keysEmitted`/`unsplittable`) into one record; the phrasing is corrected here.)
+  Checked against all four shapes this section describes: `VictimView` and `StealAttemptView` both
+  only ever READ their lock-free source fields and never write a combined value back, so combining
+  them into one record is safe by the restated rule; `OwnerSplitView` combines fields that are
+  read-only from every OTHER thread's perspective (only the owning worker, under its own lock, ever
+  writes them), so the same reasoning applies; the one field in the audit table below classified
+  **WIDENED** (`pacingSkipAvailable`/`CONSUME_PACING_SKIP`) is exactly the read-modify-write case the
+  restated rule forbids collapsing — pre-extraction, `stealPaced()` fused the check-and-decrement into
+  one call; post-extraction, the check and the decrement are split across two separate points (view
+  construction and post-selection mutation application), which is why that field, and only that
+  field, earns WIDENED rather than unchanged.
+
+  **A fifth mechanism, `ConcurrencyPolicy` — policy-owned and concurrent, not policy-owned because
+  single-threaded.** Every justification above for the "no view, no mutations" bucket (the seed
+  planner, below) rests on single-threadedness: seeding runs before any worker starts, so there is no
+  other thread a wider read window could ever race against. `ConcurrencyPolicy` (the AIMD port,
+  algorithms.md §5) is the opposite case: it is policy-owned (an interface in
+  `io.varve.swath.engine.policy`, unwired to any production caller) **and** its real implementation
+  (`ConcurrencyGauge`) is the single most contended, most timing-coupled mechanism in the engine —
+  every method races under CAS against every worker's page fetches. Nothing in this section's audit
+  table, and nothing `DecisionPathPurityTest` walks, checks a `ConcurrencyPolicy` implementation's
+  concurrency discipline: the interface is never held as a field of any reachable policy type (its
+  whole point is to be unwired), so the determinism-audit closure never reaches an implementation of
+  it. A faithful port's purity/atomicity argument is the implementer's to make and have reviewed
+  against algorithms.md §5, not something this contract or its enforcement test verifies.
+
+  Neither policy reads `RunMetrics` or a lock directly. On ambient time specifically: `DecisionClock`
+  is an executor-only seam — it is held as a field only by `IdleStealBackoff` (the executor), which
+  reads it once per call site and passes the resulting `nowNanos` explicitly into
+  `IdleStealPacingPolicy`'s methods. `IdleStealPacingPolicy` itself holds no `DecisionClock` reference
+  and calls no clock at all; every one of its methods takes `nowNanos` as an ordinary `long` parameter
+  (an earlier version of this section claimed `IdleStealPacingPolicy`'s ambient-time read "is injected
+  via `DecisionClock`, mirrors `DecisionRng`" — neither half of that is accurate, and both are
+  corrected here). `DecisionRng` is the one true parallel to `DecisionClock`: a policy-package class
+  (`ThiefPolicy`) holds it as a field and calls it for a value. `IdleStealPacingPolicy` never holds or
+  calls anything ambient — it already is the "instant-per-call" idiom, not a predecessor
+  `ConcurrencyPolicy` improves on (`ConcurrencyPolicy.java`'s own javadoc claimed to push the
+  discipline "one step further — an instant per call, not a clock to call", which is also corrected
+  there). Three idioms, accurately: `DecisionRng` (an injected interface a policy calls for a value),
+  `DecisionClock` (an injected interface only the executor calls, never a policy), and the
+  `atNanos`/`nowNanos`-parameter idiom `IdleStealPacingPolicy` and `ConcurrencyPolicy` both already use
+  (no interface to hold or call at all — the instant arrives with the signal).
 - **The seed planner has no `View` at all — a third shape, for a third reason.** `SeedDescent`
   (`HybridSeedPlanner`, algorithms.md §8) reads no live executor-owned state through a view of any
   kind: unlike `WorkerState`/`IdleStealBackoff` — fields concurrent threads touch, which the policy
@@ -335,9 +388,17 @@ and only in response to a `mutations()` list the policy returned alongside its d
   `VictimMutation` that runs *outside* a lock is cheap, per-victim `AtomicInteger`/boolean bookkeeping
   (pacing skips, futility/no-pivot/structure-probe tallies) — never a field the split CAS's guard
   clause reads.
-- `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` is the one exception with **no** widened window at
-  all: `governor.decide(view)` and `applyMutations(decision.mutations())` both run back-to-back inside
-  the same `ws.lock()` hold, so decide-then-apply is a single lock scope, not two.
+- `OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT` **is WIDENED — an earlier version of this section
+  claimed it was the one exception with no widened window at all, which is wrong and is retracted
+  here.** `governor.decide(view)` and `applyMutations(decision.mutations())` do run back-to-back
+  inside the same `ws.lock()` hold, but `ws.lock()` is **per-worker** while the mutation's target,
+  `ConfettiFeedbackGate`, is **run-scoped** — two different owners self-splitting concurrently hold
+  two *different* worker locks, so nothing serializes their consults against each other the way one
+  shared lock would. `ConfettiFeedbackGate#consumeProbeSlot()`'s own javadoc says this outright: "the
+  gate is run-scoped while `WorkerState#lock()` is per-worker, so nothing serializes two owners'
+  consults against each other". See the audit table's `ConfettiObservation` row below (now WIDENED,
+  not a deflection) and **issue #31**, which found this relaxation can multiply probe carves under
+  contention, not merely shift which consult lands on a slot.
 - The per-victim futility-pacing counters and the fleet-wide idle-steal pacing state are mutated by
   the EXECUTOR objects that have always owned them (`WorkerState`, `IdleStealBackoff`), at the
   identical call sites and under the identical (lock-free / monitor) discipline as before this
@@ -374,20 +435,23 @@ window could ever race against.
 
 | View | Field(s) | Pre-extraction read timing | Post-extraction read timing | Classification |
 |---|---|---|---|---|
-| `VictimView` | `nodeId`,`lo`,`cursor`,`hi`,`keysEmitted`,`unsplittable` | unlocked, single pool pass, inline in the selection loop | unlocked, single pool pass, inline in the view-construction loop | unchanged |
+| `VictimView` | `nodeId`,`lo`,`cursor`,`hi`,`keysEmitted`,`unsplittable` | read inline in the selection loop, but ONLY for candidates that had already passed the `unsplittable` gate, and (for `cursor`/`hi`/`keysEmitted`, needed only by `estRemaining`) also the `stealPaced` gate — a candidate failing either gate never had these fields read at all | unlocked, single pool pass, inline in the view-construction loop: every field is read for EVERY candidate, before `selectVictim` applies any gate | **read set widened to every candidate; pure reads, discarded for skipped candidates, gate order verified preserved (checked against `main`'s pre-extraction selection loop, which `continue`d past `unsplittable`/`stealPaced` before reading `cursor`/`hi`/`keysEmitted`) — benign** |
 | `VictimView` | `pacingSkipAvailable` / `CONSUME_PACING_SKIP` | `stealPaced()`: check-and-decrement in **one** call, inline per-candidate — no other candidate's work intervenes between check and consume | check (`pacingSkipAvailable()`) at view-construction time; consume (`consumePacingSkip()`) applied only after `selectVictim` has scanned the **whole** pool | **WIDENED** — see below |
+| `StealAttemptView` | `victimNodeId`,`lo` | read once, at attempt start, executor-local (the chosen victim's identity/immutable bound; never contended) | same | unchanged |
 | `StealAttemptView` | `cursor`,`hi` (via `victim.snapshot()`) | lock-guarded pair read, same call site | lock-guarded pair read, same call site | unchanged |
-| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) |
+| `StealAttemptView` | `densityFraction`,`alphabetDigest` | read live **once**, at a later, checks-gated point in the cascade (`densityFraction` inside the far-ahead-fraction computation; `alphabetDigest` at the pivot interpolation) — `recordAlphabetEngagement` afterward reuses the already-computed fraction/pivot, it does not re-read either field | the same single read now happens earlier, at view construction, immediately after the snapshot | narrowed (the one read moved earlier; still exactly one read either way) — but see issue #30 below: `alphabetDigest` is a reference to a LIVE, concurrently-mutated object, not a value, in both versions |
 | `StealAttemptView` | `unchangedSinceNonProductiveSteal(snap)` | pure comparison, immediately after the snapshot | same | unchanged |
 | `StealAttemptView` | `keysEmitted` | not read by the per-attempt cascade in either version (only `VictimView.keysEmitted`, a distinct field, feeds `estRemaining` at selection) | same | unchanged (dead field either way) |
 | `StealAttemptView` | `consecutiveZeroFanoutStructureProbes`,`consecutiveTimedOutStructureProbes` | read live at the structure-probe-suppression check, **after** this attempt's own far-ahead/step-back key-probe round trip(s) had already completed | cached at view construction, **before** any probe in this attempt has run; the structure-probe-suppression check consults the same cached value later | **WIDENED** — see below |
-| `OwnerSplitView` | `H`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged |
+| `OwnerSplitView` | `hi`,`lo`,`keysEmitted`,`densityFraction`,`observedDensityRatio`,`alphabetDigest` | read once, inside `ws.lock()`; written only by the owning worker's own listing progress (no thief mutates a `WorkerState` it doesn't own) | same | unchanged (corrected: the record component and this row's field are `hi`, not `H` — an earlier version of this row misnamed it) |
+| `OwnerSplitView` | `cursorTo`,`committed`,`lastSelfSplitPage` | read once, inside `ws.lock()`; `cursorTo` is this page-commit's just-advanced cursor, `committed`/`lastSelfSplitPage` are the owner-split rate-limit's caller-owned bookkeeping (`selfSplit[0]`/`selfSplit[1]` in the executor) — plain counts, never shared, never touched by another thread | same | unchanged (executor-local; no other thread ever reads or writes these) |
 | `OwnerSplitView` | `outstanding` | read only if the demand gate was actually reached — i.e. only after the remaining-est-floor and rate-limit gates had already passed | read unconditionally at view construction, for every self-split attempt, whether or not the demand gate will be consulted | **WIDENED** — already disclosed at `OwnerSelfSplit`'s `outstanding` field javadoc; a heuristic input, so this changes only which page-commit's snapshot the demand gate happens to see, never correctness |
-| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, not a comparable "view field" | read via `confettiFeedback.snapshot()`, once, at view construction, inside `ws.lock()` | see issue #22's own commit for the full concurrency-relaxation disclosure; not re-litigated here |
+| `OwnerSplitView` | `ConfettiObservation` (`taggedTotal`,`taggedConfetti`,`probeSeq`) | N/A — pre-#22-fix, the equivalent read was fused into `ConfettiFeedbackGate.decide()`'s own side effect, gated behind the remaining-work/rate/demand/floor checks already having passed (verified against `main`'s pre-extraction `maybeOwnerSelfSplit`: the confetti check ran only after those four gates) | read via `confettiFeedback.snapshot()` at method entry (`OwnerSelfSplit.java:170`), BEFORE the remaining-work, rate, demand, and floor gates run inside `governor.decide(view)` | **WIDENED** — a heuristic input (changes only which page-commit's snapshot the confetti-rate check sees). See issue **#31** for the separate, more serious widening on the paired mutation this same relaxation enables (`CONSUME_CONFETTI_PROBE_SLOT`, discussed above) — that one can change carve *count*, not merely which snapshot is read |
 | N/A (no `View`) | `WorkerState` futility counters: `consecutiveFutileSteals`,`futilityTrips`,`stealPacingSkips` | lock-free, unlocked, one `AtomicInteger` op at a time, inline in `recordFutileSteal`/`markStolen`/`stealPaced`/`consumePacingSkip` | identical call sites, identical op sequence — `FutilityPacingPolicy` supplies only the trip-check/cooldown-formula/decay/reset VALUES each op already computed inline; no combined read of the three | unchanged |
 | N/A (no `View`) | `IdleStealBackoff` pacing state: `consecutiveNonProductive`,`nextAttemptNanos` | plain (non-atomic) fields, read/written only inside this object's own `synchronized` methods | collapsed into one `IdleStealPacingState`, read-and-replaced as a whole, still only inside the same `synchronized` methods | unchanged — monitor-protected, so combining the two fields into one record here is safe (see the shape-asymmetry paragraph above); contrast the futility-counter row directly above it |
+| N/A (no `View`, mutation-only) | `consecutiveZeroFanoutStructureProbes` increment/reset (`RECORD_ZERO_FANOUT_STRUCTURE_PROBE`/`RESET_ZERO_FANOUT_STRUCTURE_PROBES`) | applied synchronously and inline in `structurePivot`, immediately after the probe response's fan-out was counted (verified against `main`'s pre-extraction `Thief#structurePivot`) | queued as a mutation by `ThiefPolicy#pickStructureBoundary` (`ThiefPolicy.java:435-438`) on the `StealAction` it returns; not applied until `Thief`'s `while(true)` loop comes back around and calls `applyMutations` on the NEXT action (`Thief.java:238`) — i.e. one full loop iteration after the response was counted | **WIDENED** — a third `Thief`-side widening, judged benign on the same grounds as the two below (see the bullet list immediately following this table) |
 
-**The two `Thief`-side widenings in the table above are judged benign, but the judgment is the
+**The three `Thief`-side widenings in the table above are judged benign, but the judgment is the
 reviewer's to check, not the implementer's to make silently:**
 
 - *Pacing-skip window.* If `markStolen()` (resets the cooldown to zero on a productive split) and then
@@ -404,11 +468,45 @@ reviewer's to check, not the implementer's to make silently:**
   under it (this attempt is routed through the 1-in-64 recovery gate when it should have proceeded
   unconditionally — a missed structure-probe opportunity). Both directions cost only a wasted or missed
   probe; neither can produce a gap, overlap, or duplicate split.
+- *Structure-probe-streak-mutation window.* A different, concurrently-racing thief probing the same
+  victim between when this attempt's structure-probe response was counted and when the NEXT loop
+  iteration finally applies the queued `RECORD_ZERO_FANOUT_STRUCTURE_PROBE`/
+  `RESET_ZERO_FANOUT_STRUCTURE_PROBES` mutation can read this same victim's streak one step stale — the
+  identical direction/consequence shape as the structure-probe-suppression window immediately above
+  (a wasted or a missed probe), never a gap, overlap, or duplicate split.
+
+**A live reference, not a snapshot: `StealAttemptView.alphabetDigest` (issue #30, not fixed here).**
+Every claim elsewhere in this section that a view is a coherent, immutable read the policy decides
+over assumes the view's fields are values or copies. `StealAttemptView.alphabetDigest` is not: it is
+the victim's own live `AlphabetDigest` instance, and that instance's backing arrays
+(`long[][] mask`, `boolean[] clean`) are mutated by concurrent page commits on the SAME victim
+(`WorkerState#recordPage` → `AlphabetDigest#observe`) while this attempt's decision is still in
+progress — `ThiefPolicy` dereferences the digest again later in the cascade, so a page commit that
+lands between view construction and that later dereference changes what the digest reports. This is
+the one field in this document that is genuinely a live reference, not a snapshot: it falsifies both
+"state the executor owns is snapshotted into views" (above) and the stronger claim that a policy's
+decision is a deterministic function of its recorded view — which also means a recorded
+`(view, decision)` pair is not, in general, reproducible from the golden alone for this one field. Not
+a regression (the pre-extraction code also read the digest live at decision time — this is a
+faithfully-preserved pre-existing non-determinism), and no I1–I12 invariant is at risk (the split CAS
+re-validates independently of what the policy decided). Recorded and left open as **issue #30**, not
+fixed here.
 
 One counter-conservation test exercising this contention directly —
 `ThiefStealReasonConservationTest` — reconciles `swath.steal_reason` totals against the number of
 `steal()` calls made under genuine multi-threaded racing (conservation only, never a specific
-interleaving; issue #18).
+interleaving; issue #18). Precisely what it reconciles, no more: the four terminal outcome buckets
+(`NO_VICTIM`/`RETRY`/`UNSPLITTABLE`/`CHILD_CREATED`) against the call count, the `NO_VICTIM`
+discriminator/aggregate pairing, and (added after an independent review found the first version of
+this section overclaimed) the `ALPHABET` "verdict" engagement (`alphabet_chosen`/`alphabet_fallback` —
+deliberately not the whole `ALPHABET` outcome, which also carries `AlphabetDigest#chooseScalar`'s own
+variable, digest-state-dependent fallback marks) against the same terminal-outcome/discriminator
+counters (the verdict has exactly one, unconditional call site, whose firing condition reduces to
+already-independently-recorded totals — see the test's own class javadoc for the derivation).
+`STRUCTURE`/`PIVOT` mid-cascade marks and the `STEAL` pacing engagement are **not** reconciled by this
+test under contention — each is gated by a cascade branch that is itself schedule/topology-dependent,
+not reducible to the call totals alone; their single-threaded shape is pinned by the decision-trace
+goldens instead, which is a check on VALUES, not on conservation under a race.
 
 **The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
 deterministic function of its view: no ambient clock, no ambient randomness, and — the clause the
