@@ -11,9 +11,10 @@ policy-seam campaign, not in this repo.
 
 ## What it is
 
-Before any policy logic is extracted out of `Thief`, `OwnerSelfSplit`, `WorkerState`
-(pacing), or `SeedStep` into a standalone, simulator-shareable form, we need a
-mechanical way to prove "behavior-preserving" instead of asserting it. The recorder
+All four decision sites — `Thief`, `OwnerSelfSplit`, `WorkerState`/`IdleStealBackoff`
+(pacing), and `SeedStep` — have now landed their policy-logic extraction into
+`io.varve.swath.engine.policy` (contracts.md §2.1). This recorder is the mechanical
+proof that each extraction was "behavior-preserving", not merely an assertion of it: it
 drives each of those four **decision sites** with a deterministic, single-thief/
 single-victim harness (never a storm — see `docs/ops/dev/TESTING.md`'s tag-convention
 section and issue #18 for why hard engagement asserts on schedule-dependent storms
@@ -28,8 +29,19 @@ are banned in this repo) and records one JSON object per decision:
 - **`owner_self_split`** — the victim's density view, the same counter-delta/trace
   capture, and whether a carve published (with its pivot bytes) or which gate
   suppressed it.
-- **`pacing.steal_paced`** — `WorkerState.stealPaced()`'s per-victim cooldown state
-  machine, driven directly (a pure state machine, no I/O).
+- **`pacing.steal_paced`** — the per-victim futility cooldown, driven directly as a pure
+  state machine (no I/O). This fixture drives `WorkerState.stealPaced()` — which is
+  **not** the live pair (an independent review's finding, issue #26's widening lives on
+  this exact surface): production reads `WorkerState.pacingSkipAvailable()` at
+  view-construction time and applies `consumePacingSkip()` afterward, split across the
+  policy-executor seam (contracts.md §2.1); `stealPaced()` itself has **zero**
+  production callers (verified: only its declaration and javadoc remain in `src/main`)
+  and is kept only because this fixture drives it — see its own corrected javadoc.
+  There is currently **no golden on the live `pacingSkipAvailable()`/
+  `consumePacingSkip()` pair**, and **no golden at all** on the fleet-wide
+  `IdleStealPacingPolicy` (the other half of pacing, driving `IdleStealBackoff`) — see
+  the known gaps below; the "four decision sites" framing above should not be read as
+  "pacing is covered".
 - **`seed.seed_specs`** — the probe log, the per-probed-level classification trace
   (`RunSummary.SeedSummary.decisions()` — narrow/flat_wide/partition/explosion/
   heavy-cut-banded), and the final tiled range set.
@@ -169,6 +181,61 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   `StubCheckpointStore` always accepts the split, so the abort path never triggers
   here — it is covered instead by `OwnerSelfSplitContractTest`'s dedicated
   abort-path test (T2).
+- **The thief `poolView` still omits every `StealAttemptView`-only field, for every
+  candidate (issue #25, partially closed).** An independent review found `poolView`
+  omitted `keysEmitted`/`pacingSkipAvailable` (letting a mutant that forces
+  `pacingSkipAvailable=false` in `Thief`'s view construction evade this entire fixture
+  matrix) — those two are now recorded per candidate, and `thief-edge-cases`' scenario
+  4 carries a genuinely-paced junk candidate so at least one event actually pins
+  `pacing_skip_available: true` (not just the field's presence). Still NOT recorded,
+  for any candidate: `densityFraction`, the alphabet-digest state, the
+  `unchangedSinceNonProductiveSteal` flag, or either structure-probe streak — the
+  fields that exist only on `StealAttemptView` (the CHOSEN victim's per-attempt view),
+  not `VictimView` (every candidate's pool-wide view). Two reasons this is not closed
+  here: (1) `AlphabetDigest` exposes no accessor outside `io.varve.swath.engine` for a
+  stable, JSON-comparable representation of its internal `mask`/`clean` state — adding
+  one is a real (if small) production-surface change, not a mechanical recorder edit;
+  (2) which candidate even HAS a per-attempt view is decided only after `selectVictim`
+  runs, so recording it pre-call (to avoid the golden observing post-mutation state)
+  means recording it for every candidate, not just the eventual choice — a larger
+  widening than the one applied here. A mutant that discards
+  `consecutiveZeroFanoutStructureProbes`/`consecutiveTimedOutStructureProbes` at view
+  construction, or that stales the density fraction, would still evade every fixture
+  in this matrix byte-identically.
+- **The seed slice's per-branch discipline was never applied (this campaign's own
+  finding, converged on after being conflated three times).** `HybridSeedPlanner`
+  fires **22** distinct `SEED.*` marks (21 via its own `mark()` calls, recounted
+  directly from `HybridSeedPlanner.java`'s source — not from any prior prose in this
+  file or `DecisionTraceGoldenTest`'s javadoc — plus the `radix_bands` magnitude
+  counter `RunMetrics` records separately). The 4 seed fixtures' goldens pin only
+  **6** of those 22, recounted from the committed JSONL:
+  `delimiter_seeded`/`descent_cuts_subsampled`/`frontier_level_ordered`/
+  `frontier_reordered`/`mass_weighted_subsample`/`top_complete`. The other ~16
+  (`banding_deferred_to_fanout`, `dense_root_radix_banded`, `explosion_confirmed`,
+  `fanout_tiled`, `flat_trivial`, `frontier_continued_past_explosion`,
+  `heavy_cut_banded`, `heavy_cut_descended`, `heavy_prior_applied`,
+  `heavy_prior_banded`, `heavy_prior_left_whole`, `radix_bands_toggle_disabled`,
+  `top_probe_paginated`, `top_truncated`, and `radix_bands` itself) are unpinned by
+  any golden — they are exercised instead by `SeedStepTest`/`SeedMassAwareDescentTest`
+  and this package's other dedicated seed tests (`SeedStepFanoutTilingContractTest`,
+  `SeedSampleBudgetExhaustionPriorTest`, `SeedDescentTwoHeavySiblingsBothSurviveTest`,
+  and others), never by a decision-trace golden. This file previously recorded only a
+  *fixture-file* count (`seed.seed_specs`: 4 fixtures) for seed coverage, which said
+  nothing about per-branch mark coverage — exactly the same distinct-count-vs-mark-count
+  conflation this campaign found and corrected on the thief/owner-split sides earlier;
+  it had simply never been checked on the seed side until this pass.
+- **`pacing.steal_paced` pins a dead method, not the live pacing pair.** See the
+  `pacing.steal_paced` bullet above: the fixture drives `WorkerState.stealPaced()`,
+  which has zero production callers; there is no golden on the live
+  `pacingSkipAvailable()`/`consumePacingSkip()` pair issue #26's widening actually
+  lives on.
+- **`IdleStealPacingPolicy` (the fleet-wide half of pacing) has no golden at all.**
+  Only the per-victim futility cooldown (`WorkerState`, via the dead `stealPaced()`
+  method above) has any fixture; `IdleStealBackoff`'s fleet-wide pacing decision —
+  the OTHER extracted policy this recorder's own "four decision sites" list implies
+  is covered — has no golden anywhere in this matrix. A mutant in
+  `IdleStealPacingPolicy.decide`/`onNonProductive`/`parkNanos` would evade this entire
+  safety net.
 
 ## Coverage matrix
 
