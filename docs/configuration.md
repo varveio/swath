@@ -52,6 +52,8 @@ all of these.
 | `--no-sign-request` | off |
 | `--endpoint-url` | unset |
 | `--force-path-style` | on when `--endpoint-url` is set |
+| `--bearer-token-command` | unset |
+| `--bearer-token-refresh-interval` | `45m` |
 | `--fetch-owner` | off |
 | `--requester-pays` | off |
 

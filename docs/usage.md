@@ -442,6 +442,8 @@ prefixes, endpoints, paths, filters, or keys are sensitive.
 | `--no-sign-request` | off | Anonymous requests (public buckets) |
 | `--endpoint-url URL` | — | Custom S3-compatible endpoint (LocalStack, MinIO, etc.) |
 | `--force-path-style` / `--no-force-path-style` | on when `--endpoint-url` is set | Force path-style S3 addressing |
+| `--bearer-token-command CMD` | — | Shell command whose stdout is a fresh OAuth bearer token, used instead of AWS SigV4 signing for every request |
+| `--bearer-token-refresh-interval DURATION` | `45m` | How often to re-run `--bearer-token-command` for a fresh token |
 | `--fetch-owner` | off | Request the `Owner` field from S3 (`FetchOwner=true`); populates `owner_id` and `owner_display_name` in output |
 | `--requester-pays requester` | off | Requester-pays buckets: send `x-amz-request-payer: requester` on every S3 request (only accepted value: `requester`) |
 | `--metrics-endpoint URL` | environment or off | Export OTLP metrics to URL; overrides `SWATH_OTLP_ENDPOINT` |
@@ -451,6 +453,34 @@ swath bundles the aws-sdk `sts` module so the default credential chain resolves 
 web-identity credentials (`AWS_ROLE_ARN` + `AWS_WEB_IDENTITY_TOKEN_FILE`, e.g. GKE/EKS
 workload identity), auto-refreshing from the token file, for signed private-bucket
 listing.
+
+##### Listing a GCS bucket via its S3-compatible XML API
+
+GCS's XML API is largely `ListObjectsV2`-compatible, including the `start-after`
+range primitive swath's engine depends on — see
+[`docs/internals/s3-implementation-compatibility.md`](internals/s3-implementation-compatibility.md)
+for compatibility caveats verified against LocalStack/MinIO (GCS itself has not been run
+through that same conformance suite yet). Rather than minting GCS HMAC interoperability
+keys, point swath at a command that prints a fresh Google OAuth bearer token — GCS's XML
+API accepts `Authorization: Bearer <token>` directly:
+
+```sh
+swath list s3://some-gcs-bucket/prefix/ \
+  --endpoint-url https://storage.googleapis.com \
+  --force-path-style \
+  --bearer-token-command 'gcloud auth print-access-token' \
+  --format parquet --sort \
+  -o ./out
+```
+
+`--bearer-token-command` replaces SigV4 signing entirely (`--profile`/`--no-sign-request`/
+`AWS_ACCESS_KEY_ID` are ignored for signing when it's set, though the SDK's normal
+credential resolution still runs harmlessly in the background). The command re-runs on
+`--bearer-token-refresh-interval` (default 45m — comfortably under a typical ~1h Google
+OAuth access-token TTL); it isn't real expiry-aware, since a bearer token string alone
+carries no portable expiry. This is a **listing-only** path: swath's output is always a
+local path (`-o`) today, so it doesn't touch GCS's XML multipart-upload precondition gap
+that rules the same mechanism out for a future GCS output/checkpoint destination.
 
 #### Seeding
 

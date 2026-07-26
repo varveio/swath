@@ -26,8 +26,21 @@ public record S3Config(
         Duration apiCallAttemptTimeout,  // per-attempt page timeout budget (WORKER pages; client-level)
         Duration apiCallTimeout,         // overall per-logical-call ceiling (bounds a hung fetch)
         AwsCredentialsProvider credentials,
-        Duration probeApiCallAttemptTimeout   // short per-attempt budget for probe call classes
+        Duration probeApiCallAttemptTimeout,  // short per-attempt budget for probe call classes
+        BearerTokenSupplier bearerTokenSupplier  // nullable; non-null replaces SigV4 signing (--bearer-token-command)
 ) {
+
+    /**
+     * 9-arg convenience constructor: {@link #bearerTokenSupplier} defaults to {@code null} (normal
+     * SigV4/{@code credentials} signing) — mirrors the pattern used for {@code PageRequest}'s
+     * additive field, so existing 9-arg call sites compile unchanged.
+     */
+    public S3Config(Region region, URI endpointOverride, boolean forcePathStyle, int maxParallelListings,
+                     int maxAttempts, Duration apiCallAttemptTimeout, Duration apiCallTimeout,
+                     AwsCredentialsProvider credentials, Duration probeApiCallAttemptTimeout) {
+        this(region, endpointOverride, forcePathStyle, maxParallelListings, maxAttempts, apiCallAttemptTimeout,
+                apiCallTimeout, credentials, probeApiCallAttemptTimeout, null);
+    }
 
     /**
      * Per-attempt SDK timeout: a single LIST attempt must not hang. At
