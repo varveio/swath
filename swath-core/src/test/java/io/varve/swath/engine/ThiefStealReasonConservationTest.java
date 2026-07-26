@@ -45,6 +45,17 @@ import org.junit.jupiter.api.io.TempDir;
  * CAS-loss races {@link Conc3TwoThievesTest} forces deterministically — except here nothing is
  * choreographed: whichever races the scheduler actually produces are what this test must survive.
  *
+ * <p>Two of the four outcome buckets need help reaching a nonzero count within a bounded call
+ * budget, because this fixture drives no real listing (no {@code RangeScanner}, no {@code
+ * commitPage}) — a victim's cursor never advances, so it never exhausts and the shared pool never
+ * runs dry on its own. Both are seeded in DETERMINISTICALLY, not hoped for across repeated runs:
+ * {@link #UNSPLITTABLE_JUNK_COUNT} open-frontier victims already past the scan ceiling (guaranteed
+ * {@code UNSPLITTABLE} the first time any thread reaches one — no probe, no race; see that field's
+ * javadoc for why an open frontier, not a bounded byte-adjacent pair) and {@link
+ * #EMPTY_POOL_CALLS_PER_THREAD} explicit {@code thief.steal(List.of())} calls per thread
+ * (unconditionally {@code NO_VICTIM}/{@code pool_empty} — a real path, exactly what an idle worker
+ * observes at quiescence).
+ *
  * <p>The invariant asserted is interleaving-independent because every {@link Thief#steal} return
  * path funnels through exactly one terminal {@code record(Outcome, reason)} call (verified by
  * inspection of {@link Thief#steal}/{@link Thief#commit} — see the executor-protocol contract),
@@ -56,6 +67,13 @@ import org.junit.jupiter.api.io.TempDir;
  * NO_VICTIM.*} series) avoids double-counting that documented pair; the two are cross-checked
  * against each other below as well, so a divergence there — a second, unrelated
  * engagement-accounting bug — would also fail this test.
+ *
+ * <p><b>Mutation evidence.</b> A {@code Thief#record} mutated to skip the {@code UNSPLITTABLE}
+ * emission fails this test immediately and clearly ({@code expected: 2040L but was: 1932L}); one
+ * mutated to skip {@code NO_VICTIM} likewise ({@code but was: 2000L}, exactly the 40 {@code
+ * pool_empty} calls lost); the pre-existing {@code RETRY}-double-count mutant this test was
+ * originally written to catch still fails against this extended fixture too ({@code but was:
+ * 3907L}). None of the four buckets is vacuous.
  */
 final class ThiefStealReasonConservationTest {
 
@@ -65,6 +83,37 @@ final class ThiefStealReasonConservationTest {
     private static final int KEYS_PER_SIBLING = 64;
     private static final int THREADS = 8;
     private static final int ITERATIONS_PER_THREAD = 250;
+    /**
+     * Dedicated open-frontier victims seeded alongside the wide siblings — deterministically
+     * {@code UNSPLITTABLE} the first time any thread reaches one, no probe, no race. A bounded
+     * byte-adjacent {@code (X, X+0x00]} pair (the shape {@code ThiefPolicyCascadeTest}'s {@code
+     * unsplittable_terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds} pins) cannot be used here:
+     * {@code estRemaining} computes to exactly {@code 0.0} for any such pair (the trailing {@code
+     * 0x00} byte contributes zero weight to the base-256 fraction), so {@code selectVictim} would
+     * skip it as {@code all_no_remaining_span} before ever reaching the per-attempt cascade -- it is
+     * only reachable directly, bypassing selection, the way that cascade test does. An OPEN
+     * FRONTIER ({@code hi == null}) sidesteps this entirely: {@code estRemaining} returns {@code
+     * POSITIVE_INFINITY} unconditionally for {@code hi == null} (selection ranks it above every
+     * finite-scored candidate, so it can never be starved), and seeding {@code cursor} already past
+     * the effective ceiling ({@code StealMath#extrapolate}'s only other precondition, beyond
+     * "started": {@code cursor} at or after the ceiling) makes {@link StealMath#extrapolate} return
+     * {@code null} with zero probes -- the same {@code UnsplittableReason#NO_PIVOT} terminal, reached
+     * through the real {@code selectVictim} + attempt pipeline this time, not bypassing it.
+     */
+    private static final int UNSPLITTABLE_JUNK_COUNT = 24;
+    /**
+     * Past {@code StealMath}'s effective ceiling for a whole-bucket-scope {@link Thief} ({@code
+     * prefix = new byte[0]}, so {@code prefixCeil} is {@code null} and the effective ceiling is the
+     * maximum valid-UTF-8 key, {@code 0xF4 0x8F 0xBF 0xBF}) — {@code 0xF5} alone already unsigned-
+     * exceeds that ceiling's first byte, regardless of what (if anything) follows it.
+     */
+    private static final byte[] JUNK_CURSOR = {(byte) 0xF5};
+    /**
+     * Explicit empty-pool calls per thread — deterministically {@code NO_VICTIM}/{@code pool_empty}
+     * (a real, meaningful path: this is exactly what every idle worker observes at quiescence),
+     * rather than hoping the shared pool happens to run dry within the run's bounded call budget.
+     */
+    private static final int EMPTY_POOL_CALLS_PER_THREAD = 5;
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
@@ -89,6 +138,11 @@ final class ThiefStealReasonConservationTest {
             }
         }
         return keys;
+    }
+
+    /** A junk-range prefix distinct from the wide siblings' {@code p<ii>/} namespace. */
+    private static byte[] junkLo(int i) {
+        return b(String.format("j%04d/", i));
     }
 
     /** Sums every {@code swath.steal_reason{outcome=<outcome>,reason=*}} counter, any reason. */
@@ -121,13 +175,31 @@ final class ThiefStealReasonConservationTest {
         try (SqliteCheckpointStore store = SqliteCheckpointStore.open(dir.resolve("conservation.sqlite"))) {
             RunMeta run = store.openRun(key(), false, false);
 
-            // Seed SIBLINGS wide ranges tiling (⊥, ⊤] — the shared, mutating pool every thread races
-            // over. cursor = lo (a fresh sub-range starts at its range_start), the same convention
-            // Conc2WideSiblingsTest's seed uses.
+            // Seed the UNSPLITTABLE_JUNK_COUNT open-frontier victims FIRST: estRemaining scores
+            // hi == null as POSITIVE_INFINITY unconditionally, strictly above every finite-scored
+            // wide sibling below, so these are never starved -- each is drained to permanently-cached
+            // unsplittable before any wide sibling is ever selected, deterministically, regardless of
+            // how the scheduler interleaves the threads. Independent nodes, deliberately NOT part of
+            // the siblings' tiling below -- this test asserts steal_reason conservation only, never a
+            // tiling invariant.
             List<WorkerState> pool = new CopyOnWriteArrayList<>();
+            for (int j = 0; j < UNSPLITTABLE_JUNK_COUNT; j++) {
+                byte[] lo = junkLo(j);
+                long nodeId = store.insertNode(new NodeSpec(run.id(), null, NodeKind.RANGE, lo, null, JUNK_CURSOR, null));
+                pool.add(WorkerStates.of(nodeId, lo, JUNK_CURSOR, null));
+            }
+
+            // Seed SIBLINGS wide, BOUNDED ranges tiling (⊥, p<SIBLINGS>/] -- deliberately no open
+            // frontier here (unlike Conc2WideSiblingsTest's seed): an hi == null sibling would ALSO
+            // score POSITIVE_INFINITY and, since its cursor never advances in this raw-Thief-only
+            // harness, would win every tie against the junk victims above (by iteration order) or,
+            // once seeded after them, monopolize selection forever once junk drains (an "unstarted
+            // frontier" RETRY loop that never resolves and never lets a bounded sibling be picked
+            // again) -- starving CHILD_CREATED for the rest of the run. cursor = lo (a fresh
+            // sub-range starts at its range_start), the same convention Conc2WideSiblingsTest uses.
             for (int s = 0; s < SIBLINGS; s++) {
                 byte[] lo = (s == 0) ? null : cut(s);
-                byte[] hi = (s == SIBLINGS - 1) ? null : cut(s + 1);
+                byte[] hi = cut(s + 1);
                 long nodeId = store.insertNode(new NodeSpec(run.id(), null, NodeKind.RANGE, lo, hi, lo, null));
                 pool.add(WorkerStates.of(nodeId, lo, lo, hi));
             }
@@ -152,6 +224,10 @@ final class ThiefStealReasonConservationTest {
                             for (int i = 0; i < ITERATIONS_PER_THREAD; i++) {
                                 thief.steal(pool);
                             }
+                            // Deterministic NO_VICTIM/pool_empty calls -- see EMPTY_POOL_CALLS_PER_THREAD.
+                            for (int i = 0; i < EMPTY_POOL_CALLS_PER_THREAD; i++) {
+                                thief.steal(List.of());
+                            }
                         } catch (Throwable th) {
                             err.set(th);
                         }
@@ -169,7 +245,7 @@ final class ThiefStealReasonConservationTest {
                 assertThat(err.get()).as("a racing thief thread threw").isNull();
             }
 
-            long totalCalls = (long) THREADS * ITERATIONS_PER_THREAD;
+            long totalCalls = (long) THREADS * (ITERATIONS_PER_THREAD + EMPTY_POOL_CALLS_PER_THREAD);
 
             long noVictim = countReason(metrics, "NO_VICTIM", NoVictimReason.NO_SPLITTABLE_VICTIM.code());
             long retry = sumByOutcome(metrics, "RETRY");
@@ -196,6 +272,21 @@ final class ThiefStealReasonConservationTest {
 
             // Sanity: this is a contention test, not a no-op loop -- real splits must have committed.
             assertThat(childCreated).as("at least some splits committed under contention").isGreaterThan(0);
+
+            // The two previously-vacuous buckets (issue: a 2000-call run of the earlier fixture
+            // never observed either, because the fixture drove no real listing -- cursors never
+            // advanced, so neither a genuinely exhausted victim nor a genuinely empty pool ever
+            // arose). Both are now deterministic, not scheduling-dependent:
+            //   - UNSPLITTABLE_JUNK_COUNT open-frontier victims (cursor already past the ceiling)
+            //     are ALWAYS resolved to UNSPLITTABLE the first time any thread reaches one -- no
+            //     probe, no race, no possible other outcome (see that field's javadoc).
+            //   - EMPTY_POOL_CALLS_PER_THREAD x THREADS explicit thief.steal(List.of()) calls are
+            //     UNCONDITIONALLY NoVictimReason.POOL_EMPTY -- an exact count, not a lower bound.
+            assertThat(unsplittable).as("the open-frontier junk victims resolve to UNSPLITTABLE").isGreaterThan(0);
+            assertThat(noVictim).as("the empty-pool calls resolve to NO_VICTIM").isGreaterThan(0);
+            assertThat(countReason(metrics, "NO_VICTIM", NoVictimReason.POOL_EMPTY.code()))
+                    .as("every explicit empty-pool call lands on POOL_EMPTY, exactly once each")
+                    .isEqualTo((long) THREADS * EMPTY_POOL_CALLS_PER_THREAD);
         }
     }
 }
