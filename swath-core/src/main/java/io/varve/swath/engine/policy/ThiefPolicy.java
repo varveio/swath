@@ -14,7 +14,6 @@ import io.varve.swath.model.KeyBytes;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * The thief brain: victim selection plus the pivot cascade (algorithms.md §3, §3.1, §3.2, §3.3) as
@@ -66,17 +65,22 @@ public final class ThiefPolicy implements StealPolicy {
     private final EngineToggles toggles;
     private final byte[] scanPrefix;
     private final byte[] prefixCeiling;
+    private final DecisionRng rng;
 
     /**
      * @param toggles    the {@code --engine-toggle} ablation namespace this run was constructed with
      * @param scanPrefix the scan's own prefix {@code P} — the floor every structure-probe/leaf
      *                   directory prefix is clamped to, and the basis of {@code prefixCeil(P)} for
      *                   the open-frontier extrapolation
+     * @param rng        the one random draw the cascade needs (the structure-probe suppression
+     *                   recovery's escape hatch, issue #20) — injected so this decision is
+     *                   reproducible from its inputs like every other; see {@link DecisionRng}
      */
-    public ThiefPolicy(EngineToggles toggles, byte[] scanPrefix) {
+    public ThiefPolicy(EngineToggles toggles, byte[] scanPrefix, DecisionRng rng) {
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.scanPrefix = scanPrefix;
         this.prefixCeiling = StealMath.prefixCeil(scanPrefix);
+        this.rng = rng;
     }
 
     @Override
@@ -373,13 +377,10 @@ public final class ThiefPolicy implements StealPolicy {
                     && view.consecutiveTimedOutStructureProbes() < STRUCTURE_TIMEOUT_SUPPRESS_THRESHOLD) {
                 return true;
             }
-            // Known seam exception (issue #20, same category as AlphabetDigest's metrics leak,
-            // architecture.md's "Known seam exception" note): ambient ThreadLocalRandom, moved
-            // verbatim from Thief's own structureProbesEnabled -- not a behavior change, but it
-            // means this decision is not reproducible from the view alone. The fix (an injected
-            // seeded RNG) belongs to the determinism-audit slice, which already owns this class
-            // of gap for this same interface.
-            return ThreadLocalRandom.current().nextInt(STRUCTURE_SUPPRESS_RETRY_DIVISOR) == 0;
+            // The 1-in-STRUCTURE_SUPPRESS_RETRY_DIVISOR escape hatch (issue #20): injected via
+            // DecisionRng rather than ambient ThreadLocalRandom, so this decision is reproducible
+            // from ThiefPolicy's inputs (toggles, scanPrefix, rng) like every other in the cascade.
+            return rng.nextInt(STRUCTURE_SUPPRESS_RETRY_DIVISOR) == 0;
         }
 
         private void addStructureSuppressionMarks() {

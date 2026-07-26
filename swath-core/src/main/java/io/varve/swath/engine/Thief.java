@@ -8,6 +8,7 @@ package io.varve.swath.engine;
 import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.SplitSpec;
 import io.varve.swath.engine.policy.Commit;
+import io.varve.swath.engine.policy.DecisionRng;
 import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.engine.policy.FloorProbeOutcome;
 import io.varve.swath.engine.policy.KeyProbeOutcome;
@@ -45,6 +46,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,20 +117,37 @@ public final class Thief {
     private final TraceSink trace;
 
     /**
-     * The single construction path. {@code metrics} may be {@code null} — the seam unit tests use to
-     * drive a {@link Thief} directly with no metrics sink, in which case every {@code if (metrics !=
-     * null)} instrumentation call below is a no-op. {@code toggles} is the {@code --engine-toggle}
-     * ablation namespace — {@code structure_probes}/{@code far_ahead}/{@code density_ewma}/{@code
-     * alphabet_pivots} all bear on the policy's steal-attempt pivot synthesis (see {@link
-     * EngineToggles}'s javadoc for the exact mechanical effect of each) — and null-defaults to {@link
-     * EngineToggles#DEFAULT}. {@code trace} is the opt-in {@code --trace} JSONL flight recorder seam,
-     * threaded from {@link WorkStealingScan} (see {@link TraceSink}), and null-defaults to {@link
-     * TraceSink#NONE}. A testkit object-mother supplies these same defaults explicitly for the many
-     * unit tests that don't care about them.
+     * The engine's own construction path (delegates to the 10-arg constructor below with the live
+     * ambient {@link DecisionRng} default). {@code metrics} may be {@code null} — the seam unit tests
+     * use to drive a {@link Thief} directly with no metrics sink, in which case every {@code if
+     * (metrics != null)} instrumentation call below is a no-op. {@code toggles} is the {@code
+     * --engine-toggle} ablation namespace — {@code structure_probes}/{@code far_ahead}/{@code
+     * density_ewma}/{@code alphabet_pivots} all bear on the policy's steal-attempt pivot synthesis
+     * (see {@link EngineToggles}'s javadoc for the exact mechanical effect of each) — and
+     * null-defaults to {@link EngineToggles#DEFAULT}. {@code trace} is the opt-in {@code --trace}
+     * JSONL flight recorder seam, threaded from {@link WorkStealingScan} (see {@link TraceSink}), and
+     * null-defaults to {@link TraceSink#NONE}. A testkit object-mother supplies these same defaults
+     * explicitly for the many unit tests that don't care about them.
      */
     public Thief(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                  ListingMode mode, ChildSink childSink, RunMetrics metrics, EngineToggles toggles,
                  TraceSink trace) {
+        this(store, fetcher, runId, prefix, mode, childSink, metrics, toggles, trace,
+                bound -> ThreadLocalRandom.current().nextInt(bound));
+    }
+
+    /**
+     * As the 9-arg constructor, but with a caller-supplied {@link DecisionRng} instead of the
+     * engine's live ambient {@code ThreadLocalRandom} default — for tests (and a future simulator)
+     * that need a reproducible draw for {@link ThiefPolicy}'s structure-probe suppression recovery
+     * escape hatch (issue #20). The 9-arg constructor delegates here with {@code bound ->
+     * ThreadLocalRandom.current().nextInt(bound)}, the SAME ambient source the engine drew from
+     * before this fix — deliberately zero behavior delta for every live run; only where the
+     * ambient-ness lives (an executor concern now, not inside the policy package) changed.
+     */
+    public Thief(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
+                 ListingMode mode, ChildSink childSink, RunMetrics metrics, EngineToggles toggles,
+                 TraceSink trace, DecisionRng rng) {
         this.store = store;
         this.fetcher = fetcher;
         this.runId = runId;
@@ -138,7 +157,7 @@ public final class Thief {
         this.metrics = metrics;
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.trace = trace == null ? TraceSink.NONE : trace;
-        this.policy = new ThiefPolicy(this.toggles, prefix);
+        this.policy = new ThiefPolicy(this.toggles, prefix, rng);
         recordDisabledToggleMarks(this.toggles, this.metrics);
     }
 

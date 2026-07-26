@@ -24,7 +24,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  */
 class ThiefPolicySelectionTest {
 
-    private final ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0]);
+    // selectVictim never reaches structureProbingEnabled's escape hatch -- this stub is never drawn from.
+    private final ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0);
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);

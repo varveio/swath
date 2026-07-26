@@ -52,21 +52,25 @@ dependency rules, and the decisions behind them — see
 **Known seam exceptions:** `engine.policy`'s convention is that a policy is a deterministic
 function of its view (no I/O, no ambient randomness) and returns reason enums for the executor to
 record (so AGENTS.md's counter-per-path law stays mechanically checkable against the decision
-enum) — two pre-existing gaps against that convention were carried into `ThiefPolicy` unchanged
-(moved verbatim, not introduced, and not fixed here — both are behavior-adjacent-refactor territory,
-out of scope for an extraction slice). `OwnerSplitGovernor`'s own former exception (issue #22: the
-confetti feedback gate's probe-counter side effect) is CLOSED — `decide(view)` is now a genuine
-pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the classification math
-and the `ConfettiFeedbackGate` collaborator now divide the work.
+enum). Two other exceptions this convention once carried are now CLOSED: `OwnerSplitGovernor`'s
+(issue #22, the confetti feedback gate's probe-counter side effect — `decide(view)` is now a
+genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
+classification math and the `ConfettiFeedbackGate` collaborator now divide the work) and
+`ThiefPolicy`'s ambient-randomness one (issue #20, below).
 - `AlphabetDigest` (carried through in `StealAttemptView`, consumed by
   `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires `ALPHABET.*`
-  fallback counters directly from inside `chooseScalar`. Issue #19.
-- `ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
+  fallback counters directly from inside `chooseScalar`. Issue #19. Still open.
+- ~~`ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
   `ThreadLocalRandom.current()` (the 1-in-64 escape hatch), so that one decision is not
-  reproducible from the view alone. Issue #20.
+  reproducible from the view alone.~~ Issue #20 — CLOSED: the draw is now injected as a
+  `DecisionRng` (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live
+  default as `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source
+  as before, so live-run behavior is unchanged (goldens verified byte-identical) — while tests and
+  a future simulator inject a reproducible one. A per-worker seeded generator for live-run
+  determinism is a separate, not-yet-made owner decision.
 
-Both remaining fixes belong in the determinism-audit slice, which already owns injected-clock/
-seeded-RNG purity for this interface.
+Issue #19 belongs to the determinism-audit slice, which already owns injected-clock/seeded-RNG
+purity for this interface.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.
