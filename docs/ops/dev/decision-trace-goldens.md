@@ -181,27 +181,24 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   `StubCheckpointStore` always accepts the split, so the abort path never triggers
   here — it is covered instead by `OwnerSelfSplitContractTest`'s dedicated
   abort-path test (T2).
-- **The thief `poolView` still omits every `StealAttemptView`-only field, for every
-  candidate (issue #25, partially closed).** An independent review found `poolView`
-  omitted `keysEmitted`/`pacingSkipAvailable` (letting a mutant that forces
-  `pacingSkipAvailable=false` in `Thief`'s view construction evade this entire fixture
-  matrix) — those two are now recorded per candidate, and `thief-edge-cases`' scenario
-  4 carries a genuinely-paced junk candidate so at least one event actually pins
-  `pacing_skip_available: true` (not just the field's presence). Still NOT recorded,
-  for any candidate: `densityFraction`, the alphabet-digest state, the
-  `unchangedSinceNonProductiveSteal` flag, or either structure-probe streak — the
-  fields that exist only on `StealAttemptView` (the CHOSEN victim's per-attempt view),
-  not `VictimView` (every candidate's pool-wide view). Two reasons this is not closed
-  here: (1) `AlphabetDigest` exposes no accessor outside `io.varve.swath.engine` for a
-  stable, JSON-comparable representation of its internal `mask`/`clean` state — adding
-  one is a real (if small) production-surface change, not a mechanical recorder edit;
-  (2) which candidate even HAS a per-attempt view is decided only after `selectVictim`
-  runs, so recording it pre-call (to avoid the golden observing post-mutation state)
-  means recording it for every candidate, not just the eventual choice — a larger
-  widening than the one applied here. A mutant that discards
-  `consecutiveZeroFanoutStructureProbes`/`consecutiveTimedOutStructureProbes` at view
-  construction, or that stales the density fraction, would still evade every fixture
-  in this matrix byte-identically.
+- **Issue #25 is resolved: the thief `poolView` now records the full `StealAttemptView`
+  shape.** An independent review had found `poolView` recorded only the pool-selection
+  fields (`node_id`/`lo`/`cursor`/`hi`/`unsplittable`, later widened to also carry
+  `keysEmitted`/`pacingSkipAvailable`), while `StealAttemptView` additionally carries
+  per-victim state the cascade genuinely branches on — `densityFraction`, the
+  alphabet-digest state, the `unchangedSinceNonProductiveSteal` flag, and both
+  structure-probe streaks. Issue #25 offered two ways to settle this permanently
+  (record the full view, or document the subset as a deliberate scope boundary); the
+  owner decision (2026-07-26) took option 1. `poolView` now computes every one of
+  those fields for **every** candidate (not just the one `selectVictim` eventually
+  picks — which candidate wins is itself part of the decision under test, so recording
+  only the winner's per-attempt state would make the view's own shape depend on the
+  decision it exists to verify), and `AlphabetDigest.Snapshot` gained a small,
+  package-private, test-only `base()`/`cleanBits()`/`wordsHex()` accessor set (hex,
+  never handing out its backing array) so its state can be serialized at all. A
+  `thief.steal` golden's decision is now verifiable from its own recorded view alone —
+  regenerated with zero decision-byte drift (46 events across the 6 `thief.steal`
+  fixtures gained the new fields; 0 decisions changed anywhere in the corpus).
 - **The seed slice's per-branch discipline was never applied (this campaign's own
   finding, converged on after being conflated three times).** `HybridSeedPlanner`
   fires **22** distinct `SEED.*` marks (21 via its own `mark()` calls, recounted
