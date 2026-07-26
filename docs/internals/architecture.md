@@ -70,8 +70,18 @@ The four CLOSED exceptions:
   simulator inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
   proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
   `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
-  `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded
-  generator for live-run determinism is a separate, not-yet-made owner decision.
+  `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded generator for
+  live-run determinism is no longer a deferred question (owner decision 2026-07-26): it is an
+  **opt-in** `EngineContext#decisionRngSeed` seam, `null` by default. Unset, `WorkStealingScan`
+  threads `Thief`'s identical ambient default (`ThreadLocalRandom.current()`) — byte-identical to
+  every run before this seam existed, goldens untouched. Set, every worker instead draws from a
+  `SeededDecisionRng` stream deterministically derived from that seed plus the worker's own stable
+  identity (`RunContext.workerIdOrNone()`) via a SplitMix64 mixing step, so worker *k*'s stream is a
+  pure function of `(seed, k)` alone — growing or shrinking `workerCount` adds/removes streams
+  without reshuffling the ones that stay. `SeededDecisionRng` is never held as a field of any
+  `io.varve.swath.engine.policy` type (only the `DecisionRng` interface is, in `ThiefPolicy`), so —
+  like `Thief`'s own ambient default — it sits in `DecisionPathPurityTest`'s documented Gap 1
+  (an injected implementation's body is unreachable from the policy's field-type closure).
 - `AlphabetDigest` (carried through in `StealAttemptView`, consumed by `StealMath.interpolate(...,
   digest, collector)`) held its own `RunMetrics` reference and fired `ALPHABET.*` fallback counters
   directly from inside `chooseScalar` (issue #19) — CLOSED: the fallback reason is now an

@@ -250,9 +250,18 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         // The thief probes through a throttle-aware (but NOT slot-gated) wrapper: a 503 reaching a
         // probe must drive AIMD + retry the same probe (the probe is not lost), yet probes stay off
         // the concurrency gate (rare 1-key calls; stealing is paused separately via the gauge flag).
-        this.thief = new Thief(store, new GaugedFetcher(fetcher, gauge, false, false, this.metrics,
-                () -> cancellation, this.retryConfig.sleeper(), this.retryConfig.policy()), this.runId, this.prefix,
-                this.mode, this::enqueueChild, this.metrics, this.toggles, this.trace);
+        // decisionRngSeed is null-by-default (EngineContext's documented baseline): the 9-arg
+        // constructor below then supplies Thief's own live ambient DecisionRng default, byte-identical
+        // to every run before this seam existed. Set, every worker instead draws from a
+        // SeededDecisionRng stream deterministic in that seed and the worker's own stable identity.
+        Long decisionRngSeed = context.decisionRngSeed();
+        PageFetcher thiefFetcher = new GaugedFetcher(fetcher, gauge, false, false, this.metrics,
+                () -> cancellation, this.retryConfig.sleeper(), this.retryConfig.policy());
+        this.thief = decisionRngSeed == null
+                ? new Thief(store, thiefFetcher, this.runId, this.prefix, this.mode, this::enqueueChild,
+                        this.metrics, this.toggles, this.trace)
+                : new Thief(store, thiefFetcher, this.runId, this.prefix, this.mode, this::enqueueChild,
+                        this.metrics, this.toggles, this.trace, new SeededDecisionRng(decisionRngSeed));
         // Speculative readahead's guess-ahead
         // fetches get their OWN off-gauge, fail-soft fetcher — the IDENTICAL construction as the
         // Thief's probe fetcher just above (slotGated=false, reportSuccess=false): a disposable guess
