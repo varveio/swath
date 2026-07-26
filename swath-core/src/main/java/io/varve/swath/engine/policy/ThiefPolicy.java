@@ -5,7 +5,6 @@
  */
 package io.varve.swath.engine.policy;
 
-import io.varve.swath.engine.AlphabetDigest;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.policy.VictimMutation.Kind;
