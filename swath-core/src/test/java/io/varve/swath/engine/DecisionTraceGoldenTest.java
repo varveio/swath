@@ -9,7 +9,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.NodeSpec;
+import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
+import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.model.KeyBytes;
@@ -119,36 +121,34 @@ import org.junit.jupiter.api.Test;
  *       maybeOwnerSelfSplit}/{@code onNodeCompleted} tag/classify cycle on a shared {@link
  *       OwnerSelfSplit}, then one more call past warmup; deterministic because it is the FIRST
  *       call to reach the gate's over-threshold branch on that instance (every warm-up call
- *       itself returned {@code CARVE} without touching the probe counter) — see that scenario's
- *       comment for why this is NOT the same accident-of-call-count risk {@code confetti_probe}
- *       carries</li>
+ *       itself returned {@code CARVE} without touching the probe sequence)</li>
+ *   <li>{@code confetti_probe} (the every-{@code PROBE_K}-th over-threshold call let through,
+ *       engaged on the {@link Carve} it produces): 1 event, 1 fixture (owner-split-gates) — issue
+ *       #22's fix made {@code probeSeq} a genuine {@link OwnerSplitView} field, so THIS is a real
+ *       (view → decision) pin: the same warm-up as {@code CONFETTI_SUPPRESSED}'s scenario, then 15
+ *       more plain (unrecorded) attempts each landing on {@code SUPPRESSED} and consuming one
+ *       probe slot, so the RECORDED call's view shows {@code probe_seq: 15} and lands on the
+ *       {@code PROBE_K}-th (16th) over-threshold consult — the recorded view is what makes this a
+ *       property of the scenario rather than an accident of how many {@code decide()} calls
+ *       happened to precede it (the failure mode issue #22 described, before its fix)</li>
  *   <li>{@code UNSPLITTABLE_PIVOT}: 1 event, 1 fixture (owner-split-gates) — the byte-adjacent
  *       {@code (cursorTo, hi]} recipe below, mirroring {@code
  *       ThiefPolicyCascadeTest#unsplittable_terminalNullPivotHasNoSafeKeyStrictlyBetweenTheBounds}'s
  *       technique (a proper-prefix extension by one C0-control byte, per {@code ByteMidpoint}'s
  *       I12 null contract)</li>
- *   <li>A successful carve ({@code OWNER_SPLIT.self_published}): 3 events, 3 fixtures
- *       (deep-narrow, owner-split-gates, partition-key-value) — of which one also engages {@code
- *       pivot_reflect_clamped} (owner-split-gates) and one {@code pivot_reflect_lifted}
- *       (partition-key-value)</li>
+ *   <li>A successful carve ({@code OWNER_SPLIT.self_published}): 4 events, 3 fixtures
+ *       (deep-narrow, owner-split-gates — twice, scenarios 5 and 9 — partition-key-value) — of
+ *       which two also engage {@code pivot_reflect_clamped} (owner-split-gates' scenarios 5 and 9)
+ *       and one {@code pivot_reflect_lifted} (partition-key-value)</li>
  * </ul>
- * Two branches remain genuinely out of this recorder's reach:
- * <ul>
- *   <li>The confetti feedback gate's {@code confetti_probe} engagement (the every-{@code
- *       PROBE_K}-th over-threshold call let through) is UNPINNABLE until issue #22 is fixed, not
- *       merely un-attempted: which of {@code SUPPRESSED}/{@code PROBE} {@code
- *       ConfettiFeedbackGate#decide()} returns depends on {@code probeCounter.incrementAndGet() %
- *       PROBE_K}, i.e. on how many times {@code decide()} has been called, not on the view — a
- *       golden pinning it would be pinning call-count parity (encoding an accident of how many
- *       {@code decide()} calls preceded it), exactly the non-determinism #22 describes. Fixing
- *       #22 (reproducible probe selection via an injected counter or seeded RNG) is what unlocks
- *       a legitimate recipe here. See {@code decision-trace-goldens.md}'s "known gaps".</li>
- *   <li>{@code OWNER_SPLIT.self_aborted} (the durable-split CAS rejection) is absent here by
- *       construction: every scenario's {@code StubCheckpointStore} always accepts the split, so
- *       the abort path is out of this single-attempt recorder's reach entirely — it is covered
- *       instead by {@code OwnerSelfSplitContractTest}'s dedicated abort-path test (T2), which
- *       forces every split to reject.</li>
- * </ul>
+ * Every field {@link OwnerSplitView} carries is now visible in the recorded view, including the
+ * confetti gate's {@code tagged_total}/{@code tagged_confetti}/{@code probe_seq} ({@link
+ * io.varve.swath.engine.policy.ConfettiObservation}, issue #22) — so a future change to any of
+ * this cascade's inputs shows up as a diffable view change here, not a silent decision flip.
+ * {@code OWNER_SPLIT.self_aborted} (the durable-split CAS rejection) remains the one branch
+ * genuinely out of this recorder's reach: every scenario's {@code StubCheckpointStore} always
+ * accepts the split, so the abort path never triggers here — it is covered instead by {@code
+ * OwnerSelfSplitContractTest}'s dedicated abort-path test (T2), which forces every split to reject.
  */
 final class DecisionTraceGoldenTest {
 
@@ -584,10 +584,8 @@ final class DecisionTraceGoldenTest {
         //    themselves are ordinary denseVictim/self_published attempts, already pinned by
         //    scenario 5. This is the FIRST call to reach the gate's over-threshold branch on this
         //    fresh instance (every warm-up call itself returned CARVE via the warmup branch, which
-        //    never touches the probe counter), so the outcome is deterministic and not an accident
-        //    of call-count parity -- unlike PROBE, which depends on landing on exactly the
-        //    PROBE_K-th such call and is unpinnable until issue #22 (see decision-trace-goldens.md's
-        //    "known gaps") -> OWNER_SPLIT.confetti_suppressed.
+        //    never touches the probe sequence), so the outcome is deterministic and not an accident
+        //    of call-count parity -> OWNER_SPLIT.confetti_suppressed.
         RunMetrics m8 = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink t8 = new RecordingTraceSink();
         OwnerSelfSplit confettiGov = ownerSelfSplit(m8, t8, 1, 100, () -> 0L, () -> 1);
@@ -604,6 +602,37 @@ final class DecisionTraceGoldenTest {
         WorkerState suppressed = denseVictim(9, "d/00", "d/05");
         long[] selfSplit8 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, confettiGov, suppressed, b("d/002500"), selfSplit8, m8, t8);
+
+        // 9. Confetti feedback gate's periodic probe lets a carve through: issue #22's fix made
+        //    probeSeq a genuine OwnerSplitView field, so this is now a real (view -> decision) pin,
+        //    not encoded call-count parity -- the recorded view's probe_seq is the exact input the
+        //    decision reads, visible and diffable like every other field. Warms the SAME shared-gate
+        //    tag/classify cycle as scenario 8 to cross the over-threshold rate, then drives 15 MORE
+        //    plain (unrecorded) attempts that each land on SUPPRESSED, consuming one probe slot each
+        //    -- after which probeSeq==15 and (15+1)%PROBE_K(16)==0, so THIS (the 16th over-threshold)
+        //    call lands on PROBE and the carve proceeds -> OWNER_SPLIT.confetti_probe,
+        //    decision.split=true.
+        RunMetrics m9 = new RunMetrics(new SimpleMeterRegistry());
+        RecordingTraceSink t9 = new RecordingTraceSink();
+        OwnerSelfSplit probeGov = ownerSelfSplit(m9, t9, 1, 100, () -> 0L, () -> 1);
+        for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE; i++) {
+            WorkerState warmVictim = denseVictim(200 + i, "d/00", "d/05");
+            long[] warmSelfSplit = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+            OwnerSelfSplit.OwnerSplitTrace warmResult =
+                    probeGov.maybeOwnerSelfSplit(warmVictim.nodeId(), warmVictim, b("d/002500"), warmSelfSplit);
+            WorkerState completedChild =
+                    WorkerStates.of(warmResult.childId(), warmResult.pivot(), warmResult.pivot(), warmResult.hi());
+            probeGov.onNodeCompleted(warmResult.childId(), completedChild);
+        }
+        for (int i = 0; i < 15; i++) {   // PROBE_K - 1: drives probeSeq from 0 to 15, each call SUPPRESSED
+            WorkerState suppressedVictim = denseVictim(300 + i, "d/00", "d/05");
+            long[] suppressedSelfSplit = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+            probeGov.maybeOwnerSelfSplit(suppressedVictim.nodeId(), suppressedVictim, b("d/002500"),
+                    suppressedSelfSplit);
+        }
+        WorkerState probed = denseVictim(10, "d/00", "d/05");
+        long[] selfSplit9 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        recordOwnerSplitAttempt(fx, probeGov, probed, b("d/002500"), selfSplit9, m9, t9);
 
         GoldenTrace.writeOrVerify(fx);
     }
@@ -644,6 +673,14 @@ final class DecisionTraceGoldenTest {
         view.put("keys_emitted", ws.keysEmitted());
         view.put("self_split_committed_before", selfSplit[0]);
         view.put("self_split_last_committed_at_before", selfSplit[1]);
+        // Issue #22: the confetti gate's tallies/probe sequence are now a genuine OwnerSplitView
+        // field (ConfettiObservation), read BEFORE this call the same way maybeOwnerSelfSplit itself
+        // reads them -- recording them makes the confetti_probe/confetti_suppressed pins real
+        // (view -> decision), not encoded call-count parity.
+        ConfettiFeedbackGate.Snapshot confettiBefore = gov.confettiSnapshot();
+        view.put("tagged_total", confettiBefore.taggedTotal());
+        view.put("tagged_confetti", confettiBefore.taggedConfetti());
+        view.put("probe_seq", confettiBefore.probeSeq());
 
         Map<String, Long> before = GoldenTrace.snapshotReasons(metrics);
         trace.clear();

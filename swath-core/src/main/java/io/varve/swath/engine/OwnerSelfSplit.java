@@ -267,6 +267,20 @@ final class OwnerSelfSplit {
     }
 
     /**
+     * A read-only snapshot of this run's confetti feedback gate, for the decision-trace golden
+     * recorder ({@code DecisionTraceGoldenTest}, same package): the gate's {@code taggedTotal}/
+     * {@code taggedConfetti}/{@code probeSeq} are exactly the {@link
+     * io.varve.swath.engine.policy.ConfettiObservation} the NEXT {@link #maybeOwnerSelfSplit} call
+     * would build its view from, so the recorder can put them in the golden view alongside every
+     * other input the decision reads. No side effect, no production call site — the same "seam
+     * already exists for tests" discipline decision-trace-goldens.md documents for the rest of this
+     * recorder.
+     */
+    ConfettiFeedbackGate.Snapshot confettiSnapshot() {
+        return confettiFeedback.snapshot();
+    }
+
+    /**
      * Whether a completed TAGGED owner-split child is CONFETTI ({@code true}) or
      * SUBSTANTIAL ({@code false}). Both conditions must hold for confetti: a small own tally
      * ({@code keysEmitted <= 2*maxKeys}, the same threshold the floor uses) AND {@code !hasSplit}
