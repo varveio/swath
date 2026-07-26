@@ -35,4 +35,5 @@ engine gets a no-gap/no-overlap listing without a client-chosen partition key.
 - [`internals/build-and-modules.md`](internals/build-and-modules.md) — the module graph, dependency rules, and shared build config.
 - [`swath-replay-server.md`](swath-replay-server.md) — the S3-listing replay server used to test against fixture bucket shapes without hitting real S3.
 - [`ops/dev/TESTING.md`](ops/dev/TESTING.md) — test tiers, speed, and the no-mass-populate rule.
+- [`ops/dev/decision-trace-goldens.md`](ops/dev/decision-trace-goldens.md) — the policy-seam decision-trace golden recorder: format, regeneration workflow, determinism requirement, known gaps.
 - [`ops/dev/field-investigations.md`](ops/dev/field-investigations.md) — write-ups of runs against specific real buckets, and the changes they drove.

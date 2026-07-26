@@ -1,6 +1,6 @@
 # Decision-trace goldens — the policy-seam safety net
 
-This is the operational doc for the B1 decision-trace golden recorder
+This is the operational doc for the decision-trace golden recorder
 (`swath-core/src/test/java/io/varve/swath/engine/{GoldenTrace,RecordingTraceSink,
 DecisionTraceGoldenTest}.java`, goldens under
 `swath-core/src/test/resources/goldens/decision-trace/`). See
@@ -81,7 +81,8 @@ per-site shapes — they are the source of truth, not this doc.
 ## Regenerating goldens
 
 After a **deliberate, reviewed** change to one of the four decision sites (including
-the sanctioned seam extractions in B2–B5):
+the sanctioned seam extractions this safety net exists for: the thief-brain, the
+owner-split-governor, the pacing, and the seed-planner slices):
 
 ```
 ./gradlew :swath-core:test --tests 'io.varve.swath.engine.DecisionTraceGoldenTest' \
@@ -125,6 +126,40 @@ output (`diff -r` empty) — re-run this check after any change to the recorder 
 `assertThat(actual).containsExactlyElementsOf(golden)` — AssertJ's list diff reports
 exactly which line(s) drifted and how, not just "not equal". Runs as part of the
 default `:swath-core:test` tier (no `@Tag`) — every commit.
+
+## Known gaps
+
+- **No real-bucket replay fixtures.** The fixture matrix is entirely synthetic
+  (`Keyspaces.*` generators, plus a few hand-built keyspaces in
+  `DecisionTraceGoldenTest` itself). Real-bucket fixtures served through
+  `:swath-replay-server` would be a strong addition, but `swath-replay-server`
+  *depends on* `swath-core` — reaching it from `swath-core`'s own test source set
+  would need a dependency cycle, so it cannot be wired in from here as this module
+  is laid out today. If this gap is worth closing, the goldens (or a
+  replay-server-backed variant of them) belong in a module that can depend on
+  both, or the replay-server fixture data would need to move somewhere
+  `swath-core` can reach without inverting the dependency graph. This is a
+  standing limitation, not a deferral with a planned follow-up.
+- **Synthetic generators cannot reproduce real irregular key distributions.**
+  Even setting the module-cycle problem aside, `Keyspaces.*`'s generators are
+  parametric (uniform-within-shape, seeded PRNGs) — they cannot reproduce the
+  genuinely irregular, heavy-tailed, structurally inconsistent layouts real
+  buckets exhibit (mixed conventions from different upload tools, partially
+  migrated layouts, one-off directories). The synthetic fixtures here catch
+  extraction bugs in the *named* branches and edge cases; they cannot catch a
+  bug that only a real bucket's specific irregularity would trigger. Real
+  production traffic (the public-bucket differential at the release gates,
+  and any `--trace` captures from real runs) remains the backstop this golden
+  suite does not replace.
+- **`OwnerSelfSplit`'s two silent gates.** The `est <= SELF_SPLIT_MIN_REMAINING_PAGES
+  * maxKeys` remaining-work floor (`OwnerSelfSplit.java:163-164`) and the
+  page-spacing rate limit (`OwnerSelfSplit.java:167`) both return `null` with no
+  `recordStealReason` call — issue #16 tracks adding that counter. The goldens
+  correctly pin today's behavior (an empty `reason_deltas` object on those
+  events), which is a faithful golden of the current, gap-carrying code — not a
+  bug in the recorder. When issue #16's counter lands, regenerating goldens is
+  **expected and required** in that same change; the drift it produces there is
+  the safety net catching the deliberate behavior addition, not a regression.
 
 ## Coverage matrix
 

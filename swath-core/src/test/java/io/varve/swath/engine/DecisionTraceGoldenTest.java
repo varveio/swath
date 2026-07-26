@@ -22,6 +22,7 @@ import io.varve.swath.store.PageRequest;
 import io.varve.swath.store.StoreCapabilities;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
+import io.varve.swath.testkit.SeedSteps;
 import io.varve.swath.testkit.StubCheckpointStore;
 import io.varve.swath.testkit.WorkerStates;
 import java.nio.charset.StandardCharsets;
@@ -36,8 +37,8 @@ import java.util.function.LongSupplier;
 import org.junit.jupiter.api.Test;
 
 /**
- * B1 decision-trace goldens — the safety net every seam-extraction slice (B2 thief brain, B3
- * owner-split governor, B4 pacing, B5 seed planner) is checked against: recorded
+ * Decision-trace goldens — the policy-seam safety net every extraction slice (the thief brain, the
+ * owner-split governor, pacing, the seed planner) is checked against: recorded
  * {@code (view, decision)} sequences from the CURRENT engine, deterministic, committed as JSONL
  * golden files under {@code src/test/resources/goldens/decision-trace/}, replayed and diffed here
  * on every {@code :swath-core:test} run.
@@ -56,18 +57,46 @@ import org.junit.jupiter.api.Test;
  * <p><b>Regenerating goldens.</b> After a deliberate, reviewed engine change,
  * {@code ./gradlew :swath-core:test --tests '*.DecisionTraceGoldenTest' -Dswath.goldens.update=true}
  * rewrites every fixture under {@code src/test/resources/goldens/decision-trace/}; review the diff
- * before committing. See {@code docs/ops/dev/decision-trace-goldens.md}.
+ * before committing. See {@code docs/ops/dev/decision-trace-goldens.md} (including its "known
+ * gaps" section — real-bucket replay fixtures and the uninstrumented owner-split gates).
  *
  * <p><b>Coverage matrix</b> (decision site × fixture — every site appears in ≥3 fixtures):
  * <ul>
  *   <li>{@code thief.steal}: deep-narrow, flat-wide, explosion-1to1, partition-key-value,
- *       thief-edge-cases (5)</li>
+ *       thief-edge-cases, thief-cascade-mechanisms (6)</li>
  *   <li>{@code owner_self_split}: deep-narrow, flat-wide, explosion-1to1, partition-key-value,
  *       owner-split-gates (5)</li>
  *   <li>{@code seed.seed_specs}: deep-narrow, flat-wide, explosion-1to1, partition-key-value (4)</li>
  *   <li>{@code pacing.steal_paced}: pacing-trip-and-recover, pacing-below-threshold,
  *       pacing-multi-victim-isolation (3)</li>
  * </ul>
+ *
+ * <p>A per-file count overstates {@code thief.steal} coverage on its own — the same file can pin
+ * many pivot-cascade branches once each, or pin the same branch repeatedly and miss others
+ * entirely. The mechanism-level count (how many events across how many distinct fixtures commit
+ * each named {@code PIVOT.*} branch — verified by grepping the committed goldens, not hand-counted)
+ * is the real measure:
+ * <ul>
+ *   <li>{@code midpoint}: 2 events, 1 fixture</li>
+ *   <li>{@code far_ahead}: 1 event, 1 fixture</li>
+ *   <li>{@code step_back}: 12 events, 3 fixtures</li>
+ *   <li>{@code bisect}: 2 events, 2 fixtures</li>
+ *   <li>{@code reflect} (committed hit): 4 events, 2 fixtures</li>
+ *   <li>{@code reflect_hit} / {@code reflect_empty} (probe verdicts, whether or not reflect won the
+ *       commit): 4 / 3 events, 2 / 3 fixtures</li>
+ *   <li>{@code structure_probe} / {@code structure_capped}: 8 / 6 events, 3 / 2 fixtures</li>
+ *   <li>{@code adaptive_structure} / {@code adaptive_structure_capped}: 2 / 1 events, 2 / 1
+ *       fixtures</li>
+ *   <li>{@code flat_leaf}: 10 events, 2 fixtures</li>
+ * </ul>
+ * Every named pivot-cascade branch the bounded-range cascade can commit appears at least once
+ * (the {@code extrapolate} mechanism belongs to the separate open-frontier path, not this
+ * cascade, and is exercised — without committing, since its own scenarios are transient/terminal
+ * — by {@code thiefEdgeCases}' unstarted/exhausted-frontier events instead). {@code
+ * adaptive_structure_capped} is the one mechanism pinned only once, in {@code
+ * thiefCascadeMechanisms}: reaching it requires the parent-empty sliver's byte-ADJACENT
+ * cursor/bound divergence (see {@code Thief#isCursorAdjacentSliver}) on top of a truncated
+ * probe, a narrow enough combination that a second independent recipe was not attempted here.
  */
 final class DecisionTraceGoldenTest {
 
@@ -781,7 +810,7 @@ final class DecisionTraceGoldenTest {
         MockPageFetcher fetcher = MockPageFetcher.builder().keys(keyspace)
                 .interceptor(probes.interceptor())
                 .build();
-        SeedStep step = new SeedStep(fetcher, prefix, workerCount, metrics, EngineToggles.DEFAULT);
+        SeedStep step = SeedSteps.of(fetcher, prefix, workerCount, metrics, EngineToggles.DEFAULT);
 
         Map<String, Long> before = GoldenTrace.snapshotReasons(metrics);
         List<NodeSpec> specs = step.seedSpecs(RUN_ID, SeedMode.SHALLOW);

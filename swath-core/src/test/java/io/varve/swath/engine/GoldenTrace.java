@@ -32,7 +32,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 /**
- * The B1 decision-trace golden recorder's shared plumbing: canonical JSON event building
+ * The decision-trace golden recorder's shared plumbing: canonical JSON event building
  * (byte-valued fields hex-encoded, fixed field order), a {@link MockPageFetcher.PageInterceptor}
  * that logs every probe request/response a decision-site call issues (in call order — this is
  * what makes the pivot cascade's probe verdicts part of the golden), a {@link RunMetrics}

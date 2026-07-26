@@ -14,7 +14,7 @@ import java.util.List;
  * A test-scoped {@link TraceSink} that records every call as an ordered {@link ObjectNode}
  * instead of writing JSONL to disk — the decision-trace golden recorder's tap on the {@code
  * stealAttempt}/{@code split}/{@code ownerSplit} events {@link io.varve.swath.engine.Thief} and
- * {@link OwnerSelfSplit} already emit through the production {@link TraceSink} seam (B1,
+ * {@link OwnerSelfSplit} already emit through the production {@link TraceSink} seam (see
  * {@code docs/ops/dev/decision-trace-goldens.md}). {@code enabled()} is always {@code true} so a
  * caller that gates a split's return value on it (see {@link
  * OwnerSelfSplit#maybeOwnerSelfSplit}) always gets the trace payload.
