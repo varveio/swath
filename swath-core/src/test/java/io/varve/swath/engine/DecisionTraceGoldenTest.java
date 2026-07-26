@@ -11,6 +11,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunSummary;
@@ -87,18 +89,34 @@ final class DecisionTraceGoldenTest {
         GoldenTrace.Fixture fx = new GoldenTrace.Fixture("deep-narrow");
         seedSpecsAttempt(fx, keyspace, new byte[0], 4);
         thiefCascade(fx, keyspace, new byte[0], b("9999"), 8);
-        // cursorTo well inside (lo, hi]: a large realized remaining span for the owner-split gate.
-        ownerSplitScenarios(fx, keyspace, 0.5, 4, 20);
+        // Single worker (no demand gate) + production-scale mass, probed EARLY (0.15 of the way
+        // through the sorted keyspace, not the midpoint): timeDecayed's ascending mass means the
+        // index-midpoint sits deep in code-point space too (most of the remaining SPAN, not just
+        // count, is already behind it), so a later probe point starves the remaining-work estimate
+        // regardless of scale. Reaches a genuine self-published carve, distinct from the
+        // tiny/rate-limited/demand-gated negatives owner-split-gates.jsonl already covers explicitly.
+        ownerSplitScenarios(fx, keyspace, 0.15, 1, 20, 100L, 0L);
         GoldenTrace.writeOrVerify(fx);
     }
 
     @Test
     void flatWide() throws Exception {
-        List<byte[]> keyspace = Keyspaces.singlePrefixFlat(400);
+        // A proportionate 3-digit counter (000-399, no zero-padding waste beyond the digit count
+        // itself needed to hold 400 values) rather than testkit's Keyspaces.singlePrefixFlat's
+        // deliberately-adversarial 8-digit padding: at this fixture's small (400-key) scale, an
+        // 8-digit counter leaves the density-reflected flat-leaf pivot (StealMath.extrapolate over
+        // the (leaf lo, leaf ceiling] window) reflecting a consumed span that is a vanishingly small
+        // fraction of the nominal 10^8 window every round, so it never lands meaningfully past the
+        // cursor — a real reflection-accuracy limit (Keyspaces.zeroPaddedCounter's own javadoc calls
+        // out exactly this "radix-1 positions" cost), but a keyspace/fixture-scale mismatch, not a
+        // property of the thief cascade this fixture exists to exercise.
+        List<byte[]> keyspace = flatWideKeys(400);
         GoldenTrace.Fixture fx = new GoldenTrace.Fixture("flat-wide");
         seedSpecsAttempt(fx, keyspace, new byte[0], 4);
         thiefCascade(fx, keyspace, new byte[0], b("flat0"), 8);
-        ownerSplitScenarios(fx, keyspace, 0.5, 4, 20);
+        // 4 workers, outstanding already at capacity + production-scale mass: reaches the
+        // demand-gated negative (extra parallelism would buy nothing) rather than the tiny-mass gate.
+        ownerSplitScenarios(fx, keyspace, 0.5, 4, 20, 100L, 4L);
         GoldenTrace.writeOrVerify(fx);
     }
 
@@ -109,7 +127,9 @@ final class DecisionTraceGoldenTest {
         GoldenTrace.Fixture fx = new GoldenTrace.Fixture("explosion-1to1");
         seedSpecsAttempt(fx, keyspace, new byte[0], 4);
         thiefCascade(fx, keyspace, new byte[0], b("p99999"), 6);
-        ownerSplitScenarios(fx, keyspace, 0.5, 1, 20);
+        // No mass scaling: every leaf genuinely is tiny (1 object each) — this shape legitimately
+        // never clears the owner-split remaining-work floor, unlike the other three shapes here.
+        ownerSplitScenarios(fx, keyspace, 0.5, 1, 20, 1L, 0L);
         GoldenTrace.writeOrVerify(fx);
     }
 
@@ -119,7 +139,9 @@ final class DecisionTraceGoldenTest {
         GoldenTrace.Fixture fx = new GoldenTrace.Fixture("partition-key-value");
         seedSpecsAttempt(fx, keyspace, new byte[0], 4);
         thiefCascade(fx, keyspace, new byte[0], b("dt=2024-01-99"), 6);
-        ownerSplitScenarios(fx, keyspace, 0.5, 1, 20);
+        // Single worker + production-scale mass: a second genuine self-published carve, on a
+        // structurally different (Hive-partitioned) shape than deepNarrow's.
+        ownerSplitScenarios(fx, keyspace, 0.5, 1, 20, 100L, 0L);
         GoldenTrace.writeOrVerify(fx);
     }
 
@@ -130,6 +152,17 @@ final class DecisionTraceGoldenTest {
             for (int p = 0; p < partsPerDay; p++) {
                 keys.add(b(String.format("dt=2024-01-%02d/part-%05d.parquet", d, p)));
             }
+        }
+        return keys;
+    }
+
+    /** A single flat directory {@code flat/<NNN>} zero-padded to exactly {@code n}'s own digit width
+     *  (no extra radix-1 padding) — see {@link #flatWide} for why that matters at this fixture's scale. */
+    private static List<byte[]> flatWideKeys(int n) {
+        int digits = Integer.toString(n - 1).length();
+        List<byte[]> keys = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            keys.add(b("flat/" + String.format("%0" + digits + "d", i)));
         }
         return keys;
     }
@@ -540,12 +573,34 @@ final class DecisionTraceGoldenTest {
     // Shared drivers: thief.steal cascade (iterative, single-thief), and seed.seed_specs.
     // ============================================================================================
 
+    /** Keys drained per worker per round in {@link #drainOneRound} — a small, realistic page size. */
+    private static final int DRAIN_PAGE_KEYS = 8;
+
     /**
      * Iteratively drains one root victim over {@code attempts} single {@link Thief#steal} calls: each
-     * successful split's child is enqueued back into the live pool (via {@link Thief.ChildSink}), so
-     * later attempts steal from whichever candidate has the widest remaining span — the same
-     * single-thief-at-a-time choreography a real fleet's idle loop performs one attempt at a time,
-     * without the scheduler nondeterminism a multi-thief storm would introduce.
+     * successful split's child is enqueued back into the live pool (via {@link Thief.ChildSink}) with
+     * its resume cursor at the pivot — matching production's {@code WorkStealingScan.enqueueChild}
+     * (cursor == lo, never {@code null}: see {@code Thief.ChildSink}'s own javadoc, "the child's resume
+     * cursor is m"). Between rounds, {@link #drainOneRound} advances every still-splittable candidate
+     * a little (a real bounded page fetch against the same keyspace, folded into its density digest via
+     * {@link WorkerState#recordPage}), so later attempts steal from a genuinely progressively-consumed
+     * pool — not a repeatedly-reset, always-fresh one — the same single-thief-at-a-time choreography a
+     * real fleet's idle loop performs one attempt at a time, without the scheduler nondeterminism a
+     * multi-thief storm would introduce.
+     *
+     * <p>The root worker's {@code lo} is anchored at the keyspace's OWN minimum key (never the
+     * global {@code ⊥}): a bounded root worker with {@code lo == ⊥} only arises pre-seed (already
+     * covered by {@code thief-edge-cases}' unstarted/exhausted-frontier scenarios), and code-point
+     * byte-midpoint has no density signal yet on a fresh worker, so a {@code (⊥, hi]} window can
+     * place the very first pivot in the dead space between {@code ⊥} and wherever this keyspace's
+     * real data actually starts — a real, recognized phenomenon ({@code PIVOT_BYTE.dead_zone}), but
+     * one that (depending on exactly where it lands relative to {@code ByteMidpoint}'s {@code
+     * MIN_SAFE} floor) can leave a permanently-empty zombie sub-range that is never cached
+     * unsplittable (empty-upper exhaustion is deliberately always transient, algorithms.md §11 edge
+     * 11) and so keeps outranking a genuinely productive sibling in victim selection every round —
+     * exactly the kind of nominal-not-real coverage this fixture exists to avoid. Anchoring {@code
+     * lo} at the keyspace's real minimum matches what a post-seed range actually looks like (the
+     * shallow seed only ever cuts at real structure) and keeps every round's pivot inside real data.
      */
     private void thiefCascade(GoldenTrace.Fixture fx, List<byte[]> keyspace, byte[] scanPrefix, byte[] hi,
                                int attempts) throws SwathException, InterruptedException {
@@ -555,16 +610,68 @@ final class DecisionTraceGoldenTest {
         MockPageFetcher fetcher = MockPageFetcher.builder().keys(keyspace)
                 .interceptor(probes.interceptor())
                 .build();
+        // A second, undecorated fetcher over the SAME keyspace for the between-round draining below —
+        // draining is not itself a decision this fixture records, so it must not appear in the probe
+        // log Thief.steal's own attempts are judged against.
+        MockPageFetcher drainFetcher = MockPageFetcher.builder().keys(keyspace).build();
+        byte[] rootLo = keyspace.stream().min(Arrays::compareUnsigned).orElse(null);
         List<WorkerState> pool = new ArrayList<>();
-        pool.add(WorkerStates.of(1, null, null, hi));
+        pool.add(WorkerStates.of(1, rootLo, rootLo, hi));
         AtomicLong nextChildId = new AtomicLong(1000L);
         StubCheckpointStore store = new StubCheckpointStore(s -> nextChildId.getAndIncrement());
-        Thief.ChildSink sink = (childId, lo, childHi) -> pool.add(WorkerStates.of(childId, lo, null, childHi));
+        Thief.ChildSink sink = (childId, lo, childHi) -> pool.add(WorkerStates.of(childId, lo, lo, childHi));
         Thief thief = new Thief(store, fetcher, RUN_ID, scanPrefix, ListingMode.OBJECTS, sink, metrics,
                 EngineToggles.DEFAULT, trace);
 
         for (int i = 0; i < attempts; i++) {
+            // Drain BEFORE every attempt, including the first: production only ever presents a
+            // progress-gated (stealEligible) worker to the thief (WorkerState.stealEligible's
+            // javadoc, algorithms.md §3.2) — a worker that has emitted nothing yet (cursor == lo,
+            // zero consumed span) is never a real candidate. Skipping this on round 0 left a
+            // zero-progress root worker in the pool, which the reflect/flat-leaf pivot mechanisms
+            // (both density-based) treat as "no span to reflect" and can degenerate to a
+            // near-cursor pivot — a real edge case, but not the one this fixture is after.
+            drainOneRound(pool, scanPrefix, drainFetcher);
             recordStealAttempt(fx, thief, pool, store, metrics, probes, trace);
+        }
+    }
+
+    /**
+     * Advances every still-splittable pool member by one small bounded page (up to {@link
+     * #DRAIN_PAGE_KEYS} in-range keys past its own cursor), exactly as a real worker's page commit
+     * would: {@link WorkerState#setCursor}, {@link WorkerState#recordPage} (the density digest), and
+     * {@link WorkerState#addKeysEmitted}. A worker whose own {@code (cursor, hi]} has no keys left
+     * (fully drained, or a fresh child whose narrow slice is empty) is simply left unchanged — {@link
+     * Thief#steal} already skips zero-remaining-span candidates during victim selection.
+     */
+    private void drainOneRound(List<WorkerState> pool, byte[] scanPrefix, MockPageFetcher drainFetcher)
+            throws SwathException, InterruptedException {
+        for (WorkerState w : pool) {
+            byte[] hi = w.hi();
+            if (hi == null || w.unsplittable()) {
+                continue;   // the open frontier and cached-dead ranges are never drained here
+            }
+            ListPage page = drainFetcher.fetchPage(new PageRequest(ListingMode.OBJECTS, DRAIN_PAGE_KEYS,
+                    scanPrefix, null, w.cursor(), null, null, null, null, 0));
+            byte[] first = null;
+            byte[] last = null;
+            int count = 0;
+            for (ListEntry e : page.entries()) {
+                byte[] k = e.key().rawUnsafe();
+                if (KeyBytes.compareUnsigned(k, hi) > 0) {
+                    break;   // past this worker's own (possibly since-narrowed) bound
+                }
+                if (first == null) {
+                    first = k;
+                }
+                last = k;
+                count++;
+            }
+            if (count > 0) {
+                w.setCursor(last);
+                w.recordPage(first, last, count);
+                w.addKeysEmitted(count);
+            }
         }
     }
 
@@ -627,27 +734,39 @@ final class DecisionTraceGoldenTest {
      * — so the density digest reflects the keyspace's own real shape instead of a hand-guessed bound.
      */
     private void ownerSplitScenarios(GoldenTrace.Fixture fx, List<byte[]> keyspace, double cursorFraction,
-            int workerCount, int maxKeys) throws SwathException, InterruptedException {
+            int workerCount, int maxKeys, long massScale, long outstanding) throws SwathException, InterruptedException {
         if (keyspace.isEmpty()) {
             return;
         }
         List<byte[]> sorted = new ArrayList<>(keyspace);
         sorted.sort(Arrays::compareUnsigned);
+        byte[] lo = sorted.get(0);
         byte[] max = sorted.get(sorted.size() - 1);
         byte[] hi = Arrays.copyOf(max, max.length + 1);   // strictly > every key (prefix rule)
         int idx = Math.max(0, Math.min(sorted.size() - 1, (int) (sorted.size() * cursorFraction)));
         byte[] cursorTo = sorted.get(idx);
+        // massScale simulates this SHAPE at production scale (a real bucket of this layout typically
+        // carries orders of magnitude more objects per unit of key-space than a several-hundred-key
+        // test fixture) — the byte-space view (lo/cursor/hi) stays the fixture's own real keys; only
+        // the density signal fed to the gate is scaled, so each shape can reach a DIFFERENT gate
+        // instead of every shape fixture landing on the same too-small-to-carve floor (the one
+        // owner-split-gates.jsonl already covers explicitly as scenario 2).
+        long keysEmitted = (idx + 1L) * massScale;
 
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink trace = new RecordingTraceSink();
-        WorkerState ws = WorkerStates.of(500, null, null, hi);
-        ws.addKeysEmitted(idx + 1L);
-        ws.recordPage(sorted.get(0), cursorTo, idx + 1L);
+        // lo anchored at the keyspace's own minimum (never the global ⊥) — the same dead-zone/span
+        // reasoning as thiefCascade's rootLo: est/density math measures span WITHIN (lo, hi], so a
+        // ⊥ lo spreads it over the empty byte-space below this shape's real data and collapses the
+        // signal regardless of massScale.
+        WorkerState ws = WorkerStates.of(500, lo, lo, hi);
+        ws.addKeysEmitted(keysEmitted);
+        ws.recordPage(lo, cursorTo, keysEmitted);
         // This is the FIRST carve attempt on this victim: start selfSplit[1] clear of the
         // rate-limit window so the attempt can reach the remaining-work / demand / pivot gates
         // instead of tripping the page-spacing rate limit unconditionally on every fixture.
         long[] selfSplit = {0, -OwnerSelfSplit.SELF_SPLIT_MIN_PAGES_BETWEEN};
-        recordOwnerSplitAttempt(fx, ownerSelfSplit(metrics, trace, workerCount, maxKeys, () -> 0L,
+        recordOwnerSplitAttempt(fx, ownerSelfSplit(metrics, trace, workerCount, maxKeys, () -> outstanding,
                 () -> workerCount), ws, cursorTo, selfSplit, metrics, trace);
     }
 
