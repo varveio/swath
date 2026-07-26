@@ -398,10 +398,15 @@ and only in response to a `mutations()` list the policy returned alongside its d
   slot boundary all decided PROBE and all CARVED, multiplying exactly the confetti-sized carves the
   gate exists to suppress — not merely shifting which consult landed on the slot. A probe carve now
   carries `CLAIM_CONFETTI_PROBE_SLOT` instead, and the executor resolves it against the run-scoped
-  gate (`ConfettiFeedbackGate#claimProbeSlot`, a single `compareAndSet` on the snapshotted value)
-  before recording anything, admitting exactly one carve per slot and suppressing the rest exactly as
-  the pre-#22 fused `incrementAndGet()` did. The sequence still advances once per over-threshold
-  consult, winner or loser.
+  gate before recording anything, admitting exactly one carve per slot and suppressing the rest exactly
+  as the pre-#22 fused `incrementAndGet()` did. `ConfettiFeedbackGate#claimProbeSlot` is a
+  **consume-and-claim**, not a bare CAS: a `compareAndSet` against the snapshotted value elects the one
+  winner, and a caller that loses that CAS then advances the sequence with an `incrementAndGet` of its
+  own — so the sequence advances once per over-threshold consult, winner or loser, which is what makes
+  a loser *suppressed* rather than *dropped*. (An earlier version of this bullet called it "a single
+  `compareAndSet` on the snapshotted value", which contradicted the winner-or-loser sentence that
+  followed it — a bare CAS would advance the sequence only for the winner. Caught by CodeRabbit on
+  PR #34; the method's own javadoc always stated both halves.)
   **This does not re-couple `decide()` to interleaving.** The decision stays a pure function of its
   view; the conditionality is explicit *in* the decision rather than an executor override — the same
   shape as the split CAS's own `SPLIT_ABORTED` path, where a decided carve can still be declined by an
