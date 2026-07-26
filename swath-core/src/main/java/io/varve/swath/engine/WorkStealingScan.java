@@ -599,7 +599,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                     runId, RunContext.workerIdOrNone(), claim.nodeId(), StealMath.describe(claim.lo()),
                     StealMath.describe(claim.hi()));
         }
-        WorkerState ws = new WorkerState(claim.nodeId(), claim.lo(), claim.cursor(), claim.hi(), metrics);
+        WorkerState ws = new WorkerState(claim.nodeId(), claim.lo(), claim.cursor(), claim.hi());
         AtomicLong pageSeq = new AtomicLong();
         // Owner-side self-split rate-limit state, mutated only by this worker's own (serial)
         // page-commit callback: [0] = committed non-empty pages so far, [1] = the page index of the

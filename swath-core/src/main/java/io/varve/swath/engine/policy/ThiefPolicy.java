@@ -297,7 +297,7 @@ public final class ThiefPolicy implements StealPolicy {
             }
             m = (hi == null)
                     ? StealMath.extrapolate(view.lo(), cForPivot, prefixCeiling)
-                    : toggles.interpolate(cForPivot, hi, farAheadFraction, view.alphabetDigest());
+                    : toggles.interpolate(cForPivot, hi, farAheadFraction, view.alphabetDigest(), pendingEngagements);
             mechanism = (hi == null) ? PivotMechanism.EXTRAPOLATE
                     : (farAheadFraction > 0.5 ? PivotMechanism.FAR_AHEAD : PivotMechanism.MIDPOINT);
             if (m == null) {

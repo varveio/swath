@@ -5,10 +5,12 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.output.ControlCharEscaper;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -207,6 +209,31 @@ public final class StealMath {
         }
         double frac = Math.min(1.0 - 1e-9, Math.max(1e-9, f));
         return ByteMidpoint.between(a, hi, frac, digest);
+    }
+
+    /**
+     * Alphabet-aware variant of {@link #interpolate(byte[], byte[], double, AlphabetDigest)} that
+     * reports the digest's per-consult {@code ALPHABET.*} fallback reason (if any) into {@code
+     * collector} — a caller-owned {@link Engagement} list, never {@code RunMetrics} directly (issue
+     * #19's fix, contracts.md §2.1): {@code ThiefPolicy}'s pivot cascade and {@code
+     * OwnerSplitGovernor}'s carve each pass their own pending-engagement list, so the fallback is
+     * delivered to the executor exactly like every other engagement they already collect. Identical
+     * in every other respect to the two-argument-fewer overload above; a {@code null} {@code digest}
+     * or {@code collector} is exactly as inert as a {@code null} {@code digest} there.
+     */
+    public static byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest,
+                                      List<Engagement> collector) {
+        if (hi == null) {
+            return null;
+        }
+        byte[] a = (lo == null) ? new byte[0] : lo;
+        if (KeyBytes.compareUnsigned(a, hi) >= 0) {
+            return null;
+        }
+        double frac = Math.min(1.0 - 1e-9, Math.max(1e-9, f));
+        ByteMidpoint.ScalarChooser chooser = (digest == null) ? null
+                : (cpIndex, loCp, hiCp, fraction) -> digest.chooseScalar(cpIndex, loCp, hiCp, fraction, collector);
+        return ByteMidpoint.between(a, hi, frac, chooser);
     }
 
     /**

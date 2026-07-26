@@ -44,7 +44,7 @@ class ThiefPolicyCascadeTest {
 
     /** A cold (no observations) digest — the same starting state a fresh {@link WorkerState} has. */
     private static AlphabetDigest coldDigest(byte[] lo, byte[] hi) {
-        return new WorkerState(0, lo, lo, hi, null).alphabetDigest();
+        return new WorkerState(0, lo, lo, hi).alphabetDigest();
     }
 
     /**

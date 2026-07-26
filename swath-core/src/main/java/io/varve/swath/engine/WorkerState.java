@@ -6,7 +6,6 @@
 package io.varve.swath.engine;
 
 import io.varve.swath.engine.policy.FutilityPacingPolicy;
-import io.varve.swath.observability.RunMetrics;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -183,25 +182,20 @@ public final class WorkerState {
     private final AtomicLong demandGatedTally = new AtomicLong();
 
     /**
-     * The single construction path: wires {@code metrics} into the {@link AlphabetDigest} so its
-     * per-consult {@code ALPHABET.*} fallback engagement counters fire. {@code metrics} may be
-     * {@code null} — the seam a testkit object-mother uses for the many unit tests that drive a
-     * {@link Thief} directly against a hand-built victim with no metrics sink.
+     * The single construction path.
      *
-     * @param nodeId  the {@code listing_node} id this worker owns
-     * @param lo      the immutable lower bound {@code A} of {@code (lo, hi]} (the node's
-     *                {@code range_start}; used by the thief's frontier extrapolation, §3.1)
-     * @param cursor  the initial leading cursor (the node's resume cursor; {@code null} = ⊥)
-     * @param hi      the initial upper bound {@code B} ({@code null} = the open frontier)
-     * @param metrics per-run metrics holder, or {@code null} for a metrics-less unit test
+     * @param nodeId the {@code listing_node} id this worker owns
+     * @param lo     the immutable lower bound {@code A} of {@code (lo, hi]} (the node's
+     *               {@code range_start}; used by the thief's frontier extrapolation, §3.1)
+     * @param cursor the initial leading cursor (the node's resume cursor; {@code null} = ⊥)
+     * @param hi     the initial upper bound {@code B} ({@code null} = the open frontier)
      */
-    public WorkerState(long nodeId, byte[] lo, byte[] cursor, byte[] hi,
-                       RunMetrics metrics) {
+    public WorkerState(long nodeId, byte[] lo, byte[] cursor, byte[] hi) {
         this.nodeId = nodeId;
         this.lo = lo;
         this.cursor = new AtomicReference<>(cursor);
         this.hi = new AtomicReference<>(hi);
-        this.alphabet = new AlphabetDigest(lo, hi, metrics);
+        this.alphabet = new AlphabetDigest(lo, hi);
         // A fresh node hasn't emitted yet (emittedSinceSteal = false), so it is not a steal
         // victim until it commits its first non-empty page (see stealEligible()).
     }

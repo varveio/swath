@@ -149,7 +149,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         }
         // Synthesize the pivot at fraction f in the observed-alphabet rank space so it lands on a
         // populated value.
-        byte[] m = toggles.interpolate(cursorTo, H, f, view.alphabetDigest());
+        byte[] m = toggles.interpolate(cursorTo, H, f, view.alphabetDigest(), engagements);
         if (m == null
                 || KeyBytes.compareUnsigned(cursorTo, m) >= 0
                 || KeyBytes.compareUnsigned(m, H) > 0) {

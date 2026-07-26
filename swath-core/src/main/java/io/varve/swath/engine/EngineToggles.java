@@ -5,6 +5,7 @@
  */
 package io.varve.swath.engine;
 
+import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.observability.RunMetrics;
 import java.util.ArrayList;
@@ -344,12 +345,16 @@ public record EngineToggles(
     }
 
     /**
-     * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest)} when {@code
+     * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest, List)} when {@code
      * alphabet_pivots} is on, else the plain code-point {@link StealMath#interpolate(byte[],
-     * byte[], double)} overload (no digest consult) — the same substitution at both call sites
-     * (Thief and the owner-split site).
+     * byte[], double)} overload (no digest consult, so {@code collector} never receives a fallback
+     * mark either) — the same substitution at both call sites (Thief and the owner-split site).
+     * {@code collector} is the caller's own pending-{@link Engagement} list (issue #19's fix): the
+     * digest reports its fallback there, never to {@code RunMetrics} directly.
      */
-    public byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest) {
-        return alphabetPivots ? StealMath.interpolate(lo, hi, f, digest) : StealMath.interpolate(lo, hi, f);
+    public byte[] interpolate(byte[] lo, byte[] hi, double f, AlphabetDigest digest, List<Engagement> collector) {
+        return alphabetPivots
+                ? StealMath.interpolate(lo, hi, f, digest, collector)
+                : StealMath.interpolate(lo, hi, f);
     }
 }

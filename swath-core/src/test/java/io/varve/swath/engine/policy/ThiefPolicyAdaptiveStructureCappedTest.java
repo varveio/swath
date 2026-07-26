@@ -41,7 +41,7 @@ class ThiefPolicyAdaptiveStructureCappedTest {
         byte[] lo = b("2022/");
         byte[] cursor = b("2022/03/05/abc");
         byte[] hi = b("2022/04/");
-        var digest = new WorkerState(1, lo, cursor, hi, null).alphabetDigest();
+        var digest = new WorkerState(1, lo, cursor, hi).alphabetDigest();
         StealAttemptView view = new StealAttemptView(1, lo, cursor, hi, 0, 0.5, digest, false, 0, 0);
 
         // consecutiveZeroFanoutStructureProbes/consecutiveTimedOutStructureProbes are both 0 above,

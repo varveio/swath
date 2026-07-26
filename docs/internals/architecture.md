@@ -49,32 +49,38 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
-**Known seam exceptions:** `engine.policy`'s convention is that a policy is a deterministic
-function of its view (no I/O, no ambient randomness) and returns reason enums for the executor to
-record (so AGENTS.md's counter-per-path law stays mechanically checkable against the decision
-enum). Two other exceptions this convention once carried are now CLOSED: `OwnerSplitGovernor`'s
-(issue #22, the confetti feedback gate's probe-counter side effect — `decide(view)` is now a
-genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
-classification math and the `ConfettiFeedbackGate` collaborator now divide the work) and
-`ThiefPolicy`'s ambient-randomness one (issue #20, below).
-- `AlphabetDigest` (carried through in `StealAttemptView`, consumed by
-  `StealMath.interpolate(..., digest)`) holds its own `RunMetrics` reference and fires `ALPHABET.*`
-  fallback counters directly from inside `chooseScalar`. Issue #19. Still open.
-- ~~`ThiefPolicy`'s structure-probe suppression recovery reaches for ambient
-  `ThreadLocalRandom.current()` (the 1-in-64 escape hatch), so that one decision is not
-  reproducible from the view alone.~~ Issue #20 — CLOSED: the draw is now injected as a
-  `DecisionRng` (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live
-  default as `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source
-  as before, so live-run behavior is unchanged (goldens verified byte-identical) — while tests and
-  a future simulator inject a reproducible one. A per-worker seeded generator for live-run
-  determinism is a separate, not-yet-made owner decision.
-- `IdleStealPacingPolicy` applies the same fix proactively, for the fleet-wide idle-steal
-  backoff's ambient `System.nanoTime()` read: injected as `DecisionClock`, with
-  `IdleStealBackoff` supplying the engine's live `System::nanoTime` default (unchanged live
-  behavior; tests and a future simulator inject a fake clock).
+**Known seam exceptions:** NONE remain open. `engine.policy`'s convention is that a policy is a
+deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
+and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
+mechanically checkable against the decision enum). This section carried three exceptions across
+the policy-seam refactor; all three are now closed, and the determinism audit
+(`DecisionPathPurityTest`) enforces the convention mechanically so a fourth cannot regress silently:
 
-Issue #19 belongs to the determinism-audit slice, which already owns injected-clock/seeded-RNG
-purity for this interface.
+- `OwnerSplitGovernor`'s confetti feedback gate probe-counter side effect (issue #22) — `decide(view)`
+  is now a genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
+  classification math and the `ConfettiFeedbackGate` collaborator now divide the work.
+- `ThiefPolicy`'s structure-probe suppression recovery reaching for ambient
+  `ThreadLocalRandom.current()` (issue #20) — the draw is now injected as a `DecisionRng`
+  (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live default as
+  `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source as before, so
+  live-run behavior is unchanged (goldens verified byte-identical) — while tests and a future
+  simulator inject a reproducible one. `IdleStealPacingPolicy` applied the same fix proactively for
+  the fleet-wide idle-steal backoff's ambient `System.nanoTime()` read: injected as `DecisionClock`,
+  with `IdleStealBackoff` supplying the engine's live `System::nanoTime` default. A per-worker seeded
+  generator for live-run determinism is a separate, not-yet-made owner decision.
+- `AlphabetDigest` (carried through in `StealAttemptView`, consumed by `StealMath.interpolate(...,
+  digest, collector)`) held its own `RunMetrics` reference and fired `ALPHABET.*` fallback counters
+  directly from inside `chooseScalar` (issue #19) — CLOSED: the fallback reason is now an
+  `AlphabetFallback` enum reported through a caller-owned `List<Engagement>` collector threaded from
+  `ThiefPolicy`'s pivot cascade / `OwnerSplitGovernor`'s carve, exactly like every other engagement;
+  `AlphabetDigest` holds no metrics reference of any kind.
+
+The determinism audit's enforcement test (`DecisionPathPurityTest`, `swath-core`) scans the policy
+package plus the transitive closure of every field-reachable `io.varve.swath.*` type for a held
+`RunMetrics`/`TraceSink` reference or `java.util.concurrent.atomic` state, and the same closure's
+source for a direct ambient clock/randomness call — so a class shaped like any of the three
+exceptions above (in the policy package or reached through a view/decision/event field, regardless
+of which package it lives in) fails a mechanical check rather than waiting for the next review pass.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.

@@ -44,7 +44,7 @@ class OwnerSplitGovernorTest {
 
     /** A cold (no observations) digest — the same starting state a fresh {@link WorkerState} has. */
     private static AlphabetDigest coldDigest(byte[] lo, byte[] hi) {
-        return new WorkerState(0, lo, lo, hi, null).alphabetDigest();
+        return new WorkerState(0, lo, lo, hi).alphabetDigest();
     }
 
     private static OwnerSplitGovernor governor(EngineToggles toggles, int workerCount) {
@@ -281,8 +281,11 @@ class OwnerSplitGovernorTest {
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
         assertThat(decision.engagements())
-                .as("warmup CARVE itself adds no engagement; only the terminal unsplittable-pivot gate does")
-                .containsExactly(new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
+                .as("warmup CARVE itself adds no engagement; the alphabet consult's own no-room fallback "
+                        + "(the adjacent cursor/hi leaves no room for any scalar) and the terminal "
+                        + "unsplittable-pivot gate are the only two")
+                .containsExactly(new Engagement("ALPHABET", "fallback_no_room"),
+                        new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
         assertThat(decision.mutations()).as("warmup never touches the probe sequence").isEmpty();
     }
 
@@ -376,7 +379,10 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
-        assertThat(decision.engagements()).containsExactly(new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
+        // The adjacent cursor/hi leaves no room for any scalar, so the alphabet consult's own
+        // no-room fallback fires alongside the terminal unsplittable-pivot mark.
+        assertThat(decision.engagements()).containsExactly(new Engagement("ALPHABET", "fallback_no_room"),
+                new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
     }
 
     @Test
