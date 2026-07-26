@@ -49,12 +49,15 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
-**Known seam exceptions:** NONE remain open. `engine.policy`'s convention is that a policy is a
-deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
-and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
-mechanically checkable against the decision enum). This section carried three exceptions across
-the policy-seam refactor; all three are now closed, and the determinism audit
-(`DecisionPathPurityTest`) enforces the convention mechanically so a fourth cannot regress silently:
+**Known seam exceptions:** ONE remains open (issue #30, below). `engine.policy`'s convention is that
+a policy is a deterministic function of its view (no I/O, no ambient randomness, no ambient
+collaborator state) and returns reason enums for the executor to record (so AGENTS.md's
+counter-per-path law stays mechanically checkable against the decision enum). This section carried
+three exceptions across the policy-seam refactor; those three are now closed, and the determinism
+audit (`DecisionPathPurityTest`) enforces the convention mechanically against the three SHAPES they
+took — a held collaborator reference, mutated `java.util.concurrent.atomic` state, a direct ambient
+clock/randomness call. It does **not** cover every shape: issue #30 is a fourth that the audit
+provably misses, and is disclosed rather than enforced (see below, and that test's "Known gaps"):
 
 - `OwnerSplitGovernor`'s confetti feedback gate probe-counter side effect (issue #22) — `decide(view)`
   is now a genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
@@ -75,12 +78,29 @@ the policy-seam refactor; all three are now closed, and the determinism audit
   `ThiefPolicy`'s pivot cascade / `OwnerSplitGovernor`'s carve, exactly like every other engagement;
   `AlphabetDigest` holds no metrics reference of any kind.
 
+**OPEN — `StealAttemptView.alphabetDigest` is a live reference, not a snapshot (issue #30).** The
+view is documented as an immutable snapshot the policy decides over, and for every other field it
+is. `alphabetDigest` is the victim's actual `AlphabetDigest` instance: its `long[][] mask` /
+`boolean[] clean` are final *references* with mutable *contents*, and a concurrent page commit on
+the victim can change what the digest reports between view construction and `ThiefPolicy`'s
+dereference of it. **Production behavior is unaffected by the extraction** — the pre-extraction code
+read the digest live at the same point, and the split CAS re-validate keeps tiling safe regardless
+of what the policy decided, so no I1–I12 invariant is at risk. What it costs is the *claim*: a
+recorded `(view, decision)` pair is not reproducible from the recorded view alone, so
+replay-equivalence — the property the simulator is being built on — does not hold for the pivot
+cascade until #30 is closed. Treat "deterministic function of its view" as holding for every policy
+path except this one.
+
 The determinism audit's enforcement test (`DecisionPathPurityTest`, `swath-core`) scans the policy
 package plus the transitive closure of every field-reachable `io.varve.swath.*` type for a held
 `RunMetrics`/`TraceSink` reference or `java.util.concurrent.atomic` state, and the same closure's
-source for a direct ambient clock/randomness call — so a class shaped like any of the three
+source for a direct ambient clock/randomness call — so a class shaped like any of the three CLOSED
 exceptions above (in the policy package or reached through a view/decision/event field, regardless
 of which package it lives in) fails a mechanical check rather than waiting for the next review pass.
+**Issue #30's shape is outside that audit**: mutable primitive arrays and volatile fields are legal
+under all three checks, so a view field holding shared mutable state passes cleanly. Closing #30
+should extend the test to reject view-reachable mutable array state, so the next instance is caught
+mechanically rather than by review.
 
 **Port defined, not wired: `ConcurrencyPolicy`.** Unlike the five `engine.policy` types listed in the
 table row above, `ConcurrencyPolicy` (algorithms.md §5) has no engine implementation behind it —

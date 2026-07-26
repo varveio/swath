@@ -509,7 +509,14 @@ not reducible to the call totals alone; their single-threaded shape is pinned by
 goldens instead, which is a check on VALUES, not on conservation under a race.
 
 **The determinism audit's enforcement (added 2026-07-26, issue #19's closing slice).** A policy is a
-deterministic function of its view: no ambient clock, no ambient randomness, and — the clause the
+deterministic function of its view — **with one open, disclosed exception: issue #30**, where
+`StealAttemptView.alphabetDigest` carries the victim's live `AlphabetDigest` rather than a snapshot
+of it, so a concurrent page commit can change what the pivot cascade reads mid-decision. That
+exception is outside what the audit below enforces (mutable primitive arrays are legal under all
+three of its checks), and it is the reason the snapshot rule stated earlier in this section does not
+yet hold for the thief's pivot path. It is a faithfully-preserved pre-extraction behavior, not a
+regression, and no I1–I12 invariant depends on it; what it blocks is replay equivalence. Everything
+below describes what IS mechanically enforced: no ambient clock, no ambient randomness, and — the clause the
 audit's original grep-shaped brief did not have, and so missed two of the three leaks the campaign
 actually found (issues #19, #22) — no ambient *collaborator* state either. Concretely, no type
 reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
@@ -533,10 +540,13 @@ exception legal without special-casing it in the test.
 `./gradlew spotlessCheck` — run across **every** module, not just `:swath-core` — belongs in each
 extraction slice's own verification, not only in CI. An unused import (`AlphabetDigest`, landed with
 issue #20's fix, six commits before the seed-planner slice) sat failing `spotlessCheck` through six
-independent review rounds: the tiered test budget's ban on `./gradlew build` (a deliberate speed
-tradeoff) was never paired with a substitute format/lint gate, so no slice this session ran one
-locally. `spotlessCheck` runs in single-digit seconds branch-wide — there is no speed argument for
-leaving it out.
+independent review rounds. `./gradlew build` remains the integration gate (AGENTS.md); what this
+session did was scope *implementation sub-agents* to targeted tests for speed, deferring the full
+build to the slice boundary — and that narrower loop was never paired with a substitute format/lint
+gate, so no slice ran one locally. The rule is therefore additive, not a substitution:
+`spotlessCheck` belongs in each slice's own verification **as well as** the integration gate, never
+instead of it. It runs in single-digit seconds branch-wide — there is no speed argument for leaving
+it out.
 
 ---
 

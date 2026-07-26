@@ -109,6 +109,22 @@ import org.junit.jupiter.api.Test;
  * pass found and this test now closes (a {@code ThreadLocal}-typed field; a lambda-captured {@code
  * RunMetrics}) are the two static-analysis gaps that WERE closable; this one is not.
  *
+ * <p><b>Gap 2 — SHARED MUTABLE STATE REACHED THROUGH A VIEW IS LEGAL HERE (issue #30, OPEN).</b> All
+ * three checks target a specific shape: a held collaborator reference, mutated {@code
+ * java.util.concurrent.atomic} state, a direct ambient clock/randomness call. <b>Mutable primitive
+ * arrays and volatile fields are legal under every one of them</b>, so a view field holding state
+ * another thread mutates passes this test cleanly. That is not hypothetical: {@code
+ * StealAttemptView.alphabetDigest} carries the victim's LIVE {@link
+ * io.varve.swath.engine.AlphabetDigest}, whose {@code long[][] mask}/{@code boolean[] clean} are
+ * final references with mutable contents that {@code WorkerState#recordPage} writes on every page
+ * commit — so the pivot cascade can read different digest state than the view was constructed with,
+ * and a recorded {@code (view, decision)} pair is not reproducible from the recorded view alone.
+ * This is the fourth member of the #19/#20/#22 family and the only one that directly breaks replay
+ * equivalence. It is a faithfully-preserved pre-extraction behavior, not a regression — production
+ * behavior and every I1–I12 invariant are unaffected. <b>Closing #30 should extend this test to
+ * reject view-reachable mutable array state</b>, which converts this gap from disclosed to enforced;
+ * until then, do not read a green run here as "every policy decision is a function of its view."
+ *
  * <p><b>Verified against three historical/independently-found leaks</b> (see this test's own commit
  * messages): temporarily reintroducing #19's {@code RunMetrics} field on {@code AlphabetDigest} and
  * #22's {@code ConfettiFeedbackGate} field on {@code OwnerSplitGovernor} each independently turned
