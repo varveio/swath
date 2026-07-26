@@ -7,12 +7,19 @@ package io.varve.swath.engine;
 
 import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.SplitSpec;
+import io.varve.swath.engine.policy.Carve;
+import io.varve.swath.engine.policy.Engagement;
+import io.varve.swath.engine.policy.OwnerSplitDecision;
+import io.varve.swath.engine.policy.OwnerSplitGovernor;
+import io.varve.swath.engine.policy.OwnerSplitPolicy;
+import io.varve.swath.engine.policy.OwnerSplitSkipReason;
+import io.varve.swath.engine.policy.OwnerSplitView;
+import io.varve.swath.engine.policy.Skip;
 import io.varve.swath.error.SwathException;
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.runtime.RunContext;
-import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntSupplier;
@@ -21,7 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The owner-side proactive self-split policy. A draining worker, at page-commit and holding its own
+ * The owner-side proactive self-split executor. A draining worker, at page-commit and holding its own
  * {@link WorkerState#lock()}, carves its OWN far-ahead tail into a new child node instead of waiting
  * for a reactive {@link Thief} probe near its moving cursor. Because the owner picks the pivot
  * {@code m > cursorTo} under its lock, the split CAS holds by construction, so a split that a thief
@@ -32,13 +39,20 @@ import org.slf4j.LoggerFactory;
  * untouched; only <i>who initiates</i> a split changes, and it adds zero API calls (INT-8). See
  * {@code docs/internals/walkthroughs.md} §4 and {@code docs/internals/algorithms.md} §3.3, §4.3.
  *
- * <p><b>Tagged-child lifecycle.</b> When the confetti-feedback loop is engaged the policy owns a
+ * <p><b>The gate chain itself is {@link OwnerSplitGovernor}</b> (the {@code io.varve.swath.engine.policy}
+ * seam, swath-notes' 2026-07-26 simulator campaign): a pure {@code view -> Skip(reason) | Carve(pivot)}
+ * decision over one page-commit's {@link OwnerSplitView}, with no lock/clock/RPC of its own. This
+ * class is the executor: it translates {@link WorkerState} into the view, issues every RPC/mutation
+ * the decision implies (metrics engagements, {@code splitNode}, the child hand-off), and owns every
+ * invariant carrying live lock/CAS/quiescence state that the policy never sees.
+ *
+ * <p><b>Tagged-child lifecycle.</b> When the confetti-feedback loop is engaged this class owns a
  * run-scoped ledger of the children it has carved: {@link #maybeOwnerSelfSplit} <b>tags</b> a child
  * before publishing it, and {@link #onNodeCompleted} — invoked once whichever worker eventually
  * drains that child finishes — <b>classifies</b> the completed child's realized mass as confetti or
- * substantial and folds that ground truth into the {@link ConfettiFeedbackGate} the next carve
- * reads. See {@link #ownerSplitTaggedChildren} for the claim/drain/remove-before-tag ordering that
- * makes each tag consumed exactly once (even under stealing), and {@code
+ * substantial and folds that ground truth into the {@link ConfettiFeedbackGate} the governor's next
+ * carve reads. See {@link #ownerSplitTaggedChildren} for the claim/drain/remove-before-tag ordering
+ * that makes each tag consumed exactly once (even under stealing), and {@code
  * docs/internals/metrics-internals.md} §5 for the feedback rationale.
  *
  * <p>One instance per {@link WorkStealingScan} (run-scoped). The gate and the tagged-child set are
@@ -48,21 +62,6 @@ final class OwnerSelfSplit {
 
     private static final Logger log = LoggerFactory.getLogger(OwnerSelfSplit.class);
 
-    /**
-     * Owner-side proactive self-split. A draining worker carves its OWN range at
-     * page-commit only when its estimated remaining work exceeds this many pages (× {@code maxKeys}
-     * keys) — i.e. a large dense drain, not a range about to finish. Small so a genuine mega-day
-     * (~110 pages) qualifies while ordinary short ranges never do.
-     */
-    static final long SELF_SPLIT_MIN_REMAINING_PAGES = 4;
-    /**
-     * ...and at most once per this many committed non-empty pages, so a fast tail sheds <b>O(1)</b>
-     * self-splits per drain (each child recursively re-drains and self-splits again — an O(log) ramp)
-     * rather than shattering into a child per page ("confetti"). Paired with the progress-gate
-     * ({@link WorkerState#markStolen()}) which already bounds carves to ≤1 per emitted page.
-     */
-    static final long SELF_SPLIT_MIN_PAGES_BETWEEN = 32;
-
     private final long runId;
     private final int workerCount;
     private final int maxKeys;
@@ -71,9 +70,9 @@ final class OwnerSelfSplit {
     private final RunMetrics metrics;
     private final TraceSink trace;
     /**
-     * The live-node demand-gate count ({@code outstanding.get()}), read AT USE TIME inside the
-     * demand gate — never pre-evaluated at construction — so the gate observes the count at the
-     * instant the carve is considered.
+     * The live-node demand-gate count ({@code outstanding.get()}), read AT USE TIME inside {@link
+     * #maybeOwnerSelfSplit} — never pre-evaluated at construction — so the governor's demand gate
+     * observes the count at the instant the carve is considered.
      */
     private final LongSupplier outstanding;
     /**
@@ -96,7 +95,8 @@ final class OwnerSelfSplit {
      * because {@code childId} is already validated non-aborted and {@code enqueueChild} cannot fail.
      * The id is removed and classified exactly once per process run at {@link #onNodeCompleted}, by
      * whichever worker drains it, so double-classification is impossible even under stealing. Only
-     * populated when {@code toggles.confettiFeedback()} is on.
+     * populated when {@code toggles.confettiFeedback()} is on. Shared with {@link #governor}, which
+     * only ever reads it via {@link ConfettiFeedbackGate#decide()} — see that class's javadoc.
      *
      * <p><b>Process-local, never durable.</b> Like {@link WorkerState#hasSplit()} and the gate's own
      * counters, this set lives only in heap and is never checkpointed. On resume a child tagged
@@ -106,6 +106,8 @@ final class OwnerSelfSplit {
      */
     private final ConfettiFeedbackGate confettiFeedback = new ConfettiFeedbackGate();
     private final Set<Long> ownerSplitTaggedChildren = ConcurrentHashMap.newKeySet();
+    /** The gate chain itself (algorithms.md §3.3) — see this class's javadoc for the executor/policy split. */
+    private final OwnerSplitPolicy governor;
 
     OwnerSelfSplit(long runId, int workerCount, int maxKeys, CheckpointStore store, EngineToggles toggles,
                    RunMetrics metrics, TraceSink trace, LongSupplier outstanding, IntSupplier effectiveT,
@@ -120,6 +122,7 @@ final class OwnerSelfSplit {
         this.outstanding = outstanding;
         this.effectiveT = effectiveT;
         this.enqueueChild = enqueueChild;
+        this.governor = new OwnerSplitGovernor(toggles, workerCount, maxKeys, confettiFeedback);
     }
 
     /**
@@ -150,123 +153,28 @@ final class OwnerSelfSplit {
     OwnerSplitTrace maybeOwnerSelfSplit(long nodeId, WorkerState ws, byte[] cursorTo, long[] selfSplit)
             throws SwathException, InterruptedException {
         byte[] H = ws.hiSupplier().get();
-        if (H == null) {
-            return null;   // open frontier keeps its extrapolation path — never self-split the frontier
-        }
-        long committed = ++selfSplit[0];
-        // Plain code-point estRemaining (NOT the rank-space variant): an owner-split is zero-probe
-        // (interpolate is pure math, no LIST), so under-firing here trades cheap owner-splits for
-        // costlier thief structure-probes on the un-split tail — strictly worse. The rank-space
-        // deflation belongs only to the pivot synthesis below (interpolate(..., alphabetDigest())),
-        // which needs no estRemaining change to land on a populated value.
-        double est = StealMath.estRemaining(cursorTo, ws.lo(), H, ws.keysEmitted());
-        if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
-            return null;   // remaining work too small to be worth a proactive carve
-        }
-        if (committed - selfSplit[1] < SELF_SPLIT_MIN_PAGES_BETWEEN) {
-            return null;   // rate-limit: O(1) self-splits per drain, not one per page
-        }
-        // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live
-        // nodes to keep every worker busy, so an extra child buys ZERO parallelism and only costs a
-        // wasted page (its bounded final page is fetched full, then trimmed per key). Suppress the
-        // carve once live nodes reach T; below T (during ramp) the gate stays open so the engine
-        // still ramps to T busy workers. {@code outstanding} is the existing lock-free AtomicLong —
-        // one relaxed read, no new shared state. {@code workerCount > 1} guards a T=1 run: with no
-        // thief at all, "buys zero parallelism" is moot, and gating would only shrink the durable
-        // checkpoint granularity for the lone worker without ever saving an S3 call — it drains the
-        // un-split range at the identical cost either way. See docs/internals/metrics-internals.md §5.
-        if (workerCount > 1 && outstanding.getAsLong() >= (long) workerCount) {
-            metrics.recordStealReason("OWNER_SPLIT", "demand_gated");
-            ws.recordDemandGated();   // per-range tally for the slow-range dump
-            // Record T vs Tmax at the instant the gate fired, so a shrunken-T gate closure is
-            // readable from one artifact instead of correlating the swath.workers.active gauge's
-            // history against this event's log timestamp.
-            metrics.recordDemandGatedConcurrency(effectiveT.getAsInt(), workerCount);
+        // selfSplit[0] (committed non-empty pages so far) only ever advances when the range is
+        // bounded — an open frontier has no rate-limit window to track (OwnerSplitSkipReason#OPEN_FRONTIER
+        // is structural, not a suppression, so it never consumes a page count). Reading the
+        // would-be-incremented value here, rather than incrementing unconditionally, preserves that
+        // exactly while still letting the governor's decide() be the sole gate-chain decision point.
+        long committed = (H == null) ? selfSplit[0] : ++selfSplit[0];
+        OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
+                selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
+                ws.alphabetDigest());
+        OwnerSplitDecision decision = governor.decide(view);
+        applyEngagements(decision.engagements());
+        if (decision instanceof Skip skip) {
+            if (skip.reason() == OwnerSplitSkipReason.DEMAND_GATED) {
+                ws.recordDemandGated();   // per-range tally for the slow-range dump
+                // Record T vs Tmax at the instant the gate fired, so a shrunken-T gate closure is
+                // readable from one artifact instead of correlating the swath.workers.active gauge's
+                // history against this event's log timestamp.
+                metrics.recordDemandGatedConcurrency(effectiveT.getAsInt(), workerCount);
+            }
             return null;
         }
-        // Far-ahead pivot fraction from the worker's own zero-cost density (>= 0.5 ⇒ >= byteMidpoint).
-        // The child owns the far tail — so floor that tail above two pages: even below the demand gate an
-        // owner-split must never fission into a ~1-page "confetti" child whose bounded final page is
-        // fetched full then trimmed per key. The floor measures the tail in OBSERVED-density terms —
-        // the plain span share (1-f)*est over-states a thinning tail on skewed keyspaces (see
-        // StealMath.childTailBelowObservedMassFloor's math).
-        double f = toggles.farAheadFraction(ws);
-        double densityRatio = toggles.observedDensityRatio(ws);
-        if (StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys)) {
-            metrics.recordStealReason("OWNER_SPLIT", "floor_reflected_blocked");
-            return null;   // child tail below two pages of observed mass — not worth a proactive carve
-        }
-        // CONFETTI FEEDBACK GATE. The gates above reason from upstream estimates (est/densityRatio);
-        // on a keyspace whose tail thins out over most of the observed span those estimates still
-        // pass a carve whose REALIZED mass turns out confetti-sized. Once the run has accumulated
-        // enough tagged-child evidence (MIN_SAMPLE), a high observed confetti rate suppresses further
-        // carving directly from that ground truth — with a periodic probe so a keyspace that later
-        // turns genuinely dense recovers on its own. See {@link ConfettiFeedbackGate} and
-        // docs/internals/metrics-internals.md §5.
-        if (toggles.confettiFeedback()) {
-            ConfettiFeedbackGate.Decision decision = confettiFeedback.decide();
-            if (decision == ConfettiFeedbackGate.Decision.SUPPRESSED) {
-                metrics.recordStealReason("OWNER_SPLIT", "confetti_suppressed");
-                return null;
-            }
-            if (decision == ConfettiFeedbackGate.Decision.PROBE) {
-                metrics.recordStealReason("OWNER_SPLIT", "confetti_probe");
-            }
-        }
-        // Synthesize the pivot at fraction f in the observed-alphabet rank space so it lands on a
-        // populated value.
-        byte[] m = toggles.interpolate(cursorTo, H, f, ws.alphabetDigest());
-        if (m == null
-                || KeyBytes.compareUnsigned(cursorTo, m) >= 0
-                || KeyBytes.compareUnsigned(m, H) > 0) {
-            return null;   // unsplittable, or pivot not strictly in (cursorTo, H] — skip this page
-        }
-        // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a
-        // populated value (differs from the plain code-point interpolate at the same fraction)? Recorded
-        // about the INTERPOLATED pivot (the alphabet chooser's own output), before the reflection clamp below.
-        byte[] plainPivot = StealMath.interpolate(cursorTo, H, f);
-        metrics.recordStealReason("ALPHABET",
-                !Arrays.equals(m, plainPivot) ? "alphabet_chosen" : "alphabet_fallback");
-        // Owner-split reflection clamp (gated by `reflect`). On a skewed keyspace the
-        // f-interpolated pivot can overshoot the observed mass into vacuum (a near-empty child); the
-        // density-reflected pivot m_r = extrapolate(lo, cursor, H) marks where the drained mass reflects
-        // to. Clamp the pivot DOWN to m_r ONLY when m_r is strictly below the interpolated pivot (the
-        // interpolate overshot) AND the clamped child tail (m_r, H] still clears the observed-mass
-        // floor — so the split lands inside the mass instead of carving vacuum. On a uniform keyspace
-        // m_r >= m (reflection reaches at least as far as f), so the clamp never engages (f's skew is
-        // load-bearing there — don't clamp blind). Tiling is preserved: extrapolate guarantees
-        // cursor <_u m_r <_u H, and the CAS below re-validates under the lock.
-        if (toggles.reflect()) {
-            byte[] mReflect = StealMath.extrapolate(ws.lo(), cursorTo, H);
-            if (StealMath.shouldClampToReflected(cursorTo, m, mReflect, ws.lo(), H, est, densityRatio, maxKeys)) {
-                m = mReflect;
-                metrics.recordStealReason("OWNER_SPLIT", "pivot_reflect_clamped");
-            }
-        }
-        // REFLECT-LIFT. When the FINAL post-clamp pivot would leave the owner a sub-one-page kept
-        // share (measured in est's OWN [ws.lo(), H] frame — fKeptLo below, never a re-scoped span),
-        // LIFT m to the density-reflected pivot instead of carving at cursorTo's degenerate
-        // successor: the owner then keeps ~one page of REAL mass (its final page partial-trims
-        // instead of coming back empty) and the child still gets the far tail. Lift only UP (the
-        // clamp above owns the down direction) and only if the lifted child tail still clears the
-        // observed-mass floor; any condition failing falls through to the unchanged carve, with the
-        // confetti feedback gate above as the realized-mass backstop. (Why an owner-kept MASS floor
-        // is NOT reintroduced here, and why relay carves are never suppressed outright:
-        // docs/internals/metrics-internals.md §5.)
-        //
-        // Gate on BOTH toggles: the lift is a density-reflection application — the SAME
-        // StealMath.extrapolate the thief's reflection and the clamp above use, into the SAME
-        // reflected-pivot family — so `reflect=off` disables the thief's reflection, this method's
-        // clamp, and the lift together (full reflection ablation, matching docs/usage.md's
-        // "reflect=off restores exact pre-reflection placement"); `reflect_lift=off` alone disables
-        // only this lift.
-        if (toggles.reflect() && toggles.reflectLift()) {
-            byte[] mReflect = StealMath.extrapolate(ws.lo(), cursorTo, H);
-            if (StealMath.shouldLiftToReflected(cursorTo, m, mReflect, ws.lo(), H, est, densityRatio, maxKeys)) {
-                m = mReflect;
-                metrics.recordStealReason("OWNER_SPLIT", "pivot_reflect_lifted");
-            }
-        }
+        byte[] m = ((Carve) decision).pivot();
         // Publish via the UNCHANGED thief split transaction: volatile narrow, then the CAS-guarded
         // durable split (synchronous, held across the lock exactly as the thief holds victim.lock).
         ws.narrowHi(m);
@@ -299,6 +207,13 @@ final class OwnerSelfSplit {
         // captured event so the caller emits it AFTER releasing ws.lock. null ⇒ trace disabled or
         // no split (correctness is unchanged either way — trace is a pure side-channel).
         return trace.enabled() ? new OwnerSplitTrace(nodeId, childId, m, H) : null;
+    }
+
+    /** Record every {@link Engagement} the governor returned — the executor's own metrics emission (§5). */
+    private void applyEngagements(List<Engagement> engagements) {
+        for (Engagement e : engagements) {
+            metrics.recordStealReason(e.category(), e.reason());
+        }
     }
 
     /**

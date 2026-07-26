@@ -334,6 +334,16 @@ public record EngineToggles(
     }
 
     /**
+     * The primitive form of {@link #observedDensityRatio(WorkerState)}: {@code rawObservedDensityRatio}
+     * is {@link WorkerState#observedDensityRatio()}'s already-computed value (pure, zero-I/O), so this
+     * overload needs no {@link WorkerState} — the one {@code io.varve.swath.engine.policy}'s owner-split
+     * governor calls, mirroring {@link #farAheadFraction(double)}.
+     */
+    public double observedDensityRatio(double rawObservedDensityRatio) {
+        return densityEwma ? rawObservedDensityRatio : Double.POSITIVE_INFINITY;
+    }
+
+    /**
      * {@link StealMath#interpolate(byte[], byte[], double, AlphabetDigest)} when {@code
      * alphabet_pivots} is on, else the plain code-point {@link StealMath#interpolate(byte[],
      * byte[], double)} overload (no digest consult) — the same substitution at both call sites

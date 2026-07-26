@@ -706,6 +706,17 @@ two buckets they were measured on**; per-mechanism status follows.
   (`NO_VICTIM` dominates the steal outcomes) and the dense tail runs near-serial
   (`in_flight` collapses toward one) — a real trade-off the kill-switch exists
   to back out.
+  **Implementation split (the policy seam, swath-notes' 2026-07-26 simulator
+  campaign):** the gate chain below it — the remaining-est floor, the page
+  rate-limit, the demand gate, the observed-mass child-tail floor, the confetti
+  feedback gate, then pivot synthesis, the reflection clamp, and the reflect-lift —
+  is `io.varve.swath.engine.policy.OwnerSplitGovernor`, a source-agnostic
+  `OwnerSplitPolicy` with no lock/clock/RPC of its own: one page-commit's view in,
+  `Skip(reason)` or `Carve(pivot)` out. `io.varve.swath.engine.OwnerSelfSplit` is the
+  executor: it translates `WorkerState` into that view, then runs the durable
+  split CAS (`splitTxn`) and the child hand-off under the owner's own lock — the
+  same primitives §4.3 describes. See `architecture.md`'s component map for the
+  package split.
   **Demand-gated:** on a *saturated* bucket the worklist already has enough live
   nodes to keep every worker fed, so an owner self-split adds no parallelism and
   only over-fetches its child's terminal page. It therefore skips the carve when

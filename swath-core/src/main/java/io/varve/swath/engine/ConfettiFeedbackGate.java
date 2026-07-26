@@ -43,11 +43,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * not yet tuned by a sweep. One instance per {@link WorkStealingScan} (run-scoped); every
  * method is safe for concurrent callers (workers race to both complete tagged children and
  * attempt owner-splits).
+ *
+ * <p>Public so {@code io.varve.swath.engine.policy}'s owner-split governor can hold this same
+ * run-scoped instance as a collaborator and consult {@link #decide()} as part of its own pure
+ * per-call decision (a deterministic read of this gate's already-recorded atomics, no I/O). The
+ * tagged-child lifecycle — {@link #recordCompletion}, and {@link OwnerSelfSplit}'s
+ * claim/drain/remove-before-tag bookkeeping that feeds it — stays executor-owned: classification
+ * happens at node completion, an event entirely outside the per-carve decision this gate is
+ * consulted from, tied to real node ids and {@link WorkerState} the policy package never sees
+ * (seam-notes.md's source-agnostic rule).
  */
-final class ConfettiFeedbackGate {
+public final class ConfettiFeedbackGate {
 
     /** Warmup floor: below this many tagged-child completions there is no basis to suppress. */
-    static final long MIN_SAMPLE = 8;
+    public static final long MIN_SAMPLE = 8;
     /** Suppress once the observed confetti rate is STRICTLY above this fraction. */
     static final double SUPPRESS_THRESHOLD = 0.5;
     /** Let every K-th would-be-suppressed carve through anyway, to keep the feedback alive. */
@@ -58,7 +67,7 @@ final class ConfettiFeedbackGate {
     private final AtomicLong probeCounter = new AtomicLong();
 
     /** The carve-time decision {@link #decide()} returns. */
-    enum Decision {
+    public enum Decision {
         /** Carve normally — below warmup, or the observed rate is at/under the threshold. */
         CARVE,
         /** The rate is over threshold, but this is the {@code PROBE_K}-th attempt — let it through. */
@@ -71,9 +80,10 @@ final class ConfettiFeedbackGate {
      * Fold one tagged owner-split child's completion classification (ground truth) into the
      * run-level rate the NEXT {@link #decide()} call reads. Called at most once per tagged
      * child (the caller removes it from the tagged set before calling, so double-completion is
-     * impossible).
+     * impossible). Public so a test outside {@code io.varve.swath.engine} can warm this
+     * collaborator up directly (e.g. the owner-split governor's own table-driven tests).
      */
-    void recordCompletion(boolean confetti) {
+    public void recordCompletion(boolean confetti) {
         taggedTotal.incrementAndGet();
         if (confetti) {
             taggedConfetti.incrementAndGet();
@@ -81,7 +91,7 @@ final class ConfettiFeedbackGate {
     }
 
     /** The carve-time decision, evaluated fresh against the current observed rate. */
-    Decision decide() {
+    public Decision decide() {
         long total = taggedTotal.get();
         if (total < MIN_SAMPLE) {
             return Decision.CARVE;   // warmup: not enough realized-mass evidence yet

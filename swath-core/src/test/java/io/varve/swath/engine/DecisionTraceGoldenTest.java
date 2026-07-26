@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.NodeSpec;
+import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.model.KeyBytes;
@@ -467,7 +468,7 @@ final class DecisionTraceGoldenTest {
         RunMetrics m4 = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink t4 = new RecordingTraceSink();
         WorkerState gated = denseVictim(4, "d/00", "d/05");
-        long[] selfSplit4 = {0, -OwnerSelfSplit.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        long[] selfSplit4 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, ownerSelfSplit(m4, t4, 4, 100, () -> 4L, () -> 4),
                 gated, b("d/002500"), selfSplit4, m4, t4);
 
@@ -476,7 +477,7 @@ final class DecisionTraceGoldenTest {
         RunMetrics m5 = new RunMetrics(new SimpleMeterRegistry());
         RecordingTraceSink t5 = new RecordingTraceSink();
         WorkerState published = denseVictim(5, "d/00", "d/05");
-        long[] selfSplit5 = {0, -OwnerSelfSplit.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        long[] selfSplit5 = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, ownerSelfSplit(m5, t5, 1, 100, () -> 0L, () -> 1),
                 published, b("d/002500"), selfSplit5, m5, t5);
 
@@ -800,7 +801,7 @@ final class DecisionTraceGoldenTest {
         // This is the FIRST carve attempt on this victim: start selfSplit[1] clear of the
         // rate-limit window so the attempt can reach the remaining-work / demand / pivot gates
         // instead of tripping the page-spacing rate limit unconditionally on every fixture.
-        long[] selfSplit = {0, -OwnerSelfSplit.SELF_SPLIT_MIN_PAGES_BETWEEN};
+        long[] selfSplit = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         recordOwnerSplitAttempt(fx, ownerSelfSplit(metrics, trace, workerCount, maxKeys, () -> outstanding,
                 () -> workerCount), ws, cursorTo, selfSplit, metrics, trace);
     }

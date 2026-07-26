@@ -289,10 +289,12 @@ public final class StealMath {
      * splits are unaffected; on a thinning tail ({@code densityRatio < f}) the reachable tail
      * collapses to ~0 and the confetti carve is blocked. See metrics §5 for the derivation.
      *
-     * <p>Package-private static (pure arithmetic, no engine state) so a unit test can exercise the
-     * exact boundary without driving the whole engine to a precise input combination.
+     * <p>Public static (pure arithmetic, no engine state): a unit test can exercise the exact
+     * boundary without driving the whole engine to a precise input combination, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly (source-agnostic
+     * — no engine type crosses the package boundary).
      */
-    static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys) {
+    public static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys) {
         double reach = Math.min(1.0, densityRatio);       // thinning (ratio < 1) shrinks the reachable tail
         double realizedChildMass = est * Math.max(0.0, reach - f);
         return realizedChildMass <= 2.0 * (double) maxKeys;
@@ -305,11 +307,12 @@ public final class StealMath {
      * overshot the observed mass — AND (b) the clamped child tail {@code (mReflect, H]} still clears the
      * observed-mass {@link #childTailBelowObservedMassFloor floor}. On a uniform keyspace the
      * reflected pivot reaches at least as far as the far-ahead fraction ({@code mReflect >= m}), so the
-     * clamp never engages (f's skew is load-bearing there — do not clamp blind). Package-private static
-     * (pure arithmetic + byte compares, no engine state) so the exact decision is unit-testable without
-     * driving the whole engine to a precise pivot/density combination.
+     * clamp never engages (f's skew is load-bearing there — do not clamp blind). Public static
+     * (pure arithmetic + byte compares, no engine state): the exact decision is unit-testable without
+     * driving the whole engine to a precise pivot/density combination, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly.
      */
-    static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+    public static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                           double est, double densityRatio, int maxKeys) {
         if (mReflect == null
                 || KeyBytes.compareUnsigned(cursor, mReflect) >= 0
@@ -340,10 +343,11 @@ public final class StealMath {
      *       fission the child into confetti.</li>
      * </ol>
      * Any condition failing returns {@code false} and the caller publishes the unchanged carve at
-     * {@code m}. Package-private static (pure arithmetic + byte compares, no engine state) so the
-     * exact boundary is unit-testable without driving the whole engine to a degenerate-pivot shape.
+     * {@code m}. Public static (pure arithmetic + byte compares, no engine state): the exact
+     * boundary is unit-testable without driving the whole engine to a degenerate-pivot shape, and
+     * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly.
      */
-    static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+    public static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                          double est, double densityRatio, int maxKeys) {
         double remSpan = spanIn(cursorTo, H, lo, H);
         double fKeptLo = spanIn(cursorTo, m, lo, H) / Math.max(1e-300, remSpan);
