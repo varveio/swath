@@ -137,7 +137,11 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         if (m == null
                 || KeyBytes.compareUnsigned(cursorTo, m) >= 0
                 || KeyBytes.compareUnsigned(m, H) > 0) {
-            // Unsplittable, or pivot not strictly in (cursorTo, H] — skip this page.
+            // Unsplittable, or pivot not strictly in (cursorTo, H] — skip this page. Recurs (not a
+            // one-off): estRemaining's span heuristic can diverge from true byte-adjacency on a deep
+            // shared prefix, the same measurement/reality gap algorithms.md §3.2 documents for the
+            // thief side — see OwnerSplitSkipReason#UNSPLITTABLE_PIVOT's javadoc.
+            engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code()));
             return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements);
         }
         // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a

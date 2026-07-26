@@ -46,10 +46,24 @@ public enum OwnerSplitSkipReason {
      */
     CONFETTI_SUPPRESSED("confetti_suppressed"),
     /**
-     * The synthesized pivot was {@code null}, or not strictly inside {@code (cursorTo, hi]} —
-     * unsplittable this page, or the interpolation didn't land in range. Uncounted today (moved
-     * verbatim from {@code OwnerSelfSplit}, not a gap this extraction introduces or resolves — see
-     * this slice's report for the open question of whether it deserves one).
+     * The synthesized pivot was {@code null}, or not strictly inside {@code (cursorTo, hi]} — no
+     * safe key exists strictly between {@code cursorTo} and {@code hi} THIS page, or the
+     * interpolation didn't land in range. RECURS, unlike a one-off edge case: {@code
+     * StealMath.estRemaining}'s span heuristic can diverge from true byte-adjacency on a deep shared
+     * prefix — the same measurement/reality gap algorithms.md §3.2 documents on the thief side — so
+     * this path is reachable in production, not merely a defensive check. Recorded as {@code
+     * OWNER_SPLIT.unsplittable_pivot}.
+     *
+     * <p><b>Not the same durability as {@link UnsplittableReason#NO_PIVOT}</b> ({@code
+     * UNSPLITTABLE.no_pivot}): the thief's terminal outcome permanently caches the victim as
+     * unsplittable ({@code VictimMutation.Kind#SET_UNSPLITTABLE}) because a thief's lock-guarded
+     * snapshot is coherent — a `null` pivot there really is a dead range. This gate's `Skip` is
+     * transient and per-attempt: the owner took no coherent snapshot (owner-split is zero-probe by
+     * construction), nothing here is cached, and the SAME range is reconsidered at its next
+     * qualifying page-commit, with a fresh {@code cursorTo} that may no longer be adjacent to {@code
+     * hi}. Deliberately a distinct counter, not a reuse of {@code UNSPLITTABLE.no_pivot}, so post-hoc
+     * analysis never conflates a permanently-dead range with a range that just hasn't drained past
+     * this page's transient adjacency yet.
      */
     UNSPLITTABLE_PIVOT("unsplittable_pivot");
 

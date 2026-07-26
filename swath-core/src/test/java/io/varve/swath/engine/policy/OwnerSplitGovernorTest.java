@@ -272,7 +272,9 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
-        assertThat(decision.engagements()).as("warmup CARVE adds no engagement").isEmpty();
+        assertThat(decision.engagements())
+                .as("warmup CARVE itself adds no engagement; only the terminal unsplittable-pivot gate does")
+                .containsExactly(new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
     }
 
     @Test
@@ -321,6 +323,7 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT);
+        assertThat(decision.engagements()).containsExactly(new Engagement("OWNER_SPLIT", "unsplittable_pivot"));
     }
 
     @Test

@@ -526,6 +526,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `OWNER_SPLIT` | `self_published` | the owner's proactive self-split committed | |
 | `OWNER_SPLIT` | `confetti_suppressed` | a carve was suppressed by the realized-child-mass confetti feedback gate | |
 | `OWNER_SPLIT` | `confetti_probe` | a would-be-suppressed carve was let through as the periodic probe (every `PROBE_K`-th) | |
+| `OWNER_SPLIT` | `unsplittable_pivot` | the synthesized owner-split pivot was `null`, or not strictly inside `(cursorTo, hi]`, THIS page-commit — transient and per-attempt (the range is reconsidered at its next qualifying commit), NOT the thief's permanently-cached `UNSPLITTABLE.no_pivot` | |
 | `OWNER_SPLIT_CHILD` | `confetti` | a tagged owner-split child completed with realized mass `<= 2*maxKeys` AND never itself split (no owner self-split, no successful thief steal) | |
 | `OWNER_SPLIT_CHILD` | `substantial` | a tagged owner-split child completed with realized mass `> 2*maxKeys`, OR it did itself split (regardless of its own final tally) | |
 | `ALPHABET` | `alphabet_chosen` | the observed-alphabet chooser deflected the pivot from the plain code-point value | |
