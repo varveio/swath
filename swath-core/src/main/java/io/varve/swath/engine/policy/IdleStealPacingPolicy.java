@@ -42,7 +42,15 @@ public final class IdleStealPacingPolicy {
      */
     public IdleStealPacingState onNonProductive(IdleStealPacingState state, long nowNanos) {
         int shift = Math.min(state.consecutiveNonProductive(), 16);
-        long delay = Math.min(capNanos, baseNanos << shift);
+        // Saturate BEFORE capping. `baseNanos << shift` wraps to a NEGATIVE delay once
+        // `baseNanos` exceeds 2^(63-shift), and `Math.min(capNanos, negative)` then returns the
+        // negative — arming `nextAttemptNanos` in the PAST, so an attempt the ladder meant to pace
+        // becomes immediately eligible and the backoff silently stops backing off. The engine's own
+        // constants (5ms base, 50ms cap) are ~25 bits clear of that, so this is unreachable in
+        // production today; it is guarded because this type is public and a simulator supplies its
+        // own. Behaviour is bit-identical for every input that does not overflow.
+        long grown = shift < Long.numberOfLeadingZeros(baseNanos) ? baseNanos << shift : Long.MAX_VALUE;
+        long delay = Math.min(capNanos, grown);
         return new IdleStealPacingState(state.consecutiveNonProductive() + 1, nowNanos + delay);
     }
 

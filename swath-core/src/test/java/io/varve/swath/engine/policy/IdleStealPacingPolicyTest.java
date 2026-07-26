@@ -28,6 +28,42 @@ class IdleStealPacingPolicyTest {
 
     private final IdleStealPacingPolicy policy = new IdleStealPacingPolicy(BASE_NANOS, CAP_NANOS);
 
+    /**
+     * The exponential ladder saturates instead of wrapping. With a {@code baseNanos} large enough
+     * that {@code baseNanos << shift} overflows a signed long, the pre-guard arithmetic produced a
+     * NEGATIVE delay, which {@code Math.min(capNanos, ...)} then preferred over the cap — arming
+     * the next attempt in the PAST, so a state the ladder meant to pace came back {@code ELIGIBLE}
+     * immediately and the fleet-wide backoff silently stopped backing off. The engine's own 5ms/50ms
+     * constants are far from this boundary; the policy is public and a simulator supplies its own,
+     * so the guard is pinned here rather than left to the caller.
+     */
+    @Test
+    void aBaseThatWouldOverflowTheShiftSaturatesToTheCapRatherThanArmingInThePast() {
+        long hugeBase = Long.MAX_VALUE / 4;   // overflows at any shift >= 2
+        IdleStealPacingPolicy overflowing = new IdleStealPacingPolicy(hugeBase, CAP_NANOS);
+        IdleStealPacingState state = new IdleStealPacingState(8, 0L);
+
+        IdleStealPacingState next = overflowing.onNonProductive(state, 1_000L);
+
+        assertThat(next.nextAttemptNanos())
+                .as("delay must saturate to the cap, never wrap negative")
+                .isEqualTo(1_000L + CAP_NANOS);
+        assertThat(overflowing.decide(next, 1_000L))
+                .as("a just-armed state must still be PACED, not immediately eligible")
+                .isEqualTo(IdleStealPacingDecision.PACED);
+    }
+
+    /** The saturation guard must not perturb the ordinary ladder: every in-range shift is unchanged. */
+    @Test
+    void saturationGuardLeavesEveryNonOverflowingRungBitIdentical() {
+        for (int consecutive = 0; consecutive <= 20; consecutive++) {
+            long expected = Math.min(CAP_NANOS, BASE_NANOS << Math.min(consecutive, 16));
+            assertThat(policy.onNonProductive(new IdleStealPacingState(consecutive, 0L), 7L).nextAttemptNanos())
+                    .as("rung %d", consecutive)
+                    .isEqualTo(7L + expected);
+        }
+    }
+
     /** A fresh (never-paced) state is always eligible, whatever the clock reads. */
     @Test
     void freshStateIsAlwaysEligible() {
