@@ -7,6 +7,7 @@ package io.varve.swath.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.concurrent.CyclicBarrier;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -79,6 +80,88 @@ final class ConfettiFeedbackGateTest {
         assertThat(snap.taggedTotal()).isEqualTo(1);
         assertThat(snap.taggedConfetti()).isEqualTo(1);
         assertThat(snap.probeSeq()).isEqualTo(5);
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Concurrency (issue #22's disclosed relaxation): snapshot-then-consumeProbeSlot is two
+    // separate calls, so two racing workers can share a pre-increment snapshot -- but the counter
+    // itself, a plain AtomicLong incrementAndGet, never loses an increment. Deterministic in what
+    // they assert (final conservation, and a barrier-FORCED shared read) -- never a scheduler-luck
+    // interleaving assertion (issue #18).
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    void concurrentConsumeProbeSlotNeverLosesAnIncrementUnderAForcedRace() throws Exception {
+        // One barrier forces EVERY racer's snapshot() read to happen-before ANY racer's
+        // consumeProbeSlot() call: the barrier only releases once all `racers` threads have
+        // reached it, i.e. once every read has already completed -- so this is not hoping for a
+        // lucky interleaving, it is structurally guaranteed by CyclicBarrier's own happens-before
+        // semantics that all reads observe probeSeq == 0.
+        int racers = 8;
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        CyclicBarrier allReadsDone = new CyclicBarrier(racers);
+        long[] observedBeforeIncrement = new long[racers];
+        Thread[] threads = new Thread[racers];
+        for (int i = 0; i < racers; i++) {
+            int idx = i;
+            threads[i] = new Thread(() -> {
+                observedBeforeIncrement[idx] = gate.snapshot().probeSeq();
+                await(allReadsDone);
+                gate.consumeProbeSlot();
+            });
+        }
+        for (Thread t : threads) {
+            t.start();
+        }
+        for (Thread t : threads) {
+            t.join();
+        }
+
+        assertThat(observedBeforeIncrement)
+                .as("every racer's read happened before any racer's increment (barrier-forced), so "
+                        + "all %d racers observed the SAME pre-increment probeSeq -- the exact shared-slot "
+                        + "drift this gate's javadoc discloses, reproduced on demand rather than hoped for",
+                        racers)
+                .containsOnly(0L);
+        assertThat(gate.snapshot().probeSeq())
+                .as("despite every racer sharing the same read, all %d increments are still counted -- "
+                        + "incrementAndGet never loses one", racers)
+                .isEqualTo(racers);
+    }
+
+    @Test
+    void concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad() throws Exception {
+        // No forced ordering here -- plain concurrent stress, asserting only the final conserved
+        // total (never an interleaving-dependent check).
+        int threadCount = 16;
+        int callsPerThread = 200;
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        Thread[] threads = new Thread[threadCount];
+        for (int i = 0; i < threadCount; i++) {
+            threads[i] = new Thread(() -> {
+                for (int c = 0; c < callsPerThread; c++) {
+                    gate.consumeProbeSlot();
+                }
+            });
+        }
+        for (Thread t : threads) {
+            t.start();
+        }
+        for (Thread t : threads) {
+            t.join();
+        }
+
+        assertThat(gate.snapshot().probeSeq())
+                .as("every consumeProbeSlot() call across every thread is counted exactly once")
+                .isEqualTo((long) threadCount * callsPerThread);
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await();
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
     }
 
     // -------------------------------------------------------------------------------------------

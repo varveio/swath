@@ -109,6 +109,22 @@ public final class ConfettiFeedbackGate {
      * fix for issue #22) for why this relaxation is acceptable: nothing in I1-I12 touches probe
      * cadence, and this class's own javadoc already called the mechanism "a cheap round-robin
      * counter, not gated on anything else".
+     *
+     * <p><b>What is and isn't tested for this race.</b> {@code ConfettiFeedbackGateTest}'s
+     * {@code concurrentConsumeProbeSlotNeverLosesAnIncrementUnderAForcedRace} test proves both
+     * halves of the claim above directly against this class, under a barrier-forced worst case (all
+     * racers' reads provably happen-before any of their increments): the racers' {@link #snapshot()}
+     * reads DO share the same pre-increment {@code probeSeq} value (the drift this javadoc
+     * describes, reproduced on demand rather than hoped for), and {@link #probeSeq} still ends up
+     * exactly at the number of {@link #consumeProbeSlot()} calls made — no increment lost. No
+     * engine-level test exercises this race: every {@code run(...)} in {@code
+     * ConfettiFeedbackContractTest} uses {@code workers=1} (structurally single-threaded, so it
+     * cannot race a shared {@code probeSeq}), and {@code ConfettiFeedbackWiringTest} (the one
+     * {@code workers=4} confetti scenario) drives a dense/uniform keyspace that, by its own
+     * assertion, never crosses {@code SUPPRESS_THRESHOLD} — so it never reaches this branch under
+     * concurrency either. (An earlier version of this fix's commit message claimed {@code
+     * ConfettiFeedbackContractTest} covered this race; it does not, for the {@code workers=1} reason
+     * above — corrected here since that commit's history cannot be amended.)
      */
     public void consumeProbeSlot() {
         probeSeq.incrementAndGet();
