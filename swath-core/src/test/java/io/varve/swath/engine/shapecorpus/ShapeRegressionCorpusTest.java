@@ -240,29 +240,26 @@ final class ShapeRegressionCorpusTest {
 
     /**
      * Rationale: a dense flat root (no {@code CommonPrefixes}) must radix-band at seed time
-     * ({@code dense_root_radix_banded} present in {@code decisions[]}) and — at zero latency, no
-     * timing dependency needed for this shape — must not collapse to a couple of ranges (peak
-     * in-flight reaches a healthy fraction of {@code W}).
+     * ({@code dense_root_radix_banded} present in {@code decisions[]}) and must not collapse to a
+     * couple of ranges (peak in-flight reaches a healthy fraction of {@code W}).
      *
-     * <p><b>CI-core constraint on the {@code peak_in_flight} floor.</b> At zero injected page
-     * latency, a "page fetch" is pure CPU work (an in-memory scan/compare, no {@code Thread.sleep}),
-     * so the number of REALLY-overlapping fetches {@code peak_in_flight} can observe is hard-capped by
-     * the number of physical cores actually scheduling worker threads at once — unlike the
-     * latency-injected corpus tests (e.g. {@link #healthyNestedFanoutControl_seedBandHighAvgInFlightCheapApi})
-     * where sleeping threads don't consume a core and so aren't core-bound. A fixed {@code workers / 4}
-     * floor (4 at {@code W=16}) is unreachable on a 2-core runner, even though the seed-time structural
-     * signal above (radix bands fired, {@code specs.size() > 8}) is unaffected by core count and stays
-     * green throughout. The floor is therefore capped at the runner's own core count, LESS ONE:
-     * capping at the bare count still demanded that every core be inside a fetch at the same sampled
-     * instant, which a shared 4-core CI runner does not owe anyone — the GC, the sampler and the JIT
-     * compete for exactly the cores the assertion is counting, and it read {@code peak_in_flight = 3}
-     * against a floor of 4 on the standard GitHub runner. One core of headroom keeps the guard
-     * meaningful without asserting perfect occupancy ({@code min(4, 3) = 3} on a 4-core runner;
-     * unchanged at {@code min(4, 7) = 4} on an 8+-core dev box, the original literal threshold):
-     * {@code peak_in_flight} is fundamentally a runtime-achieved-concurrency reading, not a
-     * placement/structure fact, and the zero-latency CPU-bound physics genuinely caps it at core
-     * count — the structural signal cannot substitute for it. The ablated shape still reads far
-     * below this floor (one un-banded range), so the guard keeps its bite.
+     * <p><b>Why the scan below injects a small per-page latency (unlike the seed step above, which
+     * stays at zero).</b> {@code peak_in_flight} is a runtime-achieved-concurrency reading, not a
+     * placement/structure fact, and at zero injected page latency a "page fetch" is pure CPU work —
+     * the whole 6000-key run can complete before the in-flight gauge ever samples a high value, so
+     * the reading measures how fast the runner burned through the work as much as it measures
+     * parallelism (#35: CI read {@code peak_in_flight = 2} against a floor of 3 on the standard
+     * GitHub runner, then passed 20/20 on an identical rerun — pure scheduler luck, not a
+     * regression). A small {@link Duration#ofMillis(long)} latency on the worker listing pages (the
+     * same idiom {@link #healthyNestedFanoutControl_seedBandHighAvgInFlightCheapApi} already uses)
+     * gives the gauge an observation window without changing the shape's own point, which is
+     * banding, not throughput: a virtual thread blocked in {@code Thread.sleep} unmounts from its
+     * carrier, so sleeping fetches don't hold a core and aren't core-bound the way a zero-latency
+     * CPU-bound fetch is — {@code peak_in_flight} can then reach a healthy fraction of {@code W}
+     * regardless of how many physical cores the runner actually schedules on, so the floor no longer
+     * needs the runner's own core count as an input. The seed-time structural assertions above
+     * (radix bands fired, {@code specs.size() > 8}) and the correctness assertion below
+     * ({@code assertExactlyOnce}) stay schedule-invariant and are unaffected by this latency.
      *
      * <p><b>Guard sharpness.</b> Ablating {@code radix_bands} (via {@link EngineToggles#parse}) leaves
      * the dense flat root as ONE un-subdivided seed range ({@code seedCount == 1}) instead of the
@@ -291,17 +288,11 @@ final class ShapeRegressionCorpusTest {
                 .as("dense flat root radix-banded (meeo-s3 shape)").isTrue();
         assertThat(specs.size()).as("banded into many ranges, not one serial root range").isGreaterThan(8);
 
-        Run run = scan(dir, "radix-band", keyspace, workers, 1000, Duration.ZERO, EngineToggles.DEFAULT);
+        Run run = scan(dir, "radix-band", keyspace, workers, 1000, Duration.ofMillis(2), EngineToggles.DEFAULT);
         assertExactlyOnce(run.emitted, keyspace);
-        // peak_in_flight at zero injected latency is CPU-bound, so it cannot exceed the actual
-        // core count the runner schedules on — cap the floor accordingly, keeping one core of
-        // headroom so the assertion never demands perfect occupancy (see javadoc).
-        int concurrencyFloor =
-                Math.min(workers / 4, Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
         assertThat(run.peakInFlight)
-                .as("no collapse: banded root reaches a healthy fraction of W, capped by the runner's "
-                        + "actual core count at zero injected latency")
-                .isGreaterThanOrEqualTo(concurrencyFloor);
+                .as("no collapse: banded root reaches a healthy fraction of W")
+                .isGreaterThanOrEqualTo(workers / 4);
     }
 
     // =====================================================================================
