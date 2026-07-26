@@ -12,7 +12,7 @@ package io.varve.swath.engine.policy;
  * constructs, holds, or calls a {@code ConcurrencyPolicy}. AIMD is the most timing-coupled mechanism
  * in the engine (clean-window cooldowns, a jittered shed window, a paced relaxation valve, and a
  * decaying latency baseline all racing under CAS), and the feasibility study judged a simulator-side
- * reimplementation's divergence risk low (swath-notes' feasibility.md §7 item 5) rather than justify
+ * reimplementation's divergence risk low rather than justify
  * carving the real controller out from under its concurrent callers. So instead of an extraction, this
  * defines the shape a simulator's OWN faithful port carries — derived from {@code ConcurrencyGauge}'s
  * current behavior and documented here for whoever writes that port.

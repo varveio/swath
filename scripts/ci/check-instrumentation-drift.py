@@ -459,7 +459,7 @@ def param_names(params_str: str) -> list[str]:
 # through resolution so a call-site expression shaped `receiver.accessor().code()` (an
 # enum-typed record-component accessor chain) resolves by ENUMERATING the enum type's
 # declared constants rather than chasing where the receiver's runtime value came from --
-# per seam-notes.md's policy split, the reasons are now closed enums, and a new constant
+# per the policy split, the reasons are now closed enums, and a new constant
 # can't hide from an enumeration the way it could hide from dataflow tracing.
 # ---------------------------------------------------------------------------
 

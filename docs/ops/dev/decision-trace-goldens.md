@@ -4,10 +4,10 @@ This is the operational doc for the decision-trace golden recorder
 (`swath-core/src/test/java/io/varve/swath/engine/{GoldenTrace,RecordingTraceSink,
 DecisionTraceGoldenTest}.java`, goldens under
 `swath-core/src/test/resources/goldens/decision-trace/`). See
-[`TESTING.md`](TESTING.md) for the wider test-tiering picture; the seam principle
-this recorder exists to check ("decision logic = deterministic state machines over
-observed events; engine and simulator share the former") lives in the `swath-notes`
-policy-seam campaign, not in this repo.
+[`TESTING.md`](TESTING.md) for the wider test-tiering picture. The seam principle
+this recorder exists to check — decision logic is a deterministic state machine over
+observed events, and execution is everything touching time, threads, sockets, and
+SQLite — is stated in [`contracts.md`](../../internals/contracts.md) §2.1.
 
 ## What it is
 
