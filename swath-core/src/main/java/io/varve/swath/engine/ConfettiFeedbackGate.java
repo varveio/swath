@@ -110,21 +110,33 @@ public final class ConfettiFeedbackGate {
      * cadence, and this class's own javadoc already called the mechanism "a cheap round-robin
      * counter, not gated on anything else".
      *
+     * <p><b>The authoritative conservation guarantee is BY INSPECTION, not by any racing test:</b>
+     * {@link #probeSeq} is a plain {@link java.util.concurrent.atomic.AtomicLong}, and {@link
+     * #consumeProbeSlot()} calls only its {@code incrementAndGet()} — no read-modify-write gap for a
+     * race to land in. No concurrent test can *prove* atomicity to certainty (issue #18: don't let a
+     * test imply a proof it can't deliver); the type is the proof.
+     *
      * <p><b>What is and isn't tested for this race.</b> {@code ConfettiFeedbackGateTest}'s
-     * {@code concurrentConsumeProbeSlotNeverLosesAnIncrementUnderAForcedRace} test proves both
-     * halves of the claim above directly against this class, under a barrier-forced worst case (all
-     * racers' reads provably happen-before any of their increments): the racers' {@link #snapshot()}
-     * reads DO share the same pre-increment {@code probeSeq} value (the drift this javadoc
-     * describes, reproduced on demand rather than hoped for), and {@link #probeSeq} still ends up
-     * exactly at the number of {@link #consumeProbeSlot()} calls made — no increment lost. No
-     * engine-level test exercises this race: every {@code run(...)} in {@code
-     * ConfettiFeedbackContractTest} uses {@code workers=1} (structurally single-threaded, so it
-     * cannot race a shared {@code probeSeq}), and {@code ConfettiFeedbackWiringTest} (the one
-     * {@code workers=4} confetti scenario) drives a dense/uniform keyspace that, by its own
-     * assertion, never crosses {@code SUPPRESS_THRESHOLD} — so it never reaches this branch under
-     * concurrency either. (An earlier version of this fix's commit message claimed {@code
-     * ConfettiFeedbackContractTest} covered this race; it does not, for the {@code workers=1} reason
-     * above — corrected here since that commit's history cannot be amended.)
+     * {@code concurrentConsumeProbeSlotSharesThePreIncrementReadUnderAForcedRace} proves only the
+     * DETERMINISTIC half directly against this class, under a barrier-forced worst case (all racers'
+     * reads provably happen-before any of their increments): the racers' {@link #snapshot()} reads DO
+     * share the same pre-increment {@code probeSeq} value — the drift this javadoc describes,
+     * reproduced on demand rather than hoped for. It does <b>not</b> reliably catch a non-atomic
+     * {@code consumeProbeSlot()} — a mutated implementation ({@code probeSeq.set(probeSeq.get() + 1)})
+     * still passed that test's own "no increment lost" assertion 20/20 runs, because racing to
+     * increment right after one barrier release rarely produces enough genuine contention to lose
+     * one. {@code concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad}'s plain
+     * concurrent-stress final-total check is the one that actually caught that same mutant — at a
+     * measured 100% (20/20) detection rate at its 32-threads x 5,000-calls contention level — but
+     * that is PROBABILISTIC coverage, same caveat as above. No engine-level test exercises this race:
+     * every {@code run(...)} in {@code ConfettiFeedbackContractTest} uses {@code workers=1}
+     * (structurally single-threaded, so it cannot race a shared {@code probeSeq}), and {@code
+     * ConfettiFeedbackWiringTest} (the one {@code workers=4} confetti scenario) drives a
+     * dense/uniform keyspace that, by its own assertion, never crosses {@code SUPPRESS_THRESHOLD} —
+     * so it never reaches this branch under concurrency either. (An earlier version of this fix's
+     * commit message claimed {@code ConfettiFeedbackContractTest} covered this race; it does not, for
+     * the {@code workers=1} reason above — corrected here since that commit's history cannot be
+     * amended.)
      */
     public void consumeProbeSlot() {
         probeSeq.incrementAndGet();

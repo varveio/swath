@@ -84,14 +84,29 @@ final class ConfettiFeedbackGateTest {
 
     // -------------------------------------------------------------------------------------------
     // Concurrency (issue #22's disclosed relaxation): snapshot-then-consumeProbeSlot is two
-    // separate calls, so two racing workers can share a pre-increment snapshot -- but the counter
-    // itself, a plain AtomicLong incrementAndGet, never loses an increment. Deterministic in what
-    // they assert (final conservation, and a barrier-FORCED shared read) -- never a scheduler-luck
-    // interleaving assertion (issue #18).
+    // separate calls, so two racing workers can share a pre-increment snapshot. The two tests below
+    // split the disclosure's two claims apart, because a single test claiming BOTH turned out to
+    // prove only one of them: a mutated, non-atomic consumeProbeSlot() (probeSeq.set(probeSeq.get()
+    // + 1) in place of incrementAndGet()) still passed the forced-race test below 20/20 runs -- its
+    // own "no increment lost" assertion never caught the mutant, because racing to increment right
+    // after one barrier release rarely produces enough genuine contention to lose one.
+    //   - concurrentConsumeProbeSlotSharesThePreIncrementReadUnderAForcedRace demonstrates ONLY the
+    //     DETERMINISTIC half: a CyclicBarrier forces every racer's snapshot() read to happen-before
+    //     every racer's consumeProbeSlot() call, so all racers PROVABLY observe the same
+    //     pre-increment probeSeq (the shared-slot drift the disclosure describes, reproduced on
+    //     demand rather than hoped for) -- never a scheduler-luck interleaving assertion (issue #18).
+    //   - concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad is the PROBABILISTIC half:
+    //     plain concurrent stress, no forced ordering, asserting only the final conserved total.
+    //     Measured against the same non-atomic mutant above: 100% (20/20) detection at this test's
+    //     32 threads x 5,000 calls; a materially weaker 5% (1/20) at the previously-committed 16 x 200.
+    // Neither test is a proof of atomicity -- no racing test can establish that to certainty (issue
+    // #18 again, one level up: don't let a test imply a proof it can't deliver). The AUTHORITATIVE
+    // conservation guarantee is that consumeProbeSlot() is a plain AtomicLong#incrementAndGet(), BY
+    // INSPECTION -- see that method's own javadoc in ConfettiFeedbackGate.
     // -------------------------------------------------------------------------------------------
 
     @Test
-    void concurrentConsumeProbeSlotNeverLosesAnIncrementUnderAForcedRace() throws Exception {
+    void concurrentConsumeProbeSlotSharesThePreIncrementReadUnderAForcedRace() throws Exception {
         // One barrier forces EVERY racer's snapshot() read to happen-before ANY racer's
         // consumeProbeSlot() call: the barrier only releases once all `racers` threads have
         // reached it, i.e. once every read has already completed -- so this is not hoping for a
@@ -123,18 +138,28 @@ final class ConfettiFeedbackGateTest {
                         + "drift this gate's javadoc discloses, reproduced on demand rather than hoped for",
                         racers)
                 .containsOnly(0L);
+        // Incidentally still conserved here too -- but this SPECIFIC forced setup does not reliably
+        // catch a non-atomic consumeProbeSlot() (a mutated implementation passed this exact check
+        // 20/20 runs): see concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad below for
+        // the probabilistic coverage that does, and consumeProbeSlot's own javadoc for the
+        // by-inspection guarantee neither test can substitute for.
         assertThat(gate.snapshot().probeSeq())
-                .as("despite every racer sharing the same read, all %d increments are still counted -- "
-                        + "incrementAndGet never loses one", racers)
+                .as("incidentally conserved under this forced setup too, though not what it is designed "
+                        + "to catch (see the comment above)")
                 .isEqualTo(racers);
     }
 
     @Test
     void concurrentConsumeProbeSlotConservesEveryIncrementUnderGeneralLoad() throws Exception {
         // No forced ordering here -- plain concurrent stress, asserting only the final conserved
-        // total (never an interleaving-dependent check).
-        int threadCount = 16;
-        int callsPerThread = 200;
+        // total (never an interleaving-dependent check). PROBABILISTIC coverage, not a proof: this
+        // is the test that actually caught the non-atomic mutant described in the comment block
+        // above, at a measured 100% (20/20) detection rate at these thread/call counts -- a
+        // materially weaker 5% (1/20) at the previously-committed 16 x 200. Raised here so this
+        // test carries real (if still imperfect, per issue #18's "no racing test can prove
+        // atomicity" caveat) probabilistic weight rather than a mostly-decorative one.
+        int threadCount = 32;
+        int callsPerThread = 5000;
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         Thread[] threads = new Thread[threadCount];
         for (int i = 0; i < threadCount; i++) {
