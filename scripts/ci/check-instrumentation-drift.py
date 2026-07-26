@@ -70,17 +70,27 @@ UnsplittableReason) or a plain data record (Engagement) instead of bare literals
      ``receiver``'s declared type is found the same way as rule 4's identifiers (a
      local, an `instanceof` binding, a for-each element, or -- also checked here -- a
      FORMAL PARAMETER of the enclosing method), then its accessor is looked up as a
-     record component; if that component's type is a coded enum, this resolves to ALL
-     of the enum's declared codes, by ENUMERATION rather than dataflow -- a new
-     constant cannot hide from it the way it could hide from rule 4's tracing.
-     CAVEAT (issue #21, not fixed): enumerating the whole enum credits every constant
-     to every category reaching it through any accessor chain, so if the same coded
-     enum type is ever the declared type of a same-named component shared across
-     MULTIPLE record types (or record/category pairings), this can validate a
-     (category, reason) doc row no code path actually emits, silently. Not triggered
-     today -- every coded enum here maps 1:1 to one component and one category
-     (verified) -- but a later slice adding more coded enums could trip it; the guard
-     does not yet disambiguate per-category, and this rule is where that fix belongs.
+     record component. If that component's type is a coded enum, this is resolved by
+     tracing which constant(s) are ACTUALLY assigned to that component at every
+     ``new ReceiverType(...)`` construction site in the tree (an assignment may itself be
+     a local, a formal parameter resolved via rule 4's caller search, or -- rule 4 did not
+     cover this -- an INSTANCE FIELD assigned across several methods of its enclosing
+     type, e.g. `ThiefPolicy.Attempt#mechanism`, whose scan therefore widens from the one
+     method containing the construction site to the type that declares the field; see
+     `enclosing_type_body`). Enumerating the WHOLE enum (every declared constant,
+     regardless of what is actually constructed) is a fallback used ONLY when the
+     receiver's record type has NO construction site anywhere in the tree -- nothing to
+     narrow against. Issue #21 was exactly the gap between these two: unconditional whole-
+     enum enumeration credited every constant to every category reaching it through any
+     accessor chain, so the guard could silently validate a (category, reason) doc row no
+     code path actually emitted (the dangerous direction: a ghost row fails loudly, a
+     spuriously-resolved one does not) -- most concretely when the SAME coded enum type is
+     the declared type of a same-named component shared across multiple record types, each
+     feeding a different category. Fixed by narrowing through construction sites first, as
+     described above; the whole-enum fallback remains, but only for a type that is never
+     constructed at all, where there is nothing to narrow against and no wrong-category
+     risk (no category reaches it through construction, only through the receiver's own,
+     single, unambiguous category at that one call site).
   8. Two no-arg accessor calls on the SAME local, both symbolic (e.g. ``e.category()``
      / ``e.reason()`` inside a ``for (Engagement e : engagements)`` loop) resolve via
      every ``new RecordType(...)`` construction site for that local's record type,
@@ -408,6 +418,26 @@ def enclosing_method(jf: JavaFile, pos: int):
     return None
 
 
+TYPE_HEADER_RE = re.compile(r"\b(?:class|interface|enum|record)\s+\w+")
+
+
+def enclosing_type_body(jf: JavaFile, pos: int) -> tuple[int, int] | None:
+    """The smallest enclosing TYPE (class/interface/enum/record) body containing `pos`
+    -- as opposed to `enclosing_method`, which finds the smallest enclosing METHOD.
+    Used to widen an unresolved identifier's assignment scan from one method to the
+    whole type that declares it (see `resolve_single_arg`'s Pattern C: a bare
+    identifier that turns out to be an INSTANCE FIELD assigned across several methods
+    of its class, e.g. `ThiefPolicy.Attempt#mechanism`, rather than a local scoped to
+    the one method containing the emission/construction site)."""
+    containing = [s for s in jf.spans if s[0] < pos < s[1]]
+    containing.sort(key=lambda s: s[1] - s[0])
+    for (o, c) in containing:
+        header = extract_header(jf, o)
+        if header and TYPE_HEADER_RE.search(header):
+            return o + 1, c
+    return None
+
+
 def param_names(params_str: str) -> list[str]:
     names = []
     for raw in split_top_level(params_str, params_str):
@@ -571,18 +601,58 @@ QUALIFIED_CONST_CODE_RE = re.compile(r"^(\w+)\.([A-Z][A-Za-z0-9_]*)\.code\(\)$")
 ACCESSOR_CALL_RE = re.compile(r"^(\w+)\.(\w+)\(\)$")
 
 
-def resolve_enum_code_expr(jf: JavaFile, call_pos: int, expr: str,
-                            type_index: TypeIndex) -> set[str] | None:
-    """Resolve an enum-`.code()` expression by ENUMERATING the enum type's constants,
-    never by chasing which constant flows to this call site (a new constant therefore
-    cannot hide from it -- see this module's Type-index section docstring):
+def resolve_constructed_component_codes(
+        files: dict[Path, JavaFile], recv_type: str, comp_idx: int, consts: dict[str, str],
+        type_index: TypeIndex, depth: int) -> tuple[set[str], bool]:
+    """For every ``new recv_type(...)`` construction site in the tree, resolve the
+    constructor argument at `comp_idx` (the coded-enum-typed component's position) to the
+    constant NAME(s) actually assigned there, and map each through `consts` to its code.
+    Returns ``(codes, found_any_construction_site)`` -- the second element tells the
+    caller whether "no codes resolved" means "genuinely nothing reaches this component"
+    (found_any_construction_site True, codes empty is a legitimate empty/unresolvable
+    result) versus "this type is never constructed anywhere" (False, the only case that
+    should fall back to full-enum enumeration -- see `resolve_enum_code_expr`)."""
+    call_re = re.compile(r"(?<![A-Za-z0-9_])new\s+" + re.escape(recv_type) + r"\s*\(")
+    codes: set[str] = set()
+    found_site = False
+    for jf in files.values():
+        for cm in call_re.finditer(jf.scrub):
+            open_idx = cm.end() - 1
+            close_idx = find_matching_paren(jf.scrub, open_idx)
+            if close_idx is None:
+                continue
+            inner_orig = jf.text[open_idx + 1:close_idx]
+            inner_scrub = jf.scrub[open_idx + 1:close_idx]
+            args = split_top_level(inner_orig, inner_scrub)
+            if comp_idx >= len(args):
+                continue
+            found_site = True
+            r = resolve_single_arg(files, jf, cm.start(), args[comp_idx], depth + 1, type_index)
+            for name in r.literals:
+                if name in consts:
+                    codes.add(consts[name])
+    return codes, found_site
+
+
+def resolve_enum_code_expr(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int, expr: str,
+                            type_index: TypeIndex, depth: int) -> set[str] | None:
+    """Resolve an enum-`.code()` expression to the codes that ACTUALLY reach it, not the
+    enum type's whole constant set (issue #21: crediting every declared constant to every
+    category reaching it through an accessor chain let the guard silently validate a doc
+    row no code path emits -- the dangerous direction, since a ghost row fails loudly and
+    a spuriously-resolved one does not):
 
       * ``receiver.accessor().code()`` -- `receiver`'s declared type (see
         `find_local_type`) must be a record with a component named `accessor` whose
-        declared type is a "coded enum"; resolves to ALL of that enum's codes.
+        declared type is a "coded enum". Resolved by finding every construction site of
+        that record type and tracing which constant(s) are actually assigned to the
+        `accessor` component there (`resolve_constructed_component_codes`) -- reusing the
+        same local/param/field resolution `resolve_single_arg` already does, not a new
+        dataflow pass. Falls back to enumerating the WHOLE enum only when the record type
+        has NO construction site anywhere in the tree (nothing to narrow against).
       * ``EnumType.CONSTANT.code()`` -- a qualified constant reference; resolves to just
         that one constant's code, exactly as `Outcome.NO_VICTIM` resolves to `NO_VICTIM`
-        via the existing qualified-constant rule.
+        via the existing qualified-constant rule. Already narrow; unaffected by #21.
 
     Returns `None` (not a recognized enum-`.code()` shape) for anything else, falling
     through to the existing rules unchanged.
@@ -607,7 +677,12 @@ def resolve_enum_code_expr(jf: JavaFile, call_pos: int, expr: str,
         consts = type_index.coded_enums.get(enum_type)
         if not consts:
             return None
-        return set(consts.values())
+        comp_idx = list(comps.keys()).index(accessor)
+        codes, found_site = resolve_constructed_component_codes(
+                files, recv_type, comp_idx, consts, type_index, depth)
+        if found_site:
+            return codes  # narrowed to what's actually constructed -- may legitimately be empty
+        return set(consts.values())  # recv_type is never constructed anywhere -- nothing to narrow against
     return None
 
 
@@ -781,9 +856,10 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
     # Rule 1.6: an enum-typed `.code()` expression -- either a qualified constant
     # (`NoVictimReason.NO_SPLITTABLE_VICTIM.code()`) or a record-component accessor chain
     # on a local of a recognized type (`noVictim.reason().code()`, `commit.mechanism()
-    # .code()`). Resolved by ENUMERATING the enum type's constants, not by tracing the
-    # value -- see `resolve_enum_code_expr`.
-    enum_lits = resolve_enum_code_expr(jf, call_pos, expr, type_index)
+    # .code()`). Resolved by tracing which constant(s) actually reach the component at its
+    # construction sites, falling back to the whole enum only if none exist -- see
+    # `resolve_enum_code_expr`.
+    enum_lits = resolve_enum_code_expr(files, jf, call_pos, expr, type_index, depth)
     if enum_lits is not None:
         return ResolveResult(literals=enum_lits)
     # Rule 1.7: a symbolic key wrapped in a trailing string-literal affix, e.g.
@@ -827,9 +903,21 @@ def resolve_single_arg(files: dict[Path, JavaFile], jf: JavaFile, call_pos: int,
         literals.update(literals_and_consts_in_expr(am.group(1)))
     if literals:
         return ResolveResult(literals=literals)
+    # Pattern C: `base` resolved as neither a param nor a local of the ENCLOSING METHOD --
+    # it may be an INSTANCE FIELD assigned across several methods of the enclosing TYPE
+    # instead (e.g. `ThiefPolicy.Attempt#mechanism`, set in one method and read at a `new
+    # Commit(...)` site in another). Widen the same assignment scan to the smallest
+    # enclosing type's whole body.
+    type_body = enclosing_type_body(jf, call_pos)
+    if type_body is not None:
+        t_start, t_end = type_body
+        for am in assign_re.finditer(jf.text[t_start:t_end]):
+            literals.update(literals_and_consts_in_expr(am.group(1)))
+        if literals:
+            return ResolveResult(literals=literals)
     return ResolveResult(warning=f"{jf.path}:{jf.line_of(call_pos)}: "
                                   f"non-literal argument `{expr}` "
-                                  f"(local `{base}` has no literal assignment found)")
+                                  f"(local/field `{base}` has no literal assignment found)")
 
 
 def resolve_via_callers(files: dict[Path, JavaFile], method_name: str, param_idx: int,
@@ -1409,6 +1497,152 @@ def self_test_record_accessor_pair_via_collection() -> int:
         return 0
 
 
+def self_test_enum_code_never_constructed_constant_ghosts() -> int:
+    """Issue #21, repro 1: a coded enum `Reason { ALPHA, BETA, DEAD }` where code only
+    ever constructs the record with ALPHA/BETA -- DEAD is declared but never assigned to
+    the component anywhere. Before narrowing, `receiver.accessor().code()` credited the
+    WHOLE enum (including DEAD) to the category, so a doc row `CAT.dead_never_constructed`
+    resolved as live instead of ghost -- the guard silently validating a row no code path
+    emits, the dangerous direction (a ghost row fails loudly; this failed not at all).
+    Asserts the exact resolved code pairs (never `dead_never_constructed`) AND that
+    `run_check` reports the doc row as a genuine ghost."""
+    print("self-test: constructing a scratch tree with a declared-but-never-constructed "
+          "coded-enum constant...")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "swath-core" / "src" / "main" / "java" / "dev" / "swath" / "u"
+        src.mkdir(parents=True)
+        (src / "U.java").write_text(
+            "package io.varve.swath.u;\n"
+            "import java.util.List;\n"
+            "class U {\n"
+            "    enum Reason {\n"
+            "        ALPHA(\"alpha\"), BETA(\"beta\"), DEAD(\"dead_never_constructed\");\n"
+            "        private final String code;\n"
+            "        Reason(String code) { this.code = code; }\n"
+            "        public String code() { return code; }\n"
+            "    }\n"
+            "    record Outcome(Reason reason) {}\n"
+            "    void run(Metrics metrics, Object selection) {\n"
+            "        if (selection instanceof Outcome outcome) {\n"
+            "            metrics.recordStealReason(\"CAT\", outcome.reason().code());\n"
+            "        }\n"
+            "    }\n"
+            "    void build(List<Outcome> out) {\n"
+            "        out.add(new Outcome(Reason.ALPHA));\n"
+            "        out.add(new Outcome(Reason.BETA));\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        docs = root / "docs" / "internals"
+        docs.mkdir(parents=True)
+        (docs / "metrics-internals.md").write_text(
+            "# doc\n\n"
+            f"{TABLE_START}\n"
+            "| category | reason | status |\n"
+            "|---|---|---|\n"
+            "| `CAT` | `alpha` | |\n"
+            "| `CAT` | `beta` | |\n"
+            "| `CAT` | `dead_never_constructed` | |\n"
+            f"{TABLE_END}\n",
+            encoding="utf-8",
+        )
+        java_root = root / "swath-core" / "src" / "main" / "java"
+        files = load_java_files(java_root)
+        type_index = build_type_index(files)
+        sites = find_emission_sites(files, type_index)
+        pairs = {p for s in sites for p in s.pairs}
+        expected = {("CAT", "alpha"), ("CAT", "beta")}
+        if pairs != expected:
+            print(f"self-test FAILED: expected exactly {expected}, resolved {pairs}", file=sys.stderr)
+            return 1
+        rc = run_check(root)
+        if rc != 1:
+            print(f"self-test FAILED: expected exit 1 (the never-constructed row must ghost), "
+                  f"got {rc}", file=sys.stderr)
+            return 1
+        print("self-test: declared-but-never-constructed constant correctly ghosts "
+              "instead of silently resolving. PASS")
+        return 0
+
+
+def self_test_enum_code_cross_record_mismatch_ghosts() -> int:
+    """Issue #21, repro 2: two DIFFERENT record types (`RecA`, `RecB`) share the same
+    coded-enum component type -- `RecA` only ever constructed with ALPHA (feeding
+    category CAT_A), `RecB` only ever constructed with BETA (feeding CAT_B). Before
+    narrowing, both accessor chains credited the WHOLE enum to BOTH categories, so a
+    wrong doc row `CAT_A.beta` was silently accepted (no ghost, no undocumented) while
+    the unrelated `CAT_B.alpha` -- absent from the doc table on purpose here, to isolate
+    the artifact -- showed as UNDOCUMENTED: a true-positive complaint, but about a pair
+    the code never actually emits, an artifact of the same over-widening rather than a
+    real gap. Asserts the exact resolved pairs (each category credited only its own
+    record's actual constant) AND that `run_check` now ghosts exactly the wrong row
+    (`CAT_A.beta`) with nothing left undocumented."""
+    print("self-test: constructing a scratch tree with two record types sharing one coded enum...")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "swath-core" / "src" / "main" / "java" / "dev" / "swath" / "t"
+        src.mkdir(parents=True)
+        (src / "T.java").write_text(
+            "package io.varve.swath.t;\n"
+            "import java.util.List;\n"
+            "class T {\n"
+            "    enum Reason {\n"
+            "        ALPHA(\"alpha\"), BETA(\"beta\");\n"
+            "        private final String code;\n"
+            "        Reason(String code) { this.code = code; }\n"
+            "        public String code() { return code; }\n"
+            "    }\n"
+            "    record RecA(Reason reason) {}\n"
+            "    record RecB(Reason reason) {}\n"
+            "    void run(Metrics metrics, Object a, Object b) {\n"
+            "        if (a instanceof RecA recA) {\n"
+            "            metrics.recordStealReason(\"CAT_A\", recA.reason().code());\n"
+            "        }\n"
+            "        if (b instanceof RecB recB) {\n"
+            "            metrics.recordStealReason(\"CAT_B\", recB.reason().code());\n"
+            "        }\n"
+            "    }\n"
+            "    void build(List<RecA> as, List<RecB> bs) {\n"
+            "        as.add(new RecA(Reason.ALPHA));\n"
+            "        bs.add(new RecB(Reason.BETA));\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        docs = root / "docs" / "internals"
+        docs.mkdir(parents=True)
+        (docs / "metrics-internals.md").write_text(
+            "# doc\n\n"
+            f"{TABLE_START}\n"
+            "| category | reason | status |\n"
+            "|---|---|---|\n"
+            "| `CAT_A` | `alpha` | |\n"
+            "| `CAT_A` | `beta` | |\n"
+            "| `CAT_B` | `beta` | |\n"
+            f"{TABLE_END}\n",
+            encoding="utf-8",
+        )
+        java_root = root / "swath-core" / "src" / "main" / "java"
+        files = load_java_files(java_root)
+        type_index = build_type_index(files)
+        sites = find_emission_sites(files, type_index)
+        pairs = {p for s in sites for p in s.pairs}
+        expected = {("CAT_A", "alpha"), ("CAT_B", "beta")}
+        if pairs != expected:
+            print(f"self-test FAILED: expected exactly {expected}, resolved {pairs}", file=sys.stderr)
+            return 1
+        rc = run_check(root)
+        if rc != 1:
+            print(f"self-test FAILED: expected exit 1 (CAT_A.beta must ghost), got {rc}",
+                  file=sys.stderr)
+            return 1
+        print("self-test: cross-record coded-enum sharing no longer lets a wrong "
+              "category/reason pairing slide through. PASS")
+        return 0
+
+
 def self_test() -> int:
     results = [
         self_test_ghost_and_undocumented(),
@@ -1418,6 +1652,8 @@ def self_test() -> int:
         self_test_family_row_ghost(),
         self_test_enum_code_accessor_pattern(),
         self_test_record_accessor_pair_via_collection(),
+        self_test_enum_code_never_constructed_constant_ghosts(),
+        self_test_enum_code_cross_record_mismatch_ghosts(),
     ]
     return 1 if any(results) else 0
 
