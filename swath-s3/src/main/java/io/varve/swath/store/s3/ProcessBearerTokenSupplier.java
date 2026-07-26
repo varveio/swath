@@ -33,17 +33,24 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class ProcessBearerTokenSupplier implements BearerTokenSupplier {
 
-    private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration DEFAULT_COMMAND_TIMEOUT = Duration.ofSeconds(30);
 
     private final List<String> command;
     private final Duration refreshInterval;
+    private final Duration commandTimeout;
 
     private volatile String cachedToken;
     private volatile Instant fetchedAt = Instant.MIN;
 
     public ProcessBearerTokenSupplier(String shellCommand, Duration refreshInterval) {
+        this(shellCommand, refreshInterval, DEFAULT_COMMAND_TIMEOUT);
+    }
+
+    /** Test-only: a short {@code commandTimeout} so a hung-process test doesn't wait 30s. */
+    ProcessBearerTokenSupplier(String shellCommand, Duration refreshInterval, Duration commandTimeout) {
         this.command = List.of("/bin/sh", "-c", shellCommand);
         this.refreshInterval = refreshInterval;
+        this.commandTimeout = commandTimeout;
     }
 
     @Override
@@ -65,24 +72,20 @@ public final class ProcessBearerTokenSupplier implements BearerTokenSupplier {
         }
         // Drain stdout/stderr concurrently (not sequentially): a child that writes enough to the
         // stream we read second can otherwise block on a full pipe buffer while we sit blocked
-        // reading the first, deadlocking both sides.
+        // reading the first, deadlocking both sides. These reader threads run independently of —
+        // and start before — the waitFor() below, so bounding the process's lifetime there doesn't
+        // reintroduce that deadlock.
         AtomicReference<String> stdoutRef = new AtomicReference<>("");
         AtomicReference<String> stderrRef = new AtomicReference<>("");
         Thread stdoutReader = Thread.ofVirtual().start(() -> stdoutRef.set(readAllQuietly(process.getInputStream())));
         Thread stderrReader = Thread.ofVirtual().start(() -> stderrRef.set(readAllQuietly(process.getErrorStream())));
-        try {
-            stdoutReader.join();
-            stderrReader.join();
-        } catch (InterruptedException e) {
-            process.destroyForcibly();
-            Thread.currentThread().interrupt();
-            throw new BearerTokenCommandException("interrupted while reading --bearer-token-command output", e);
-        }
-        String stdout = stdoutRef.get().strip();
-        String stderr = stderrRef.get().strip();
+        // waitFor() MUST run before joining the reader threads: a hung child that keeps its pipes
+        // open (the common case — alive but not yet producing output) never triggers stream EOF, so
+        // join() alone could block forever and the commandTimeout below would never be reached.
+        // token() is synchronized, so that would stall every subsequent signing call indefinitely.
         boolean finished;
         try {
-            finished = process.waitFor(COMMAND_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            finished = process.waitFor(commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             process.destroyForcibly();
             Thread.currentThread().interrupt();
@@ -91,8 +94,19 @@ public final class ProcessBearerTokenSupplier implements BearerTokenSupplier {
         if (!finished) {
             process.destroyForcibly();
             throw new BearerTokenCommandException(
-                    "--bearer-token-command did not exit within " + COMMAND_TIMEOUT);
+                    "--bearer-token-command did not exit within " + commandTimeout);
         }
+        // The process has exited (or was just destroyed above), so its pipes are closed and these
+        // joins return promptly.
+        try {
+            stdoutReader.join();
+            stderrReader.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BearerTokenCommandException("interrupted while reading --bearer-token-command output", e);
+        }
+        String stdout = stdoutRef.get().strip();
+        String stderr = stderrRef.get().strip();
         int exitValue = process.exitValue();
         if (exitValue != 0) {
             throw new BearerTokenCommandException("--bearer-token-command exited " + exitValue
