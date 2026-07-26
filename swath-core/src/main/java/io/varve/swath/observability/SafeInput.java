@@ -16,7 +16,24 @@ public final class SafeInput {
 
     public static final String REDACTED_ENDPOINT = "<redacted endpoint>";
 
+    /**
+     * Marker for an option whose value can BE a credential rather than merely identify one.
+     * Distinct from {@link #REDACTED_ENDPOINT} so a summary reader can tell "an endpoint was given"
+     * from "a secret was given" without either value being recoverable.
+     */
+    public static final String REDACTED_SECRET = "<redacted secret>";
+
     private static final Set<String> ENDPOINT_OPTIONS = Set.of("--endpoint-url", "--metrics-endpoint");
+
+    /**
+     * Options whose value must never reach a durable artifact. {@code --bearer-token-command} is
+     * nominally a command, but nothing obliges it to MINT a token — {@code --bearer-token-command
+     * 'echo eyJhbGci…'} is a plausible shortcut for someone holding one already, which would put a
+     * live credential in the run summary's {@code argv}. Redacting the option wholesale is the only
+     * safe reading, since the difference between a minting command and an embedded secret is not
+     * something this layer can determine.
+     */
+    private static final Set<String> SECRET_OPTIONS = Set.of("--bearer-token-command");
 
     private SafeInput() {
     }
@@ -64,36 +81,48 @@ public final class SafeInput {
     }
 
     /**
-     * Safe persisted argv: endpoint values are represented by a fixed marker and all remaining
-     * arguments have log/terminal control characters escaped. Handles both {@code --opt value}
-     * and {@code --opt=value} forms.
+     * Safe persisted argv: endpoint values and secret-bearing values are each represented by a
+     * fixed marker, and all remaining arguments have log/terminal control characters escaped.
+     * Handles both {@code --opt value} and {@code --opt=value} forms.
      */
     public static List<String> argv(List<String> original) {
         if (original == null || original.isEmpty()) {
             return List.of();
         }
         List<String> safe = new ArrayList<>(original.size());
-        boolean redactNext = false;
+        String pendingMarker = null;
         for (String arg : original) {
-            if (redactNext) {
-                safe.add(REDACTED_ENDPOINT);
-                redactNext = false;
+            if (pendingMarker != null) {
+                safe.add(pendingMarker);
+                pendingMarker = null;
                 continue;
             }
             String value = arg == null ? "" : arg;
-            if (ENDPOINT_OPTIONS.contains(value)) {
+            String marker = redactionMarkerFor(value);
+            if (marker != null) {
                 safe.add(value);
-                redactNext = true;
+                pendingMarker = marker;
                 continue;
             }
             int equals = value.indexOf('=');
-            if (equals > 0 && ENDPOINT_OPTIONS.contains(value.substring(0, equals))) {
-                safe.add(value.substring(0, equals + 1) + REDACTED_ENDPOINT);
-                continue;
+            if (equals > 0) {
+                String inlineMarker = redactionMarkerFor(value.substring(0, equals));
+                if (inlineMarker != null) {
+                    safe.add(value.substring(0, equals + 1) + inlineMarker);
+                    continue;
+                }
             }
             safe.add(logText(value));
         }
         return List.copyOf(safe);
+    }
+
+    /** The marker an option's VALUE must be replaced by, or {@code null} to keep it (escaped). */
+    private static String redactionMarkerFor(String option) {
+        if (ENDPOINT_OPTIONS.contains(option)) {
+            return REDACTED_ENDPOINT;
+        }
+        return SECRET_OPTIONS.contains(option) ? REDACTED_SECRET : null;
     }
 
     /** Escape ISO control characters so one untrusted value cannot forge another log line. */

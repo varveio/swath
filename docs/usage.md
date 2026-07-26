@@ -483,9 +483,12 @@ local path (`-o`) today, so it doesn't touch GCS's XML multipart-upload precondi
 that rules the same mechanism out for a future GCS output/checkpoint destination.
 
 **Resuming a bearer-auth run.** Unlike `--profile`/`--region`/`--no-sign-request`, which are
-soft-restored from the checkpoint, `--bearer-token-command` is deliberately **never stored** —
-a checkpoint that named the command would decide what a later `swath resume` executes, so
-anyone who could write that file could choose the command. Re-pass both flags on resume:
+soft-restored from the checkpoint, `--bearer-token-command` is deliberately **never stored**.
+Storing it would mean a checkpoint decides what a later `swath resume` executes — and nothing
+obliges the command to *mint* a token, so a `--bearer-token-command 'echo <token>'` shortcut
+would leave that literal token at rest in the checkpoint. The token itself never leaves memory
+today, and persisting the command is the one thing that would change that. Re-pass both flags
+on resume:
 
 ```sh
 swath resume ./out --bearer-token-command 'gcloud auth print-access-token'
