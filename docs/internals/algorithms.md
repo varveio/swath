@@ -264,6 +264,15 @@ obtained — never *what* or *when* the loop emits — so I1 commit-before-emit
 A worker that has no `PENDING` node to claim, while other workers are still
 busy, becomes a **thief**.
 
+**Implementation split (the policy seam, swath-notes' 2026-07-26 simulator campaign):** the
+pseudocode below is a decision-logic description, not a call-graph — victim selection and the
+whole pivot cascade (everything from "PLACE the pivot" through the structure/reflect/bisect/
+flat-leaf fallbacks) live in `io.varve.swath.engine.policy.ThiefPolicy`, a source-agnostic
+`StealPolicy` with no lock, clock, or RPC of its own. `io.varve.swath.engine.Thief` is the
+executor: it snapshots `(cursor, hi)` under the victim's lock, drives `ThiefPolicy` through a
+request/response loop (issuing every probe it asks for), then re-validates and runs the durable
+split CAS under the same lock. See `architecture.md`'s component map for the package split.
+
 ```
 steal():
   victim = argmax over live workers w of estRemaining(w)        // §3.2
