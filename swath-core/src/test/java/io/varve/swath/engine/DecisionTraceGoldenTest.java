@@ -189,6 +189,120 @@ final class DecisionTraceGoldenTest {
         GoldenTrace.writeOrVerify(fx);
     }
 
+    // ============================================================================================
+    // thief-cascade-mechanisms: the pivot-cascade branches the edge-case fixture above never
+    // reaches (reflect commit, flat-leaf, plain and adaptive structure-probe, both uncapped and
+    // truncated) — ported from ThiefReflectPivotTest/ThiefFlatLeafPivotTest/StealStructureProbeTest's
+    // own recipes through the same single-attempt oneShotSteal driver.
+    // ============================================================================================
+
+    @Test
+    void thiefCascadeMechanisms() throws Exception {
+        GoldenTrace.Fixture fx = new GoldenTrace.Fixture("thief-cascade-mechanisms");
+
+        // 1. Reflect commits directly: the far-ahead AND step-back midpoint both probe empty, but
+        //    the density-reflected pivot lands inside the low sliver and probes non-empty.
+        //    (ThiefReflectPivotTest.reflectHitCommitsAtTheReflectedPivot)
+        List<byte[]> sliver = sliverKeys();
+        WorkerState reflectVictim = WorkerStates.of(1, b("k/0000"), b("k/0040"), b("k/z"));
+        reflectVictim.addKeysEmitted(64);
+        oneShotSteal(fx, List.of(reflectVictim), MockPageFetcher.builder().keys(sliver).build(),
+                StubCheckpointStore.returning(88L));
+
+        // 2. Flat-leaf bootstrap: a parent-empty sliver over one flat high-entropy directory with NO
+        //    sub-directories — the structure probe finds nothing, so density extrapolation carves a
+        //    balanced interior pivot instead of the degenerate cursor-adjacent sliver.
+        //    (ThiefFlatLeafPivotTest.bootstrapFlatLeafDensityReflectsBalancedInteriorPivot)
+        List<byte[]> flatLeaf = flatLeafKeys();
+        WorkerState flatLeafBootstrap = WorkerStates.of(2, b("led/0100/"), b("led/0100/4000"), b("led/02"));
+        flatLeafBootstrap.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(flatLeafBootstrap), MockPageFetcher.builder().keys(flatLeaf).build(),
+                StubCheckpointStore.returning(89L));
+
+        // 3. Flat-leaf, child worker: lo is a real deep key (a prior split's pivot, not the leaf
+        //    directory), so the reflection reference is the child's own lo — zero extra probes.
+        //    (ThiefFlatLeafPivotTest.childFlatLeafReflectsOwnLoWithZeroExtraProbes)
+        WorkerState flatLeafChild = WorkerStates.of(2, b("led/0100/2000"), b("led/0100/4000"), b("led/02"));
+        flatLeafChild.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(flatLeafChild), MockPageFetcher.builder().keys(flatLeaf).build(),
+                StubCheckpointStore.returning(90L));
+
+        // 4. Adaptive structure probe (parent-empty sliver, uncapped): a date/uuid shape whose
+        //    coarse->fine back-out lands on the DAY level and splits at a real sub-directory boundary.
+        //    (ThiefFlatLeafPivotTest.leafWithSubdirsStillTakesStructureProbePath)
+        List<byte[]> dateUuid = dateUuidKeys(28);
+        WorkerState adaptiveVictim = WorkerStates.of(3, b("2022/03/05/u05/"), b("2022/03/05/u05/f"), b("2022/04"));
+        adaptiveVictim.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(adaptiveVictim), MockPageFetcher.builder().keys(dateUuid).build(),
+                StubCheckpointStore.returning(91L));
+
+        // 5. Plain structure probe (empty-upper, uncapped): lo/cursor share a directory with < 32
+        //    qualifying sibling boundaries past the cursor, so one bounded probe returns the true
+        //    median — never truncated.
+        WorkerState structureVictim = WorkerStates.of(4, b("root/"), b("root/005/obj00"), b("root/zzz"));
+        structureVictim.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(structureVictim), MockPageFetcher.builder().keys(manyDirs("root", 20)).build(),
+                StubCheckpointStore.returning(92L));
+
+        // 6. Plain structure probe, capped: the same shape with far more than
+        //    STRUCTURE_PROBE_MAX_KEYS (32) sibling directories past the cursor, so the probe page
+        //    truncates and the pivot is the furthest boundary it could prove, not the true median.
+        WorkerState structureCappedVictim = WorkerStates.of(5, b("root2/"), b("root2/005/obj00"), b("root2/zzz"));
+        structureCappedVictim.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(structureCappedVictim),
+                MockPageFetcher.builder().keys(manyDirs("root2", 150)).build(), StubCheckpointStore.returning(93L));
+
+        // 7. Adaptive structure probe, capped: the same parent-empty-sliver date/uuid shape as
+        //    scenario 4, but with 100 synthetic "day" sub-directories instead of a calendar month, so
+        //    the DAY-level probe truncates too.
+        List<byte[]> dateUuidWide = dateUuidKeys(100);
+        WorkerState adaptiveCappedVictim = WorkerStates.of(6, b("2022/03/05/u05/"), b("2022/03/05/u05/f"),
+                b("2022/04"));
+        adaptiveCappedVictim.addKeysEmitted(100);
+        oneShotSteal(fx, List.of(adaptiveCappedVictim), MockPageFetcher.builder().keys(dateUuidWide).build(),
+                StubCheckpointStore.returning(94L));
+
+        GoldenTrace.writeOrVerify(fx);
+    }
+
+    /** {@code k/0000..k/00ff}: a low sliver — the mass occupies a thin low window of a far-bounded range. */
+    private static List<byte[]> sliverKeys() {
+        List<byte[]> keys = new ArrayList<>(256);
+        for (int i = 0; i < 256; i++) {
+            keys.add(b("k/%04x".formatted(i)));
+        }
+        return keys;
+    }
+
+    /** {@code led/0100/<hhhh>}: one flat high-entropy directory, no sub-directories. */
+    private static List<byte[]> flatLeafKeys() {
+        List<byte[]> keys = new ArrayList<>(4096);
+        for (int i = 0; i < 4096; i++) {
+            keys.add(b("led/0100/%04x".formatted(i * 16)));
+        }
+        return keys;
+    }
+
+    /** {@code 2022/03/<day>/u<NN>/f} for {@code days} zero-padded day-equivalents (1-based, 2 digits). */
+    private static List<byte[]> dateUuidKeys(int days) {
+        List<byte[]> keys = new ArrayList<>(days * 10);
+        for (int day = 1; day <= days; day++) {
+            for (int u = 0; u < 10; u++) {
+                keys.add(b("2022/03/%02d/u%02d/f".formatted(day, u)));
+            }
+        }
+        return keys;
+    }
+
+    /** {@code <root>/<ddd>/obj00} for {@code dirs} zero-padded (3-digit) sibling directories. */
+    private static List<byte[]> manyDirs(String root, int dirs) {
+        List<byte[]> keys = new ArrayList<>(dirs);
+        for (int d = 0; d < dirs; d++) {
+            keys.add(b(root + "/%03d/obj00".formatted(d)));
+        }
+        return keys;
+    }
+
     private static MockPageFetcher fetcher(String... keys) {
         List<byte[]> ks = new ArrayList<>();
         for (String k : keys) {
