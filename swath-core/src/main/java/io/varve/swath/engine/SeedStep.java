@@ -20,7 +20,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.PriorityQueue;
 import java.util.TreeMap;
@@ -376,6 +378,15 @@ public final class SeedStep {
          *  see {@link #scopeCeiling}) — the fallback {@link #spanScore} measures {@code cut}'s tail
          *  against when it has no successor in {@code cuts} yet. */
         void offer(byte[] cut, TreeSet<byte[]> cuts, byte[] scopeUpper);
+
+        /**
+         * Whether cuts at more than one depth have ever been offered, so the level ordering had a
+         * real cross-level choice to make. {@code false} for the mass-aware-OFF {@link FifoFrontier},
+         * which has no notion of depth — the engagement counter must not fire on the OFF path.
+         */
+        default boolean spansMultipleDepths() {
+            return false;
+        }
     }
 
     /** The mass-aware OFF frontier: plain FIFO, byte-identical to the original {@link ArrayDeque}. */
@@ -427,11 +438,47 @@ public final class SeedStep {
      * infinite (see {@link #scopeCeiling}).
      */
     private static final class SpanPriorityFrontier implements Frontier {
-        private record Entry(byte[] cut, long score) {
+        private record Entry(byte[] cut, int depth, long score) {
         }
 
-        private final PriorityQueue<Entry> queue =
-                new PriorityQueue<>(Comparator.comparingLong(Entry::score).reversed());
+        /**
+         * <b>Level-ordered first, span-ordered within a level.</b> {@link #spanScore} is a proxy for
+         * mass, and on a name-keyed keyspace it is not merely weak but effectively uncorrelated:
+         * measured over {@code s3://wis2globalcache/}'s 111 top-level cuts against their true object
+         * counts, Spearman {@code rho = -0.153}. The mechanism is that the score rewards a cut whose
+         * next sibling diverges EARLY in the name, so a heavy cut is penalised for having a
+         * similarly-named neighbour — {@code data/de-dwd-gts-to-wis2/} (1,379,098 objects) sits next
+         * to {@code data/de-dwd-global-discovery-catalogue/} (ONE object), shares {@code de-dwd-g}
+         * with it, and so scored the floor (258) and ranked 107th of 111.
+         * {@code jp-jma-gts-to-wis2/} (889,294 objects) ranked 108th for exactly the same reason.
+         * The four heaviest centres ranked 65, 77, 104 and 107 while the probe budget reached 69 of
+         * 111, so 61.8% of the bucket's objects were never descended into and stayed as undivided
+         * seed ranges — one worker draining a serial tail across 41.7% of the run's wall clock.
+         *
+         * <p>Depth is the primary key because it is the one ordering <b>independent of naming</b>:
+         * no cut at depth {@code D+1} is polled while any unprobed cut at depth {@code D} remains.
+         * That bounds what a bad within-level proxy can cost to a single level instead of letting it
+         * strand whole subtrees — on the bucket above all 111 top-level cuts fit inside the descent's
+         * own probe ceiling, so every centre is probed and the ordering question stops mattering
+         * there at all.
+         *
+         * <p>It also subsumes the starvation this frontier was originally built for.
+         * {@code s3://commoncrawl}'s {@code projects/} (~8.1M of ~13.7M objects) was starved by
+         * {@code contrib/}'s ever-deepening chain of narrow subdirectories discovering new cuts
+         * forever; under level order that chain cannot outrank a depth-1 sibling at all, whatever it
+         * scores. Span is kept as the within-level tiebreak rather than dropped — it is still the
+         * best zero-probe signal for choosing among true siblings, and keeping it makes this a
+         * strict refinement of the previous order rather than a replacement of it.
+         */
+        private final PriorityQueue<Entry> queue = new PriorityQueue<>(
+                Comparator.comparingInt(Entry::depth)
+                        .thenComparing(Comparator.comparingLong(Entry::score).reversed()));
+
+        /** Depth -> count of entries at that depth currently queued — drives
+         *  {@link #spansMultipleDepths()}. Tracks what is QUEUED, not what was ever offered: once a
+         *  depth's last entry is polled it is removed, so a depth that has fully drained no longer
+         *  counts even if its cuts were offered earlier in the descent. */
+        private final Map<Integer, Integer> queuedDepths = new HashMap<>();
 
         @Override
         public boolean isEmpty() {
@@ -446,12 +493,46 @@ public final class SeedStep {
         @Override
         public byte[] poll() {
             Entry e = queue.poll();
+            if (e != null) {
+                queuedDepths.computeIfPresent(e.depth(), (depth, count) -> count == 1 ? null : count - 1);
+            }
             return e == null ? null : e.cut();
         }
 
         @Override
         public void offer(byte[] cut, TreeSet<byte[]> cuts, byte[] scopeUpper) {
-            queue.add(new Entry(cut, spanScore(cut, cuts, scopeUpper)));
+            int depth = depthOf(cut);
+            queuedDepths.merge(depth, 1, Integer::sum);
+            queue.add(new Entry(cut, depth, spanScore(cut, cuts, scopeUpper)));
+        }
+
+        /**
+         * Whether cuts at more than one depth are CURRENTLY queued — i.e. whether the level ordering
+         * has a live cross-level choice to make right now. Tracking depths ever offered (rather than
+         * currently queued) over-fired: a shallow level fully drained before a deeper cut is ever
+         * discovered never posed the priority queue a real choice between the two, even though both
+         * depths were offered at some point in the descent. On a uniform-depth frontier the depth key
+         * is constant and the poll order is byte-identical to the pure-span order, so this is what
+         * separates "level ordering engaged" from "level ordering was a no-op".
+         */
+        @Override
+        public boolean spansMultipleDepths() {
+            return queuedDepths.size() > 1;
+        }
+
+        /**
+         * Depth = the number of {@link #DELIMITER} bytes in the cut. Absolute rather than relative to
+         * the scan prefix: every cut in one descent shares that prefix, so a constant offset cannot
+         * change the ordering.
+         */
+        private static int depthOf(byte[] cut) {
+            int d = 0;
+            for (byte b : cut) {
+                if (b == DELIMITER[0]) {
+                    d++;
+                }
+            }
+            return d;
         }
     }
 
@@ -571,6 +652,15 @@ public final class SeedStep {
             // use is deliberate (see SAMPLE_BUDGET's own javadoc).
             int descentCeiling = massAware ? maxProbes - Math.min(SAMPLE_BUDGET, maxProbes / 2) : maxProbes;
             boolean frontierReorderedFired = false;
+            boolean frontierLevelOrderedFired = false;
+            // Empirical prior for the truncated levels the sample budget can no longer reach (§8):
+            // how the siblings ALREADY sampled in this same descent came out. SAMPLE_BUDGET (32) at
+            // SAMPLE_WIDTH (3) probes per level funds only ~10 disambiguations, and the budget is
+            // spent in DESCENT order — so on a bucket with more ambiguous levels than that, WHICH
+            // ones get sampled is decided by traversal position rather than by mass. See the
+            // prior's use-site below for why exhaustion must not silently mean "not heavy".
+            int heavySamples = 0;
+            int sampledLevels = 0;
             while (!expandable.isEmpty() && probeState[0] < descentCeiling) {
                 if (massAware && !frontierReorderedFired && expandable.size() > 1) {
                     // (§5 instrumentation rule): only counts a REAL engagement — fires the first
@@ -582,6 +672,16 @@ public final class SeedStep {
                     // size before the loop even started) missed that case.
                     recordSeed("frontier_reordered");
                     frontierReorderedFired = true;
+                }
+                if (massAware && !frontierLevelOrderedFired && expandable.spansMultipleDepths()) {
+                    // (§5 instrumentation rule): the level key only DECIDES anything once the
+                    // frontier actually holds cuts at more than one depth. On a uniform-depth
+                    // frontier the poll order is byte-identical to the pure-span order, so firing
+                    // unconditionally would report engagement on runs where level ordering was a
+                    // no-op. Checked at every poll for the same reason as frontier_reordered above:
+                    // a frontier can become multi-depth mid-descent.
+                    recordSeed("frontier_level_ordered");
+                    frontierLevelOrderedFired = true;
                 }
                 byte[] dir = expandable.poll();
                 ListPage sub = probe(dir);
@@ -643,9 +743,39 @@ public final class SeedStep {
                         boolean heavy = false;
                         if (massAware && probeState[1] < SAMPLE_BUDGET && probeState[0] < maxProbes) {
                             heavy = sampleProvesHeavy(sub, probeState);
+                            sampledLevels++;
+                            if (heavy) {
+                                heavySamples++;
+                            }
                             recordSeed("heavy_cut_descended");   // the bounded second-level dive fired
                             if (!heavy) {
                                 recordSeed("explosion_confirmed");   // sample proved 1:1 (INT-8 shape)
+                            }
+                        } else if (massAware && sampledLevels > 0) {
+                            // The sample budget is spent, but this level is just as ambiguous as the
+                            // ones that got sampled. Falling through with heavy=false would LEAVE IT
+                            // WHOLE — the least-parallel outcome — on no evidence at all, decided by
+                            // where the level happened to sit in the descent order. Measured on
+                            // nara-1950-census: 11 levels sampled (10 banded, 1 confirmed explosion),
+                            // then California (445,879 objects) and New_York (606,090) came 12th and
+                            // 13th, were never sampled, and were left whole — a 64%-of-wall-clock
+                            // serial tail bought with zero information.
+                            //
+                            // Carry the prior from the siblings we DID sample instead: same bucket,
+                            // same descent, the strongest evidence available, and zero extra probes
+                            // (no page is fetched here). A genuinely 1:1 keyspace proves itself on
+                            // the sampled levels and the prior stays not-heavy, so the INT-8 shape is
+                            // unaffected; only a keyspace whose sampled levels came out heavy now
+                            // extends that verdict to the ones the budget could not reach.
+                            heavy = heavySamples * 2 >= sampledLevels;
+                            // Literal arguments, not a ternary: check-instrumentation-drift.py
+                            // resolves only literals, and a non-literal call site is silently
+                            // downgraded to a human-review warning (the c85f082 trap).
+                            recordSeed("heavy_prior_applied");
+                            if (heavy) {
+                                recordSeed("heavy_prior_banded");
+                            } else {
+                                recordSeed("heavy_prior_left_whole");
                             }
                         }
                         if (heavy) {
