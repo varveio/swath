@@ -20,7 +20,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.PriorityQueue;
 import java.util.TreeMap;
@@ -472,9 +474,11 @@ public final class SeedStep {
                 Comparator.comparingInt(Entry::depth)
                         .thenComparing(Comparator.comparingLong(Entry::score).reversed()));
 
-        /** Shallowest/deepest depth ever offered — drives {@link #spansMultipleDepths()}. */
-        private int minDepthOffered = Integer.MAX_VALUE;
-        private int maxDepthOffered = Integer.MIN_VALUE;
+        /** Depth -> count of entries at that depth currently queued — drives
+         *  {@link #spansMultipleDepths()}. Tracks what is QUEUED, not what was ever offered: once a
+         *  depth's last entry is polled it is removed, so a depth that has fully drained no longer
+         *  counts even if its cuts were offered earlier in the descent. */
+        private final Map<Integer, Integer> queuedDepths = new HashMap<>();
 
         @Override
         public boolean isEmpty() {
@@ -489,26 +493,31 @@ public final class SeedStep {
         @Override
         public byte[] poll() {
             Entry e = queue.poll();
+            if (e != null) {
+                queuedDepths.computeIfPresent(e.depth(), (depth, count) -> count == 1 ? null : count - 1);
+            }
             return e == null ? null : e.cut();
         }
 
         @Override
         public void offer(byte[] cut, TreeSet<byte[]> cuts, byte[] scopeUpper) {
             int depth = depthOf(cut);
-            minDepthOffered = Math.min(minDepthOffered, depth);
-            maxDepthOffered = Math.max(maxDepthOffered, depth);
+            queuedDepths.merge(depth, 1, Integer::sum);
             queue.add(new Entry(cut, depth, spanScore(cut, cuts, scopeUpper)));
         }
 
         /**
-         * Whether cuts at more than one depth have ever been offered — i.e. whether the level
-         * ordering ever had a cross-level choice to make. On a uniform-depth frontier the depth key
+         * Whether cuts at more than one depth are CURRENTLY queued — i.e. whether the level ordering
+         * has a live cross-level choice to make right now. Tracking depths ever offered (rather than
+         * currently queued) over-fired: a shallow level fully drained before a deeper cut is ever
+         * discovered never posed the priority queue a real choice between the two, even though both
+         * depths were offered at some point in the descent. On a uniform-depth frontier the depth key
          * is constant and the poll order is byte-identical to the pure-span order, so this is what
          * separates "level ordering engaged" from "level ordering was a no-op".
          */
         @Override
         public boolean spansMultipleDepths() {
-            return maxDepthOffered > minDepthOffered;
+            return queuedDepths.size() > 1;
         }
 
         /**
