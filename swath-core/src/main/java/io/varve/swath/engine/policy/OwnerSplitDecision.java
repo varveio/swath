@@ -24,8 +24,10 @@ public sealed interface OwnerSplitDecision permits Skip, Carve {
     List<Engagement> engagements();
 
     /**
-     * Durable-state changes the executor must apply against its own collaborators — the policy
-     * never touches them directly (source-agnostic; contracts.md §2.1). Empty for every gate except the
+     * Executor-owned LIVE-state changes the executor must apply against its own collaborators — the
+     * policy never touches them directly (source-agnostic; contracts.md §2.1). Not durable state:
+     * the only mutation defined today updates the run-scoped, in-memory {@code
+     * ConfettiFeedbackGate}, and nothing here reaches the checkpoint. Empty for every gate except the
      * confetti check's over-threshold branch, which both of its outcomes ({@code
      * CONFETTI_SUPPRESSED} and the {@code confetti_probe}-engaged {@link Carve}) carry {@link
      * OwnerSplitMutation#CONSUME_CONFETTI_PROBE_SLOT} on.

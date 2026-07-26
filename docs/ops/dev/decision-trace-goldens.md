@@ -96,7 +96,7 @@ After a **deliberate, reviewed** change to one of the four decision sites (inclu
 the sanctioned seam extractions this safety net exists for: the thief-brain, the
 owner-split-governor, the pacing, and the seed-planner slices):
 
-```
+```shell
 ./gradlew :swath-core:test --tests 'io.varve.swath.engine.DecisionTraceGoldenTest' \
     -Dswath.goldens.update=true
 ```

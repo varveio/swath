@@ -396,10 +396,11 @@ steal():
   is strict.** *Pacing state* (backoff level, next-attempt instant) and *slot
   ownership* (`attemptInFlight`) are separate concerns in `IdleStealBackoff`. The
   pacing arithmetic (the exponential growth/cap and the park-remaining
-  computation) is `io.varve.swath.engine.policy.IdleStealPacingPolicy`, with the
-  ambient clock read injected through `DecisionClock` (mirroring `DecisionRng`'s
-  treatment of randomness) — `IdleStealBackoff` supplies the live
-  `System::nanoTime` default. The one-attempt SLOT itself — its ownership,
+  computation) is `io.varve.swath.engine.policy.IdleStealPacingPolicy`, which
+  owns no clock: `IdleStealBackoff` reads the ambient clock through its
+  `DecisionClock` (mirroring `DecisionRng`'s treatment of randomness, and
+  supplying the live `System::nanoTime` default) and passes the resulting
+  `nowNanos` in as a policy argument. The one-attempt SLOT itself — its ownership,
   release, and the `RunMetrics` reference — is executor infrastructure and does
   **not** move into the policy package. The
   slot belongs to the worker that acquired it and is released only by that worker,

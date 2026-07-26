@@ -6,7 +6,7 @@
 package io.varve.swath.engine.policy;
 
 /**
- * Which of the four structurally-different situations selection's aggregate {@code
+ * Which of the five structurally-different situations selection's aggregate {@code
  * NO_VICTIM.no_splittable_victim} refusal folds together (algorithms.md §3), or
  * {@link #NO_SPLITTABLE_VICTIM} itself, the aggregate always fired alongside exactly one
  * discriminator so the two counter series stay reconcilable. {@link #code()} is the exact
