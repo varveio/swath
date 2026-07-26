@@ -69,15 +69,20 @@ final class ConnectionOptions {
     @Option(names = "--region", paramLabel = "REGION", description = "AWS region (else resolved from the environment).")
     String region;
 
-    @Resume(ResumeClass.STICKY)
+    // FREE, not STICKY like the auth flags above it: a STICKY row would persist the command
+    // STRING into the checkpoint's run_meta, and a later `swath resume` would execute whatever
+    // that file says. A checkpoint is data, not a trusted script — anyone who can write one
+    // could choose the command a resume runs. Re-pass the flag on resume instead.
+    @Resume(ResumeClass.FREE)
     @Option(names = "--bearer-token-command", paramLabel = "CMD",
             description = "Shell command whose stdout is a fresh OAuth bearer token, used instead of "
-                    + "AWS SigV4 signing for every request. For GCS's XML API: --endpoint-url "
+                    + "AWS SigV4 signing for every request. Not stored in the checkpoint: re-pass it "
+                    + "on `swath resume`. For GCS's XML API: --endpoint-url "
                     + "https://storage.googleapis.com --force-path-style --bearer-token-command "
                     + "'gcloud auth print-access-token'.")
     String bearerTokenCommand;
 
-    @Resume(ResumeClass.STICKY)
+    @Resume(ResumeClass.FREE)
     @Option(names = "--bearer-token-refresh-interval", paramLabel = "DURATION",
             description = "How often to re-run --bearer-token-command for a fresh token (default: 45m). "
                     + "Size it comfortably under the token source's real expiry.")

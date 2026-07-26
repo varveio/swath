@@ -482,6 +482,18 @@ carries no portable expiry. This is a **listing-only** path: swath's output is a
 local path (`-o`) today, so it doesn't touch GCS's XML multipart-upload precondition gap
 that rules the same mechanism out for a future GCS output/checkpoint destination.
 
+**Resuming a bearer-auth run.** Unlike `--profile`/`--region`/`--no-sign-request`, which are
+soft-restored from the checkpoint, `--bearer-token-command` is deliberately **never stored** —
+a checkpoint that named the command would decide what a later `swath resume` executes, so
+anyone who could write that file could choose the command. Re-pass both flags on resume:
+
+```sh
+swath resume ./out --bearer-token-command 'gcloud auth print-access-token'
+```
+
+Omit it and the resumed run falls back to SigV4 signing, which a bearer-auth endpoint will
+reject.
+
 #### Seeding
 
 | Flag | Default | Description |

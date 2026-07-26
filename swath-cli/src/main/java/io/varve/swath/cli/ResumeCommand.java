@@ -39,8 +39,9 @@ import picocli.CommandLine.Spec;
  * and re-drives {@link ListCommand} in resume mode, continuing each non-COMPLETED node from its
  * cursor (text) / durable_cursor (Parquet). A {@code <dir>} whose dataset is already complete (its
  * checkpoint was deleted on completion) reports "already complete" and exits 0. Credentials and
- * region resolve from the environment, exactly as a fresh {@code list} would. A directory-dataset
- * output is the only resumable regime.
+ * region resolve from the environment, exactly as a fresh {@code list} would — the one exception is
+ * {@code --bearer-token-command}, which is never stored in a checkpoint and so must be re-passed
+ * here. A directory-dataset output is the only resumable regime.
  */
 @Command(name = "resume", mixinStandardHelpOptions = true,
         description = "Resume a run by its output directory: swath resume <dir>.")
@@ -85,6 +86,30 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
             description = "Print live progress records to stderr (default: on when stderr is a "
                     + "terminal and neither -q nor -v was given).")
     Boolean progress;
+
+    /**
+     * The bearer-token levers, forwarded to the delegated {@link ListCommand} like {@code --stats}
+     * and {@code --progress}, but for a different reason: they are the one piece of connection
+     * config a resume cannot restore from the checkpoint. Every other auth flag
+     * ({@code --profile}, {@code --region}, {@code --no-sign-request}) is {@link ResumeClass#STICKY}
+     * and soft-restored, but {@code --bearer-token-command} is a command string that a resumed run
+     * would <i>execute</i>. Persisting it would let whoever can write a checkpoint choose that
+     * command, so it is {@link ResumeClass#FREE} and never stored — which leaves re-passing it here
+     * as the only way a resumed run against a bearer-auth endpoint (e.g. GCS's XML API) can
+     * authenticate at all.
+     */
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--bearer-token-command", paramLabel = "CMD",
+            description = "Shell command whose stdout is a fresh OAuth bearer token, used instead of "
+                    + "AWS SigV4 signing for every request. Never stored in the checkpoint, so a "
+                    + "resumed run against a bearer-auth endpoint must re-pass it.")
+    String bearerTokenCommand;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--bearer-token-refresh-interval", paramLabel = "DURATION",
+            description = "How often to re-run --bearer-token-command for a fresh token (default: 45m). "
+                    + "Size it comfortably under the token source's real expiry.")
+    String bearerTokenRefreshInterval;
 
     @Mixin
     final GlobalOptions global = new GlobalOptions();
@@ -140,6 +165,11 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         list.uri = id.scheme() + "://" + id.bucket() + "/"
                 + new String(id.prefix() == null ? new byte[0] : id.prefix(), StandardCharsets.UTF_8);
         list.connection.endpointUrl = id.endpoint();
+        // The one connection setting the checkpoint deliberately does not carry (see the field's
+        // javadoc): forward what the operator passed to `swath resume`, or leave it null for the
+        // ordinary SigV4 path.
+        list.connection.bearerTokenCommand = bearerTokenCommand;
+        list.connection.bearerTokenRefreshInterval = bearerTokenRefreshInterval;
         // Important: `list` is driven directly via #call(), never through picocli's
         // own parse of the "list" subcommand -- its OWN @Mixin GlobalOptions instance never sees
         // whatever -q/-v the user actually passed to `swath resume`. Propagate explicitly,

@@ -805,6 +805,44 @@ final class ResumeCommandTest {
         }
     }
 
+    /**
+     * {@code --bearer-token-command} must never reach the checkpoint: a persisted row would make
+     * {@code run_meta} decide which command a later {@code swath resume} executes, so whoever can
+     * write a checkpoint file could choose that command. FREE (no row) is the security property;
+     * {@link ResumeRegistryDriftTest#everyFreeOptionHasNoRegistryRow()} enforces the same invariant
+     * generically, but this names the reason so the classification is not "simplified" back to
+     * STICKY to match the {@code --profile}/{@code --region} block it sits in.
+     */
+    @Test
+    void bearerTokenOptionsAreNeverPersistedToTheCheckpoint() {
+        assertThat(ResumeRegistry.hasPersistedRow("--bearer-token-command")).isFalse();
+        assertThat(ResumeRegistry.hasPersistedRow("--bearer-token-refresh-interval")).isFalse();
+    }
+
+    /**
+     * Because they are never persisted (above), re-passing them on {@code swath resume} is the ONLY
+     * way a resumed run against a bearer-auth endpoint can authenticate — so the forwarding onto the
+     * delegated {@link ListCommand} is load-bearing, not a convenience.
+     *
+     * <p>One malformed-duration assertion pins BOTH forwardings at once, because
+     * {@code ConnectionOptions#resolveBearerTokenSupplier()} parses the interval only when the
+     * command is non-null: drop the command forwarding and it returns early (no throw); drop the
+     * interval forwarding and the 45m default is used (no throw).
+     */
+    @Test
+    void bearerTokenOptionsForwardOntoTheDelegatedListCommand(@TempDir Path tempDir) throws Exception {
+        Path outputDir = seedCompletedRunDir(tempDir);
+
+        ResumeCommand cmd = new ResumeCommand();
+        cmd.directory = outputDir;
+        cmd.bearerTokenCommand = "printf token";
+        cmd.bearerTokenRefreshInterval = "not-a-duration";
+
+        assertThatThrownBy(cmd::call)
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("bearer-token-refresh-interval");
+    }
+
     private static void overwriteOutputFormat(Path db, String format) throws Exception {
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
              PreparedStatement ps = c.prepareStatement("UPDATE run_meta SET output_format=?")) {
