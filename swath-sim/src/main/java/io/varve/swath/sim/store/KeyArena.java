@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sim.store;
 
+import io.varve.swath.replay.protocol.ByteKeys;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -44,20 +45,20 @@ final class KeyArena {
      */
     static final int SEGMENT_BYTES = 1 << 24;
 
-    private final byte[][] segments;
+    private final List<byte[]> segments;
     private final int segmentBytes;
     private final long[] offsets;
     private final int count;
 
-    private KeyArena(byte[][] segments, int segmentBytes, long[] offsets, int count) {
+    private KeyArena(List<byte[]> segments, int segmentBytes, long[] offsets, int count) {
         this.segments = segments;
         this.segmentBytes = segmentBytes;
         this.offsets = offsets;
         this.count = count;
     }
 
-    static Builder builder(long maxEncodedBytes) {
-        return new Builder(maxEncodedBytes, SEGMENT_BYTES);
+    static Builder builder(long maxEncodedBytes, int segmentBytes) {
+        return new Builder(maxEncodedBytes, segmentBytes);
     }
 
     /**
@@ -90,23 +91,7 @@ final class KeyArena {
     /** Unsigned byte-order comparison of key {@code index} against {@code other}, copy-free. */
     int compareKeyAt(int index, byte[] other) {
         long from = offsets[index];
-        int remaining = (int) (offsets[index + 1] - from);
-        int otherPos = 0;
-        while (remaining > 0 && otherPos < other.length) {
-            int segment = (int) (from / segmentBytes);
-            int position = (int) (from % segmentBytes);
-            int run = Math.min(remaining, segmentBytes - position);
-            run = Math.min(run, other.length - otherPos);
-            int cmp = Arrays.compareUnsigned(segments[segment], position, position + run,
-                    other, otherPos, otherPos + run);
-            if (cmp != 0) {
-                return cmp;
-            }
-            from += run;
-            remaining -= run;
-            otherPos += run;
-        }
-        return Integer.compare(remaining, other.length - otherPos);
+        return compareStored(segments, segmentBytes, from, (int) (offsets[index + 1] - from), other);
     }
 
     /** The first index whose key is {@code >= key} (== {@link #size()} when none is). */
@@ -144,10 +129,36 @@ final class KeyArena {
             int segment = (int) (from / segmentBytes);
             int position = (int) (from % segmentBytes);
             int run = Math.min(destination.length - written, segmentBytes - position);
-            System.arraycopy(segments[segment], position, destination, written, run);
+            System.arraycopy(segments.get(segment), position, destination, written, run);
             from += run;
             written += run;
         }
+    }
+
+    /**
+     * Unsigned comparison of the {@code length} stored bytes at global offset {@code from} against
+     * {@code other}, walking segment boundaries. Shared by the finished arena's {@link #compareKeyAt}
+     * and the builder's ascending-order check, so a boundary bug cannot exist on one side only.
+     */
+    private static int compareStored(List<byte[]> segments, int segmentBytes, long from, int length,
+                                     byte[] other) {
+        int remaining = length;
+        int otherPos = 0;
+        while (remaining > 0 && otherPos < other.length) {
+            int segment = (int) (from / segmentBytes);
+            int position = (int) (from % segmentBytes);
+            int run = Math.min(remaining, segmentBytes - position);
+            run = Math.min(run, other.length - otherPos);
+            int cmp = Arrays.compareUnsigned(segments.get(segment), position, position + run,
+                    other, otherPos, otherPos + run);
+            if (cmp != 0) {
+                return cmp;
+            }
+            from += run;
+            remaining -= run;
+            otherPos += run;
+        }
+        return Integer.compare(remaining, other.length - otherPos);
     }
 
     /**
@@ -185,12 +196,16 @@ final class KeyArena {
          * Appends {@code key}, or returns {@code false} without appending when it would exceed the
          * budget. Once {@code false} is returned the arena is over budget for good — the caller
          * abandons it rather than skipping a key and silently serving an incomplete fixture.
+         *
+         * @throws IllegalArgumentException when {@code key} is over-long, or not strictly above its
+         *                                  predecessor
          */
         boolean append(byte[] key) {
             if (key.length > MAX_KEY_BYTES) {
                 throw new IllegalArgumentException("key of " + key.length
                         + " bytes exceeds the " + MAX_KEY_BYTES + "-byte maximum");
             }
+            requireAscending(key);
             long end = used + key.length;
             if (encodedBytes(end, count + 1) > maxEncodedBytes) {
                 return false;
@@ -207,8 +222,28 @@ final class KeyArena {
         KeyArena build() {
             ensureOffsetCapacity(count + 1);
             offsets[count] = used;
-            return new KeyArena(segments.toArray(new byte[0][]), segmentBytes,
+            return new KeyArena(List.copyOf(segments), segmentBytes,
                     Arrays.copyOf(offsets, count + 1), count);
+        }
+
+        /**
+         * Every lookup this arena answers is a binary search, so a source that hands back a
+         * duplicate or an out-of-order key does not merely degrade it — it corrupts every later
+         * search, and the store then reports confident wrong answers. Fail loudly instead. The
+         * hazard is concrete: {@link ArenaListingStore#loadWithin} resumes each batch exclusively
+         * from the previous batch's last key, which is sound only for a strictly ascending source.
+         */
+        private void requireAscending(byte[] key) {
+            if (count == 0) {
+                return;
+            }
+            long previous = offsets[count - 1];
+            int cmp = compareStored(segments, segmentBytes, previous, (int) (used - previous), key);
+            if (cmp >= 0) {
+                throw new IllegalArgumentException("arena keys must arrive in strictly ascending unsigned "
+                        + "order; key " + count + " (" + ByteKeys.percentEncode(key) + ") is "
+                        + (cmp == 0 ? "a duplicate of" : "below") + " its predecessor");
+            }
         }
 
         private void ensureOffsetCapacity(int required) {

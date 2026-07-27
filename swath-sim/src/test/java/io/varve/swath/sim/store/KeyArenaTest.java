@@ -105,7 +105,8 @@ class KeyArenaTest {
         KeyArena.Builder longKeys = new KeyArena.Builder(budget, TIGHT_SEGMENT_BYTES);
 
         for (int i = 0; i < 8; i++) {
-            assertThat(shortKeys.append(new byte[8])).as("short key %d", i).isTrue();
+            assertThat(shortKeys.append(new byte[]{0, 0, 0, 0, 0, 0, 0, (byte) i}))
+                    .as("short key %d", i).isTrue();
         }
         assertThat(longKeys.append(new byte[KeyArena.MAX_KEY_BYTES])).isFalse();
     }
@@ -120,6 +121,47 @@ class KeyArenaTest {
         assertThat(builder.append(utf8("cccc"))).isFalse();
         // Declining does not corrupt what was already appended.
         assertThat(builder.build().size()).isEqualTo(2);
+    }
+
+    @Test
+    void appendRejectsANonAscendingKeyRatherThanCorruptingBinarySearch() {
+        KeyArena.Builder builder = new KeyArena.Builder(GENEROUS_BUDGET, TIGHT_SEGMENT_BYTES);
+        assertThat(builder.append(utf8("b"))).isTrue();
+
+        assertThatThrownBy(() -> builder.append(utf8("a")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("strictly ascending")
+                .hasMessageContaining("below");
+    }
+
+    @Test
+    void appendRejectsADuplicateKey() {
+        // A duplicate is as corrupting as an inversion: lowerBound/upperBound stop straddling it.
+        KeyArena.Builder builder = new KeyArena.Builder(GENEROUS_BUDGET, TIGHT_SEGMENT_BYTES);
+        assertThat(builder.append(utf8("dup"))).isTrue();
+
+        assertThatThrownBy(() -> builder.append(utf8("dup")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate");
+    }
+
+    @Test
+    void theAscendingCheckComparesAcrossASegmentBoundary() {
+        // The predecessor straddles the boundary, so the check must walk segments exactly as
+        // compareKeyAt does — a boundary-blind check would compare only the head and pass.
+        byte[] first = new byte[600];
+        Arrays.fill(first, (byte) 'a');
+        byte[] second = first.clone();
+        second[599] = 'b';
+        byte[] straddlingLower = first.clone();
+        straddlingLower[599] = 'A';
+        KeyArena.Builder builder = new KeyArena.Builder(GENEROUS_BUDGET, TIGHT_SEGMENT_BYTES);
+        assertThat(builder.append(first)).isTrue();
+        assertThat(builder.append(second)).isTrue();
+
+        assertThatThrownBy(() -> builder.append(straddlingLower))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("strictly ascending");
     }
 
     @Test

@@ -13,6 +13,8 @@ import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
+import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
@@ -26,6 +28,9 @@ import java.util.List;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * The arena tier answers the same key sequence as the Parquet-backed tier, over the same fixture,
@@ -57,33 +62,59 @@ class ArenaDifferentialTest {
     /** Beyond the pager's default seek-scan threshold (32), so a rollup takes the seek path. */
     private static final int WIDE_DIRECTORY_CHILDREN = 150;
 
+    /**
+     * The smallest legal segment. Loading the arena with it puts most fixture keys across a segment
+     * boundary, so the segmented layout is exercised through the pager and not only in
+     * {@link KeyArenaTest}; production always uses {@link KeyArena#SEGMENT_BYTES}.
+     */
+    private static final int TIGHT_SEGMENT_BYTES = KeyArena.MAX_KEY_BYTES;
+
     private static final String OBJECT_MARK = "O:";
     private static final String COMMON_PREFIX_MARK = "P:";
 
-    @Test
-    void arenaAndParquetAgreeOnKeysPaginationAndTruncation(@TempDir Path dir) throws IOException {
-        List<byte[]> keys = edgeCaseKeys();
-        Path fixture = writeCapture(dir, keys);
+    @TempDir
+    private Path dir;
 
+    /**
+     * The degenerate fixtures matter as much as the interesting one: an empty capture and a
+     * single-key capture are where a first-page, a lower bound and a truncation probe all collapse
+     * to the same edge, and they must collapse identically on both backends.
+     */
+    static List<Arguments> fixtures() {
+        return List.of(
+                Arguments.of("empty", List.of()),
+                Arguments.of("single-key", List.of(utf8("solo"))),
+                Arguments.of("edge-case-inventory", edgeCaseKeys()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("fixtures")
+    void arenaAndParquetAgreeOnKeysPaginationAndTruncation(String name, List<byte[]> keys) throws IOException {
+        Path fixture = writeCapture(dir, keys);
         List<Scenario> scenarios = scenarios(keys.size());
-        List<List<String>> arena = transcripts(fixture, SimStoreBackend.ARENA, scenarios);
-        List<List<String>> parquet = transcripts(fixture, SimStoreBackend.PARQUET, scenarios);
+
+        List<List<String>> parquet = transcripts(scenarios, parquetStore(fixture));
+        // Both the production segment size and a tight one, so a cross-segment key that the arena
+        // reassembled wrongly would show up as a pager-visible disagreement, not just a unit failure.
+        List<List<String>> arena = transcripts(scenarios, arenaStore(fixture));
+        List<List<String>> tightlySegmented = transcripts(scenarios, tightlySegmentedArenaStore(fixture));
 
         for (int i = 0; i < scenarios.size(); i++) {
-            assertThat(arena.get(i)).as("%s", scenarios.get(i)).isEqualTo(parquet.get(i));
+            assertThat(arena.get(i)).as("%s / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
+            assertThat(tightlySegmented.get(i))
+                    .as("%s / tight segments / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
         }
     }
 
     @Test
-    void theFlatWalkEnumeratesEveryFixtureKeyExactlyOnce(@TempDir Path dir) throws IOException {
+    void theFlatWalkEnumeratesEveryFixtureKeyExactlyOnce() throws IOException {
         // Without this, the differential above would pass just as happily on two stores that both
         // returned nothing. Small max-keys, so this is many continuation hops, not one page.
         List<byte[]> keys = edgeCaseKeys();
         Path fixture = writeCapture(dir, keys);
 
-        SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.ARENA, GENEROUS);
-        try (var store = result.store()) {
-            ListObjectsV2Pager pager = new ListObjectsV2Pager(store, result.metrics());
+        try (Opened opened = arenaStore(fixture)) {
+            ListObjectsV2Pager pager = new ListObjectsV2Pager(opened.store(), opened.metrics());
             List<String> walked = new ArrayList<>();
             for (String page : walk(pager, new Scenario(null, null, null, 3, false))) {
                 walked.addAll(objectKeysOf(page));
@@ -93,14 +124,12 @@ class ArenaDifferentialTest {
     }
 
     @Test
-    void metadataIsStubbedOnTheArenaAndFullOnParquet(@TempDir Path dir) throws IOException {
+    void metadataIsStubbedOnTheArenaAndFullOnParquet() throws IOException {
         Path fixture = writeCapture(dir, List.of(utf8("solo")));
 
-        SimStoreFactory.Result arena = SimStoreFactory.open(fixture, SimStoreBackend.ARENA, GENEROUS);
-        SimStoreFactory.Result parquet = SimStoreFactory.open(fixture, SimStoreBackend.PARQUET, GENEROUS);
-        try (var arenaStore = arena.store(); var parquetStore = parquet.store()) {
-            ListedObject fromArena = arenaStore.rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
-            ListedObject fromParquet = parquetStore.rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
+        try (Opened arena = arenaStore(fixture); Opened parquet = parquetStore(fixture)) {
+            ListedObject fromArena = arena.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
+            ListedObject fromParquet = parquet.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
 
             assertThat(fromArena.key()).isEqualTo(fromParquet.key());
             assertThat(fromArena.size()).isEqualTo(ArenaListingStore.STUB_SIZE);
@@ -154,8 +183,12 @@ class ArenaDifferentialTest {
         // Flat listing at page sizes that force many continuation hops, and one that does not.
         addProjections(scenarios, null, null, null, 1, 2, 3, 7, 1000);
         // max-keys=0 ⇒ empty and NOT truncated; then the exact-fit and off-by-one truncation
-        // boundaries, where "is there one more row" must agree across backends.
-        addProjections(scenarios, null, null, null, 0, keyCount - 1, keyCount, keyCount + 1);
+        // boundaries, where "is there one more row" must agree across backends. keyCount-1 only
+        // exists as a boundary once there is a key to be one short of.
+        addProjections(scenarios, null, null, null, 0, keyCount, keyCount + 1);
+        if (keyCount > 0) {
+            addProjections(scenarios, null, null, null, keyCount - 1);
+        }
         // Prefix windows: a wide one, a one-character one whose successor keys are adjacent, a
         // prefix that is itself a key, and one that matches nothing.
         addProjections(scenarios, utf8("wide/"), null, null, 1, 7, 1000);
@@ -205,12 +238,47 @@ class ArenaDifferentialTest {
         }
     }
 
-    private static List<List<String>> transcripts(Path fixture, SimStoreBackend backend,
-                                                  List<Scenario> scenarios) {
+    /** An opened store and the metrics its pager needs, closed as one. */
+    private record Opened(ListingStore store, ReplayMetrics metrics) implements AutoCloseable {
+
+        @Override
+        public void close() {
+            store.close();
+        }
+    }
+
+    private static Opened parquetStore(Path fixture) {
+        return forced(fixture, SimStoreBackend.PARQUET);
+    }
+
+    private static Opened arenaStore(Path fixture) {
+        return forced(fixture, SimStoreBackend.ARENA);
+    }
+
+    /**
+     * The arena again, but packed into {@value #TIGHT_SEGMENT_BYTES}-byte segments. The segment size
+     * is an internal encoding detail with no operator knob, so this reaches past the factory to the
+     * load seam rather than inventing a configuration surface for a test.
+     */
+    private static Opened tightlySegmentedArenaStore(Path fixture) {
+        SimStoreFactory.Result source = SimStoreFactory.open(fixture, SimStoreBackend.PARQUET, GENEROUS);
+        try (var parquet = source.store()) {
+            ArenaListingStore arena = ArenaListingStore
+                    .loadWithin(parquet, GENEROUS.arenaMaxEncodedBytes(), TIGHT_SEGMENT_BYTES)
+                    .orElseThrow();
+            return new Opened(arena, source.metrics());
+        }
+    }
+
+    private static Opened forced(Path fixture, SimStoreBackend backend) {
         SimStoreFactory.Result result = SimStoreFactory.open(fixture, backend, GENEROUS);
         assertThat(result.resolvedBackend()).as("forced backend").isEqualTo(backend);
-        try (var store = result.store()) {
-            ListObjectsV2Pager pager = new ListObjectsV2Pager(store, result.metrics());
+        return new Opened(result.store(), result.metrics());
+    }
+
+    private static List<List<String>> transcripts(List<Scenario> scenarios, Opened opened) {
+        try (opened) {
+            ListObjectsV2Pager pager = new ListObjectsV2Pager(opened.store(), opened.metrics());
             List<List<String>> transcripts = new ArrayList<>(scenarios.size());
             for (Scenario scenario : scenarios) {
                 transcripts.add(walk(pager, scenario));

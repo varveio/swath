@@ -71,7 +71,14 @@ public final class ArenaListingStore implements ListingStore {
      * it afterwards.
      */
     public static Optional<ArenaListingStore> loadWithin(ListingStore source, long maxEncodedBytes) {
-        KeyArena.Builder builder = KeyArena.builder(maxEncodedBytes);
+        return loadWithin(source, maxEncodedBytes, KeyArena.SEGMENT_BYTES);
+    }
+
+    // segmentBytes is a seam, not a knob: production always uses KeyArena.SEGMENT_BYTES, and a test
+    // pins it small so cross-segment keys are exercised end-to-end through the pager rather than
+    // only in the arena's own unit tests.
+    static Optional<ArenaListingStore> loadWithin(ListingStore source, long maxEncodedBytes, int segmentBytes) {
+        KeyArena.Builder builder = KeyArena.builder(maxEncodedBytes, segmentBytes);
         ByteKey cursor = null;
         while (true) {
             List<ListedObject> batch = source.rows(cursor, false, null, LOAD_BATCH_ROWS, Projection.KEYS_ONLY);
@@ -104,13 +111,14 @@ public final class ArenaListingStore implements ListingStore {
             return List.of();
         }
         int start = start(from, fromInclusive);
-        int size = arena.size();
-        byte[] upper = toExclusive == null ? null : toExclusive.toByteArray();
-        List<ListedObject> rows = new ArrayList<>(Math.min(limit, size - start));
-        for (int i = start; i < size && rows.size() < limit; i++) {
-            if (upper != null && arena.compareKeyAt(i, upper) >= 0) {
-                break;
-            }
+        // The exclusive upper bound is one more binary search, not a comparison per row: both ends
+        // of the half-open range are resolved to indices before a single key is materialised.
+        int end = toExclusive == null ? arena.size() : arena.lowerBound(toExclusive.toByteArray());
+        if (end <= start) {
+            return List.of();
+        }
+        List<ListedObject> rows = new ArrayList<>(Math.min(limit, end - start));
+        for (int i = start; i < end && rows.size() < limit; i++) {
             rows.add(stub(arena.keyAt(i)));
         }
         return rows;
