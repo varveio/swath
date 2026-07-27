@@ -7,6 +7,7 @@ package io.varve.swath.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import io.varve.swath.checkpoint.Node;
 import io.varve.swath.checkpoint.NodeSpec;
@@ -31,6 +32,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -155,15 +157,6 @@ final class ResumeParquetTest {
         Path dir = tmp.resolve("out");
         Files.createDirectories(dir);
 
-        // Small part target ⇒ parts rotate (finalize) mid-run, advancing durable_cursor;
-        // crash on the 9th fetch leaves earlier finalized parts durable + an open part to discard.
-        MockPageFetcher faulty = MockPageFetcher.builder().keys(all).maxKeysCap(5)
-                .interceptor((req, idx, page) -> {
-                    if (idx == 9) {
-                        throw new ListingException("injected late kill");
-                    }
-                    return page;
-                }).build();
         MockPageFetcher clean2 = MockPageFetcher.builder().keys(all).maxKeysCap(5).build();
         RunContext ctx = RunContext.create();
 
@@ -171,6 +164,27 @@ final class ResumeParquetTest {
             RunMeta run = store.openRun(runKey(), false, false);
             store.insertNode(NodeSpec.rootRange(run.id()));
             Node node = store.loadResumable(run.id(), true).getFirst();
+
+            // Small part target ⇒ parts rotate (finalize) mid-run, advancing durable_cursor;
+            // crash on the 9th fetch leaves earlier finalized parts durable + an open part to discard.
+            // Finalization runs on the ParquetWriterPool's own writer-lane thread
+            // (ParquetWriterPool#runLane, forked in the constructor), decoupled from this fetch
+            // thread — so on a slow/contended runner the abort at fetch idx 9 can win the race
+            // against the first part's finalize+record (ParquetWriterPool#finalizeCurrent), leaving
+            // zero finalized parts (#36). Force the ordering the precondition below depends on
+            // instead of hoping for it: block THIS fetch thread on the designated kill fetch until
+            // the store itself reports a finalized part, then throw. This cannot deadlock — the
+            // writer lane drains its already-submitted batches on its own thread regardless of
+            // whether the producer ever reaches fetch idx 9.
+            MockPageFetcher faulty = MockPageFetcher.builder().keys(all).maxKeysCap(5)
+                    .interceptor((req, idx, page) -> {
+                        if (idx == 9) {
+                            await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(20))
+                                    .until(() -> !store.finalizedParts(run.id()).isEmpty());
+                            throw new ListingException("injected late kill");
+                        }
+                        return page;
+                    }).build();
 
             assertThatThrownBy(() -> new ListRunner().runToParquetCheckpointed(
                     ctx, faulty, dir, spec(256), store, run.id(), node, List.of()))
