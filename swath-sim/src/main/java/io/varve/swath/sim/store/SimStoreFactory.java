@@ -82,20 +82,20 @@ public final class SimStoreFactory {
         MeterRegistry registry = new SimpleMeterRegistry();
         SimStoreMetrics simMetrics = new SimStoreMetrics(registry);
         // The same registry the sorted-eligibility derive pass records into (swath.replay.index.*)
-        // -- one shared registry describes the whole resolution, exactly as ReplayMetrics does below.
+        // -- one shared registry describes the whole resolution, exactly as each branch's own
+        // ReplayMetrics does.
         FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
-        // SERVING_MODE_DUCKDB even under ARENA, and that is not a mislabel: every backend here
-        // reads the fixture through the DuckDB-over-Parquet store -- ARENA and AUTO open it to
-        // stream the keys out, and only then decide whether to keep it -- so the replay-side
-        // serving tag describes the store that actually touched the file, truthfully, in all three
-        // cases. Which backend SERVES the simulation afterwards is a genuinely different fact and
-        // gets its own signal, swath.sim.store.backend, because under ARENA the two differ.
-        ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
 
         return switch (backend) {
-            case PARQUET -> resolved(parquetStore(fixturePath, metrics), SimStoreBackend.PARQUET,
-                    metrics, simMetrics);
+            case PARQUET -> {
+                ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
+                yield resolved(parquetStore(fixturePath, metrics), SimStoreBackend.PARQUET, metrics, simMetrics);
+            }
             case ARENA -> {
+                // SERVING_MODE_DUCKDB, and that is not a mislabel: the arena reads the fixture through
+                // the DuckDB-over-Parquet store to stream keys out, and only then decides whether to
+                // keep it, so the tag describes the store that actually touched the file, truthfully.
+                ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ArenaListingStore arena;
                 try (ListingStore source = parquetStore(fixturePath, metrics)) {
                     arena = loadArena(source, config).orElseThrow(() -> new IllegalArgumentException(
@@ -107,6 +107,7 @@ public final class SimStoreFactory {
                 yield resolved(arena, SimStoreBackend.ARENA, metrics, simMetrics);
             }
             case WINDOWED -> {
+                ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
                 List<Path> files = resolveFiles(fixturePath);
                 // recordFallbackOnFailure=false: a forced backend that declines hard-fails, so this
                 // is not a "fallback" any more than ARENA's own forced decline above is.
@@ -121,7 +122,8 @@ public final class SimStoreFactory {
                                 + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + fixturePath);
             }
             case AUTO -> {
-                ListingStore source = parquetStore(fixturePath, metrics);
+                ReplayMetrics duckdbMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
+                ListingStore source = parquetStore(fixturePath, duckdbMetrics);
                 Optional<ArenaListingStore> arena;
                 try {
                     arena = loadArena(source, config);
@@ -131,24 +133,35 @@ public final class SimStoreFactory {
                 }
                 if (arena.isPresent()) {
                     source.close();
-                    yield resolved(arena.get(), SimStoreBackend.ARENA, metrics, simMetrics);
+                    yield resolved(arena.get(), SimStoreBackend.ARENA, duckdbMetrics, simMetrics);
                 }
                 simMetrics.recordArenaDecline(SimStoreMetrics.DECLINE_OVER_BUDGET);
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
                         + "— trying the windowed tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
 
-                List<Path> files = resolveFiles(fixturePath);
-                SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, true);
+                // source is still open here (the abandoned DuckDB pool, kept as the PARQUET fallback
+                // in case windowed also declines) -- a resolveFiles/decide failure must close it too,
+                // exactly like the arena step just above, or it leaks.
+                List<Path> files;
+                SortedEligibility.Result eligibility;
+                try {
+                    files = resolveFiles(fixturePath);
+                    eligibility = SortedEligibility.decide(files, fixtureMetrics, true);
+                } catch (RuntimeException e) {
+                    source.close();
+                    throw e;
+                }
                 if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
                     source.close();
-                    yield resolved(windowedStore(files, eligible.index(), metrics), SimStoreBackend.WINDOWED,
-                            metrics, simMetrics);
+                    ReplayMetrics sortedMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
+                    yield resolved(windowedStore(files, eligible.index(), sortedMetrics), SimStoreBackend.WINDOWED,
+                            sortedMetrics, simMetrics);
                 }
                 String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
                 simMetrics.recordWindowedDecline(reason);
                 log.info("sim_store auto declined the windowed tier (reason={}) — falling back to {} for {}",
                         reason, SimStoreBackend.PARQUET, fixturePath);
-                yield resolved(source, SimStoreBackend.PARQUET, metrics, simMetrics);
+                yield resolved(source, SimStoreBackend.PARQUET, duckdbMetrics, simMetrics);
             }
         };
     }
@@ -170,16 +183,26 @@ public final class SimStoreFactory {
     /**
      * The windowed tier: {@link WindowedListingStore} wrapping the replay module's sorted-Parquet
      * store as-is, in process — no JDBC/HTTP round trip, just the decorator's sequential-window
-     * prefetch over an already-local reader. {@code window-rows}/{@code max-windows} come from the
-     * same {@code swath.replay.prefetch.*} properties the replay server's sorted-serving path reads,
-     * rather than a second sim-only knob for the same tuning.
+     * prefetch over an already-local reader. {@code window-rows}/{@code max-windows}/{@code enabled}
+     * come from the same {@code swath.replay.prefetch.*} properties the replay server's
+     * sorted-serving path reads, rather than a second sim-only knob for the same tuning — including
+     * {@code enabled}: an operator who has turned prefetch off for the replay server must see the
+     * identical store served bare here too, mirroring {@code ReplayServingFactory#sorted}.
      */
     private static ListingStore windowedStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
+        // Read the prefetch config before opening any connection, so a malformed
+        // swath.replay.prefetch.* property can't leak a freshly-opened DuckDB pool.
+        WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
+        int connections = SortedParquetStore.defaultConnectionCount();
+        if (!prefetch.enabled()) {
+            log.info("sim_store windowed prefetch DISABLED (bare store) for {}", files);
+            return new SortedParquetStore(files, index, metrics, connections);
+        }
         // recordPageReadLatency=false: the wrapper owns the outer per-page timer, same reasoning as
         // the replay server's own sorted-serving wiring (SortedParquetStore's javadoc).
-        SortedParquetStore backing = new SortedParquetStore(files, index, metrics,
-                SortedParquetStore.defaultConnectionCount(), false);
-        WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
+        SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
+        log.info("sim_store windowed prefetch ENABLED (window_rows={} max_windows={}) for {}",
+                prefetch.windowRows(), prefetch.maxWindows(), files);
         return new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
     }
 

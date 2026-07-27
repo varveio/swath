@@ -10,7 +10,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.varve.swath.replay.protocol.ListedObject;
+import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.Projection;
+import io.varve.swath.replay.store.SortedParquetStore;
 import io.varve.swath.replay.store.WindowedListingStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
@@ -32,6 +34,9 @@ class SimStoreFactoryTest {
 
     /** Room for two 8-byte keys — far less than the fixture below needs. */
     private static final SimStoreConfig TINY = new SimStoreConfig(KeyArena.encodedBytes(16, 2));
+
+    /** Mirrors {@code WindowedListingStore}'s own (package-private) property name. */
+    private static final String PREFETCH_ENABLED_PROPERTY = "swath.replay.prefetch.enabled";
 
     @Test
     void forcedArenaServesStubbedMetadataAndRecordsTheBackend(@TempDir Path dir) throws IOException {
@@ -132,6 +137,47 @@ class SimStoreFactoryTest {
                 .tag("reason", SimStoreMetrics.DECLINE_OVER_BUDGET).counter().count()).isEqualTo(1);
     }
 
+    /**
+     * Each store here reuses a replay-side {@link ReplayMetrics}, and the {@code serving_mode} tag
+     * it carries must name the store that ACTUALLY reads the fixture -- {@code sorted} for windowed
+     * (it wraps {@link SortedParquetStore}, never {@link io.varve.swath.replay.store.DuckDbListingStore}),
+     * {@code duckdb} for arena/parquet/the two AUTO cases that don't resolve to windowed -- not a
+     * single tag copied across every backend regardless of what actually served.
+     */
+    @Test
+    void eachBackendTagsItsMetricsWithTheStoreThatActuallyServes(@TempDir Path dir) throws IOException {
+        assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "parquet")), SimStoreBackend.PARQUET, GENEROUS),
+                ReplayMetrics.SERVING_MODE_DUCKDB);
+        assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "arena")), SimStoreBackend.ARENA, GENEROUS),
+                ReplayMetrics.SERVING_MODE_DUCKDB);
+        assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "windowed")), SimStoreBackend.WINDOWED, GENEROUS),
+                ReplayMetrics.SERVING_MODE_SORTED);
+        assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "auto-arena")), SimStoreBackend.AUTO, GENEROUS),
+                ReplayMetrics.SERVING_MODE_DUCKDB);
+        assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "auto-windowed")), SimStoreBackend.AUTO, TINY),
+                ReplayMetrics.SERVING_MODE_SORTED);
+        assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "auto-parquet")), SimStoreBackend.AUTO, TINY),
+                ReplayMetrics.SERVING_MODE_DUCKDB);
+    }
+
+    @Test
+    void windowedHonoursPrefetchDisabledAndServesTheBareSortedStore(@TempDir Path dir) throws IOException {
+        String previous = System.getProperty(PREFETCH_ENABLED_PROPERTY);
+        System.setProperty(PREFETCH_ENABLED_PROPERTY, "false");
+        try {
+            SimStoreFactory.Result result = SimStoreFactory.open(sortedFixture(dir), SimStoreBackend.WINDOWED, GENEROUS);
+            try (var store = result.store()) {
+                assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.WINDOWED);
+                // Bare SortedParquetStore, not the WindowedListingStore decorator -- mirroring
+                // ReplayServingFactory#sorted's own bare-store path when prefetch is disabled.
+                assertThat(store).isInstanceOf(SortedParquetStore.class);
+                assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
+            }
+        } finally {
+            restoreProperty(PREFETCH_ENABLED_PROPERTY, previous);
+        }
+    }
+
     @Test
     void theConfiglessEntryPointReadsTheThresholdFromTheSystemProperty(@TempDir Path dir) throws IOException {
         // The forced-ARENA failure message tells an operator to raise this property, so the
@@ -179,6 +225,25 @@ class SimStoreFactoryTest {
         Path out = Files.createDirectory(dir.resolve("out"));
         new CaptureSorter(SortConfigs.base()).sort(capture, out);
         return out;
+    }
+
+    private static Path mkdir(Path parent, String name) throws IOException {
+        return Files.createDirectory(parent.resolve(name));
+    }
+
+    private static void assertServingMode(SimStoreFactory.Result result, String expected) {
+        try (var store = result.store()) {
+            assertThat(result.metrics().servingMode()).as("resolved %s", result.resolvedBackend())
+                    .isEqualTo(expected);
+        }
+    }
+
+    private static void restoreProperty(String name, String previous) {
+        if (previous == null) {
+            System.clearProperty(name);
+        } else {
+            System.setProperty(name, previous);
+        }
     }
 
     private static MeterRegistry registry(SimStoreFactory.Result result) {

@@ -50,8 +50,10 @@ regression.
 pure-`OBJECT` capture, the same eligibility the replay server's own `--serving-mode sorted` checks
 (`SortedEligibility`, shared code). A fixture that is not sorted-eligible fails fast under a
 forced `WINDOWED` request, and falls back to `PARQUET` under `AUTO`. The decorator's own
-`window-rows`/`max-windows` come from the replay server's `swath.replay.prefetch.*` system
-properties — one tuning surface for both callers, not a second sim-only knob for the same thing.
+`enabled`/`window-rows`/`max-windows` come from the replay server's `swath.replay.prefetch.*`
+system properties — one tuning surface for both callers, not a second sim-only knob for the same
+thing — so `swath.replay.prefetch.enabled=false` serves the bare sorted-Parquet store here too,
+exactly as it does for `--serving-mode sorted`.
 
 ### The sim-mode projection
 
