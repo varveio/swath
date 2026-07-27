@@ -1,5 +1,10 @@
 [versions]
-picocli = "4.7.7"
+# Pinned below the rest of this group's bump: 4.7.7 regressed picocli-codegen's @ArgGroup
+# validation for an ArgGroup class reused across commands (our BearerTokenOptions, shared by
+# ConnectionOptions and ResumeCommand) -- see https://github.com/remkop/picocli/issues/2407,
+# fixed upstream in PR #2508 but not yet released (4.7.7 is still latest on Maven Central).
+# Bump back to 4.7.7+ once a fixed release ships.
+picocli = "4.7.6"
 slf4j = "2.0.18"
 logback = "1.6.0"
 micrometer = "1.17.0"

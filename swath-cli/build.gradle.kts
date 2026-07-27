@@ -106,6 +106,13 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     archiveClassifier.set("")
     archiveVersion.set("")
 
+    // Shadow 9's duplicatesStrategy defaults to EXCLUDE, which drops every colliding
+    // resource but the first one BEFORE mergeServiceFiles()/append() below ever see it --
+    // silently keeping only one jar's service file or legal notice instead of merging
+    // them. INCLUDE hands every duplicate to the transformers so they can actually merge.
+    // See https://gradleup.com/shadow/changes/ (8.x -> 9.x breaking changes).
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
     // Coalesce colliding META-INF/services entries (hadoop FileSystem, AWS SDK
     // providers) — without this, shading silently keeps only one jar's service file
     // and the fat jar throws ServiceConfigurationError / "No FileSystem for scheme:
@@ -169,7 +176,7 @@ val verifyLegalArtifactContents by tasks.registering {
         // Assert actual text, not merely an arbitrary META-INF/NOTICE survivor. These
         // components exercise the Avro/Hadoop/AWS notice variants present in the CLI graph.
         val licenseReportDir = layout.buildDirectory.dir("reports/licenses").get().asFile
-        listOf("avro-1.9.2.jar", "hadoop-common-3.4.1.jar", "annotations-2.31.78.jar").forEach { artifact ->
+        listOf("avro-1.11.5.jar", "hadoop-common-3.5.0.jar", "annotations-2.49.3.jar").forEach { artifact ->
             val notice = licenseReportDir.resolve("$artifact/META-INF/NOTICE")
             val noticeTxt = licenseReportDir.resolve("$artifact/META-INF/NOTICE.txt")
             val source = listOf(notice, noticeTxt).firstOrNull { it.isFile }
