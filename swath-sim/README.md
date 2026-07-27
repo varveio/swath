@@ -324,11 +324,49 @@ Two parts of that record are worth naming, because a counter total cannot expres
   artifact of the kernel rather than a property of the modelled fleet — **so a comparison between runs
   belongs on the timeline's end, not on the kernel's.**
 - **Position-sensor readings.** Whether the arithmetic the policies steer on can see a given keyspace
-  at all: how many page commits moved the cursor without moving `fracIn`, and how many scanned victims
-  had a consumed span of zero, which is the case where `estRemaining` discards the emitted keys it was
-  given. These are computed by the executor from the same public `StealMath` the decisions call —
-  nothing in swath-core changes to produce them — because whether a sensor works is a property of the
-  keys, and a fixture that defeats it needs to be able to say so in numbers.
+  at all: how many page commits moved the cursor without moving the run's position metric, and how many
+  scanned victims had a degenerate estimate — one that read zero, or one that discarded the emitted keys
+  it was given. Nothing in swath-core changes to produce them, because whether a sensor works is a
+  property of the keys, and a fixture that defeats it needs to be able to say so in numbers. They are
+  read **through whichever sensor the run steers on** (below): the question a counter answers is whether
+  *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
+  would report the disease while the cure was running.
+
+### Swapping the position sensor
+
+Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
+quantity: estimated remaining work on a range. The engine computes it one way — a local density times a
+remaining span, both measured in a byte window anchored at the divergence of the range's own bounds —
+and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes the quantity swappable
+*here*, so a candidate cure can be run against a fixture without the engine changing at all:
+
+| variant | reading |
+|---|---|
+| `CURRENT` | the shipped one; delegates to the engine's own public `StealMath`, so a control leg is the algorithm and not a copy of it |
+| `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
+| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one wherever the shipped window can already see the cursor |
+| `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
+
+`SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
+the shipped sensor and reads exactly what it read before. Victim selection and the owner-split gate
+chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
+pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
+drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical
+decisions, so a copy that drifts fails a test rather than becoming a race result.
+
+**What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
+four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key
+page all three candidates remove the serial tail — 0.33 down to 0.0003–0.0090 at every seed, ~28% less
+virtual time, mean occupancy 5.5 → ~7.9 of 8 workers, and *fewer* store calls. The mechanism is the one
+the estimate gates directly: owner carves refused by the remaining-work floor fall by an order of
+magnitude per page committed, and what replaces them is the demand gate declining to carve because
+there is already enough work queued. **At the measured 1,000-key page every candidate is worse, at every
+seed**, because an estimate with no sense of position places the owner's carve on a nearly-drained range,
+the child comes back confetti-sized, and the feedback gate that watches for that shuts owner splitting
+down for the rest of the run. The rate variant alone also damages the hash-fanned healthy shape, at two
+of four seeds, for the same reason. None of the three is shippable as it stands; what the race
+establishes is that the sensor, and not the split policy above it, is what gates division on that
+keyspace.
 
 ### What a run costs to produce
 
