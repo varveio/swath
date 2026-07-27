@@ -36,7 +36,9 @@ public final class SimStoreMetrics {
      *  eligibility reason that fired. */
     public static final String STREAMING_DECLINE_METRIC = "swath.sim.store.streaming.decline";
 
-    /** Bumped once per range read served entirely from an already-decoded segment. */
+    /** Bumped once per already-decoded segment a range read touches — a read spanning several
+     *  segments can bump this once per segment and still bump {@link #SEGMENT_FAULT_METRIC} for
+     *  another one of them, so the two are not mutually exclusive outcomes of a single read. */
     public static final String SEGMENT_HIT_METRIC = "swath.sim.store.streaming.segment.hit";
 
     /** Bumped once per segment fault, tagged {@link #FAULT_FORWARD} or {@link #FAULT_SEEK}. */
@@ -110,6 +112,11 @@ public final class SimStoreMetrics {
      * quantity a residency budget is checked against is the value right now, not a total.
      */
     public void registerStreamingResidentBytes(Supplier<Number> residentBytes) {
+        // Micrometer's Gauge normally holds only a weak reference to its value source, but the
+        // registered Meter holds `residentBytes` (here a bound method reference onto the store
+        // itself) strongly, and the gauge is never explicitly deregistered. Safe only because each
+        // SimStoreFactory.open() call gets its own fresh, unshared MeterRegistry and untagged name,
+        // so the gauge's lifetime is the registry's (and the store's, which it keeps alive).
         Gauge.builder(RESIDENT_BYTES_METRIC, residentBytes).register(registry);
     }
 

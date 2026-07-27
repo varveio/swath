@@ -21,8 +21,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * The giant-fixture tier: <b>decode each region of a sorted fixture once</b>, as simulated streams
@@ -64,8 +62,8 @@ import org.slf4j.LoggerFactory;
  * enough for a fleet of ~30 concurrent cursors, on a fixture of any size, since residency is a
  * function of the budget and never of the key count. It is off-heap, so it sits beside the JVM heap
  * rather than inside it. Raise it (or lower it) through
- * {@link SimStoreConfig#STREAMING_MAX_RESIDENT_BYTES_PROPERTY}; a budget below two segments makes
- * every boundary crossing re-decode and is warned about once.
+ * {@link SimStoreConfig#STREAMING_MAX_RESIDENT_BYTES_PROPERTY}; a budget too small to hold even one
+ * row group's decoded keys fails fast at the first decode that hits it, naming the property to raise.
  *
  * <p>The budget bounds the <b>settled</b> residency. A fault transiently exceeds it, because the
  * block being decoded is built before the eviction it triggers frees anything: worst case, the
@@ -90,8 +88,6 @@ import org.slf4j.LoggerFactory;
  */
 public final class StreamingListingStore implements ListingStore {
 
-    private static final Logger log = LoggerFactory.getLogger(StreamingListingStore.class);
-
     private final List<IndexEntry> index;
     private final SimStoreMetrics metrics;
     private final long maxResidentBytes;
@@ -101,7 +97,6 @@ public final class StreamingListingStore implements ListingStore {
     private final LinkedHashMap<Integer, KeyBlock> resident = new LinkedHashMap<>(16, 0.75f, true);
     private long residentBytes;
     private long peakResidentBytes;
-    private boolean warnedUndersizedBudget;
 
     /**
      * @param index            the derived {@code (file, rowGroup, firstKey, rowCount)} routing index of a
@@ -270,12 +265,6 @@ public final class StreamingListingStore implements ListingStore {
             residentBytes -= eldest.getValue().residentBytes();
             eldest.getValue().close();
             metrics.recordStreamingSegmentEvict();
-        }
-        if (residentBytes > maxResidentBytes && !warnedUndersizedBudget) {
-            warnedUndersizedBudget = true;
-            log.warn("sim_store streaming residency budget ({} bytes) is smaller than a single decoded "
-                    + "row group ({} bytes) — every crossing between row groups will re-decode; raise {}",
-                    maxResidentBytes, residentBytes, SimStoreConfig.STREAMING_MAX_RESIDENT_BYTES_PROPERTY);
         }
     }
 
