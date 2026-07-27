@@ -4,7 +4,8 @@ import org.gradle.jvm.application.tasks.CreateStartScripts
 plugins {
     id("swath.java-conventions")
     application
-    // testkit: ObjectEntries/ParquetFixtures — the fixture builders this module's own suites use.
+    // testkit: ObjectEntries/ParquetFixtures/FakeListingStore — the fixture builders and the
+    // range-only in-memory store this module's own suites use.
     // Published as test fixtures rather than kept in `src/test` so a sibling tool module can drive
     // the same capture shapes instead of re-deriving them (`swath-sim`'s differential suite).
     `java-test-fixtures`
