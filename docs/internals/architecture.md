@@ -71,7 +71,7 @@ The four CLOSED exceptions:
   proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
   `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
   `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded generator for
-  live-run determinism is no longer a deferred question (owner decision 2026-07-26): it is an
+  live-run determinism is no longer a deferred question: it is an
   **opt-in** `EngineContext#decisionRngSeed` seam, `null` by default. Unset, `WorkStealingScan`
   threads `Thief`'s identical ambient default (`ThreadLocalRandom.current()`) — byte-identical to
   every run before this seam existed, goldens untouched. Set, every worker instead draws from a

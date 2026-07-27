@@ -11,7 +11,7 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The opt-in seeded live {@link DecisionRng} (owner decision 2026-07-26): a per-worker deterministic
+ * The opt-in seeded live {@link DecisionRng}: a per-worker deterministic
  * stream instead of {@link Thief}'s ambient {@code ThreadLocalRandom} default, threaded when {@link
  * EngineContext#decisionRngSeed()} is non-null. Unset (the documented default), {@link
  * WorkStealingScan} never constructs this class at all — the live engine's default draw stays exactly

@@ -178,7 +178,7 @@ final class WorkStealingScanConstructorDefaultsTest {
     }
 
     // =========================================================================
-    // decisionRngSeed: opt-in wiring into Thief's ThiefPolicy (owner decision 2026-07-26)
+    // decisionRngSeed: opt-in wiring into Thief's ThiefPolicy
     // =========================================================================
 
     /**
@@ -232,7 +232,7 @@ final class WorkStealingScanConstructorDefaultsTest {
                         new EngineContext(id, p, m, metrics, null, null, null).withDecisionRngSeed(42L),
                         f, s, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY));
 
-        assertThat(seeded.stealReasons().getOrDefault("TOGGLE.decision_rng_seeded", 0L))
+        assertThat(mark(seeded, "TOGGLE.decision_rng_seeded"))
                 .as("a seeded run marks the opt-in branch exactly once, at engine construction")
                 .isEqualTo(1L);
     }

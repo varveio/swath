@@ -189,7 +189,7 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   alphabet-digest state, the `unchangedSinceNonProductiveSteal` flag, and both
   structure-probe streaks. Issue #25 offered two ways to settle this permanently
   (record the full view, or document the subset as a deliberate scope boundary); the
-  owner decision (2026-07-26) took option 1. `poolView` now computes every one of
+  first was chosen. `poolView` now computes every one of
   those fields for **every** candidate (not just the one `selectVictim` eventually
   picks — which candidate wins is itself part of the decision under test, so recording
   only the winner's per-attempt state would make the view's own shape depend on the

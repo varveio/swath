@@ -25,7 +25,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
- * The opt-in seeded {@link DecisionRng} live default (owner decision 2026-07-26): per-worker seed
+ * The opt-in seeded {@link DecisionRng} live default: per-worker seed
  * derivation ({@link SeededDecisionRng#deriveWorkerSeed}), its own draw-sequence determinism, and an
  * end-to-end replay through {@link Thief}'s structure-probe suppression escape hatch (the one
  * consumer — {@code ThiefPolicy#structureProbingEnabled}, contracts.md §2.1) to prove the wiring, not
