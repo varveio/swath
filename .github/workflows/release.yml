@@ -28,9 +28,25 @@ jobs:
       # gradle/actions/setup-gradle@v4
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
 
+      # -PnoIntegration matches ci.yml's fast-tests EXACTLY, and that is the point: this
+      # must be an invocation CI runs on every PR and every merge, so a release cannot
+      # fail in a way no merge would have caught.
+      #
+      # A bare `./gradlew build` is NOT that. It runs the fast and integration tiers
+      # together, so swath-core's timing-sensitive tests execute across parallel forks
+      # while other modules' Testcontainers/LocalStack ITs start containers alongside them
+      # — the exact cross-fork contention the tier split in swath.java-conventions exists
+      # to prevent (see its maxParallelForks comment). On a 4-core runner that made the
+      # release build flaky by construction: the first two v0.1.0 attempts failed on two
+      # DIFFERENT timing assertions that both pass on main. See issue #62.
+      #
+      # Integration coverage for the released commit comes from ci.yml's integration-tests
+      # job on main, and deep coverage from deep-tests — neither of which the release build
+      # ran even before this change.
       - name: Verify tag and build the release once
         run: |
-          ./gradlew verifyReleaseVersion build :swath-cli:shadowJar :swath-cli:distZip :swath-cli:distTar \
+          ./gradlew verifyReleaseVersion build -PnoIntegration \
+            :swath-cli:shadowJar :swath-cli:distZip :swath-cli:distTar \
             -PreleaseTag="${GITHUB_REF_NAME}" --no-daemon --stacktrace
 
       - id: version
