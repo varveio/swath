@@ -236,7 +236,7 @@ jobs:
           # (read-only token) — degrade to a warning instead of failing the build.
           cache-to: type=gha,mode=max,ignore-error=true
 
-      - name: Build native image + load for smoke
+      - name: Build image (builder-native arch) + load for smoke
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -304,10 +304,10 @@ jobs:
       - name: Verify container-promotion payload
         run: ./scripts/ci/verify-container-promotion.sh promote
 
-      # Smoke BEFORE push: build the native image, run the deep runtime smoke,
+      # Smoke BEFORE push: build the builder-native-arch image, run the deep runtime smoke,
       # and only push if it passes — so a shading/exclude/runtime regression can
       # never reach the GHCR tags (`branch`/`sha-`).
-      - name: Build native image + load for deep smoke
+      - name: Build image (builder-native arch) + load for deep smoke
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -392,7 +392,7 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
 
-      # Provenance note: the deep smoke above ran the native `--load`ed amd64 image;
+      # Provenance note: the deep smoke above ran the `--load`ed builder-native amd64 image;
       # this step rebuilds the multi-arch manifest from the SAME build cache in the
       # SAME job seconds later, so the pushed amd64 is effectively the smoked amd64.
       # Two residual facts, accepted as low-risk for an arch-neutral RUN-free jar:
