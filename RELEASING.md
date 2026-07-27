@@ -21,9 +21,14 @@ human side of it.
 ## Container tags
 
 - **Releases** publish `ghcr.io/varveio/swath:X.Y.Z` and `:latest`.
-- **Development builds** (main / manual CI) publish immutable `sha-<gitsha>` and branch
-  tags. `:latest` is owned solely by releases. To pin an exact build, use the immutable
-  digest: `ghcr.io/varveio/swath@sha256:…`.
+- **Merges to `main`** publish the immutable `sha-<gitsha>` tag plus the mutable `main`
+  pointer.
+- **Manual dispatch** (any branch) publishes `sha-<gitsha>` **only** — the branch-name tag
+  is restricted to `main`, so internal branch names never reach the public package. Pull a
+  branch build by its `sha-` tag.
+- `:latest` and every semver tag are owned solely by releases; no development build can
+  regress them. To pin an exact build, use the immutable digest:
+  `ghcr.io/varveio/swath@sha256:…`.
 
 ## Cutting a release
 
