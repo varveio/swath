@@ -111,7 +111,7 @@ public final class SortedEligibility {
      * reusing an index, or a file whose index exceeds the observed count, fails the contiguity check
      * instead. Returns {@code null} when the set is complete; otherwise a detail string for logs.
      */
-    public static String multiFileCompletenessViolation(List<Path> files, List<SortStamp> stamps) {
+    static String multiFileCompletenessViolation(List<Path> files, List<SortStamp> stamps) {
         int n = files.size();
         boolean[] seen = new boolean[n + 1];   // 1-based; seen[0] unused
         int finalCount = 0;
