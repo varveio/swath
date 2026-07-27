@@ -12,6 +12,9 @@ package io.varve.swath.sim.kernel;
  *
  * <p>Ordinals participate in the seed derivation, so <b>appending</b> a constant is safe while
  * reordering or removing one silently re-tapes every run recorded before the change.
+ *
+ * <p>The isolation is between constants, not within one: a single stream is consumed in event order,
+ * so moving when an actor reaches a draw changes the value it gets (see {@link SimRng}).
  */
 public enum SimRngStream {
 

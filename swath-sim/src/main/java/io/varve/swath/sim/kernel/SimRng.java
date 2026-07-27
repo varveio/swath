@@ -15,8 +15,23 @@ package io.varve.swath.sim.kernel;
  * them, which is the opposite of reproducible under a policy change: adding one extra decision to
  * actor 3 would shift every subsequent draw of actors 0..N. Each (actor, purpose) pair instead owns
  * its own stream, so a change confined to one actor's latency draws cannot move another actor's
- * decision draws. This mirrors the engine's own per-worker seeded {@code DecisionRng}, which derives
- * worker {@code k}'s seed the same way and for the same reason.
+ * decision draws.
+ *
+ * <p><b>How far that isolation goes, precisely.</b> It is <em>between</em> (actor, purpose) pairs, not
+ * within one. Inside a single pair the tape is consumed in event order, so an actor that reaches a
+ * given draw one event later than it used to gets a different value — the {@code n}-th draw of a tape
+ * is fixed, but which decision is the {@code n}-th is not. This is the same property the engine's own
+ * per-worker generator has, and it is why the determinism claim is stated as "one scenario at one seed
+ * reproduces itself", never as "a draw is pinned to a decision". Reading it more strongly than that
+ * would make an ordinary policy change look like a defect.
+ *
+ * <p><b>Parity contract with the live engine.</b> This derivation deliberately mirrors
+ * {@code io.varve.swath.engine.SeededDecisionRng#deriveWorkerSeed} in swath-core: the same SplitMix64
+ * mixing constants, the same golden-ratio offset per identity, and the same refusal to read the
+ * worker/actor <em>count</em>. The two are separate implementations on purpose — the sim must not
+ * depend on an engine-internal class, and the engine's own seeding must stay opt-in and unchanged —
+ * so the parity is a convention, and each side's javadoc names the other so that a change to one is
+ * visibly a change that has to be made to both.
  *
  * <p><b>Why a mixed derivation rather than {@code baseSeed + actorId}.</b> {@link #forStream} runs
  * SplitMix64's mixing/finalizer step over the base seed offset by the actor id and again over the

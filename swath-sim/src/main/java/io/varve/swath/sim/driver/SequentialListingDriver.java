@@ -53,9 +53,17 @@ import java.util.List;
  */
 public final class SequentialListingDriver {
 
-    /** Store calls issued. */
+    /**
+     * Store calls <b>issued</b>, counted when the request goes out rather than when its response
+     * arrives. On a run that quiesced the two are the same number; on a run cut short by a duration or
+     * event ceiling this <b>overstates</b> the calls actually answered, by however many were in flight
+     * at the ceiling. Deliberate, and the same bias (and the same reasoning) as the FIFO resource's
+     * service accounting: an issued-but-unanswered call is work the modelled system committed to, and
+     * counting at arrival instead would silently drop it. Read it as "calls issued", and read a
+     * truncated run's numbers as upper bounds.
+     */
     public static final String STORE_CALLS_COUNTER = "store.calls";
-    /** Keys returned across every call. */
+    /** Keys returned across every call — counted on arrival, so only answered pages contribute. */
     public static final String KEYS_LISTED_COUNTER = "store.keys";
     /** Ranges taken off the shared work list. */
     public static final String RANGES_CLAIMED_COUNTER = "ranges.claimed";
@@ -113,6 +121,8 @@ public final class SequentialListingDriver {
      */
     private void issueCall(SimContext ctx, KeyRange range, ByteKey from, boolean fromInclusive) {
         long serviceNanos = scenario.latency().drawNanos(CallClass.WORKER_PAGE, ctx.rng(SimRngStream.LATENCY));
+        // Counted at REQUEST time, not on arrival -- see the counter constant's own javadoc for why,
+        // and for how to read it on a run that a ceiling cut short.
         ctx.count(STORE_CALLS_COUNTER, 1);
         ctx.record("list.request", bound(from) + "|inclusive=" + fromInclusive
                 + "|limit=" + scenario.pageSize());
