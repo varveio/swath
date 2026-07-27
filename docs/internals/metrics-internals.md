@@ -152,6 +152,7 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 | `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
 | `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
 | `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
+| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, part MD5, manifest rewrite), timed on the lane's own thread between two waits on its queue. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize. Parquet-sink runs only. |
 
 **Reading it.** The spans are percentile-bearing precisely because a per-page cost read as a MEAN
 cannot distinguish an iid per-page cost from a queue behind a shared single writer — whose tail grows
@@ -163,6 +164,15 @@ deliberately NOT here: it is attributable per call class, so it lives in `probe_
 `checkpoint_commit_wait` is near-zero (but still recorded) on a run with no checkpoint — there is
 nothing to wait for, which is a real client cost of zero, not a missing measurement.
 
+**Why `parquet_write` exists.** For the text sinks `emit` is the whole sink write, so summing the
+spans of a run brackets its process CPU. For the Parquet sink it is not: `emit` ends at the handoff
+to the writer pool (dispatch — a rounding error per page), and the encode/compress/write that
+follows happens on the pool's own lane threads. Without a span there, that work shows up in the
+process's CPU with nothing attributing it, and a CPU-accounting cross-check (summed spans against
+`cpu_seconds`) under-accounts on Parquet runs while closing on jsonl ones — measured as roughly
+2 ms/page of pool CPU at low concurrency, of which `swath.parquet.finalize.latency` caught only the
+footer-fsync sliver. `parquet_write` is that missing term, measured around the lane's own work.
+
 **Not additive — same non-additivity discipline as `probe_latency[]` above.** Two pairs of spans
 here overlap in wall-clock rather than stacking, so summing spans (or cross-checking their sum
 against a run's wall-clock/page count) must account for both: (1) `checkpoint_commit_wait` is the
@@ -171,7 +181,12 @@ the fetch worker's own observed wait, the other two are the writer thread's per-
 of the identical commit, not additional cost on top of it; and (2) `emit` and `writer_backpressure`
 overlap in wall-clock by construction — the worker blocks handing a page onto the downstream channel
 precisely because the consumer stage is still inside that page's (or an earlier page's) `emit` span,
-so the two are two ends of the same handoff, not sequential costs.
+so the two are two ends of the same handoff, not sequential costs. `parquet_write` adds a THIRD kind of
+overlap, and a different one: it is measured on the pool's lane threads, which run concurrently with
+the fetch workers and the consumer stage, so it overlaps *every* span above in wall-clock and is
+never part of a page's serial latency — while for CPU accounting it is genuinely additive to them
+(different threads, disjoint CPU). It also strictly CONTAINS the `swath.parquet.finalize.latency`
+sample of any rotation that fired inside the stretch, so those two must never be added together.
 
 **`demand_gate`**: the `OWNER_SPLIT.demand_gated` fixed-threshold/effective-T snapshot — `{events, last_t, min_t,
 t_max}`. `events` is the total count of demand-gate suppressions this run; `last_t`/`min_t` are the

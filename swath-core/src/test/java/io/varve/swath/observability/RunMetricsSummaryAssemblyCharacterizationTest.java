@@ -160,7 +160,7 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(s.demandGate().tMax()).isEqualTo(16);
         assertThat(s.slowRanges()).hasSize(1);
         assertThat(s.callClassLatency()).hasSize(12);
-        assertThat(s.clientCost()).hasSize(5);
+        assertThat(s.clientCost()).hasSize(6);
     }
 
     @Test

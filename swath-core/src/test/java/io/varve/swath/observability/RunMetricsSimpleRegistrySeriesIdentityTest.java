@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT emit the same set. In particular Micrometer's {@code SimpleMeterRegistry.newTimer}
  * registers {@code HistogramGauges} — 3 extra {@code *.percentile{phi}} GAUGE meters per
- * percentile-publishing timer, 54 in total here — that {@code OtlpMeterRegistry.newTimer} does not
+ * percentile-publishing timer, 57 in total here — that {@code OtlpMeterRegistry.newTimer} does not
  * create at all (OTLP encodes percentiles as Summary quantiles on the wire instead). So this
  * snapshot holds {@value #EXPECTED_SIMPLE_METER_COUNT} ids where the same run yields
  * {@value RunMetricsOtlpSeriesIdentityTest#EXPECTED_OTLP_METER_COUNT} meters under OTLP. That side
@@ -204,6 +204,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.in_flight.avg|{}",
             "GAUGE|swath.owner_split.demand_gated_t_min|{}",
             "GAUGE|swath.owner_split.demand_gated_t|{}",
+            "GAUGE|swath.parquet.write.latency.percentile|{phi=0.5}",
+            "GAUGE|swath.parquet.write.latency.percentile|{phi=0.99}",
+            "GAUGE|swath.parquet.write.latency.percentile|{phi=0.9}",
             "GAUGE|swath.phase|{}",
             "GAUGE|swath.process.memory.heap.bytes|{kind=current}",
             "GAUGE|swath.process.memory.heap.bytes|{kind=peak}",
@@ -240,6 +243,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
             "TIMER|swath.parquet.finalize.latency|{}",
+            "TIMER|swath.parquet.write.latency|{}",
             "TIMER|swath.queue.wait|{}",
             "TIMER|swath.rate_limit.api_wait|{}",
             "TIMER|swath.rate_limit.wait|{}",
@@ -297,6 +301,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.parquet.rotation{trigger=rows}=1",
             "swath.parquet.rotation{trigger=size}=1",
             "swath.parquet.rotation{trigger=time}=1",
+            "swath.parquet.write.latency{}=1",
             "swath.probe.empty_upper_bisections{}=1",
             "swath.probe.fetches{}=1",
             "swath.probe.structure_fetches{}=1",
@@ -346,7 +351,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 171;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 175;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code
