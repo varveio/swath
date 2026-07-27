@@ -10,7 +10,54 @@ prove the shipped engine behaves correctly end-to-end over HTTP, so it pays real
 Parquet and real clock costs per page. A simulator exists to answer *"what would a different
 split/steal policy have done on this bucket?"* thousands of times, so it must pay none of
 them — but it must still answer every list request exactly as the real thing would, or its
-answers are fiction. This module is the part that guarantees that: the **ground-truth store**.
+answers are fiction. Two parts of the module make that possible: the **ground-truth store**, and
+the **discrete-event kernel** that drives it.
+
+## What "simulation in virtual time" means here
+
+The simulator does not run a listing and time it. It **computes** what the timings would be.
+
+The clock is a plain number of nanoseconds, and it only moves when the model says something
+happened. Alongside it is a queue of events scheduled for future instants — "this page request
+completes at t + 4.1 ms", "this worker's backoff expires at t + 5 ms". The kernel loops: take the
+earliest event in the queue, jump the clock straight to its instant, run it (which typically
+schedules more events), repeat until the queue is empty. All the time in between, in which nothing
+happens, is skipped for free. That is what makes it fast: a modelled ten-minute listing costs
+whatever its few million events cost to process, not ten minutes.
+
+Virtual time buys two things beyond speed.
+
+- **Reproducibility.** The kernel is single-threaded and events are totally ordered by
+  `(instant, scheduling sequence)`, so there is nothing for a host scheduler to decide. Every random
+  draw comes from a stream derived from the run's single seed, one stream per actor and purpose. Two
+  runs of one scenario at one seed therefore produce byte-identical event logs — and a policy change
+  shows up as a difference in the log rather than as noise. (This is determinism *inside the
+  simulator*; a real multi-worker run's thread scheduling stays outside anyone's control.)
+- **Inputs you state rather than inherit.** Request latencies, the client-side cost of processing a
+  page, and the engine's own time budgets (probe timeouts, pacing windows, run duration ceiling) are
+  all **declared parameters** of a scenario, not properties of the machine the simulation runs on.
+  A benchmark on a loaded laptop silently changes the ratio between a three-second timeout and the
+  calls it bounds; a scenario states that ratio exactly, and a sweep can vary it on purpose.
+
+The price is honesty about what is modelled. Store answers are ground truth — real keys, real
+pagination, real truncation — but every duration in a result is only as good as the model that
+produced it, which is why the module refuses to run without an explicit client-cost term and why its
+own tests pin closed-form answers in the mode where the arithmetic is exact.
+
+### Two instruments, not two attempts at one
+
+|  | `swath-replay-server` | `swath-sim` |
+|---|---|---|
+| Runs | the real engine, over HTTP | the real decision logic, in-process |
+| Store | a fake S3 endpoint serving a captured fixture | a modelled store serving the same fixture |
+| Time | real: real sockets, real clock, real duration | virtual: computed from declared inputs |
+| Answers | *does the shipped engine behave correctly end to end?* | *what would a different policy have done, and how fast?* |
+
+They are complementary. The replay server is the realism instrument — it exercises the actual code
+paths and can catch anything a model leaves out, at the cost of one real-time run per question. The
+simulator is the speed-and-reproducibility instrument — thousands of runs, exactly repeatable, at
+the cost of only being as right as its model. Results from the second are worth what the first
+says they are worth, which is why the two live side by side.
 
 ## The seam
 
@@ -145,6 +192,31 @@ config-taking overload lets a caller pin it outright.
 
 Keys are stored raw. Front-coding a sorted key set often buys 3–5×, but that is a *measured*
 optimisation to make later against a real fixture, not an assumption to build in now.
+
+## The kernel and the models
+
+Three packages, in dependency order:
+
+| Package | Holds |
+|---|---|
+| `sim.kernel` | The clock, the event queue, the scheduler, the per-actor SplitMix64 draw streams, the event log, and a FIFO server for modelling a shared resource. A few hundred lines, deliberately: a general-purpose simulation framework would bring its own clock and its own randomness, which is precisely what the closed-form invariants below need to own. |
+| `sim.model` | The physics, all of it pluggable: `LatencyModel` (constant, or a fitted shifted-exponential per call class), `ClientCostModel` (independent per page, or contended through a shared server), and `EngineTimeBudgets`. |
+| `sim.driver` | A scenario, and a trivial "list every range with T workers" driver that exercises the whole stack against a real store. The real split/steal policies are not wired up here. |
+
+An action body runs atomically in virtual time — the clock does not move and no other actor runs
+inside it — which is how a lock hold is expressed without a lock. State read in one event and used
+in a later one is correspondingly exposed to whatever other actors do in between, which is how a
+widened read window, and the race it permits, is expressed without a thread.
+
+### Why the kernel's own tests assert equalities
+
+With a constant latency and the client-cost term explicitly zeroed, a run's wall time is pure
+arithmetic, so the tests assert it exactly rather than within a tolerance: a range of `n` keys costs
+`floor(n / pageSize) + 1` calls (the last, short page is how a lister learns it is finished); the
+total call count does not depend on the worker count at all; one worker costs the sum of the
+latencies; a worker per range costs the largest range. Scaling is asserted **monotonic and not
+proportional** — a range is claimed whole, and pacing intervals and client costs are fixed
+durations, so more workers legitimately stop helping.
 
 ## Fixtures
 
