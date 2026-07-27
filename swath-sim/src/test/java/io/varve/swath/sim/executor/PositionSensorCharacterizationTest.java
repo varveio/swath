@@ -130,8 +130,11 @@ class PositionSensorCharacterizationTest {
         assertThat(result.keysEmitted()).isEqualTo(deepNestedUniform().size());
 
         // 698 of 743 bounded commits (94%) invisible — the heavy-tailed run's 93%, on the same shape.
+        // Only the comparison with that run is being made here: this share does not by itself separate
+        // the deep-nested shape from anything, since the flat control reaches it too once its ranges are
+        // wide enough. What it says is that changing the mass leaves this geometry exactly as blind.
         assertThat(invisibleAdvanceShare(result))
-                .as("the geometry alone is what blinds the sensor").isGreaterThan(0.85);
+                .as("the same geometry is just as blind under a uniform mass").isGreaterThan(0.85);
         // And nothing to pay for it: 7.6 of 8 ranges in flight on average, 1.1% of the run serial, and
         // not one scored victim whose estimate discarded its keys (0 of 59) — the fleet is never in the
         // position where a blind estimate has to be acted on.

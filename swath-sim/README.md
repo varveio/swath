@@ -369,7 +369,18 @@ prefix of a range's own bounds, so on a range spanning sibling subtrees the meas
 page commits therefore advance the cursor without moving the fraction at all, the consumed span reads
 zero, and `estRemaining` falls back to a raw width with the range's emitted keys discarded — which is
 what every layer downstream (victim choice, pivot mass floors, the owner's self-split, the density
-feedback) is then steering on. How much each subtree holds is a separate parameter, because the
+feedback) is then steering on.
+
+**A high invisible-advance share on its own is not diagnostic of any of that**, and the measurements
+say so: the flat hex-named control reproduces it too (95.0% at scale, against this fixture's 94.1%).
+Twelve bytes is simply narrower than the ground a hundred-page range covers, whatever its keys are
+named, so once ranges are that wide the counter is reporting range width rather than taxonomy depth.
+What separates the two shapes is the **consumed span** — whether the window can see the cursor move
+*away from its own `lo`*, which is what decides if the estimate keeps the range's emitted keys or
+throws them away. That is where the fixtures diverge by a factor of two to eleven
+(`est_ignores_keys`, `est_zero`), and it is the reading a cure has to move.
+
+How much each subtree holds is a separate parameter, because the
 geometry decides what can be *measured* and the mass distribution decides whether being unable to
 measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed law a real archive
 follows is what makes the second visible.

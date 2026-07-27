@@ -154,13 +154,17 @@ public record PolicyRunResult(
         out.append(sensorLine());
         out.append(String.format(Locale.ROOT, "store=%s store_reads=%d%n", storeLabel, storeReads));
         out.append(String.format(Locale.ROOT, "client_cost=%s (%s)%n", term.provenance(), term.sourceLabel()));
+        // The steal-attempt-slot park is printed alongside the idle ladder because it is the longest
+        // timer the kernel cannot cancel, and therefore the whole of the gap between this record's
+        // quiesced and kernel_end instants — a reader checking that attribution needs its value here.
         out.append(String.format(Locale.ROOT, "budgets: worker_attempt_timeout=%dms probe_attempt_timeout=%dms "
-                + "clean_window=%dms idle_park=%dms..%dms%n",
+                + "clean_window=%dms idle_park=%dms..%dms attempt_slot_park=%dms%n",
                 scenario.budgets().workerAttemptTimeoutNanos() / 1_000_000L,
                 scenario.budgets().probeAttemptTimeoutNanos() / 1_000_000L,
                 scenario.budgets().concurrencyCleanWindowNanos() / 1_000_000L,
                 scenario.budgets().idleStealBaseParkNanos() / 1_000_000L,
-                scenario.budgets().idleStealBackoffCapNanos() / 1_000_000L));
+                scenario.budgets().idleStealBackoffCapNanos() / 1_000_000L,
+                scenario.budgets().idleStealAttemptParkNanos() / 1_000_000L));
         return out.toString();
     }
 
