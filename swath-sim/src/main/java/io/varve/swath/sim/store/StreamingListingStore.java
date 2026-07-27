@@ -226,6 +226,10 @@ public final class StreamingListingStore implements ListingStore {
      * this tier only proved the ascent of row-group <em>first</em> keys, not of the rows within one
      * group. A decode that fails part-way releases what it had already allocated rather than leaking
      * it off-heap, where no collector would come for it. Called under {@link #lock}.
+     *
+     * <p>The block's own rejection message names the offending key and its position <em>within the
+     * group</em>, which is all a block can know; the file and row group it came from are added here,
+     * so a sweep that trips this over one fixture out of a corpus says which fixture and where.
      */
     private KeyBlock decode(int group) {
         IndexEntry entry = index.get(group);
@@ -234,7 +238,14 @@ public final class StreamingListingStore implements ListingStore {
         long rowCount;
         try {
             rowCount = reader(entry.file()).forEachKey(entry.rowGroup(), key -> {
-                if (!builder.append(key)) {
+                boolean fits;
+                try {
+                    fits = builder.append(key);
+                } catch (IllegalStateException rejected) {
+                    throw new IllegalStateException("row group " + entry.rowGroup() + " of " + entry.file()
+                            + " cannot be served: " + rejected.getMessage(), rejected);
+                }
+                if (!fits) {
                     throw new IllegalStateException("row group " + entry.rowGroup() + " of " + entry.file()
                             + " does not fit the streaming tier's " + maxResidentBytes
                             + "-byte residency budget (raise "

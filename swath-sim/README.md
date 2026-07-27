@@ -108,6 +108,23 @@ strictly-sorted, pure-`OBJECT` capture, the same eligibility the replay server's
 `--serving-mode sorted` checks (`SortedEligibility`, shared code). A fixture that is not
 sorted-eligible fails fast under either forced request, and `AUTO` falls back to `PARQUET`.
 
+### An unsorted fixture is a corrupt input, and where that is caught
+
+Eligibility proves the ascent of row-group **first** keys. The rows *inside* a group are proved
+where they are decoded, in the loop each tier already runs — never as a separate validation pass,
+which on a 300 MB fixture would cost as much as the run:
+
+| Tier | Unsorted input |
+|---|---|
+| `STREAMING` | **Hard fail** on the first violation in any row group a run faults in, naming file, row group and row (`KeyBlock` on the way in, context added by the tier). |
+| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedRowGroupReader.KeyCursor`). Its plain range reads go through a DuckDB query that sorts what it returns, so intra-group disorder shows up there as a **short page**, not an out-of-order one. |
+| `ARENA` | Loaded through the Parquet store, whose reads are `ORDER BY key`: disorder is normalised on the way in and only a **duplicate** key trips the arena's check. |
+| `PARQUET` | Not checked, by design — that store exists to serve arbitrary unsorted captures and re-sorts at query time. |
+
+So a corpus fixture large enough for a real sweep — which `AUTO` puts on `STREAMING` — is guarded,
+and one small enough to fit the arena is served in key order whatever its file holds. A sweep runner
+treats the hard failure as "exclude this bucket and record why", not as a reason to stop.
+
 **Why `WINDOWED` is forced-only.** It decodes Parquet *inside* the serving loop: every window
 refill is a bounded range query, and because the `key` column is a `BLOB` with no usable zonemaps
 that query scans the whole key column — a cost proportional to the fixture, not to the window.

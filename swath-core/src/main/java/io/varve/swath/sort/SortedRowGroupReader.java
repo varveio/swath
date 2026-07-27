@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.ColumnReader;
@@ -100,6 +101,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
         }
     }
 
+    private final Path file;
     private final ParquetFileReader reader;
     private final ColumnIOFactory columnIoFactory = new ColumnIOFactory();
     private final String createdBy;
@@ -112,6 +114,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
     private final MessageColumnIO objectColumnIoWithoutOwner;
 
     public SortedRowGroupReader(Path file) throws IOException {
+        this.file = file;
         this.reader = ParquetFileReader.open(new LocalInputFile(file));
         this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
         MessageType full = reader.getFooter().getFileMetaData().getSchema();
@@ -133,7 +136,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
         reader.setRequestedSchema(keySchema);
         PageReadStore pages = reader.readRowGroup(blockIndex);
         RecordReader<Group> rowReader = keyColumnIo.getRecordReader(pages, new GroupRecordConverter(keySchema));
-        return new KeyCursor(pages, rowReader, pages.getRowCount());
+        return new KeyCursor(file, blockIndex, pages, rowReader, pages.getRowCount());
     }
 
     /**
@@ -147,16 +150,30 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * {@code close()} — closing the enclosing file reader does not release them — so the caller must
      * {@link #close()} a cursor it replaces or abandons, or repeated scans retain every visited
      * group's buffers until GC.
+     *
+     * <p><b>The ascent of the rows it steps over is checked as it steps</b> ({@link #step()}): a
+     * skip-scan hop trusts this cursor's position to stand for "the first key at/after the target",
+     * and a row group whose rows are not in ascending order makes that reading silently false — the
+     * hop then emits a common prefix it has already passed, or skips a subtree it never reached. The
+     * sortedness a fixture was admitted on ({@code SortedFileIndex}/the replay server's index derive)
+     * proves the ascent of row-group <em>first</em> keys only, so a group's own rows are proved here,
+     * where they are decoded anyway, and nowhere else. The comparison is the same one
+     * {@link #advanceTo} already makes per stepped row, so it costs a compare and no I/O.
      */
     public static final class KeyCursor implements AutoCloseable {
 
+        private final Path file;
+        private final int blockIndex;
         private final PageReadStore pages;
         private final RecordReader<Group> rowReader;
         private final long rowCount;
         private long position = -1;
         private byte[] currentKey;
 
-        private KeyCursor(PageReadStore pages, RecordReader<Group> rowReader, long rowCount) {
+        private KeyCursor(Path file, int blockIndex, PageReadStore pages, RecordReader<Group> rowReader,
+                          long rowCount) {
+            this.file = file;
+            this.blockIndex = blockIndex;
             this.pages = pages;
             this.rowReader = rowReader;
             this.rowCount = rowCount;
@@ -169,8 +186,16 @@ public final class SortedRowGroupReader implements AutoCloseable {
         }
 
         private void step() {
+            byte[] previousKey = currentKey;
             position++;
             currentKey = position < rowCount ? rowReader.read().getBinary(KEY_FIELD, 0).getBytes() : null;
+            if (currentKey != null && previousKey != null
+                    && KeyBytes.compareUnsigned(previousKey, currentKey) >= 0) {
+                throw new IllegalStateException("row group " + blockIndex + " of " + file
+                        + " is not sorted: its keys must be in strictly ascending unsigned order, but row "
+                        + position + " (" + HexFormat.of().formatHex(currentKey)
+                        + ") is at or below its predecessor");
+            }
         }
 
         /** Whether a current row is available — {@code false} once the group is exhausted. */
@@ -226,6 +251,11 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * record per row, which is what makes it the faster of the two for a caller that consumes the
      * whole group; the {@code key} column is {@code required} in swath's canonical schema, so every
      * row yields exactly one value and there is no definition level to test.
+     *
+     * <p>Unlike {@link KeyCursor}, this tier does <b>not</b> check the group's ascent as it visits: a
+     * caller draining a whole group builds something out of it that has to prove the same property for
+     * its own sake (the simulator's key block rejects a non-ascending key on the way in), so checking
+     * here too would be the same comparison twice on the fastest key path in the tree.
      *
      * @return the number of keys visited, i.e. the row group's row count
      */

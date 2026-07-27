@@ -51,6 +51,34 @@ import org.slf4j.LoggerFactory;
  * <p><b>Fixtures are local paths.</b> {@code fixturePath} is a swath Parquet capture file or a
  * directory of them, on this machine. Nothing here resolves a remote object-store location:
  * fetching a fixture to local disk is the caller's job, deliberately outside this seam.
+ *
+ * <h2>What an unsorted fixture does here, tier by tier</h2>
+ * A fixture that is not in strictly ascending key order is a corrupt input for a simulator: the sim's
+ * whole premise is that its store answers the ranges a real ordered store would. The check is inline
+ * in the loops each tier already runs — never a separate validation pass — and it does not reach every
+ * tier equally, which is stated here rather than left to be discovered:
+ * <ul>
+ *   <li>{@link SimStoreBackend#STREAMING} — <b>guarded</b>. Row-group first keys are proved ascending
+ *       at index derive ({@link SortedFixtures#loadIndex}, the fixture is otherwise ineligible), and
+ *       every key of every row group the run actually faults in is proved on the way into its
+ *       {@link KeyBlock}. The first violation fails the read, naming file, row group and row.</li>
+ *   <li>{@link SimStoreBackend#WINDOWED} — <b>partly guarded</b>. Same index-derive gate, and the
+ *       {@code delimiter=/} skip-scan proves the ascent of every row it steps over
+ *       ({@code SortedRowGroupReader.KeyCursor}). Its plain range reads, though, go through a bounded
+ *       DuckDB query that sorts what it returns, so disorder inside a row group cannot be seen there —
+ *       it shows up as a short page, not as an out-of-order one.</li>
+ *   <li>{@link SimStoreBackend#ARENA} — <b>duplicates guarded, disorder normalised</b>. The arena is
+ *       loaded <em>through</em> the Parquet store below, whose reads are {@code ORDER BY key}: keys
+ *       therefore arrive sorted whatever the file holds, and the arena's ascending check can only
+ *       fire on a duplicate (which survives sorting). The keys it then serves are the fixture's, in
+ *       order.</li>
+ *   <li>{@link SimStoreBackend#PARQUET} — <b>not guarded, and deliberately</b>. That store exists to
+ *       serve arbitrary captures, sorted or not, and it re-sorts at query time; proving the file's
+ *       physical order would mean a second scan of it, which is precisely what an inline check is
+ *       not. A fixture that reaches this tier is served in key order regardless.</li>
+ * </ul>
+ * {@link SimStoreBackend#AUTO} therefore hard-fails an unsorted fixture whenever it lands on the
+ * streaming tier — which is where a fixture large enough for a real sweep lands by construction.
  */
 public final class SimStoreFactory {
 
@@ -102,7 +130,7 @@ public final class SimStoreFactory {
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ArenaListingStore arena;
                 try (ListingStore source = parquetStore(fixturePath, metrics)) {
-                    arena = loadArena(source, config).orElseThrow(() -> new IllegalArgumentException(
+                    arena = loadArena(source, config, fixturePath).orElseThrow(() -> new IllegalArgumentException(
                             "backend " + SimStoreBackend.ARENA + " requires a fixture whose encoded keys fit in "
                                     + config.arenaMaxEncodedBytes() + " bytes (raise "
                                     + SimStoreConfig.ARENA_MAX_ENCODED_BYTES_PROPERTY + ", or use "
@@ -138,7 +166,7 @@ public final class SimStoreFactory {
                 ListingStore source = parquetStore(fixturePath, duckdbMetrics);
                 Optional<ArenaListingStore> arena;
                 try {
-                    arena = loadArena(source, config);
+                    arena = loadArena(source, config, fixturePath);
                 } catch (RuntimeException e) {
                     source.close();
                     throw e;
@@ -183,8 +211,20 @@ public final class SimStoreFactory {
         return new Result(store, backend, metrics);
     }
 
-    private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config) {
-        return ArenaListingStore.loadWithin(source, config.arenaMaxEncodedBytes());
+    /**
+     * The arena load, with the fixture named on the way out of a rejection. The arena rejects a key
+     * that is over-long or not strictly above its predecessor, and its message names the offending key
+     * and its row ordinal — but it is built over a {@link ListingStore} and cannot know which fixture
+     * that store is reading, which is exactly what a sweep over a corpus needs told.
+     */
+    private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config,
+                                                         Path fixturePath) {
+        try {
+            return ArenaListingStore.loadWithin(source, config.arenaMaxEncodedBytes());
+        } catch (IllegalArgumentException rejected) {
+            throw new IllegalArgumentException("fixture " + fixturePath + " cannot be served by the "
+                    + SimStoreBackend.ARENA + " tier: " + rejected.getMessage(), rejected);
+        }
     }
 
     private static ListingStore parquetStore(Path fixturePath, ReplayMetrics metrics) {
