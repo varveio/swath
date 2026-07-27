@@ -344,7 +344,7 @@ and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes
 |---|---|
 | `CURRENT` | the shipped one; delegates to the engine's own public `StealMath`, so a control leg is the algorithm and not a copy of it |
 | `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
-| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one wherever the shipped window can already see the cursor |
+| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
 | `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
 
 `SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on

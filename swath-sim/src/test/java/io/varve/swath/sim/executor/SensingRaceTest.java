@@ -74,9 +74,11 @@ import org.junit.jupiter.api.Test;
  * these three is shippable — all three lose at the page size a real deployment uses, which is the
  * regime the deployment's own tail was measured in, and the reason for that loss is a calibration
  * problem rather than a visibility one. E2 is the only candidate whose reading is byte-identical to
- * the shipped one wherever the shipped one works, and it is the one that keeps both guards; E1 is the
- * one that eliminates every degenerate reading, and it is the one that breaks a healthy shape. The
- * combination keeps both properties and still loses the measured regime.
+ * the shipped one wherever the two windows are anchored at the same byte — a narrower set than
+ * "wherever the shipped one works", so its holding both guards at 4 of 4 seeds is a measurement rather
+ * than a construction — and it does hold them; E1 is the one that eliminates every degenerate reading,
+ * and it is the one that breaks a healthy shape. The combination keeps both properties and still loses
+ * the measured regime.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory and time, like every at-scale fixture here: the bench
  * is a million-key keyspace and the race runs it once per seed per variant.

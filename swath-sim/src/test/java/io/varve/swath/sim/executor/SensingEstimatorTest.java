@@ -67,14 +67,18 @@ class SensingEstimatorTest {
     }
 
     @Test
-    void theAnchoredWindowIsTheShippedOneWhereverTheShippedOneCanSeeTheCursor() {
-        // A cursor that diverges from lo exactly where hi does -- the healthy case, and every case on a
-        // keyspace with no deep shared prefix. Re-anchoring is a no-op there, digit for digit, which is
-        // what keeps a well-splitting bucket out of this variant's blast radius by construction.
+    void theAnchoredWindowIsTheShippedOneExactlyWhereTheCursorLeavesLoWhereHiDoes() {
+        // The identity set, stated as the condition it actually is: cpl(lo, cursor) == cpl(lo, hi).
+        // Re-anchoring is a no-op there, digit for digit. It is every case on a keyspace with no deep
+        // shared prefix, and it is not one byte wider than that -- see the test below.
         CursorAnchoredEstimator anchored = new CursorAnchoredEstimator();
+        int d0 = RemainingWorkEstimator.commonPrefixLen(LO, HI);
         byte[][] cursors = {key("species/Bat"), key("species/Bathy"),
             key("species/Bathysaurus_mollis/f")};
         for (byte[] cursor : cursors) {
+            assertThat(RemainingWorkEstimator.commonPrefixLen(LO, cursor))
+                    .as("cursor %s is in the identity set", new String(cursor, StandardCharsets.UTF_8))
+                    .isEqualTo(d0);
             assertThat(anchored.estRemaining(cursor, LO, HI, 12_345L))
                     .as("cursor %s", new String(cursor, StandardCharsets.UTF_8))
                     .isEqualTo(StealMath.estRemaining(cursor, LO, HI, 12_345L));
@@ -82,6 +86,28 @@ class SensingEstimatorTest {
         // Including the un-started range, where neither has any consumed evidence to anchor.
         assertThat(anchored.estRemaining(LO, LO, HI, 0L))
                 .isEqualTo(StealMath.estRemaining(LO, LO, HI, 0L));
+    }
+
+    @Test
+    void theTwoReadingsDivergeOnceTheCursorLeavesLoDeeperThanHiDoes() {
+        // The boundary of the identity above, pinned so the claim cannot quietly widen to "wherever the
+        // shipped window can see the cursor". This cursor is one byte deeper than hi's divergence and
+        // well inside the shipped window's own width, so the shipped reading is NOT degenerate -- its
+        // consumed span is positive and it keeps the emitted keys. The two still disagree by more than
+        // an order of magnitude, because each divides by a span measured at a different depth. Every
+        // cursor with d0 < cpl(lo, cursor) < d0 + WINDOW_BYTES is this case.
+        CursorAnchoredEstimator anchored = new CursorAnchoredEstimator();
+        byte[] cursor = key("species/Balf");
+        int d0 = RemainingWorkEstimator.commonPrefixLen(LO, HI);
+        assertThat(RemainingWorkEstimator.commonPrefixLen(LO, cursor))
+                .as("strictly deeper than hi's divergence, and inside the shipped window")
+                .isBetween(d0 + 1, d0 + RemainingWorkEstimator.WINDOW_BYTES - 1);
+        assertThat(new WindowEstimator().ignoresEmittedKeys(cursor, LO, HI))
+                .as("the shipped window can see this cursor -- this is not the degenerate case")
+                .isFalse();
+        assertThat(anchored.estRemaining(cursor, LO, HI, 12_345L))
+                .as("and the two readings are more than an order of magnitude apart anyway")
+                .isLessThan(StealMath.estRemaining(cursor, LO, HI, 12_345L) / 10.0);
     }
 
     @Test

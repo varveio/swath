@@ -23,10 +23,17 @@ import io.varve.swath.model.KeyBytes;
  *
  * <ul>
  *   <li><b>{@code d == d0} — the cursor diverges from {@code lo} exactly where {@code hi} does.</b>
- *       The re-anchoring is a no-op and every term below is the incumbent's, digit for digit. <b>This
- *       variant is therefore byte-identical to the shipped estimator on every range whose cursor the
- *       shipped window can already see</b>, which is what keeps a healthy keyspace out of the blast
- *       radius by construction rather than by measurement.</li>
+ *       The re-anchoring is a no-op and every term below is the incumbent's, digit for digit. <b>That
+ *       is the whole of the identity: this variant is byte-identical to the shipped estimator exactly
+ *       on {@code cpl(lo, cursor) == cpl(lo, hi)}, and not one byte wider.</b> The shipped window can
+ *       still <em>see</em> a cursor for any {@code d} below {@code d0 + }{@link
+ *       RemainingWorkEstimator#WINDOW_BYTES} — its consumed span is positive there, so those ranges are
+ *       not the degenerate case — and across that strictly wider set the two readings diverge, by more
+ *       than an order of magnitude at a single byte past {@code d0} (4.1e7 against 3.1e6 on the worked
+ *       example), because each divides by a span measured at a different depth. Whether a
+ *       healthy keyspace is out of this variant's blast radius is therefore a measurement and not a
+ *       construction: both regression-guard fixtures hold it at 4 of 4 seeds, which is what the race
+ *       reports.</li>
  *   <li><b>{@code d > d0} — the cursor has descended into a subtree shared with {@code lo}.</b> The
  *       window is read from byte {@code d} instead, and its ceiling is the top of the {@code d}-byte
  *       prefix that {@code lo} and the cursor share. That ceiling is <em>inside</em> {@code [lo, hi]}
