@@ -243,10 +243,16 @@ jobs:
       - name: Smoke — image runs and entrypoint passes args to swath
         run: docker run --rm swath:ci --help
 
-  # Manual GHCR publish + deep runtime smoke. Tagged releases publish through
-  # release.yml; ordinary main pushes never publish a mutable image. Gated on the tests: `needs`
-  # fast-tests + integration-tests, so an image is never published from code that
-  # fails its tests. It builds the image itself (so it does not need docker-image).
+  # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge and on
+  # manual dispatch from any branch. Tagged releases publish through release.yml
+  # instead; `latest` and the semver tags are owned solely by that workflow, so this
+  # job can never regress a release pointer.
+  #
+  # Running on merges is what gives `main` any Docker coverage at all: docker-check
+  # is PR-only, so without this a merge would build no image, and a break that only
+  # appears in the merge result (a semantic conflict between two green PRs, a RUN
+  # added to the runtime stage) would stay invisible until someone cut a tag.
+  #
   # Gated on ALL test jobs (`needs` fast-tests + integration-tests + deep-tests), so an image
   # is never published from code that fails any tier. It also promotes the tested uber-jar
   # from fast-tests into the image (see the build-context step below) rather than recompiling.
@@ -255,7 +261,9 @@ jobs:
   # settings; the workflow itself does not assume private or public visibility.
   docker-publish:
     needs: [fast-tests, integration-tests, deep-tests]
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     # Serialize ALL publishes globally (main + any dispatched branch share this one
     # group) so two publishes can never race the shared GHCR tags (main/sha-).
     # cancel-in-progress: false — never kill a publish mid-push; queue instead. If
