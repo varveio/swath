@@ -51,7 +51,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.aimd.target_reductions` | counter | — | AIMD concurrency-target reductions |
 | `swath.owner_split.demand_gated_t` | gauge | — | the effective concurrency target `T` observed at the INSTANT the most recent `OWNER_SPLIT.demand_gated` suppression fired — so a shed-shrunken `T` closing the owner-split demand gate is visible without cross-referencing `swath.workers.active`'s history against a log timestamp. `NaN` until the gate has fired at least once |
 | `swath.owner_split.demand_gated_t_min` | gauge | — | the LOWEST effective `T` observed across every demand-gate firing this run (the running min, mirroring `swath.aimd.target_low_water`'s idiom) — how far the shed/AIMD brake had pulled `T` down at the gate's worst observed moment. `NaN` until the gate has fired at least once |
-| `swath.queue.wait` | timer | — | producer backpressure (bounded output queue full) — one observation per page, measured on the fetch worker as it hands the page downstream. A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99 |
+| `swath.queue.wait` | timer | — | producer backpressure (bounded output queue full) — one observation per page, recorded from every producer that hands a page onto the bounded output channel (`WorkStealingScan`, and the sequential `ScanProducer`/`CheckpointedScanProducer` paths), not the fetch worker exclusively. A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99 |
 | `swath.rate_limit.wait` | timer | — | the always-on **reactive AIMD** concurrency-slot wait — the gate every worker page fetch waits on, regardless of `--request-rate`. See §1.1 |
 | `swath.rate_limit.api_wait` | timer | — | the opt-in **proactive** `--request-rate` client-side cap, on its own dedicated meter so it is never conflated with `swath.rate_limit.wait` above. When `--request-rate` is unset (default) or an explicit `0`, the limiter is never wired in, so this meter is **genuinely zero** — no approximation. See §1.1 |
 | `swath.process.memory.rss.bytes` | gauge | `{kind=current\|peak}` | resident set size — current (`/proc/self/status` `VmRSS`) and high-water (`VmHWM`) |
@@ -64,7 +64,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.checkpoint.commit.latency` | timer | — | the checkpoint writer thread's per-batch op execution + commit (the WAL-fsync critical path). A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99 |
 | `swath.checkpoint.commit_batch_size` | distribution summary | — | tasks per committed writer-thread batch (up to `MAX_BATCH`=256) |
 | `swath.checkpoint.queue.wait` | timer | — | time a checkpoint task waited on the writer queue before its batch was drained. A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99 |
-| `swath.checkpoint.commit.wait` | timer | — | the FETCH WORKER's own blocking wait for its page commit to become durable (the commit-before-emit await, I1) — **one observation per page**, unlike the two writer-thread meters above, which decompose the same work per task and per batch. A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99. Near-zero on a run with no checkpoint (nothing to wait for) |
+| `swath.checkpoint.commit.wait` | timer | — | the FETCH WORKER's own blocking wait for its page commit to become durable (the commit-before-emit await, I1) — **one observation per page**, unlike the two writer-thread meters above, which decompose the same work per task and per batch. Instrumented only on the `WorkStealingScan` path — its absence on a run that took a different producer path means "not instrumented there", not "never waited". A **client-service-cost span** (§3 `client_cost[]`, as `checkpoint_commit_wait`): publishes p50/p90/p99. Near-zero on a run with no checkpoint (nothing to wait for) |
 | `swath.checkpoint.queue.depth` | gauge | — | live depth of the checkpoint writer's task queue |
 | `swath.parquet.rotation` | counter | `{trigger}` | a lane rotation fired, by which cadence trigger (`size`\|`rows`\|`time`) |
 | `swath.parquet.parts` | counter | `{outcome}` | a lane's open part reached a terminal outcome — `finalized`\|`discarded`\|`finalize_failed` (the part's footer write/fsync threw, so the part is deleted and NOT in the manifest) |
@@ -351,7 +351,7 @@ downstream parser should key off, not "does `meters[]` exist".
     { "call_class": "pivot_probe", "phase": "ttfb", "count": 44, "p50_ms": 9800.1, "p90_ms": 10000.0, "p99_ms": 10000.0, "max_ms": 10000.0 }
   ],
   "client_cost": [
-    { "span": "commit_wait", "count": 1120, "p50_ms": 0.9, "p90_ms": 2.4, "p99_ms": 11.0, "max_ms": 41.2 },
+    { "span": "checkpoint_commit_wait", "count": 1120, "p50_ms": 0.9, "p90_ms": 2.4, "p99_ms": 11.0, "max_ms": 41.2 },
     { "span": "emit", "count": 1120, "p50_ms": 0.3, "p90_ms": 0.8, "p99_ms": 2.2, "max_ms": 6.4 },
     { "span": "writer_backpressure", "count": 1120, "p50_ms": 0.0, "p90_ms": 5.1, "p99_ms": 30.7, "max_ms": 88.0 }
   ],
