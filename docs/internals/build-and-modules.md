@@ -47,7 +47,7 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
 | **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | ❌ (dev/test tool) |
-| **`swath-sim`** | `java-library` | The policy simulator's ground-truth store (`io.varve.swath.sim`): backends that answer the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`. Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server | ❌ (dev/analysis tool) |
+| **`swath-sim`** | `java-library` | The policy simulator's ground-truth store (`io.varve.swath.sim`): backends that answer the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`. Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server; `impl` → swath-core | ❌ (dev/analysis tool) |
 
 Only `swath-cli` ships. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
 `runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped
@@ -92,6 +92,10 @@ repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
   `org.apache.parquet`/`org.apache.hadoop` type; parquet reaches it only *transitively at runtime*
   via `implementation(project(":swath-core"))`. Enforced by the module's
   `verifyNoParquetOrHadoopOnCompileClasspath` task, wired into `:swath-replay-server:check`.
+  **`swath-sim` holds the same line by the same mechanism** — its streaming tier drives
+  `io.varve.swath.sort.SortedRowGroupReader`, which traffics only in `byte[]`/`long`/`String`, over
+  an `implementation(project(":swath-core"))` edge — but relies on that edge's scope alone; it has
+  no guard task of its own yet.
 - **A module declares every dependency it directly uses**, even one that would also arrive
   transitively. `jackson-databind` on `swath-cli` tests is the necessity case: it reaches
   `swath-core` only transitively via `parquet-hadoop`, `implementation`-scoped there, so it never
