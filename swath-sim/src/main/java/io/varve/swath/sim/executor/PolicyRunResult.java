@@ -74,11 +74,13 @@ public record PolicyRunResult(
     }
 
     public PolicyRunResult {
-        if (run == null || scenario == null || timeline == null) {
-            // Every accessor and describe() dereferences all three, so a missing one has to fail here,
+        if (run == null || scenario == null || timeline == null || sensing == null) {
+            // Every accessor and describe() dereferences all four, so a missing one has to fail here,
             // where the caller that dropped it is still on the stack, rather than at the first read.
-            throw new IllegalArgumentException("a run record needs its kernel result, its scenario and "
-                    + "its timeline");
+            // The sensor is in the guard for a second reason: a run whose sensor is unknown is a number
+            // no one can quote, which is the invariant this record's own javadoc declares.
+            throw new IllegalArgumentException("a run record needs its kernel result, its scenario, its "
+                    + "timeline and the sensor it steered on");
         }
         counters = Collections.unmodifiableSortedMap(new TreeMap<>(counters));
     }

@@ -6,6 +6,7 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import io.varve.swath.sim.fixture.KeyspaceFixtures;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
@@ -116,6 +117,15 @@ class PolicyRunEndToEndTest {
                 "mean_ranges", "mean_tail_ranges", "serial_fraction", "max_concurrent_ranges",
                 // and what its position sensor read while it did
                 "cursor_advance_invisible", "victims_scanned", "est_ignores_keys", "est_zero");
+
+        // The other half of that contract, enforced rather than declared. The record's own javadoc says
+        // a number quoted without saying which sensor produced it is not a result -- so the field that
+        // makes every other field ambiguous is in the constructor's guard, alongside the three whose
+        // absence would merely have thrown later.
+        assertThatIllegalArgumentException().isThrownBy(() -> new PolicyRunResult(result.run(),
+                result.scenario(), result.storeLabel(), result.counters(), result.nodesCreated(),
+                result.splitsRejected(), result.storeReads(), result.finalConcurrencyTarget(),
+                result.stuck(), result.timeline(), null));
     }
 
     @Test

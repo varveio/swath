@@ -192,8 +192,12 @@ public final class SimExecutor {
      */
     public static final String SENSOR_BOUNDED_COMMITS_COUNTER = "sensor.bounded_page_commits";
     /**
-     * Bounded page commits whose cursor advance did not move {@link StealMath#fracIn} at all: real keys
-     * came out and the position the policies measure stayed where it was.
+     * Bounded page commits whose cursor advance did not move <b>the installed sensor's own sense of
+     * position</b> at all: real keys came out and the quantity the policies measure stayed where it was.
+     * What counts as position is the estimator's to declare
+     * ({@link RemainingWorkEstimator#advanceVisible}) — for the shipped sensor it is
+     * {@link StealMath#fracIn}; for one whose position <em>is</em> the emitted count no commit can be
+     * invisible, and this reads zero.
      */
     public static final String SENSOR_INVISIBLE_ADVANCE_COUNTER = "sensor.cursor_advance_invisible";
     /**
@@ -210,18 +214,21 @@ public final class SimExecutor {
      */
     public static final String SENSOR_VICTIMS_BOUNDED_COUNTER = "sensor.victims_scanned_bounded";
     /**
-     * Scored bounded victims whose {@code estRemaining} read zero, so selection passed over them as
-     * having no remaining span. An attempt in which <em>every</em> scored candidate reads this way is
-     * what a {@code NO_VICTIM.all_no_remaining_span} is made of; this counter is the per-candidate
-     * reading, not that verdict.
+     * Scored bounded victims whose estimate — the installed sensor's — read zero, so selection passed
+     * over them as having no remaining span. An attempt in which <em>every</em> scored candidate reads
+     * this way is what a {@code NO_VICTIM.all_no_remaining_span} is made of; this counter is the
+     * per-candidate reading, not that verdict.
      */
     public static final String SENSOR_EST_ZERO_COUNTER = "sensor.victim_est_zero";
     /**
-     * Scored bounded victims whose consumed span read zero, so {@code estRemaining} returned the raw
-     * remaining span and <b>ignored {@code keysEmitted}</b>: a worker that has emitted a million keys
-     * scores identically to one that has emitted none. These are victims that have <em>certainly</em>
-     * emitted keys — a candidate only becomes steal-eligible after emitting some — which is what makes
-     * a zero consumed span a defect in the measurement rather than a fact about the worker.
+     * Scored bounded victims whose estimate <b>discards the keys they have emitted</b>: the installed
+     * sensor scores a worker that has emitted a million keys identically to one that has emitted none.
+     * Which readings those are is again the estimator's to declare
+     * ({@link RemainingWorkEstimator#ignoresEmittedKeys}) — the shipped sensor's are its zero-consumed-
+     * span branch; a sensor whose estimate <em>is</em> the emitted count has none. These are victims
+     * that have <em>certainly</em> emitted keys — a candidate only becomes steal-eligible after
+     * emitting some — which is what makes such a reading a defect in the measurement rather than a
+     * fact about the worker.
      */
     public static final String SENSOR_EST_IGNORES_KEYS_COUNTER = "sensor.victim_est_ignores_keys";
 
@@ -1182,9 +1189,10 @@ public final class SimExecutor {
     }
 
     /**
-     * Reads {@code estRemaining} over the pool victim selection is about to rank, recording the two ways
-     * it degenerates: a zero score, which takes a candidate out of the running entirely, and a zero
-     * consumed span, which leaves the score a raw width with the candidate's emitted keys discarded.
+     * Reads the installed sensor over the pool victim selection is about to rank, recording the two ways
+     * an estimate degenerates: a zero score, which takes a candidate out of the running entirely, and a
+     * score that discards the candidate's emitted keys. Both are asked of the estimator in use rather
+     * than re-derived here, so what a counter reports is the sensor this run steers on.
      *
      * <p><b>The skip order mirrors the policy's.</b> {@link ThiefPolicy#selectVictim} passes over an
      * unsplittable candidate, and over one holding a futility-pacing skip, <em>before</em> it computes
@@ -1195,7 +1203,8 @@ public final class SimExecutor {
      * <p>This duplicates the arithmetic the policy is about to do rather than asking it what it saw:
      * the policy's contract is a {@link Selection}, and widening it to report its own intermediate
      * readings would put a diagnostic in the engine's decision seam. The inputs are the same view the
-     * policy gets and the function is the same public one it calls.
+     * policy gets and the estimator is the one the policy scores with — the engine's own public
+     * arithmetic under {@link SensingVariant#CURRENT}, and whichever candidate is installed otherwise.
      */
     private void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
         for (VictimView candidate : pool) {

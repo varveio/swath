@@ -250,7 +250,11 @@ final class SensingRaceProtocol {
      *
      * <p>The store is passed in rather than built here so that one generated keyspace serves every
      * variant and every seed raced against it — a million-key fixture is a large share of the heap and
-     * generating it once per leg would dominate the race's own cost. Nothing a run does writes to it.
+     * generating it once per leg would dominate the race's own cost. Sharing is safe because nothing a
+     * leg writes to the store is observable in another leg's <em>result</em>: the keys are immutable, and
+     * the only state a leg mutates is the fixture's own read/close tallies, which do accumulate across
+     * legs and are not a column of this table — every number reported here is the run's own counter, and
+     * the modelled store-call count is one of them rather than the fixture's read count.
      */
     static Leg runLeg(SensingVariant variant, String keyspace, ListingFixtureStore store, long seed,
                       int pageSize, LatencyModel latency) {
