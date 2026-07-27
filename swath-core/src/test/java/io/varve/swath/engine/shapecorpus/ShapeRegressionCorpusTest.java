@@ -258,8 +258,14 @@ final class ShapeRegressionCorpusTest {
      * CPU-bound fetch is — {@code peak_in_flight} can then reach a healthy fraction of {@code W}
      * regardless of how many physical cores the runner actually schedules on, so the floor no longer
      * needs the runner's own core count as an input. The seed-time structural assertions above
-     * (radix bands fired, {@code specs.size() > 8}) and the correctness assertion below
-     * ({@code assertExactlyOnce}) stay schedule-invariant and are unaffected by this latency.
+     * (radix bands fired, {@code specs.size() > 8}) stay schedule-invariant and are unaffected by
+     * this latency.
+     *
+     * <p>Exactly-once is asserted on BOTH scans. The zero-latency one is the coverage this shape had
+     * before the pacing was introduced — a CPU-bound run interleaves the workers differently from a
+     * run whose fetches all park in {@code Thread.sleep}, and emission correctness is exactly the
+     * property that must not depend on which interleaving the shape happens to get, so keeping only
+     * the paced run would quietly narrow the guard to one timing regime.
      *
      * <p><b>Guard sharpness.</b> Ablating {@code radix_bands} (via {@link EngineToggles#parse}) leaves
      * the dense flat root as ONE un-subdivided seed range ({@code seedCount == 1}) instead of the
@@ -288,7 +294,10 @@ final class ShapeRegressionCorpusTest {
                 .as("dense flat root radix-banded (meeo-s3 shape)").isTrue();
         assertThat(specs.size()).as("banded into many ranges, not one serial root range").isGreaterThan(8);
 
-        Run run = scan(dir, "radix-band", keyspace, workers, 1000, Duration.ofMillis(2), EngineToggles.DEFAULT);
+        Run correctness = scan(dir, "radix-band", keyspace, workers, 1000, Duration.ZERO, EngineToggles.DEFAULT);
+        assertExactlyOnce(correctness.emitted, keyspace);
+
+        Run run = scan(dir, "radix-band-paced", keyspace, workers, 1000, Duration.ofMillis(2), EngineToggles.DEFAULT);
         assertExactlyOnce(run.emitted, keyspace);
         assertThat(run.peakInFlight)
                 .as("no collapse: banded root reaches a healthy fraction of W")
