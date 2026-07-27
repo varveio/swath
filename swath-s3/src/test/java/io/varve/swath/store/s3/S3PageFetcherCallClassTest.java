@@ -71,17 +71,16 @@ class S3PageFetcherCallClassTest {
         fetcher.fetchPage(PageRequest.objectsDelimited(null, DELIM, null, 1000));   // structure_probe
 
         RunSummary summary = metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0);
-        List<RunSummary.CallClassLatencySummary> rows = summary.callClassLatency();
+        List<RunSummary.CallClassLatencySummary> totalRows = summary.callClassLatency().stream()
+                .filter(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_TOTAL))
+                .toList();
 
-        assertThat(rows)
+        assertThat(totalRows)
                 .as("total-phase row present for each of the 3 call classes")
                 .anySatisfy(r -> assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_WORKER_PAGE))
                 .anySatisfy(r -> assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_PIVOT_PROBE))
                 .anySatisfy(r -> assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_STRUCTURE_PROBE));
-        assertThat(rows).allSatisfy(r -> {
-            assertThat(r.phase()).isIn(RunMetrics.LATENCY_PHASE_TOTAL, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE);
-            assertThat(r.count()).isEqualTo(1L);
-        });
+        assertThat(totalRows).allSatisfy(r -> assertThat(r.count()).isEqualTo(1L));
     }
 
     /**

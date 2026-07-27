@@ -12,7 +12,6 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleConfig;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -96,19 +95,41 @@ class RunMetricsClientCostSpanTest {
         });
     }
 
-    /** Each span reads its own timer — no two rows are wired to the same meter. */
+    /**
+     * Each span reads its own timer — no two rows are wired to the same meter. Every span is given a
+     * DISTINCT observation count precisely so two spans silently sharing one backing timer would be
+     * caught here: a shared timer's count would be the SUM of the two spans' counts, not either
+     * span's own distinct count, and the touched-timer-id set would also collapse below five.
+     */
     @Test
     void eachSpanIsBackedByItsOwnMeter() {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
 
-        metrics.recordEmit(7_000_000L);
+        metrics.recordCheckpointCommitWait(1_000_000L);
+        for (int i = 0; i < 2; i++) {
+            metrics.recordCheckpointQueueWait(1_000_000L);
+        }
+        for (int i = 0; i < 3; i++) {
+            metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 1);
+        }
+        for (int i = 0; i < 4; i++) {
+            metrics.recordEmit(1_000_000L);
+        }
+        for (int i = 0; i < 5; i++) {
+            metrics.recordQueueWait(metrics.startQueueWaitTimer());
+        }
 
-        List<Timer> touched = metrics.registry().getMeters().stream()
+        Map<String, Long> touchedCountsByName = metrics.registry().getMeters().stream()
                 .filter(Timer.class::isInstance)
                 .map(Timer.class::cast)
                 .filter(t -> t.count() > 0L)
-                .toList();
-        assertThat(touched).singleElement()
-                .satisfies(t -> assertThat(t.getId().getName()).isEqualTo("swath.emit.latency"));
+                .collect(Collectors.toMap(t -> t.getId().getName(), Timer::count));
+
+        assertThat(touchedCountsByName).containsOnly(
+                Map.entry("swath.checkpoint.commit.wait", 1L),
+                Map.entry("swath.checkpoint.queue.wait", 2L),
+                Map.entry("swath.checkpoint.commit.latency", 3L),
+                Map.entry("swath.emit.latency", 4L),
+                Map.entry("swath.queue.wait", 5L));
     }
 }
