@@ -184,6 +184,7 @@ jobs:
         run: ./scripts/ci/smoke-container.sh "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" releasesmoke
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
+          SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
 
       # Only now do the tags exist. imagetools create copies no bytes: it points new
       # tags at the digest that was just smoked.

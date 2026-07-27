@@ -330,6 +330,8 @@ jobs:
       # push below: a shading/exclude/runtime regression can never reach the GHCR tags.
       - name: Smoke — container Parquet write + read + resume (public bucket)
         run: ./scripts/ci/smoke-container.sh swath:ci dockersmoke
+        env:
+          SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
 
       # Only now — after the smoke passed — log in and push the multi-arch
       # manifest to this repository's GHCR namespace.

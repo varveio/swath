@@ -34,10 +34,21 @@ command -v duckdb >/dev/null || {
   exit 2
 }
 
-# A small, stable public AWS Open Data prefix (CMAS air-quality sample, us-east-1,
-# anonymous / not requester-pays) — a convenient tiny listing target, nothing
-# swath-specific about it.
-readonly BUCKET='s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/'
+# The listing target. Any small, stable, anonymously-readable prefix works — the smoke
+# asserts "at least one object", not a specific count, and swath issues LIST calls only
+# (object bodies are never fetched, so the objects' size is irrelevant).
+#
+# The default is a CMAS (Community Modeling and Analysis System) example case for the
+# SMOKE emissions model — 7 objects, us-east-1, anonymous, not requester-pays. Note the
+# name is a coincidence: "SMOKE" there is Sparse Matrix Operator Kernel Emissions, not a
+# smoke test. It is a third-party research-consortium bucket, NOT a bucket we control and
+# not (as far as we can confirm) part of the Registry of Open Data on AWS.
+#
+# Hence the override. A release publish now depends on this listing succeeding, so if the
+# bucket is ever removed, renamed, or flipped to requester-pays, an operator can point the
+# smoke elsewhere by setting SWATH_SMOKE_BUCKET — a repository variable and a re-tag,
+# rather than a code change, a PR and a merge while a half-published release waits.
+readonly BUCKET=${SWATH_SMOKE_BUCKET:-s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/}
 
 # The image runs as a non-root numeric UID (10001), so the mounted output directory has to
 # be writable by it. `--user` is deliberately NOT used: the smoke should exercise the
