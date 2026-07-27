@@ -133,10 +133,65 @@ readback of `swath.fetch.latency.phase` (§1) since the generic `meters[]` array
 Timer's `count`/`total_ms`/`max_ms` only, not its percentiles (the same reason `shape.regime.
 api_latency_p50_ms`/`_p99_ms` needed one). Each entry is `{call_class, phase, count, p50_ms, p90_ms,
 p99_ms, max_ms}` — `call_class` is `worker_page`/`pivot_probe`/`structure_probe`, `phase` is
-`connect_acquire`/`ttfb`/`total`/`response_parse` (see §1's meter row for exactly what each phase
-does and does NOT capture — they are NOT guaranteed additive to `total`). Always present as an array
-(possibly empty — never omitted); a `call_class`/`phase` pair with zero observations is omitted from
-the array, never a fabricated all-zero row.
+`connect_acquire`/`ttfb`/`sdk_unmarshal`/`total`/`response_parse` (see §1's meter row for exactly
+what each phase does and does NOT capture — they are NOT guaranteed additive to `total`). Always
+present as an array (possibly empty — never omitted); a `call_class`/`phase` pair with zero
+observations is omitted from the array, never a fabricated all-zero row.
+
+**The two response-side phases, and the residual they narrow.** `total` minus `ttfb` is everything a
+page costs the client after the store started answering, and for a long time it was readable ONLY as
+that subtraction — a single number with no distribution, no call-class attribution and no
+decomposition. Two of the five phases now sit inside it:
+
+- **`sdk_unmarshal`** — the SDK's own response-handling window: first response byte through the SDK's
+  protocol response handler returning. Bridged in by `S3CallClassLatencyPublisher` from the SDK's own
+  per-attempt stamps, not measured by swath. On the sync `ApacheHttpClient` path the body is still a
+  live socket stream when that handler runs, so it spans draining the remaining response bytes off the
+  wire **plus** the XML parse and POJO construction. It is the DOMINANT term of the residual on a full
+  1000-key page.
+
+  **Why it is derived rather than read.** `CoreMetric.UNMARSHALLING_DURATION` is the exact boundary and
+  was this phase's first implementation — but it is never published for an S3 `ListObjectsV2`, and that
+  is true **by construction, not by accident**: `DefaultS3Client` holds an `AwsS3ProtocolFactory`, which
+  overrides `createCombinedResponseHandler` to route through its own
+  `createErrorCouldBeInBodyResponseHandler` (S3 can return an error document under a `200`), and that
+  path never goes through `AwsXmlProtocolFactory.timeUnmarshalling` — the decorator that reports the
+  metric. So no S3 operation reports it and no SDK upgrade within that design will start. The phase was
+  simply absent from real runs while every unit test (which hand-builds the metric tree) stayed green;
+  `S3SdkUnmarshalPhaseLocalStackIT` is what caught that, and it is now the standing guard.
+
+  What the SDK *does* publish is `TIME_TO_LAST_BYTE`, stamped in `HandleResponseStage` **after** the
+  response handler returned — so the publisher derives `TimeToLastByte - TimeToFirstByte`, taking both
+  stamps from the SAME `MetricCollection` so a retried call can never cross attempts, and letting a
+  collection that reports a first byte supersede any earlier attempt's window (a final attempt that
+  read-timed-out mid-body has no window of its own, and an earlier attempt's must not stand in for it).
+  A negative difference is rejected rather than clamped; an exact-zero window is admissible and records
+  as a real sample. Treat the result as a close UPPER bound on the SDK's client-side response cost,
+  never as pure CPU.
+- **`response_parse`** — swath's own conversion of the returned response object into `ListEntry`/
+  `KeyBytes`, after the call returned. Cheap by comparison.
+
+**What is still only-a-residual after subtracting both.** `total - ttfb - sdk_unmarshal -
+response_parse` is NOT zero. It still contains, at minimum:
+
+- **The SDK's response-INTERCEPTOR chain**, which runs after the response handler and is therefore
+  outside `sdk_unmarshal` — for S3 that includes the percent-decode of the `encoding-type=url`
+  response **swath itself requests** (`S3PageFetcher` sets `EncodingType.URL` on every request; the
+  SDK's decode interceptor is always registered and engages because of that choice), which walks every
+  key and rebuilds the response object.
+- **Everything request-side, because `ttfb`'s zero is the ATTEMPT start, not the API call's.** The SDK
+  reports `TimeToFirstByte` equal to `ServiceCallDuration` — i.e. measured from the HTTP execute —
+  so marshalling, endpoint resolution, credential fetch and SigV4 signing all sit in the residual, in
+  front of `ttfb`.
+- **Retry backoff sleep and every superseded attempt.** `total` is the fetcher's wall-clock around the
+  whole API call including all attempts, while `ttfb`/`sdk_unmarshal` describe the LAST attempt only.
+  On a retried call (a 503 ridden out transiently) the residual therefore absorbs the earlier attempts
+  and their backoff delays outright — material, and the reason a per-page cost read should be taken on
+  a low-throttle run or cross-checked against `swath.throttle.events`.
+
+So a per-page cost analysis must still report the residual rather than assume the decomposition is
+complete. The subtraction itself is legitimate for these phases (they follow one another in
+wall-clock); it is `connect_acquire` and `ttfb` that must never be summed — see §1's meter row.
 
 **`client_cost[]`**: the per-page **client-service-cost** decomposition — what one page costs the
 CLIENT once the store has answered, split into the spans that can contend independently. Each entry
@@ -157,9 +212,11 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 cannot distinguish an iid per-page cost from a queue behind a shared single writer — whose tail grows
 with worker count while its mean may not. `checkpoint_commit_wait` ≫ `checkpoint_commit` with
 `checkpoint_queue_wait` climbing as `T` climbs is the contended-writer signature; the three moving
-together and flat in `T` is the iid one. The **parse** member of the same decomposition is
-deliberately NOT here: it is attributable per call class, so it lives in `probe_latency[]` as
-`phase=response_parse` rather than being flattened into a call-class-blind row. Note also that
+together and flat in `T` is the iid one. The two **response-side** members of the same decomposition
+are deliberately NOT here: both are attributable per call class, so they live in `probe_latency[]` as
+`phase=sdk_unmarshal` and `phase=response_parse` rather than being flattened into call-class-blind
+rows — and `sdk_unmarshal` is by far the larger of the two, so a client-cost read that consults only
+`client_cost[]` will understate per-page client cost by roughly an order of magnitude. Note also that
 `checkpoint_commit_wait` is near-zero (but still recorded) on a run with no checkpoint — there is
 nothing to wait for, which is a real client cost of zero, not a missing measurement.
 

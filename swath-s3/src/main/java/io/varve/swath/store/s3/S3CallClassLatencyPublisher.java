@@ -13,10 +13,11 @@ import software.amazon.awssdk.metrics.MetricPublisher;
 
 /**
  * Bridges the AWS SDK's per-attempt {@link HttpMetric#CONCURRENCY_ACQUIRE_DURATION} (the
- * Apache {@code ApacheHttpClient} connection-pool checkout wait) and {@link
- * CoreMetric#TIME_TO_FIRST_BYTE} (request start through first response byte) into a per-thread
- * {@link PhaseCapture} that {@link S3PageFetcher} reads back <b>synchronously</b> right after its
- * {@code listObjectsV2} call returns.
+ * Apache {@code ApacheHttpClient} connection-pool checkout wait), {@link
+ * CoreMetric#TIME_TO_FIRST_BYTE} (request start through first response byte) and the {@link
+ * CoreMetric#TIME_TO_LAST_BYTE}-minus-{@code TIME_TO_FIRST_BYTE} response-handling window (see
+ * {@link PhaseCapture#sdkUnmarshalNanos()}) into a per-thread {@link PhaseCapture} that {@link
+ * S3PageFetcher} reads back <b>synchronously</b> right after its {@code listObjectsV2} call returns.
  *
  * <p><b>Why this is safe (no race).</b> {@code S3PoolMetricsLocalStackIT} already proves — against a
  * REAL sync {@code ApacheHttpClient} call, not a hand-built fixture — that {@link
@@ -47,10 +48,10 @@ import software.amazon.awssdk.metrics.MetricPublisher;
  * PER-REQUEST override list vs the client-level one, which this class deliberately avoids using —
  * a request-level override was considered and rejected for exactly that risk.)
  *
- * <p><b>Best-effort.</b> Either metric may be absent on a given attempt (the SDK reports what its
- * HTTP client/pipeline actually measured for that call) — {@link PhaseCapture} exposes {@code -1} for
- * an unobserved phase, the same "unavailable, don't fabricate a zero" sentinel the rest of {@code
- * RunMetrics} uses.
+ * <p><b>Best-effort.</b> Any of the three metrics may be absent on a given attempt (the SDK reports
+ * what its HTTP client/pipeline actually measured for that call) — {@link PhaseCapture} exposes
+ * {@code -1} for an unobserved phase, the same "unavailable, don't fabricate a zero" sentinel the
+ * rest of {@code RunMetrics} uses.
  */
 public final class S3CallClassLatencyPublisher implements MetricPublisher {
 
@@ -58,6 +59,7 @@ public final class S3CallClassLatencyPublisher implements MetricPublisher {
     public static final class PhaseCapture {
         private volatile long connectAcquireNanos = -1L;
         private volatile long timeToFirstByteNanos = -1L;
+        private volatile long sdkUnmarshalNanos = -1L;
 
         /** The Apache pool connection-checkout wait, in nanos; {@code -1} if the SDK didn't report it. */
         public long connectAcquireNanos() {
@@ -67,6 +69,43 @@ public final class S3CallClassLatencyPublisher implements MetricPublisher {
         /** Request start through first response byte, in nanos; {@code -1} if the SDK didn't report it. */
         public long timeToFirstByteNanos() {
             return timeToFirstByteNanos;
+        }
+
+        /**
+         * The SDK's response-handling window — first response byte through the SDK's protocol
+         * response handler returning — in nanos; {@code -1} if it could not be derived.
+         *
+         * <p><b>Derived, not read.</b> {@link CoreMetric#UNMARSHALLING_DURATION} would be the exact
+         * boundary, but it is never reported for an S3 {@code ListObjectsV2} — and that is true BY
+         * CONSTRUCTION, not by accident: {@code DefaultS3Client} holds an {@code AwsS3ProtocolFactory},
+         * which OVERRIDES {@code createCombinedResponseHandler} to route through its own {@code
+         * createErrorCouldBeInBodyResponseHandler} (S3 can return an error document under a 200), and
+         * that path never goes through {@code AwsXmlProtocolFactory.timeUnmarshalling} — the decorator
+         * that would report the metric. So no S3 operation reports it, and no SDK upgrade within this
+         * design will start. Confirmed empirically too: the metric never appears in the published
+         * collection tree (see {@code S3SdkUnmarshalPhaseLocalStackIT}). What the SDK does report is {@link
+         * CoreMetric#TIME_TO_LAST_BYTE}, and on the SYNC path that stamp is taken in the SDK's
+         * {@code HandleResponseStage} <b>after</b> the response handler has returned — so {@code
+         * TIME_TO_LAST_BYTE - TIME_TO_FIRST_BYTE} is the response-handling window: draining the
+         * remaining response body off the socket (the handler parses straight from the live stream)
+         * plus the XML parse and POJO construction. Not pure client CPU, and not a true unmarshal
+         * span — a close upper bound on one.
+         *
+         * <p>It stops before the SDK's response-INTERCEPTOR chain — including the percent-decode of
+         * the {@code encoding-type=url} response {@link S3PageFetcher} itself asks for (the SDK's
+         * decode interceptor is always registered, but engages because of that request choice), which
+         * rebuilds the response object — so that part stays inside the total-minus-TTFB residual,
+         * along with everything request-side of the attempt's first byte.
+         *
+         * <p>Derived per {@link MetricCollection}, so both stamps always come from the SAME attempt,
+         * and a collection reporting a first byte always supersedes an earlier attempt's window (see
+         * {@code apply}). A negative difference (two stamps that disagree) is rejected rather than
+         * clamped, leaving the unobserved sentinel; an exact-zero window is admissible and records as
+         * a real {@code 0} sample, since the subtraction is arithmetically sound and treating it as
+         * "absent" would discard a genuine measurement.
+         */
+        public long sdkUnmarshalNanos() {
+            return sdkUnmarshalNanos;
         }
     }
 
@@ -106,6 +145,19 @@ public final class S3CallClassLatencyPublisher implements MetricPublisher {
         Duration ttfb = MetricCollections.last(collection, CoreMetric.TIME_TO_FIRST_BYTE);
         if (ttfb != null) {
             capture.timeToFirstByteNanos = ttfb.toNanos();
+        }
+        Duration ttlb = MetricCollections.last(collection, CoreMetric.TIME_TO_LAST_BYTE);
+        if (ttfb != null) {
+            // Both stamps read off THIS collection, so they are always the same attempt's -- see
+            // PhaseCapture#sdkUnmarshalNanos for why the window is derived rather than read.
+            //
+            // A collection that reported a first byte SUPERSEDES any earlier attempt's window, even
+            // when it reported no last byte: a retried call whose final attempt read-timed-out
+            // mid-body has no derivable window, and an EARLIER attempt's must not stand in for it --
+            // that would record a healthy attempt's parse cost against the failed call whose ttfb
+            // and total are the ones actually published. Reset to the unobserved sentinel instead.
+            long windowNanos = ttlb == null ? -1L : ttlb.toNanos() - ttfb.toNanos();
+            capture.sdkUnmarshalNanos = windowNanos >= 0L ? windowNanos : -1L;
         }
     }
 
