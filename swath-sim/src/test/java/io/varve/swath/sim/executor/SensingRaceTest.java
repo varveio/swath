@@ -29,7 +29,15 @@ import org.junit.jupiter.api.Test;
  * E1+E2         0.0003-0.0024   0.0008-0.0014   0.000          0.000        0.321-0.662  52.5-53.1  7.9
  * </pre>
  *
- * The serial tail the bench exists to produce falls by roughly two orders of magnitude at every seed,
+ * <b>Two of those columns are not findings.</b> {@code estZro} and {@code estIgn} are <b>zero by
+ * construction</b> for E1 and E1+E2: an estimator whose estimate <em>is</em> the emitted count cannot
+ * discard it, and the only score that can read zero is a cursor already at its bound, which is a
+ * finished range and never a scanned candidate. The invisible-advance counter is zero for them for the
+ * same reason. So only E2's readings in those columns are measurements — and E2's {@code estZro} is not
+ * an improvement (0.015–0.050 against the control's 0.036–0.039, worse at one seed). They are still
+ * asserted below, because what they pin is that the counters follow the installed sensor at all.
+ *
+ * <p>The serial tail the bench exists to produce falls by roughly two orders of magnitude at every seed,
  * the run finishes about 28% sooner, mean occupancy goes from 5.5 of 8 workers to nearly 8, and it
  * costs <em>fewer</em> store calls, not more. Steal attempts fall from ~2,100 to 100–355 and the
  * NO_VICTIM share from 0.88 to under 0.07: the fleet stops spinning because there is work to find.
@@ -83,9 +91,9 @@ import org.junit.jupiter.api.Test;
  * problem rather than a visibility one. E2 is the only candidate whose reading is byte-identical to
  * the shipped one wherever the two windows are anchored at the same byte — a narrower set than
  * "wherever the shipped one works", so its holding both guards at 4 of 4 seeds is a measurement rather
- * than a construction — and it does hold them; E1 is the one that eliminates every degenerate reading,
- * and it is the one that breaks a healthy shape. The combination keeps both properties and still loses
- * the measured regime.
+ * than a construction — and it does hold them; E1 is the one whose degenerate readings are all zero,
+ * which is a property of its arithmetic rather than a result, and it is the one that breaks a healthy
+ * shape. The combination keeps both properties and still loses the measured regime.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory and time, like every at-scale fixture here: the bench
  * is a million-key keyspace and the race runs it once per seed per variant.
@@ -154,8 +162,14 @@ class SensingRaceTest {
                 String at = variant + " at seed " + seed;
 
                 // PRIMARY 2: the estimate stops discarding a range's emitted keys. Exactly zero, at
-                // every seed, for every candidate -- 0.692-0.706 for the shipped one.
-                assertThat(leg.estIgnoresKeysShare()).as("%s: estimate discards keys", at).isZero();
+                // every seed, for every candidate -- 0.692-0.706 for the shipped one. A measurement for
+                // E2 only: E1 and E1+E2 estimate FROM the emitted count, so a zero here is an
+                // arithmetic identity for them and what the assertion pins is that the counter follows
+                // the installed sensor, not that the sensor improved.
+                assertThat(leg.estIgnoresKeysShare())
+                        .as("%s: estimate discards keys (zero by construction for the position-free "
+                                + "variants)", at)
+                        .isZero();
                 // PRIMARY 3: fewer split proposals lose the race to the victim's own cursor. The
                 // control's four seeds span 0.778-0.852 and no candidate seed reaches 0.70.
                 assertThat(leg.revalidationLossShare()).as("%s: revalidation loss share", at)
@@ -184,13 +198,19 @@ class SensingRaceTest {
             }
         }
         // Only the two variants that carry no position term drive the zero-estimate reading itself to
-        // zero. E2 keeps a position, so it keeps a few genuinely-exhausted candidates -- 0.015-0.050,
-        // against the control's 0.036-0.039, which is why this is pinned per variant and not for all.
+        // zero -- and for them that is construction rather than a cure: their estimate is the emitted
+        // count floored at a page, so the only score that can read zero is a cursor already at its
+        // bound, which is a finished range and never a scanned candidate. E2 keeps a position, so it
+        // keeps a few genuinely-exhausted candidates -- 0.015-0.050 against the control's 0.036-0.039,
+        // WORSE at one seed. That is why this is pinned per variant and not for all, and why E2 is
+        // nowhere reported as improving this reading.
         for (SensingVariant variant : new SensingVariant[] {
             SensingVariant.RATE, SensingVariant.RATE_CURSOR_ANCHORED}) {
             for (long seed : SensingRaceProtocol.SEEDS) {
                 assertThat(SensingRaceProtocol.at(legs, variant, seed).estZeroShare())
-                        .as("%s at seed %d: zero estimates", variant, seed).isZero();
+                        .as("%s at seed %d: zero estimates (zero by construction -- no position term)",
+                                variant, seed)
+                        .isZero();
             }
         }
     }

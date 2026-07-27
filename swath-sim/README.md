@@ -357,16 +357,25 @@ decisions, so a copy that drifts fails a test rather than becoming a race result
 **What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
 four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key
 page all three candidates remove the serial tail — 0.33 down to 0.0003–0.0090 at every seed, ~28% less
-virtual time, mean occupancy 5.5 → ~7.9 of 8 workers, and *fewer* store calls. The mechanism is the one
-the estimate gates directly: owner carves refused by the remaining-work floor fall by an order of
+virtual time, mean occupancy 5.5 → 7.6–7.9 of 8 workers, and *fewer* store calls. The mechanism is the
+one the estimate gates directly: owner carves refused by the remaining-work floor fall by an order of
 magnitude per page committed, and what replaces them is the demand gate declining to carve because
 there is already enough work queued. **At the measured 1,000-key page every candidate is worse, at every
 seed**, because an estimate with no sense of position places the owner's carve on a nearly-drained range,
 the child comes back confetti-sized, and the feedback gate that watches for that shuts owner splitting
-down for the rest of the run. The rate variant alone also damages the hash-fanned healthy shape, at two
-of four seeds, for the same reason. None of the three is shippable as it stands; what the race
+down for the rest of the run. The rate variant alone also damages the hash-fanned healthy shape, at one
+of the four seeds — read on the same yardstick for all three candidates, the control's own reading at
+the same seed — for the same reason. None of the three is shippable as it stands; what the race
 establishes is that the sensor, and not the split policy above it, is what gates division on that
 keyspace.
+
+**The degeneracy counters are not the evidence they look like.** Both go to zero for `RATE` and
+`RATE_CURSOR_ANCHORED`, but that is arithmetic and not a cure: an estimator whose estimate *is* the
+emitted count cannot discard it, and the only score that can read zero is a cursor already at its
+bound, which is a finished range and never a scanned candidate. Only `CURSOR_ANCHORED`'s readings there
+are measured — and its zero-estimate share is **not** an improvement (0.015–0.050 against the control's
+0.036–0.039, worse at one seed). What the counters do establish is that they follow whichever sensor is
+installed.
 
 ### What a run costs to produce
 
