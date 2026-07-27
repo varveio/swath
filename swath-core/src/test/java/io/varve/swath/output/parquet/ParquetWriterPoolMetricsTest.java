@@ -115,21 +115,29 @@ class ParquetWriterPoolMetricsTest {
         // own already-open output-stream handle is unaffected (POSIX permission checks apply only
         // at open() time, not to already-open descriptors), so the write itself still lands; only
         // the SECOND, explicit open for fsync (the one finalizeCurrent's IOException catch guards)
-        // fails. This is the same time-trigger clock-seam pattern as timeTriggerRotationRecordsTimeReason.
+        // fails.
+        //
+        // A ROW-COUNT trigger -- not the clock-driven time trigger this test used to arm the fault
+        // with -- makes the fault window deterministic. Whether rotation fires is then a pure
+        // function of how many rows THIS lane thread has itself written from the ordered queue;
+        // nothing the test thread does (revoking permissions, submitting the next batch) can move
+        // that number. The old clock-based design raced: under full-suite load, the lane thread
+        // could still be evaluating the FIRST (under-threshold) batch's rotationReason() by the
+        // time the test thread had already bumped the injected clock and revoked permissions -- so
+        // the FIRST batch's own rotation check (now reading the already-bumped clock) could fire
+        // the fault before the SECOND, intended batch ever ran, recording the failure into the
+        // pool's shared state before the test's own second submit() call -- which then threw the
+        // already-recorded failure straight out of `pool.submit()` (via `checkFailure()`) instead
+        // of surfacing where this test asserts it (#37).
         RunContext ctx = RunContext.create();
-        AtomicLong clock = new AtomicLong(0);
-        long intervalNanos = Duration.ofSeconds(10).toNanos();
         var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 8,
-                ParquetWriterPoolConfig.DEFAULT.withRotationIntervalNanos(intervalNanos).withMetrics(ctx.metrics()),
-                clock::get);
+                ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(5L).withMetrics(ctx.metrics()));
         Path partPath = DatasetLayout.of(dir).dataFile("part-w0-00000.parquet");
 
-        pool.submit(batch(0, 0, 0, 10));   // opens part-w0-00000 (partOpenedAtNanos captured at clock=0)
+        pool.submit(batch(0, 0, 0, 3));   // opens part-w0-00000; 3 rows < maxRows(5) -> never rotates on its own
         await().atMost(Duration.ofSeconds(5)).until(() -> Files.exists(partPath));
-        Thread.sleep(50);   // let writeBatch()'s rotationReason() check (still reading clock=0) finish too
         Files.setPosixFilePermissions(partPath, Set.of());   // revoke access for any NEW open() of this file
-        clock.addAndGet(intervalNanos + 1);
-        pool.submit(batch(0, 1, 10, 11));   // next write's rotationReason() fires the time trigger -> finalizeCurrent -> close() fails
+        pool.submit(batch(0, 1, 3, 6));   // cumulative rows=6 >= maxRows(5) -> rotationReason() fires ROWS -> finalizeCurrent() -> close() fails
 
         try {
             MeterRegistry registry = ctx.meterRegistry();
