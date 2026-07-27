@@ -41,10 +41,62 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
 
     /** Keeps {@code --version} aligned with the Gradle archive manifest. */
     public static final class VersionProvider implements CommandLine.IVersionProvider {
+        /** Manifest attribute stamped by the build (see {@code swath.java-conventions.gradle.kts}). */
+        private static final String COMMIT_ATTRIBUTE = "Implementation-Commit";
+
+        /** Displayed commit length — enough to be unambiguous, short enough to read. */
+        private static final int SHORT_COMMIT_LENGTH = 12;
+
         @Override
         public String[] getVersion() {
-            String version = App.class.getPackage().getImplementationVersion();
-            return new String[] {"swath " + (version == null ? "development" : version)};
+            return new String[] {
+                format(App.class.getPackage().getImplementationVersion(), readCommit())
+            };
+        }
+
+        /**
+         * Renders the version line. Package-private and pure so the formatting is testable
+         * without a packaged jar to read a manifest from.
+         *
+         * @param version the manifest's {@code Implementation-Version}, or null outside a jar
+         * @param commit the manifest's {@code Implementation-Commit}, or null when unavailable
+         */
+        static String format(String version, String commit) {
+            String line = "swath " + (version == null ? "development" : version);
+            if (commit == null || commit.isBlank() || commit.equals("unknown")) {
+                return line;
+            }
+            return line + " (" + commit.substring(0, Math.min(SHORT_COMMIT_LENGTH, commit.length())) + ")";
+        }
+
+        /**
+         * Reads the commit from the manifest of the jar this class was loaded from.
+         *
+         * <p>{@code Package.getImplementationVersion()} only exposes the standard version
+         * attribute, so the manifest is opened directly. Running from a classes directory
+         * (development, tests) has no jar and yields null, which {@link #format} renders as a
+         * bare version line — so this degrades rather than failing.
+         */
+        private static String readCommit() {
+            try {
+                java.security.CodeSource source = App.class.getProtectionDomain().getCodeSource();
+                if (source == null || source.getLocation() == null) {
+                    return null;
+                }
+                java.io.File location = new java.io.File(source.getLocation().toURI());
+                if (!location.isFile()) {
+                    return null;
+                }
+                try (java.util.jar.JarFile jar = new java.util.jar.JarFile(location)) {
+                    java.util.jar.Manifest manifest = jar.getManifest();
+                    return manifest == null
+                            ? null
+                            : manifest.getMainAttributes().getValue(COMMIT_ATTRIBUTE);
+                }
+            } catch (Exception e) {
+                // Version reporting must never be the reason a command fails.
+                return null;
+            }
         }
     }
 
