@@ -7,12 +7,15 @@ package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.engine.AlphabetDigest;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.ConfettiObservation;
 import io.varve.swath.engine.policy.OwnerSplitDecision;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.engine.policy.OwnerSplitPolicy;
+import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.engine.policy.Selection;
 import io.varve.swath.engine.policy.StealPolicy;
@@ -21,7 +24,9 @@ import io.varve.swath.engine.policy.VictimView;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -31,10 +36,11 @@ import org.junit.jupiter.api.Test;
  * into a comparison of two unrelated algorithms without failing anything.
  *
  * <p>So both mirrors are driven with the <b>incumbent</b> estimator installed, over the same inputs
- * as the engine's own policies, and required to decide identically. That covers the two constants the
- * engine keeps package-private and this module therefore has to duplicate: a change to either in the
- * engine breaks the confetti-gate cases below rather than quietly changing what a variant is measured
- * against.
+ * as the engine's own policies, and required to decide identically. That is what guards the two
+ * constants the engine keeps package-private and this module therefore has to duplicate — but only as
+ * far as the battery's own observations reach, which is stated exactly on
+ * {@link #confettiObservations()} rather than implied: the confetti rates bracket the suppression
+ * threshold at 0.5 and 0.5625, and the probe sequences catch a probe period that halves or doubles.
  */
 class SensingVariantParityTest {
 
@@ -65,7 +71,7 @@ class SensingVariantParityTest {
 
         int carves = 0;
         int skips = 0;
-        int confettiBranches = 0;
+        Set<String> reasons = new HashSet<>();
         for (OwnerSplitView view : ownerSplitViews()) {
             OwnerSplitDecision expected = engine.decide(view);
             OwnerSplitDecision actual = mirror.decide(view);
@@ -75,16 +81,17 @@ class SensingVariantParityTest {
             } else {
                 skips++;
             }
-            if (expected.engagements().stream()
-                    .anyMatch(e -> e.reason().startsWith("confetti"))) {
-                confettiBranches++;
-            }
+            expected.engagements().forEach(e -> reasons.add(e.reason()));
         }
         // A parity check that only ever saw refusals would prove nothing about the pivot half of the
-        // chain, and one that never reached the confetti gate would not cover the duplicated constants.
+        // chain, and one that never reached a branch says nothing about the constants that govern it --
+        // so the branches the battery has to reach are named rather than counted.
         assertThat(carves).as("carves reached").isPositive();
         assertThat(skips).as("skips reached").isPositive();
-        assertThat(confettiBranches).as("the confetti gate's own branches reached").isPositive();
+        assertThat(reasons).as("branches reached")
+                .contains(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), "confetti_probe",
+                        OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(),
+                        "alphabet_chosen", "alphabet_fallback");
     }
 
     private static void assertSameDecision(OwnerSplitDecision expected, OwnerSplitDecision actual,
@@ -169,10 +176,13 @@ class SensingVariantParityTest {
                             for (long outstanding : new long[] {1L, 8L}) {
                                 for (double density : new double[] {0.5, 0.9}) {
                                     for (long[] confetti : confettiObservations()) {
-                                        views.add(new OwnerSplitView(hi, lo, cursor, keys, committed, 0L,
-                                                outstanding, density, 1.0, null,
-                                                new ConfettiObservation(confetti[0], confetti[1],
-                                                        confetti[2])));
+                                        for (PivotShape shape : pivotShapes()) {
+                                            views.add(new OwnerSplitView(hi, lo, cursor, keys, committed,
+                                                    0L, outstanding, density,
+                                                    shape.observedDensityRatio(), shape.alphabet(),
+                                                    new ConfettiObservation(confetti[0], confetti[1],
+                                                            confetti[2])));
+                                        }
                                     }
                                 }
                             }
@@ -185,15 +195,59 @@ class SensingVariantParityTest {
     }
 
     /**
-     * Confetti readings that sit either side of the gate's own thresholds: below the warmup sample,
-     * above it but under the suppression rate, over the rate on a sequence that suppresses, and over
-     * the rate on the one sequence out of sixteen that probes instead.
+     * Confetti readings chosen to bracket the gate's own two constants, so drift in either is caught
+     * rather than merely likely to be. {@code {taggedTotal, taggedConfetti, probeSeq}}:
+     * <ul>
+     *   <li><b>the suppression threshold</b> — 2/16 = 0.125 and 15/16 = 0.9375 straddle it loosely;
+     *       <b>8/16 = 0.5 (which must NOT suppress, the comparison being strict) and 9/16 = 0.5625
+     *       (which must)</b> straddle it tightly. Between them, any engine threshold outside
+     *       {@code [0.5, 0.5625)} makes one of these two decide differently here than there.</li>
+     *   <li><b>the probe period</b> — {@code probeSeq} 15 probes at a period of sixteen and suppresses
+     *       at thirty-two, so a doubling is caught; {@code probeSeq} 7 suppresses at sixteen and
+     *       probes at eight, so a halving is caught. The old battery had neither: 3 and 15 alone
+     *       decide identically under 8 and 16.</li>
+     * </ul>
      */
     private static List<long[]> confettiObservations() {
         return List.of(
                 new long[] {0L, 0L, 0L},
                 new long[] {16L, 2L, 3L},
+                new long[] {16L, 8L, 3L},
+                new long[] {16L, 9L, 3L},
+                new long[] {16L, 9L, 7L},
                 new long[] {16L, 15L, 3L},
                 new long[] {16L, 15L, 15L});
+    }
+
+    /**
+     * One (observed density ratio, observed alphabet) pair the gate battery is run under: the neutral
+     * default, a <b>thinning</b> density whose ratio below 1 shrinks the reachable child tail the
+     * observed-mass floor and both reflection decisions read, and an <b>observed alphabet</b>, which
+     * is what sends pivot synthesis down its alphabet-aware branch instead of its fallback. Both sides
+     * call the same {@code StealMath} for these, so this is coverage of the mirrored chain rather than
+     * a suspected divergence.
+     */
+    private record PivotShape(double observedDensityRatio, AlphabetDigest.Snapshot alphabet) {
+    }
+
+    private static List<PivotShape> pivotShapes() {
+        return List.of(new PivotShape(1.0, null),
+                new PivotShape(0.25, null),
+                new PivotShape(1.0, observedAlphabet()));
+    }
+
+    /**
+     * An observed alphabet built the way a run builds one — a {@link WorkerState} over the battery's
+     * own outermost bounds, fed the page endpoints it would have committed — rather than a synthetic
+     * digest, so the branch this exercises is the one a run reaches. The third species is what makes
+     * the digest bite: it populates the gap between the battery's cursors and their bounds at the
+     * positions a pivot is synthesised at, so the alphabet-aware choice differs from the plain one
+     * instead of falling back through it.
+     */
+    private static AlphabetDigest.Snapshot observedAlphabet() {
+        WorkerState state = new WorkerState(0L, KEYS[2], null, KEYS[7]);
+        state.recordPage(KEYS[3], KEYS[5], 4_000L);
+        state.recordPage(KEYS[5], key("species/Mammoth_primigenius/mMamPri1/"), 4_000L);
+        return state.alphabetDigest().snapshot();
     }
 }
