@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT emit the same set. In particular Micrometer's {@code SimpleMeterRegistry.newTimer}
  * registers {@code HistogramGauges} — 3 extra {@code *.percentile{phi}} GAUGE meters per
- * percentile-publishing timer, 54 in total here — that {@code OtlpMeterRegistry.newTimer} does not
+ * percentile-publishing timer, 63 in total here — that {@code OtlpMeterRegistry.newTimer} does not
  * create at all (OTLP encodes percentiles as Summary quantiles on the wire instead). So this
  * snapshot holds {@value #EXPECTED_SIMPLE_METER_COUNT} ids where the same run yields
  * {@value RunMetricsOtlpSeriesIdentityTest#EXPECTED_OTLP_METER_COUNT} meters under OTLP. That side
@@ -170,6 +170,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=sdk_unmarshal,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=sdk_unmarshal,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=sdk_unmarshal,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.9}",
@@ -182,6 +185,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=sdk_unmarshal,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=sdk_unmarshal,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=sdk_unmarshal,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.9}",
@@ -194,6 +200,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=sdk_unmarshal,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=sdk_unmarshal,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=sdk_unmarshal,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.9}",
@@ -228,14 +237,17 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "TIMER|swath.emit.latency|{}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
@@ -269,14 +281,17 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.errors{type=throttle}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=connect_acquire}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=response_parse}=1",
+            "swath.fetch.latency.phase{call_class=pivot_probe,phase=sdk_unmarshal}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=total}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=ttfb}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=connect_acquire}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=response_parse}=1",
+            "swath.fetch.latency.phase{call_class=structure_probe,phase=sdk_unmarshal}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=total}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=ttfb}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=connect_acquire}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=response_parse}=1",
+            "swath.fetch.latency.phase{call_class=worker_page,phase=sdk_unmarshal}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=total}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=ttfb}=1",
             "swath.idle_backoff.park_time{}=1",
@@ -346,7 +361,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 171;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 183;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

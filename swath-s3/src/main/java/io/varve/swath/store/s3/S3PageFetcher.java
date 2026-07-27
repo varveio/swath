@@ -216,9 +216,11 @@ public final class S3PageFetcher implements PageFetcher {
         } catch (SdkException e) {
             // Latency-phase samples are recorded on the FAILURE path too, same as swath.api.latency
             // below (SAME Timer.Sample) -- see metrics-and-observability.md §1 (swath.fetch.latency.phase)
-            // for why a success-only record would be survivorship bias. connect_acquire/ttfb are
-            // commonly unavailable here and silently skipped (never fabricated) -- see
-            // S3CallClassLatencyPublisher; total (this fetcher's own wall-clock) is always available and
+            // for why a success-only record would be survivorship bias. connect_acquire/ttfb/sdk_unmarshal
+            // are commonly unavailable here and silently skipped (never fabricated) -- see
+            // S3CallClassLatencyPublisher; a MODELED service fault is the exception, since the SDK still
+            // runs (and stamps) its ERROR response handling, so sdk_unmarshal is then a (tiny)
+            // error-document parse rather than a page's. total (this fetcher's own wall-clock) is always available and
             // is the phase most likely to actually reflect the fault (e.g. a ~10s
             // ApiCallAttemptTimeoutException with no TTFB ever reported).
             //
@@ -267,12 +269,14 @@ public final class S3PageFetcher implements PageFetcher {
         }
         Duration latency = Duration.ofNanos(System.nanoTime() - startedNs);
         metrics.recordS3Latency(sample);
-        // Per-call-class latency-phase decomposition -- connect-acquire/TTFB best-effort from
-        // the SDK (may be -1/unavailable on a given attempt, silently skipped by recordCallClassLatency),
-        // total always available (this fetcher's own measured wall-clock).
+        // Per-call-class latency-phase decomposition -- connect-acquire/TTFB/SDK-unmarshal best-effort
+        // from the SDK (may be -1/unavailable on a given attempt, silently skipped by
+        // recordCallClassLatency), total always available (this fetcher's own measured wall-clock).
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE,
                 phaseCapture.connectAcquireNanos());
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_TTFB, phaseCapture.timeToFirstByteNanos());
+        metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL,
+                phaseCapture.sdkUnmarshalNanos());
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_TOTAL, latency.toNanos());
         maybeLogSlowProbeExemplar(callClass, req, latency.toNanos(), phaseCapture, false);
 
@@ -293,8 +297,8 @@ public final class S3PageFetcher implements PageFetcher {
         // Response parse: the client-side conversion of the SDK's already-unmarshalled response into
         // swath's own page model. One nanoTime pair per page (the same idiom as the wall-clock total
         // above), so the client's per-page service cost is measurable separately from the store's
-        // response time -- the SDK's OWN unmarshalling is inside the call and stays visible only as
-        // the total-minus-TTFB residual.
+        // response time -- the SDK's OWN response handling happens inside the call and is reported
+        // separately, from the SDK's own per-attempt stamps, as the sdk_unmarshal phase above.
         long parseStartedNs = System.nanoTime();
         List<ListEntry> entries = new ArrayList<>(resp.contents().size());
         for (S3Object o : resp.contents()) {
@@ -332,7 +336,7 @@ public final class S3PageFetcher implements PageFetcher {
     /**
      * The fetch-outcome latency+interrupt block, shared VERBATIM between the {@code
      * catch (SdkException e)} and {@code catch (RuntimeException e)} arms of {@link #fetchPage}
-     * (they were byte-identical before this extraction) — records the same three latency-phase
+     * (they were byte-identical before this extraction) — records the same four latency-phase
      * samples + the overall S3-call timer, logs a slow-probe exemplar candidate ({@code
      * forceLog=true}, since any exception path is always a candidate regardless of elapsed time),
      * then re-asserts "only OUR cancel counts as an interrupt": if the thread's interrupt flag is
@@ -347,6 +351,8 @@ public final class S3PageFetcher implements PageFetcher {
                 phaseCapture.connectAcquireNanos());
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_TTFB,
                 phaseCapture.timeToFirstByteNanos());
+        metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL,
+                phaseCapture.sdkUnmarshalNanos());
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_TOTAL, elapsedNanos);
         // A probe (pivot or structure) that reached this catch arm -- whatever the eventual
         // classification (throttle/timeout/network/other) -- is a candidate slow-probe exemplar;

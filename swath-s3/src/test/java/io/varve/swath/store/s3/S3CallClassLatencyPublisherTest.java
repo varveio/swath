@@ -14,9 +14,11 @@ import software.amazon.awssdk.http.HttpMetric;
 import software.amazon.awssdk.metrics.MetricCollector;
 
 /**
- * {@link S3CallClassLatencyPublisher} extracts {@link HttpMetric#CONCURRENCY_ACQUIRE_DURATION}
- * and {@link CoreMetric#TIME_TO_FIRST_BYTE} into the thread-local {@link
- * S3CallClassLatencyPublisher.PhaseCapture} started by {@link S3CallClassLatencyPublisher#begin()}.
+ * {@link S3CallClassLatencyPublisher} extracts {@link HttpMetric#CONCURRENCY_ACQUIRE_DURATION} and
+ * {@link CoreMetric#TIME_TO_FIRST_BYTE}, and DERIVES the SDK response-handling window from {@link
+ * CoreMetric#TIME_TO_LAST_BYTE} minus {@link CoreMetric#TIME_TO_FIRST_BYTE}, into the thread-local
+ * {@link S3CallClassLatencyPublisher.PhaseCapture} started by {@link
+ * S3CallClassLatencyPublisher#begin()}.
  *
  * <p>Same hand-built {@link MetricCollector} tree idiom as {@code S3PoolMetricPublisherTest} — the
  * SDK only populates these fields on a real HTTP-client attempt, so these tests assert the
@@ -30,6 +32,7 @@ class S3CallClassLatencyPublisherTest {
         try {
             assertThat(capture.connectAcquireNanos()).isEqualTo(-1L);
             assertThat(capture.timeToFirstByteNanos()).isEqualTo(-1L);
+            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(-1L);
         } finally {
             S3CallClassLatencyPublisher.end();
         }
@@ -43,11 +46,84 @@ class S3CallClassLatencyPublisherTest {
             MetricCollector attempt = root.createChild("ApiCallAttempt");
             attempt.reportMetric(HttpMetric.CONCURRENCY_ACQUIRE_DURATION, Duration.ofMillis(12));
             attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(45));
+            attempt.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(52));
 
             new S3CallClassLatencyPublisher().publish(root.collect());
 
             assertThat(capture.connectAcquireNanos()).isEqualTo(Duration.ofMillis(12).toNanos());
             assertThat(capture.timeToFirstByteNanos()).isEqualTo(Duration.ofMillis(45).toNanos());
+            assertThat(capture.sdkUnmarshalNanos())
+                    .as("the SDK response-handling window is TIME_TO_LAST_BYTE - TIME_TO_FIRST_BYTE")
+                    .isEqualTo(Duration.ofMillis(7).toNanos());
+        } finally {
+            S3CallClassLatencyPublisher.end();
+        }
+    }
+
+    /**
+     * The window needs BOTH stamps: time-to-last-byte alone says nothing about where the response
+     * handling started, so the phase stays unobserved rather than being reported as the whole
+     * attempt. This is the shape of an attempt that failed before the service ever answered.
+     */
+    @Test
+    void timeToLastByteWithoutTimeToFirstByteLeavesTheWindowUnobserved() {
+        S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
+        try {
+            MetricCollector root = MetricCollector.create("ApiCall");
+            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(52));
+
+            new S3CallClassLatencyPublisher().publish(root.collect());
+
+            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(-1L);
+        } finally {
+            S3CallClassLatencyPublisher.end();
+        }
+    }
+
+    /**
+     * Two stamps that disagree (last byte BEFORE first byte) are rejected outright rather than
+     * clamped to {@code 0} — a fabricated zero would silently pull the phase's p50 down, and the
+     * whole point of the {@code -1} sentinel is that an untrustworthy measurement contributes no
+     * sample at all.
+     */
+    @Test
+    void aNegativeWindowIsRejectedNotClampedToZero() {
+        S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
+        try {
+            MetricCollector root = MetricCollector.create("ApiCall");
+            MetricCollector attempt = root.createChild("ApiCallAttempt");
+            attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(45));
+            attempt.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(44));
+
+            new S3CallClassLatencyPublisher().publish(root.collect());
+
+            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(-1L);
+            assertThat(capture.timeToFirstByteNanos())
+                    .as("the TTFB phase itself is unaffected -- only the derived window is rejected")
+                    .isEqualTo(Duration.ofMillis(45).toNanos());
+        } finally {
+            S3CallClassLatencyPublisher.end();
+        }
+    }
+
+    /**
+     * The window is derived PER collection, so a retried call's two stamps can never be crossed
+     * between attempts: attempt 1 reports only a first byte (it then hung), attempt 2 reports both,
+     * and the surviving window is attempt 2's own — not {@code attempt2.ttlb - attempt1.ttfb}.
+     */
+    @Test
+    void theWindowIsDerivedWithinOneAttemptNeverAcrossTwo() {
+        S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
+        try {
+            MetricCollector root = MetricCollector.create("ApiCall");
+            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(900));
+            MetricCollector second = root.createChild("ApiCallAttempt");
+            second.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(40));
+            second.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(46));
+
+            new S3CallClassLatencyPublisher().publish(root.collect());
+
+            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(Duration.ofMillis(6).toNanos());
         } finally {
             S3CallClassLatencyPublisher.end();
         }
@@ -65,8 +141,10 @@ class S3CallClassLatencyPublisherTest {
             new S3CallClassLatencyPublisher().publish(root.collect());
 
             assertThat(capture.connectAcquireNanos()).isEqualTo(Duration.ofMillis(3).toNanos());
-            // TIME_TO_FIRST_BYTE never reported anywhere -- stays the -1 unobserved sentinel.
+            // TIME_TO_FIRST_BYTE/TIME_TO_LAST_BYTE never reported anywhere -- TTFB and the derived
+            // response-handling window both stay the -1 unobserved sentinel.
             assertThat(capture.timeToFirstByteNanos()).isEqualTo(-1L);
+            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(-1L);
         } finally {
             S3CallClassLatencyPublisher.end();
         }

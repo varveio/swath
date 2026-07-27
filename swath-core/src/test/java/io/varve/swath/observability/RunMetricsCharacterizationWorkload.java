@@ -212,12 +212,13 @@ final class RunMetricsCharacterizationWorkload {
         m.recordConnectionHandshake();
         m.recordSocketClosureRecovered();
 
-        // Per-call-class latency phases — all 3 x 4 series (a negative sample is the
+        // Per-call-class latency phases — all 3 x 5 series (a negative sample is the
         // SDK-didn't-report sentinel and must NOT register a series).
         for (String callClass : List.of(RunMetrics.CALL_CLASS_WORKER_PAGE, RunMetrics.CALL_CLASS_PIVOT_PROBE,
                 RunMetrics.CALL_CLASS_STRUCTURE_PROBE)) {
             for (String phase : List.of(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE, RunMetrics.LATENCY_PHASE_TTFB,
-                    RunMetrics.LATENCY_PHASE_TOTAL, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE)) {
+                    RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL, RunMetrics.LATENCY_PHASE_TOTAL,
+                    RunMetrics.LATENCY_PHASE_RESPONSE_PARSE)) {
                 m.recordCallClassLatency(callClass, phase, 1_500_000L);
             }
         }
