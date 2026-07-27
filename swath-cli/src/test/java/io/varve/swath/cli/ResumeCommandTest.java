@@ -873,6 +873,29 @@ final class ResumeCommandTest {
                 .hasMessageContaining("bearer-token-refresh-interval");
     }
 
+    /**
+     * Re-passing ONLY the interval is the likeliest version of getting that re-pass wrong, and it is
+     * the one shape where the flags mean nothing together: the run would fall back to SigV4 signing,
+     * which the bearer-auth endpoint it was resuming against rejects — or, worse, would succeed
+     * against whatever ambient identity the SDK chain resolved. Rejected at exit 2 instead of
+     * silently ignored, through the real resume path (a hand-copied {@code bearer} would leave a
+     * regression in the forwarding itself undetected).
+     */
+    @Test
+    void resumeRejectsABearerRefreshIntervalWithoutItsCommand(@TempDir Path tempDir) throws Exception {
+        Path outputDir = seedCompletedRunDir(tempDir);
+
+        ResumeCommand cmd = new ResumeCommand();
+        cmd.directory = outputDir;
+        cmd.bearer.refreshInterval = "10m";
+
+        assertThatThrownBy(cmd::call)
+                .isInstanceOf(InvalidConfigException.class)
+                .satisfies(e -> assertThat(ExitCodes.forThrowable(e)).isEqualTo(2))
+                .hasMessageContaining("--bearer-token-refresh-interval")
+                .hasMessageContaining("--bearer-token-command");
+    }
+
     private static void overwriteOutputFormat(Path db, String format) throws Exception {
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
              PreparedStatement ps = c.prepareStatement("UPDATE run_meta SET output_format=?")) {

@@ -36,25 +36,10 @@ class BearerTokenRefreshIntervalValidationTest {
                 .hasMessageContaining("--bearer-token-command");
     }
 
-    /**
-     * The same rejection on {@code swath resume}, which is where the slip is likeliest: the command
-     * is never persisted, so an operator re-passing the pair by hand can easily carry over only the
-     * interval. Both flags are forwarded onto the delegated {@link ListCommand}, so one guard covers
-     * both commands.
-     */
-    @Test
-    void refreshIntervalWithoutACommandIsRejectedOnResumeToo() {
-        ResumeCommand resume = new ResumeCommand();
-        ListCommand cmd = new ListCommand();
-        new CommandLine(cmd).parseArgs("s3://bucket/prefix", "--checkpoint", "none",
-                "--region", "us-east-1");
-        resume.bearer.refreshInterval = "10m";
-        cmd.connection.bearer.copyFrom(resume.bearer);
-
-        assertThatThrownBy(cmd::call)
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("--bearer-token-refresh-interval");
-    }
+    // The same rejection driven through the real `swath resume` — where the slip is likeliest, since
+    // the command is never persisted and has to be re-passed by hand — lives in ResumeCommandTest,
+    // next to that command's own bearer-forwarding coverage and the run-seeding helpers it needs:
+    // ResumeCommandTest#resumeRejectsABearerRefreshIntervalWithoutItsCommand.
 
     /**
      * The guard must not fire on the overwhelmingly common case — neither flag passed — which is
