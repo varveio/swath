@@ -8,6 +8,7 @@ package io.varve.swath.engine;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.Node;
@@ -46,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -139,22 +141,37 @@ final class OwnerSelfSplitContractTest {
 
     private Run run(Path dir, String label, List<byte[]> keyspace, List<RangePartition.Interval> seeds,
                     int workers, int maxKeys, Duration dataLatency, EngineToggles toggles) throws Exception {
+        return run(dir, label, keyspace, seeds, workers, maxKeys, dataLatency, toggles, metrics -> { });
+    }
+
+    /**
+     * As above, plus {@code onDataPage}: a hook invoked on the fetching worker's own thread for every
+     * WORKER listing page (not probes), before the page is returned. Blocking in it parks that worker
+     * inside its fetch — which is outside the victim lock, so a thief can still probe and carve the
+     * very range whose owner is parked. That is what lets a test SCHEDULE the owner/thief race instead
+     * of waiting for it to happen by luck.
+     */
+    private Run run(Path dir, String label, List<byte[]> keyspace, List<RangePartition.Interval> seeds,
+                    int workers, int maxKeys, Duration dataLatency, EngineToggles toggles,
+                    Consumer<RunMetrics> onDataPage) throws Exception {
         Path ckptDir = dir.resolve(label);
         Files.createDirectories(ckptDir);
 
         AtomicInteger structureProbes = new AtomicInteger();
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         MockPageFetcher mock = MockPageFetcher.builder()
                 .keys(keyspace)
                 .latency(req -> req.maxKeys() > 1 && req.delimiter() == null ? dataLatency : Duration.ZERO)
                 .interceptor((PageRequest req, int idx, ListPage page) -> {
                     if (req.delimiter() != null && req.startAfter() != null) {
                         structureProbes.incrementAndGet();
+                    } else if (req.maxKeys() > 1 && req.delimiter() == null) {
+                        onDataPage.accept(metrics);
                     }
                     return page;
                 })
                 .build();
 
-        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         List<byte[]> emitted = new ArrayList<>(keyspace.size());
         Map<Long, RangePartition.Interval> seedLive = new HashMap<>();
 
@@ -322,31 +339,108 @@ final class OwnerSelfSplitContractTest {
     // (5) Concurrency: owner-splits and thief-steals race on the same dense range, still byte-exact.
     // -------------------------------------------------------------------------
 
+    /**
+     * Both split sources must be live on the SAME range at once, and the run must still be
+     * byte-exact under that double carve.
+     *
+     * <p><b>The race is scheduled, not hoped for.</b> The earlier shape raised the worker count and
+     * slowed the drainer so that idle workers would probe-and-steal a range while its owner was
+     * self-splitting, then asserted {@code thiefSplits >= 1} — an assertion about what the scheduler
+     * happened to do. Whether any worker is ever idle at the same moment a victim is stealable is a
+     * timing outcome: the owner's own carving keeps refilling the ready queue, so workers claim
+     * instead of stealing, and on a contended runner a run can legitimately finish with zero thief
+     * steals. It read {@code thiefSplits = 0} on CI while passing on the same commit minutes earlier.
+     *
+     * <p>The measured bottleneck is the engine's fleet-wide SINGLE in-flight steal slot: idle workers
+     * were denied it 2721 times in one instrumented run, so whether a steal attempt actually completes
+     * before the run drains is a race against the run's own length, not a property of the shape.
+     *
+     * <p>{@link #thiefCarveWindow()} closes that: exactly one worker listing page parks inside its
+     * fetch until a thief carve commits. A parked fetch does NOT hold the victim lock, so that range
+     * stays fat, far-ahead and stealable — with its cursor already advanced — while the thieves, whose
+     * 1-key probes and structure probes are deliberately NOT gated, work on it. The other 15 workers
+     * keep draining, so the pool still reaches idleness and produces the steal attempt. So the two
+     * sources are not merely both present in the final tally: the thief's carve provably lands while
+     * that range's owner is parked mid-drain.
+     *
+     * <p>The wait is bounded ({@link #THIEF_CARVE_TIMEOUT}) and falls through rather than hanging, so
+     * a genuine regression that stops thieves from stealing still fails at the assertion below —
+     * naming the count — instead of timing out the suite.
+     */
     @Test
     void ownerSplitsRaceThiefStealsAndStayByteExact(@TempDir Path dir) throws Exception {
-        // A deterministic *interleaving* harness is not available — the engine runs on real
-        // virtual threads, so scheduling is not bit-deterministic. Instead we raise the worker count
-        // and slow the drainer (1ms/data page) so many idle workers probe-and-steal the same dense
-        // range WHILE its owner self-splits — both split sources are live at once. Byte-exact set
-        // equality is schedule-invariant, so it is the right property to assert under this race.
         List<byte[]> keyspace = denseFlat(40_000);
         int workers = 16;
 
         Run run = assertTimeoutPreemptively(Duration.ofSeconds(90), () ->
                 run(dir, "race", keyspace,
-                        List.of(new RangePartition.Interval(LO, HI)), workers, 100, Duration.ofMillis(1)));
+                        List.of(new RangePartition.Interval(LO, HI)), workers, 100, Duration.ofMillis(1),
+                        EngineToggles.DEFAULT, thiefCarveWindow()));
 
         EngineHarness.assertExactlyOnce(run.emitted(), keyspace);
 
         // Owner-splits fired...
         assertThat(run.ownerSplits()).as("owner-splits fired under the race").isGreaterThanOrEqualTo(2L);
-        // ...and thief-steals also carved the same range (a slowed drainer lets idle workers win
-        // steals): both split sources are proven to co-occur here — the double-carve stress.
+        // ...and thief-steals carved the same range while its owner was parked mid-drain: both split
+        // sources are proven to co-occur here — the double-carve stress.
         assertThat(run.thiefSplits())
                 .as("thief-steals also fired — both split sources raced the same range")
                 .isGreaterThanOrEqualTo(1L);
         // Parallelism actually happened (not a serial baton).
         assertThat(run.peakInFlight()).as("the dense range parallelized").isGreaterThanOrEqualTo(2L);
+    }
+
+    /** How long the single parked page waits for a thief to carve before falling through. */
+    private static final Duration THIEF_CARVE_TIMEOUT = Duration.ofSeconds(10);
+
+    /** Poll interval for that wait — short enough not to distort the race, long enough not to spin. */
+    private static final Duration THIEF_CARVE_POLL = Duration.ofMillis(2);
+
+    /** Pages the owner commits before the gate arms, so the victim is fat and far-ahead when it parks. */
+    private static final int PAGES_BEFORE_GATE = 2;
+
+    /**
+     * The ONE-SHOT data-page gate described on {@link #ownerSplitsRaceThiefStealsAndStayByteExact}:
+     * exactly one worker listing page — the {@value #PAGES_BEFORE_GATE}nd, by which point its range
+     * has committed pages and is far-ahead enough to be worth stealing — parks until a thief carve
+     * commits.
+     *
+     * <p>One-shot is the load-bearing part. An earlier version of this gate parked EVERY worker page
+     * until a thief carved, which starves the thieves it is waiting for: once enough workers own
+     * carved children, all of them park inside their fetches, none is idle, and no steal attempt is
+     * ever made — measured, that self-starvation burned the full timeout on 2 of 4 parks. Parking a
+     * single page leaves the other 15 workers running, so the pool still drains toward idleness while
+     * one fat victim sits stealable with its lock free.
+     */
+    private Consumer<RunMetrics> thiefCarveWindow() {
+        AtomicInteger dataPages = new AtomicInteger();
+        AtomicBoolean parked = new AtomicBoolean();
+        return metrics -> {
+            if (dataPages.incrementAndGet() < PAGES_BEFORE_GATE
+                    || stealReason(metrics, THIEF_SPLIT_KEY) > 0L
+                    || !parked.compareAndSet(false, true)) {
+                return;
+            }
+            long deadline = System.nanoTime() + THIEF_CARVE_TIMEOUT.toNanos();
+            while (stealReason(metrics, THIEF_SPLIT_KEY) == 0L && System.nanoTime() < deadline) {
+                try {
+                    Thread.sleep(THIEF_CARVE_POLL);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        };
+    }
+
+    /** Live read of one {@code swath.steal_reason{outcome,reason}} counter mid-run. */
+    private static long stealReason(RunMetrics metrics, String key) {
+        int dot = key.indexOf('.');
+        Counter counter = metrics.registry().find("swath.steal_reason")
+                .tag("outcome", key.substring(0, dot))
+                .tag("reason", key.substring(dot + 1))
+                .counter();
+        return counter == null ? 0L : (long) counter.count();
     }
 
     // -------------------------------------------------------------------------
