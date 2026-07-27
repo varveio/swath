@@ -79,6 +79,15 @@ distributions {
     }
 }
 
+// distTar defaults to an UNCOMPRESSED .tar, which would ship a ~90 MB release asset
+// next to a .zip of the same tree — pure waste on every download. Gzip is also what
+// the wider ecosystem expects of a `.tar.gz`: Homebrew formulae, in particular, cannot
+// consume a bare .tar url.
+tasks.named<Tar>("distTar") {
+    compression = Compression.GZIP
+    archiveExtension = "tar.gz"
+}
+
 // The checked-in notice file is also the output of the opt-in root generator. When both
 // generation and packaging are requested in one invocation, make that ordering explicit
 // without making normal packaging regenerate (and thereby hide) a stale notice file.

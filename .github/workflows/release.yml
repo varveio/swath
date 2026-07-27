@@ -42,11 +42,17 @@ jobs:
         run: ./scripts/ci/prepare-container-promotion.sh promote
 
       - name: Stage release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p release-assets
-          cp swath-cli/build/libs/swath.jar release-assets/
+          # Versioned asset name: a bare swath.jar collides across releases in a
+          # download folder and makes SHA256SUMS lines ambiguous once several
+          # releases exist. The build output keeps its fixed name — the container
+          # promotion path depends on it (see the Dockerfile COPY).
+          cp swath-cli/build/libs/swath.jar "release-assets/swath-${VERSION}.jar"
           cp swath-cli/build/distributions/swath-*.zip release-assets/
-          cp swath-cli/build/distributions/swath-*.tar release-assets/
+          cp swath-cli/build/distributions/swath-*.tar.gz release-assets/
 
       - name: Generate SPDX SBOM from the shipped jar
         # anchore/sbom-action@v0
@@ -57,7 +63,7 @@ jobs:
           output-file: release-assets/swath-${{ steps.version.outputs.version }}.spdx.json
 
       - name: Write SHA256SUMS for release assets
-        run: (cd release-assets && sha256sum swath.jar swath-*.zip swath-*.tar *.spdx.json > SHA256SUMS)
+        run: (cd release-assets && sha256sum swath-*.jar swath-*.zip swath-*.tar.gz *.spdx.json > SHA256SUMS)
 
       # actions/upload-artifact@v4
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -105,8 +111,10 @@ jobs:
           path: promote
 
       - name: Verify promoted artifacts
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          ./scripts/ci/verify-container-promotion.sh promote release-assets/swath.jar
+          ./scripts/ci/verify-container-promotion.sh promote "release-assets/swath-${VERSION}.jar"
           (cd release-assets && sha256sum --check SHA256SUMS)
 
       # docker/setup-buildx-action@v3
@@ -146,7 +154,7 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          for asset in release-assets/swath.jar release-assets/swath-*.zip release-assets/swath-*.tar; do
+          for asset in release-assets/swath-*.jar release-assets/swath-*.zip release-assets/swath-*.tar.gz; do
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"
           done
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
