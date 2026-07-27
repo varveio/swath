@@ -54,12 +54,37 @@ import org.junit.jupiter.api.Test;
  * The honest statement of what the tail measurement needs is a bucket about ten times this one's size;
  * the small page buys that at a tenth of the memory, and buys nothing else.
  *
- * <p><b>The numbers quoted here moved once already</b>, when the simulator stopped charging a trailing
- * empty listing call on every range whose size happened to divide by the page size (see
- * {@code SimListingViewProtocolTest}). The concentrated fixture's tail was almost untouched by that —
- * it is one enormous range, and one call either way does not change it — but the spread control's
- * halved, which is the finding the correction actually sharpened: the two fixtures used to look alike
- * on serial time and no longer do.
+ * <h2>What replicates across seeds, and what does not</h2>
+ * Every figure below was re-measured at four seeds (20260727, 1, 424242, 987654321) after the
+ * simulator stopped charging a trailing empty listing call on ranges whose size divides by the page
+ * size (see {@code SimListingViewProtocolTest}). The two fixtures behave completely differently under
+ * re-seeding, and the difference is the result:
+ *
+ * <ul>
+ *   <li><b>The concentrated fixture is a constant.</b> Serial fraction 0.3314 / 0.3296 / 0.3308 /
+ *       0.3306, post-split tail 0.334–0.340, mean tail occupancy 1.02–1.04. It has one enormous range
+ *       and no amount of re-seeding gives the fleet a way to divide it, so the tail is a property of
+ *       the keyspace rather than of an interleaving.</li>
+ *   <li><b>The spread control is not a quantity at all.</b> Serial fraction 0.1476 / 0.0069 / 0.0189 /
+ *       0.2551 — a 37-fold spread over four seeds, with owner-split children ranging 25–231 over the
+ *       same runs. Its trajectory is chaotic in the interleaving, so <b>no threshold on the spread
+ *       control's serial fraction may be pinned, and none is below.</b></li>
+ * </ul>
+ *
+ * <p><b>Trigger versus mechanism.</b> The empty-call correction is what made the spread control jump,
+ * but it is not what the jump is made of: that run's page count went <em>up</em> (11,117 to 11,287),
+ * so it cannot be explained by calls being removed. Removing them changes <em>when</em> a range whose
+ * size divides by the page size completes, and every downstream decision — which worker goes idle
+ * next, which victim it finds, whether the owner-split governor is inside its rate limit — is taken
+ * against that ordering. One call earlier is a perturbation, and this fixture amplifies a
+ * perturbation; re-seeding produces swings of the same size, which is how we know the correction is
+ * the trigger and the governor's trajectory is the mechanism.
+ *
+ * <p>So the surviving comparison is the one that holds at every seed: the concentrated fixture ends
+ * in a long single-worker tail (tail fraction ~0.34) and the spread one does not (0.0007–0.0024),
+ * and the concentrated fixture's serial fraction exceeds the spread one's in all four runs. Whether
+ * spreading the mass <em>halves</em> the serial time — the reading a single seed offered — is
+ * <b>unsettled</b>, and would need a sample rather than a rerun.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory: a million-key fixture is a large share of a default test
  * worker's heap. The fixtures are generated one at a time, and the results compared, so only one is ever
@@ -70,6 +95,14 @@ class MassConcentrationAtScaleTest {
 
     private static final int WORKERS = 8;
     private static final int PAGE_SIZE = 100;
+
+    /**
+     * The concentrated fixture's serial fraction at {@link #PAGE_SIZE}, as measured by
+     * {@link #massAtLiveDepthCostsTheFleetAThirdOfTheRunInSerialTime}: 0.3296–0.3314 over the four
+     * seeds of the class note. The measured-page-regime test states its own result relative to this
+     * rather than against an absolute floor — see there for why.
+     */
+    private static final double SERIAL_FRACTION_AT_HUNDRED_KEY_PAGE = 0.33;
 
     /** Eight species over a Zipf rank law, each holding its whole file count in one leaf directory. */
     private static Supplier<List<byte[]>> concentrated() {
@@ -93,33 +126,34 @@ class MassConcentrationAtScaleTest {
         assertThat(spread.completed()).as(spread::describe).isTrue();
 
         // 33.1% of the post-seed run has at most one range being drained, and 34.0% of it comes after
-        // the last split anything managed to make — against 9.6% and 17.1% for the same geometry at a
-        // twentieth of the mass per leaf. Within a factor of two of the 60% a real deep-nested bucket
-        // loses, and the first fixture in this repository that is in that régime at all.
+        // the last split anything managed to make. Both hold to three decimal places at all four seeds
+        // of the class note. Within a factor of two of the 60% a real deep-nested bucket loses, and the
+        // first fixture in this repository that is in that régime at all.
         assertThat(deep.timeline().serialFraction())
                 .as("the fleet spends a third of the run as one worker").isGreaterThan(0.25);
         assertThat(deep.timeline().tailFraction()).isGreaterThan(0.25);
         assertThat(deep.timeline().meanTailOccupancy()).isLessThan(1.2);
-        // The spread control reaches 14.8%, and its post-split tail all but vanishes (0.2% against
-        // 34.0%): the same mass in the same few subtrees, divided across an accession's four leaf
-        // directories instead of pooled in one, is a run the fleet can still carve. So depth is not
-        // incidental to this tail — it is what buys it — and what depth changes on top of that is how
-        // the run fails, below.
+        // The spread control's post-split tail all but vanishes — 0.0007 to 0.0024 across the same four
+        // seeds, against the concentrated fixture's 0.334 to 0.340. THAT is the separation depth buys,
+        // and it is the only one stated here: the spread run's serial fraction swings from 0.007 to
+        // 0.255 under re-seeding and is deliberately left unpinned (class note).
+        assertThat(spread.timeline().tailFraction())
+                .as("the fleet can still carve the spread keyspace, whatever the interleaving")
+                .isLessThan(0.05);
         assertThat(spread.timeline().serialFraction())
-                .as("spreading the same mass over four leaves halves the serial time")
-                .isGreaterThan(0.10)
+                .as("and it never ends up as serial as the concentrated one")
                 .isLessThan(deep.timeline().serialFraction());
-        assertThat(spread.timeline().tailFraction()).isLessThan(0.05);
 
         // Structural rescue runs out. Every child the thief published on the concentrated keyspace was
-        // placed by extrapolation or interpolation; not one came from a structure probe, though 219 of
-        // them were issued. The spread keyspace still wins three that way.
+        // placed by extrapolation or interpolation; not one came from a structure probe, at any of the
+        // four seeds. The spread keyspace still wins two or three that way in every run.
         assertThat(structureSourcedChildren(deep))
                 .as("a fan-out that carries no mass is not a pivot").isZero();
         assertThat(structureSourcedChildren(spread)).isPositive();
 
-        // And the estimate that decides where to cut is degenerate for 71.5% of the victims it is
-        // computed over: their consumed span reads zero, so their emitted keys are discarded outright.
+        // And the estimate that decides where to cut is degenerate for 69.6% of the victims it is
+        // computed over (69.2-70.6% across the four seeds): their consumed span reads zero, so their
+        // emitted keys are discarded outright.
         assertThat(estIgnoresKeysShare(deep)).isGreaterThan(0.6);
     }
 
@@ -149,8 +183,9 @@ class MassConcentrationAtScaleTest {
                 "in-memory deep-nested, mass in one leaf directory");
 
         assertThat(deep.completed()).as(deep::describe).isTrue();
-        // 196 of 252 proposals lost (77.8%), against 140 of 242 (57.9%) at a twentieth of the mass; the
-        // same denominator reads 90-96% on the deployment's own runs.
+        // 196 of 252 proposals lost (77.8%; 78-85% across the four seeds of the class note), against
+        // 140 of 242 (57.9%) at a twentieth of the mass; the same denominator reads 90-96% on the
+        // deployment's own runs.
         assertThat(revalidationLossShare(deep))
                 .as("the thief is not refusing to split; it is trying and losing").isGreaterThan(0.7);
         assertThat(deep.splitsRejected())
@@ -182,12 +217,16 @@ class MassConcentrationAtScaleTest {
                 "in-memory deep-nested, mass in one leaf directory");
 
         assertThat(deep.completed()).as(deep::describe).isTrue();
-        // 43 of 60 proposals lost (71.7%) at a tenth of the page count.
+        // 43 of 60 proposals lost (71.7%; 66-73% across the four seeds of the class note) at a tenth of
+        // the page count.
         assertThat(revalidationLossShare(deep)).isGreaterThan(0.5);
-        // And 0.009 serial against 0.331, on the same keys: the tail needs the pages, the race does not.
+        // And the serial fraction reads 0.0003-0.0096 over those seeds against a rock-steady 0.330 at a
+        // 100-key page: two orders of magnitude apart, so the claim is stated as a ratio to the other
+        // regime. A flat "< 0.01" would have been a threshold the 0.0096 seed sits on the edge of, and
+        // the point being made is "small at a full page", not "below one particular hundredth".
         assertThat(deep.timeline().serialFraction())
                 .as("a tail is pages per range, and at a full page this fixture has a tenth of them")
-                .isLessThan(0.01);
+                .isLessThan(0.1 * SERIAL_FRACTION_AT_HUNDRED_KEY_PAGE);
     }
 
     /** Thief children whose pivot came from a structure probe rather than from arithmetic over keys. */

@@ -37,6 +37,12 @@ import java.util.List;
  * <b>not</b> truncated (S3 looks one key past what it returns, which is why the pager reads
  * {@code maxKeys + 1} rows). {@code SimListingViewProtocolTest} pins both against the pager.
  *
+ * <p><b>Where to check that, if you are reviewing this.</b> In {@link ListObjectsV2Pager}, not here:
+ * this class contains no protocol rule to be right or wrong about, and reading only the seam
+ * documentation — which has always said the rules live in the pager — is how a second implementation
+ * of them survived here undetected once already. The two rules named above are at the pager's
+ * common-prefix boundary guard and its {@code maxKeys + 1} fetch respectively.
+ *
  * <p><b>Costing.</b> Nothing here consumes virtual time. A call's modelled duration is drawn when the
  * request is issued and the store is consulted only when the response arrives, so the number of range
  * reads a rollup happens to need is a property of the fixture's layout, not of the simulated world —
@@ -182,6 +188,12 @@ final class SimListingView {
             return delegate.rows(from, fromInclusive, toExclusive, limit, projection);
         }
 
+        /**
+         * A store that declines the fast path returns {@code null} having done no work, so only an
+         * answered rollup is counted — the pager then falls back to the range walk above and every hop
+         * it makes is counted there instead. A declining store therefore never contributes a phantom
+         * read, and an answering one contributes exactly one however wide the directory was.
+         */
         @Override
         public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                                     byte[] prefix, byte[] delimiter, int limit,

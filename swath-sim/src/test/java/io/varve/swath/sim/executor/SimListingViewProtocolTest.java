@@ -184,10 +184,19 @@ class SimListingViewProtocolTest {
         }
     }
 
+    /**
+     * The pager's answer to the request the view would have issued — <b>field for field</b>, including
+     * the empty scan prefix and {@code encodingTypeUrl=false} the view passes. A differential is only
+     * one while both sides ask the identical question, so these mirror {@link SimListingView#list}
+     * rather than being written in whatever shape reads most naturally here: should the pager ever
+     * start reading a field this test had set differently, the comparison would quietly become an
+     * assertion about two different requests.
+     */
     private static S3ListResult pagerPage(ListingFixtureStore store, byte[] delimiter, byte[] startAfter,
                                           int maxKeys) {
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, new ReplayMetrics());
-        return pager.list(new S3ListRequest("bucket", null, delimiter, startAfter, null, maxKeys, true, false));
+        return pager.list(new S3ListRequest("sim", new byte[0], delimiter, startAfter, null, maxKeys,
+                false, false));
     }
 
     private static List<String> names(List<byte[]> keys) {

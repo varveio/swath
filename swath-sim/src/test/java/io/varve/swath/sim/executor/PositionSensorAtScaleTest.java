@@ -28,8 +28,21 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>The numbers quoted below moved once already</b>, when the simulator stopped charging a
  * trailing empty listing call on every range whose size happened to divide by the page size — see
- * {@code SimListingViewProtocolTest}. The shapes and the ordering survived it; the magnitudes did not,
- * which is what a pin on current behaviour is for.
+ * {@code SimListingViewProtocolTest}. Removing calls is the trigger, not the mechanism: it changes
+ * <em>when</em> such a range completes, and the fleet's whole subsequent trajectory — which worker
+ * idles next, which victim it finds, where the owner-split governor is in its rate limit — is taken
+ * against that ordering. The shapes and the ordering of the comparison survived; the magnitudes did
+ * not, which is what a pin on current behaviour is for.
+ *
+ * <p><b>How much of that is the seed.</b> Re-measured at four seeds (20260727, 1, 424242, 987654321),
+ * the deep run's serial fraction reads 0.0964 / 0.0128 / 0.0467 / 0.0413 and its tail fraction
+ * 0.1711 / 0.0010 / 0.0505 / 0.0813 — both an order of magnitude wide. What holds at every seed is
+ * the <b>comparison</b>: the deep run publishes more children than the control (115–207 against
+ * 46–63) and is the less parallel of the two anyway (mean occupancy 6.47–7.19 against 7.48–7.84),
+ * and its degenerate-estimate share is 0.400–0.456 against the control's 0.000–0.013. The absolute
+ * thresholds on the deep run's own tail and serial fractions below are <b>single-seed</b> and are
+ * known not to survive re-seeding (seed 1 clears neither); they are left as-is because re-deriving
+ * this characterization's thresholds is a larger question than the protocol fix that disturbed them.
  *
  * <p>Opt-in ({@code @Tag("perf")}), for <b>memory</b> rather than time: each run computes in about a
  * third of a second, but the two fixtures are three quarters of a million keys apiece and are held on
@@ -68,8 +81,7 @@ class PositionSensorAtScaleTest {
         // The division itself is not missing — it is the opposite. The deep-nested run publishes 115
         // children to the control's 61, and is still the less parallel of the two: it divides late,
         // through the thief rather than the owner, and only after spinning. 1,017 steal attempts for 102
-        // thief children, 734 of them turned away before a probe was even issued; the control publishes
-        // its 18 from 82 attempts and is turned away exactly once.
+        // thief children, 734 of them turned away before a probe was even issued.
         assertThat(deep.ownerSplitChildren() + deep.thiefChildren())
                 .as("what fails here is when and how the keyspace gets cut, not whether")
                 .isGreaterThan(control.ownerSplitChildren() + control.thiefChildren());
@@ -78,14 +90,27 @@ class PositionSensorAtScaleTest {
                 .as("most of what the thief does on this shape produces nothing")
                 .isGreaterThan(4L * deep.thiefChildren());
         assertThat(control.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)).isLessThan(200L);
-        assertThat(control.counter("steal.outcome.NO_VICTIM"))
-                .as("the control is never meaningfully short of victims")
-                .isLessThanOrEqualTo(1L);
+        // Being turned away for want of a victim is a SHARE of what the thief tried, not a count: the
+        // control turns 1 to 6 of its 61-141 attempts away across the four seeds (0.012 to 0.075), the
+        // deep run 0.556 to 0.722 of its own. A count would pin the noise; the share is the property.
+        assertThat(noVictimShare(control))
+                .as("a fleet with balanced ranges is essentially never short of a victim")
+                .isLessThan(0.15);
+        assertThat(noVictimShare(deep))
+                .as("and one without them spends most of its steal attempts finding none")
+                .isGreaterThan(0.5);
 
         // 627 of 1,515 scored bounded victims (41%) score zero remaining span outright, against 3 of
-        // 398 (0.8%) — the reading a victim-selection cure has to move.
+        // 398 (0.8%) — the reading a victim-selection cure has to move, and the one comparison here
+        // that barely moves under re-seeding at all (0.400-0.456 against 0.000-0.013).
         assertThat(estZeroShare(deep)).isGreaterThan(0.25);
         assertThat(estZeroShare(control)).isLessThan(0.10);
+    }
+
+    /** Steal attempts that found no victim at all, as a share of every attempt made. */
+    private static double noVictimShare(PolicyRunResult result) {
+        return (double) result.counter("steal.outcome.NO_VICTIM")
+                / result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER);
     }
 
     private static double estZeroShare(PolicyRunResult result) {
