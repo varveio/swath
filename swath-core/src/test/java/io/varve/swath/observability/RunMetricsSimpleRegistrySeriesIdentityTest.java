@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT emit the same set. In particular Micrometer's {@code SimpleMeterRegistry.newTimer}
  * registers {@code HistogramGauges} — 3 extra {@code *.percentile{phi}} GAUGE meters per
- * percentile-publishing timer, 30 in total here — that {@code OtlpMeterRegistry.newTimer} does not
+ * percentile-publishing timer, 54 in total here — that {@code OtlpMeterRegistry.newTimer} does not
  * create at all (OTLP encodes percentiles as Summary quantiles on the wire instead). So this
  * snapshot holds {@value #EXPECTED_SIMPLE_METER_COUNT} ids where the same run yields
  * {@value RunMetricsOtlpSeriesIdentityTest#EXPECTED_OTLP_METER_COUNT} meters under OTLP. That side
@@ -150,11 +150,26 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.5}",
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.99}",
             "GAUGE|swath.api.latency.percentile|{op=listObjectsV2,phi=0.9}",
+            "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.5}",
+            "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.99}",
+            "GAUGE|swath.checkpoint.commit.latency.percentile|{phi=0.9}",
+            "GAUGE|swath.checkpoint.commit.wait.percentile|{phi=0.5}",
+            "GAUGE|swath.checkpoint.commit.wait.percentile|{phi=0.99}",
+            "GAUGE|swath.checkpoint.commit.wait.percentile|{phi=0.9}",
             "GAUGE|swath.checkpoint.queue.depth|{}",
+            "GAUGE|swath.checkpoint.queue.wait.percentile|{phi=0.5}",
+            "GAUGE|swath.checkpoint.queue.wait.percentile|{phi=0.99}",
+            "GAUGE|swath.checkpoint.queue.wait.percentile|{phi=0.9}",
             "GAUGE|swath.disk.free_bytes|{}",
+            "GAUGE|swath.emit.latency.percentile|{phi=0.5}",
+            "GAUGE|swath.emit.latency.percentile|{phi=0.99}",
+            "GAUGE|swath.emit.latency.percentile|{phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=connect_acquire,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=connect_acquire,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=connect_acquire,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=response_parse,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=pivot_probe,phase=total,phi=0.9}",
@@ -164,6 +179,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=connect_acquire,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=connect_acquire,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=connect_acquire,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=response_parse,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=structure_probe,phase=total,phi=0.9}",
@@ -173,6 +191,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=connect_acquire,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=connect_acquire,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=connect_acquire,phi=0.9}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.5}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.99}",
+            "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=response_parse,phi=0.9}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.5}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.99}",
             "GAUGE|swath.fetch.latency.phase.percentile|{call_class=worker_page,phase=total,phi=0.9}",
@@ -188,6 +209,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.process.memory.heap.bytes|{kind=peak}",
             "GAUGE|swath.process.memory.rss.bytes|{kind=current}",
             "GAUGE|swath.process.memory.rss.bytes|{kind=peak}",
+            "GAUGE|swath.queue.wait.percentile|{phi=0.5}",
+            "GAUGE|swath.queue.wait.percentile|{phi=0.99}",
+            "GAUGE|swath.queue.wait.percentile|{phi=0.9}",
             "GAUGE|swath.run.throughput|{}",
             "GAUGE|swath.s3.pool.idle_available|{}",
             "GAUGE|swath.s3.pool.leased|{}",
@@ -199,14 +223,19 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.workers.active|{}",
             "TIMER|swath.api.latency|{op=listObjectsV2}",
             "TIMER|swath.checkpoint.commit.latency|{}",
+            "TIMER|swath.checkpoint.commit.wait|{}",
             "TIMER|swath.checkpoint.queue.wait|{}",
+            "TIMER|swath.emit.latency|{}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
@@ -230,19 +259,24 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.api.latency{op=listObjectsV2}=1",
             "swath.bytes.estimated{}=90000",
             "swath.checkpoint.commit.latency{}=1",
+            "swath.checkpoint.commit.wait{}=1",
             "swath.checkpoint.commit_batch_size{}=1",
             "swath.checkpoint.queue.wait{}=1",
+            "swath.emit.latency{}=1",
             "swath.entries.emitted{}=910",
             "swath.errors{type=accessdenied}=1",
             "swath.errors{type=nosuchbucket}=1",
             "swath.errors{type=throttle}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=connect_acquire}=1",
+            "swath.fetch.latency.phase{call_class=pivot_probe,phase=response_parse}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=total}=1",
             "swath.fetch.latency.phase{call_class=pivot_probe,phase=ttfb}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=connect_acquire}=1",
+            "swath.fetch.latency.phase{call_class=structure_probe,phase=response_parse}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=total}=1",
             "swath.fetch.latency.phase{call_class=structure_probe,phase=ttfb}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=connect_acquire}=1",
+            "swath.fetch.latency.phase{call_class=worker_page,phase=response_parse}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=total}=1",
             "swath.fetch.latency.phase{call_class=worker_page,phase=ttfb}=1",
             "swath.idle_backoff.park_time{}=1",
@@ -312,7 +346,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 142;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 171;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

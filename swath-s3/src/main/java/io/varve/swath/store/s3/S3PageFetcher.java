@@ -290,6 +290,12 @@ public final class S3PageFetcher implements PageFetcher {
                     resp.contents().size(), resp.commonPrefixes().size());
         }
 
+        // Response parse: the client-side conversion of the SDK's already-unmarshalled response into
+        // swath's own page model. One nanoTime pair per page (the same idiom as the wall-clock total
+        // above), so the client's per-page service cost is measurable separately from the store's
+        // response time -- the SDK's OWN unmarshalling is inside the call and stays visible only as
+        // the total-minus-TTFB residual.
+        long parseStartedNs = System.nanoTime();
         List<ListEntry> entries = new ArrayList<>(resp.contents().size());
         for (S3Object o : resp.contents()) {
             entries.add(toEntry(o));
@@ -298,6 +304,8 @@ public final class S3PageFetcher implements PageFetcher {
         for (CommonPrefix cp : resp.commonPrefixes()) {
             commonPrefixes.add(KeyBytes.of(cp.prefix().getBytes(StandardCharsets.UTF_8)));
         }
+        metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE,
+                System.nanoTime() - parseStartedNs);
 
         int httpStatus = resp.sdkHttpResponse() != null ? resp.sdkHttpResponse().statusCode() : 200;
         if (httpStatus == 503) {

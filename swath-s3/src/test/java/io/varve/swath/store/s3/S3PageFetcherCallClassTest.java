@@ -79,9 +79,54 @@ class S3PageFetcherCallClassTest {
                 .anySatisfy(r -> assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_PIVOT_PROBE))
                 .anySatisfy(r -> assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_STRUCTURE_PROBE));
         assertThat(rows).allSatisfy(r -> {
-            assertThat(r.phase()).isEqualTo(RunMetrics.LATENCY_PHASE_TOTAL);
+            assertThat(r.phase()).isIn(RunMetrics.LATENCY_PHASE_TOTAL, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE);
             assertThat(r.count()).isEqualTo(1L);
         });
+    }
+
+    /**
+     * The client-side response-PARSE span: one {@code response_parse} observation per successful
+     * fetch, on the SAME {@code call_class} the wall-clock total was attributed to, so a
+     * client-service-cost analysis can separate a worker page's parse cost from a probe's. Recorded
+     * from the fetcher's own conversion of the response into swath's page model — the only parse
+     * work swath owns (the SDK unmarshals inside the call).
+     */
+    @Test
+    void successfulFetchesRecordTheResponseParseSpanPerCallClass() throws Exception {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        S3PageFetcher fetcher = new S3PageFetcher(FakeS3Client.captureOnly(), "bucket",
+                S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        fetcher.fetchPage(PageRequest.objects(null, null, 1000));   // worker_page
+        fetcher.fetchPage(PageRequest.objects(null, null, 1));      // pivot_probe
+        fetcher.fetchPage(PageRequest.objectsDelimited(null, DELIM, null, 1000));   // structure_probe
+
+        List<RunSummary.CallClassLatencySummary> parseRows =
+                metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency().stream()
+                        .filter(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_RESPONSE_PARSE))
+                        .toList();
+
+        assertThat(parseRows).extracting(RunSummary.CallClassLatencySummary::callClass)
+                .containsExactlyInAnyOrder(RunMetrics.CALL_CLASS_WORKER_PAGE,
+                        RunMetrics.CALL_CLASS_PIVOT_PROBE, RunMetrics.CALL_CLASS_STRUCTURE_PROBE);
+        assertThat(parseRows).allSatisfy(r -> {
+            assertThat(r.count()).isEqualTo(1L);
+            assertThat(r.p50Ms()).isNotNull();
+        });
+    }
+
+    /** A fetch that never returned a response never fabricates a parse span. */
+    @Test
+    void aFailedFetchRecordsNoResponseParseSpan() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        S3PageFetcher fetcher = new S3PageFetcher(FakeS3Client.throwing(ApiCallAttemptTimeoutException.create(5000)),
+                "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        assertThatThrownBy(() -> fetcher.fetchPage(PageRequest.objects(null, null, 1000)))
+                .isInstanceOf(ThrottleException.class);
+
+        assertThat(metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency())
+                .noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_RESPONSE_PARSE));
     }
 
     /**

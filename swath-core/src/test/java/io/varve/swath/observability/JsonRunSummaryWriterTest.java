@@ -55,7 +55,13 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), List.of(), null);
+                shape(), null, List.of(), List.of(), clientCost(), null);
+    }
+
+    /** One populated client-service-cost span, enough to pin the {@code client_cost[]} row shape. */
+    private static List<RunSummary.ClientCostSpan> clientCost() {
+        return List.of(new RunSummary.ClientCostSpan(RunMetrics.CLIENT_COST_SPAN_EMIT, 1000L,
+                0.4, 1.2, 4.8, 9.1));
     }
 
     private static RunSummary.ShapeSummary shape() {
@@ -207,6 +213,19 @@ final class JsonRunSummaryWriterTest {
         assertThat(fingerprint.has("git_sha")).isTrue();
         assertThat(fingerprint.get("started_at").asText()).isEqualTo("2026-07-01T00:00:00Z");
         assertThat(fingerprint.get("finished_at").asText()).isEqualTo("2026-07-01T00:00:25Z");
+
+        // The per-page client-service-cost decomposition -- a dedicated percentile readback,
+        // because meters[] below carries a timer's count/total_ms/max_ms only.
+        JsonNode clientCost = root.get("client_cost");
+        assertThat(clientCost.isArray()).isTrue();
+        assertThat(clientCost).hasSize(1);
+        JsonNode emitSpan = clientCost.get(0);
+        assertThat(emitSpan.get("span").asText()).isEqualTo(RunMetrics.CLIENT_COST_SPAN_EMIT);
+        assertThat(emitSpan.get("count").asLong()).isEqualTo(1000L);
+        assertThat(emitSpan.get("p50_ms").asDouble()).isEqualTo(0.4);
+        assertThat(emitSpan.get("p90_ms").asDouble()).isEqualTo(1.2);
+        assertThat(emitSpan.get("p99_ms").asDouble()).isEqualTo(4.8);
+        assertThat(emitSpan.get("max_ms").asDouble()).isEqualTo(9.1);
 
         JsonNode meters = root.get("meters");
         assertThat(meters.isArray()).isTrue();
@@ -509,7 +528,7 @@ final class JsonRunSummaryWriterTest {
                 42L, 1000L, Duration.ofSeconds(25), Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, -1L, -1L, -1.0, -1.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), null);
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);
         JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
                 config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> summary);
         try {
@@ -1020,7 +1039,7 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), List.of(), null);
+                shape(), null, List.of(), List.of(), List.of(), null);
     }
 
     /** A clean run (target never driven by the engine) renders min_effective_t as null, not 0. */
