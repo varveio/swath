@@ -168,14 +168,35 @@ final class SensingRaceProtocol {
             return result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER);
         }
 
+        /**
+         * Owner-side carves refused by the remaining-work floor, per page committed. The mechanism the
+         * estimate gates directly: a floor that reads the estimate below four pages refuses a carve
+         * that costs nothing to make.
+         */
+        double estFloorRefusalsPerPage() {
+            return share(result.counter("OWNER_SPLIT.remaining_est_floor"), result.pages());
+        }
+
+        /**
+         * Of the owner-split children this run classified on completion, the share that came back
+         * confetti-sized. The other mechanism the estimate gates: a carve placed by an estimate with no
+         * sense of position lands on a nearly-drained range, and the feedback gate that watches for
+         * exactly that then suppresses owner splitting for the rest of the run.
+         */
+        double confettiChildShare() {
+            long confetti = result.counter("OWNER_SPLIT_CHILD.confetti");
+            return share(confetti, confetti + result.counter("OWNER_SPLIT_CHILD.substantial"));
+        }
+
         String row() {
             return String.format(Locale.ROOT,
                     "%-14s %-12s %-10d %5d  %6.4f %6.4f  %6.4f %6.4f  %6.4f  %5d %5d  %5d %6.4f  "
-                            + "%5.2f %7d %7.3f",
+                            + "%5.2f %7d %7.3f  %6.3f %6.3f",
                     variant, keyspace, seed, pageSize, serialFraction(), tailFraction(), estZeroShare(),
                     estIgnoresKeysShare(), revalidationLossShare(), result.ownerSplitChildren(),
                     result.thiefChildren(), stealAttempts(), noVictimShare(),
-                    result.timeline().meanOccupancy(), result.storeCalls(), result.virtualNanos() / 1e9);
+                    result.timeline().meanOccupancy(), result.storeCalls(), result.virtualNanos() / 1e9,
+                    estFloorRefusalsPerPage(), confettiChildShare());
         }
 
         private static double share(long numerator, long denominator) {
@@ -186,9 +207,9 @@ final class SensingRaceProtocol {
     /** The table header the {@link Leg#row()} columns line up under. */
     static String header() {
         return String.format(Locale.ROOT,
-                "%-14s %-12s %-10s %5s  %6s %6s  %6s %6s  %6s  %5s %5s  %5s %6s  %5s %7s %7s",
+                "%-14s %-12s %-10s %5s  %6s %6s  %6s %6s  %6s  %5s %5s  %5s %6s  %5s %7s %7s  %6s %6s",
                 "variant", "keyspace", "seed", "page", "serial", "tail", "estZro", "estIgn", "revLos",
-                "ownCh", "thfCh", "steal", "noVic", "occ", "calls", "dur_s");
+                "ownCh", "thfCh", "steal", "noVic", "occ", "calls", "dur_s", "flr/pg", "cnfti");
     }
 
     /** Prints a whole table under one caption, in the order the legs were run. */
@@ -202,38 +223,78 @@ final class SensingRaceProtocol {
         System.out.print(out);
     }
 
-    /** Every value of {@code metric} across {@code legs}, for a 4-seed verdict. */
-    static List<Double> across(List<Leg> legs, java.util.function.ToDoubleFunction<Leg> metric) {
-        List<Double> values = new ArrayList<>(legs.size());
+    /** The one leg a variant ran at {@code seed}, for a paired same-seed comparison. */
+    static Leg at(List<Leg> legs, SensingVariant variant, long seed) {
         for (Leg leg : legs) {
-            values.add(metric.applyAsDouble(leg));
+            if (leg.variant().equals(label(variant)) && leg.seed() == seed) {
+                return leg;
+            }
         }
-        return values;
+        throw new AssertionError("no leg for " + variant + " at seed " + seed);
     }
 
     // ---- running one leg ----------------------------------------------------------------
 
     /**
      * Runs one leg and checks the only thing that is not up for debate: a run must emit every key in
-     * its fixture. The store is built per leg because a keyspace of this size is a large share of the
-     * heap, and only one is ever live.
+     * its fixture.
+     *
+     * <p>The store is passed in rather than built here so that one generated keyspace serves every
+     * variant and every seed raced against it — a million-key fixture is a large share of the heap and
+     * generating it once per leg would dominate the race's own cost. Nothing a run does writes to it.
      */
-    static Leg runLeg(String variant, String keyspace, Supplier<List<byte[]>> fixture, long seed,
+    static Leg runLeg(SensingVariant variant, String keyspace, ListingFixtureStore store, long seed,
                       int pageSize, LatencyModel latency) {
-        ListingFixtureStore store = new ListingFixtureStore(fixture.get());
-        int size = store.size();
         PolicyRunResult result = SimExecutor.run(
                 PolicyRunFixtures.scenario(WORKERS, pageSize, latency, PolicyRunFixtures.measuredCost())
                         .withSeed(seed),
-                store, "in-memory " + keyspace);
+                store, "in-memory " + keyspace, variant);
+        String leg = variant + "/" + keyspace + "/" + seed + "/page " + pageSize;
         if (!result.completed()) {
-            throw new AssertionError("leg " + variant + "/" + keyspace + "/" + seed + " did not complete:"
-                    + System.lineSeparator() + result.describe());
+            throw new AssertionError("leg " + leg + " did not complete:" + System.lineSeparator()
+                    + result.describe());
         }
-        if (result.keysEmitted() != size) {
-            throw new AssertionError("leg " + variant + "/" + keyspace + "/" + seed + " emitted "
-                    + result.keysEmitted() + " of " + size + " keys");
+        if (result.keysEmitted() != store.size()) {
+            throw new AssertionError("leg " + leg + " emitted " + result.keysEmitted() + " of "
+                    + store.size() + " keys");
         }
-        return new Leg(variant, keyspace, seed, pageSize, result);
+        return new Leg(label(variant), keyspace, seed, pageSize, result);
+    }
+
+    /**
+     * The named variants against one keyspace at all four seeds, in variant-then-seed order. One
+     * generated keyspace serves the whole call.
+     */
+    static List<Leg> raceOn(String keyspace, Supplier<List<byte[]>> fixture, int pageSize,
+                            LatencyModel latency, SensingVariant... variants) {
+        ListingFixtureStore store = new ListingFixtureStore(fixture.get());
+        List<Leg> legs = new ArrayList<>();
+        for (SensingVariant variant : variants) {
+            for (long seed : SEEDS) {
+                legs.add(runLeg(variant, keyspace, store, seed, pageSize, latency));
+            }
+        }
+        return legs;
+    }
+
+    /** The four legs of one variant, out of a {@link #raceOn} result. */
+    static List<Leg> of(List<Leg> legs, SensingVariant variant) {
+        List<Leg> mine = new ArrayList<>();
+        for (Leg leg : legs) {
+            if (leg.variant().equals(label(variant))) {
+                mine.add(leg);
+            }
+        }
+        return mine;
+    }
+
+    /** The short name a variant appears under in the table. */
+    static String label(SensingVariant variant) {
+        return switch (variant) {
+            case CURRENT -> "current";
+            case RATE -> "E1-rate";
+            case CURSOR_ANCHORED -> "E2-anchored";
+            case RATE_CURSOR_ANCHORED -> "E1+E2";
+        };
     }
 }
