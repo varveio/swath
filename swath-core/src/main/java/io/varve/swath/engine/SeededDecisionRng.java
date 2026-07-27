@@ -61,6 +61,13 @@ final class SeededDecisionRng implements DecisionRng {
      * own mixing/finalizer constants, applied to {@code baseSeed} offset by {@code workerId} scaled by
      * the golden-ratio increment SplitMix64 itself advances its state by between draws. Package-private
      * so it is directly unit-testable without constructing a whole {@link SeededDecisionRng}.
+     *
+     * <p><b>Parity contract:</b> {@code io.varve.swath.sim.kernel.SimRng#deriveStreamSeed} (in the
+     * simulator module, which this module must not depend on) mirrors this derivation deliberately —
+     * same mixing constants, same golden-ratio offset per identity, same refusal to read the worker
+     * count, so growing a run adds streams without reshuffling existing ones. The two are separate
+     * implementations by design; the parity is therefore a convention, and each side names the other
+     * so a change here is visibly a change that has to be made there too.
      */
     static long deriveWorkerSeed(long baseSeed, long workerId) {
         long z = baseSeed + workerId * 0x9E3779B97F4A7C15L;

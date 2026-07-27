@@ -129,9 +129,71 @@ class S3PageFetcherCallClassTest {
     }
 
     /**
+     * The SDK's own RESPONSE-HANDLING window — the phase that used to be invisible, folded into the
+     * {@code total}-minus-{@code ttfb} residual with no distribution of its own. It is not swath's
+     * measurement: {@link S3CallClassLatencyPublisher} derives it from the SDK's own per-attempt
+     * first-byte/last-byte stamps, and the fetcher attributes it to the SAME {@code call_class} as
+     * that call's wall-clock total.
+     */
+    @Test
+    void aSuccessfulFetchRecordsTheSdkUnmarshalPhaseFromTheSdkOwnStamps() throws Exception {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        S3Client client = FakeS3Client.respondingWith(request -> {
+            publishByteStamps(Duration.ofMillis(20), Duration.ofMillis(27));
+            return ListObjectsV2Response.builder().isTruncated(false).build();
+        });
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        fetcher.fetchPage(PageRequest.objects(null, null, 1000));   // worker_page
+        fetcher.fetchPage(PageRequest.objects(null, null, 1));      // pivot_probe
+        fetcher.fetchPage(PageRequest.objectsDelimited(null, DELIM, null, 1000));   // structure_probe
+
+        List<RunSummary.CallClassLatencySummary> unmarshalRows =
+                metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency().stream()
+                        .filter(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL))
+                        .toList();
+
+        assertThat(unmarshalRows).extracting(RunSummary.CallClassLatencySummary::callClass)
+                .containsExactlyInAnyOrder(RunMetrics.CALL_CLASS_WORKER_PAGE,
+                        RunMetrics.CALL_CLASS_PIVOT_PROBE, RunMetrics.CALL_CLASS_STRUCTURE_PROBE);
+        assertThat(unmarshalRows).allSatisfy(r -> {
+            assertThat(r.count()).isEqualTo(1L);
+            assertThat(r.p50Ms()).isCloseTo(7.0, within(0.5));
+        });
+    }
+
+    /**
+     * The same phase on the FAILURE path: a modeled service fault still has its ERROR response
+     * handled (and stamped) by the SDK, so whatever window could be derived is recorded rather than
+     * dropped — the anti-survivorship-bias discipline the {@code total} phase already follows, and
+     * NOT the success-only semantics of {@code response_parse} (which is swath's own measurement and
+     * has nothing to time when no response came back).
+     */
+    @Test
+    void aFailedFetchStillRecordsWhateverSdkUnmarshalWindowTheSdkStamped() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        S3Client client = FakeS3Client.respondingWith(request -> {
+            publishByteStamps(Duration.ofMillis(30), Duration.ofMillis(32));
+            throw ApiCallAttemptTimeoutException.create(5000);
+        });
+        S3PageFetcher fetcher = new S3PageFetcher(client, "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+
+        assertThatThrownBy(() -> fetcher.fetchPage(PageRequest.objects(null, null, 1000)))
+                .isInstanceOf(ThrottleException.class);
+
+        assertThat(metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency())
+                .anySatisfy(r -> {
+                    assertThat(r.callClass()).isEqualTo(RunMetrics.CALL_CLASS_WORKER_PAGE);
+                    assertThat(r.phase()).isEqualTo(RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL);
+                    assertThat(r.count()).isEqualTo(1L);
+                });
+    }
+
+    /**
      * A bare fake {@link S3Client} (no real SDK HTTP pipeline, so no {@code MetricPublisher} ever
-     * fires) never populates connect-acquire/TTFB — {@link RunMetrics#recordCallClassLatency} must
-     * silently skip the unobserved {@code -1} sentinel rather than fabricate a 0-nanosecond sample.
+     * fires) never populates connect-acquire/TTFB/sdk-unmarshal — {@link
+     * RunMetrics#recordCallClassLatency} must silently skip the unobserved {@code -1} sentinel
+     * rather than fabricate a 0-nanosecond sample.
      */
     @Test
     void unobservedPhasesAreSkippedNotFabricated() throws Exception {
@@ -143,6 +205,7 @@ class S3PageFetcherCallClassTest {
                 metrics.summary(Duration.ofSeconds(1), "work_stealing", 0, 0).callClassLatency();
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE));
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_TTFB));
+        assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL));
     }
 
     /**
@@ -217,10 +280,12 @@ class S3PageFetcherCallClassTest {
                     assertThat(r.phase()).isEqualTo(RunMetrics.LATENCY_PHASE_TOTAL);
                     assertThat(r.count()).isEqualTo(1L);
                 });
-        // No connect_acquire/ttfb rows -- this bare fake S3Client never fires a MetricPublisher, so
-        // both phases stay the -1 unobserved sentinel and are correctly skipped, not fabricated.
+        // No connect_acquire/ttfb/sdk_unmarshal rows -- this bare fake S3Client never fires a
+        // MetricPublisher, so all three phases stay the -1 unobserved sentinel and are correctly
+        // skipped, not fabricated.
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE));
         assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_TTFB));
+        assertThat(rows).noneMatch(r -> r.phase().equals(RunMetrics.LATENCY_PHASE_SDK_UNMARSHAL));
     }
 
     /**
@@ -297,6 +362,18 @@ class S3PageFetcherCallClassTest {
         MetricCollector attempt = root.createChild("ApiCallAttempt");
         attempt.reportMetric(HttpMetric.CONCURRENCY_ACQUIRE_DURATION, connectAcquire);
         attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, timeToFirstByte);
+        new S3CallClassLatencyPublisher().publish(root.collect());
+    }
+
+    /**
+     * As {@link #publishPhaseTimings}, reporting the first-byte/last-byte stamp PAIR the SDK
+     * response-handling window is derived from — the window is {@code ttlb - ttfb}.
+     */
+    private static void publishByteStamps(Duration timeToFirstByte, Duration timeToLastByte) {
+        MetricCollector root = MetricCollector.create("ApiCall");
+        MetricCollector attempt = root.createChild("ApiCallAttempt");
+        attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, timeToFirstByte);
+        attempt.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, timeToLastByte);
         new S3CallClassLatencyPublisher().publish(root.collect());
     }
 

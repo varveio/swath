@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 118;
+    static final int EXPECTED_OTLP_METER_COUNT = 121;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -190,14 +190,17 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.emit.latency|{}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
+            "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=sdk_unmarshal}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
@@ -212,8 +215,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.merge.range.latency|{}");
 
     /**
-     * The 19 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
-     * single {@code swath.api.latency} op series, all twelve {@code swath.fetch.latency.phase}
+     * The 22 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
+     * single {@code swath.api.latency} op series, all fifteen {@code swath.fetch.latency.phase}
      * call_class/phase distributions, and the six client-service-cost spans. Asserting the EXACT
      * set (not just count + allowed names) catches one attribute set being duplicated while another
      * silently disappears.
@@ -226,14 +229,17 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "SUMMARY|swath.emit.latency|{}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=sdk_unmarshal}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=sdk_unmarshal}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=sdk_unmarshal}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "SUMMARY|swath.parquet.write.latency|{}",

@@ -294,7 +294,7 @@ public final class RunMetrics {
 
     // Per-call-class latency-phase decomposition (worker page fetch vs the thief's 1-key pivot
     // probe vs its delimiter=/ structure probe) -- lazily-registered Timers, same computeIfAbsent idiom
-    // as stealReasonCounters/apiCalls above. Bounded cardinality: 3 call classes x 4 phases = 12 series.
+    // as stealReasonCounters/apiCalls above. Bounded cardinality: 3 call classes x 5 phases = 15 series.
     /** {@code call_class} tag value: a worker's slot-gated range page fetch. */
     public static final String CALL_CLASS_WORKER_PAGE = "worker_page";
     /** {@code call_class} tag value: the thief's 1-key ({@code max_keys<=1}, no delimiter) pivot probe. */
@@ -305,13 +305,35 @@ public final class RunMetrics {
     public static final String LATENCY_PHASE_CONNECT_ACQUIRE = "connect_acquire";
     /** {@code phase} tag value: SDK-reported time-to-first-byte (request start through first response byte). */
     public static final String LATENCY_PHASE_TTFB = "ttfb";
+    /**
+     * {@code phase} tag value: the SDK's own RESPONSE-HANDLING window — first response byte through
+     * the SDK's protocol response handler returning — bridged in from the SDK's per-attempt metrics
+     * by the store layer's metric publisher. For a sync S3 {@code ListObjectsV2} that is draining the
+     * remaining response body off the socket plus the XML parse and POJO construction: the dominant
+     * term of the {@link #LATENCY_PHASE_TOTAL}-minus-{@link #LATENCY_PHASE_TTFB} residual, which
+     * before this phase existed was the only thing that made it visible at all.
+     *
+     * <p><b>Not a pure unmarshal span, and not pure client CPU.</b> The SDK's own
+     * unmarshal-duration metric is not reported at all for this operation, so the window is DERIVED
+     * from the SDK's time-to-last-byte and time-to-first-byte stamps (see the store layer's
+     * publisher for the exact derivation and why it is a close upper bound rather than the true
+     * boundary). It also EXCLUDES the SDK's response-interceptor chain (for S3, the percent-decode of
+     * the {@code encoding-type=url} response the store layer itself requests, which rebuilds the
+     * response object), everything request-side of the attempt's first byte, any retry backoff, and
+     * {@link #LATENCY_PHASE_RESPONSE_PARSE}, which happens after the call returns. So this phase
+     * narrows the residual, it does not close it.
+     *
+     * <p>Best-effort like {@link #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}: absent
+     * on an attempt it could not be derived for, and then skipped rather than fabricated as {@code 0}.
+     */
+    public static final String LATENCY_PHASE_SDK_UNMARSHAL = "sdk_unmarshal";
     /** {@code phase} tag value: this fetcher's own measured wall-clock total. */
     public static final String LATENCY_PHASE_TOTAL = "total";
     /**
      * {@code phase} tag value: the client-side conversion of an already-received response into
      * swath's own page model (entries + common prefixes) — the one parse cost swath itself owns and
-     * can time. NOT the SDK's own unmarshalling, which happens inside the call and is only visible
-     * as the {@link #LATENCY_PHASE_TOTAL} minus {@link #LATENCY_PHASE_TTFB} residual.
+     * can time. NOT the SDK's own unmarshalling, which happens inside the call and is reported
+     * separately as {@link #LATENCY_PHASE_SDK_UNMARSHAL}.
      */
     public static final String LATENCY_PHASE_RESPONSE_PARSE = "response_parse";
     private final ConcurrentMap<String, Timer> callClassLatencyTimers = new ConcurrentHashMap<>();
@@ -995,10 +1017,11 @@ public final class RunMetrics {
      * One call-class/phase latency observation ({@code swath.fetch.latency.phase{call_class,
      * phase}}) -- {@code callClass} is one of {@link #CALL_CLASS_WORKER_PAGE}/{@link
      * #CALL_CLASS_PIVOT_PROBE}/{@link #CALL_CLASS_STRUCTURE_PROBE}, {@code phase} one of {@link
-     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link #LATENCY_PHASE_TOTAL}/{@link
+     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link
+     * #LATENCY_PHASE_SDK_UNMARSHAL}/{@link #LATENCY_PHASE_TOTAL}/{@link
      * #LATENCY_PHASE_RESPONSE_PARSE}. {@code nanos < 0} is the SDK-didn't-report-this-phase sentinel
      * (a best-effort SDK metric publisher observation, not guaranteed present on every attempt) and
-     * is silently skipped -- never fabricates a 0 sample. Bounded cardinality (12 series max), lazily
+     * is silently skipped -- never fabricates a 0 sample. Bounded cardinality (15 series max), lazily
      * registered the same {@code computeIfAbsent} idiom as {@link #stealReasonCounter}.
      */
     public void recordCallClassLatency(String callClass, String phase, long nanos) {
@@ -2202,9 +2225,14 @@ public final class RunMetrics {
     /** All 3 {@code call_class} tag values, in a fixed, stable iteration order for the summary. */
     private static final List<String> CALL_CLASSES =
             List.of(CALL_CLASS_WORKER_PAGE, CALL_CLASS_PIVOT_PROBE, CALL_CLASS_STRUCTURE_PROBE);
-    /** All 4 {@code phase} tag values, in a fixed, stable iteration order for the summary. */
+    /**
+     * All 5 {@code phase} tag values, in a fixed, stable iteration order for the summary — roughly
+     * chronological within one fetch: pool checkout, first byte, the SDK's response handling, the
+     * whole call, then swath's own post-return parse.
+     */
     private static final List<String> LATENCY_PHASES = List.of(LATENCY_PHASE_CONNECT_ACQUIRE,
-            LATENCY_PHASE_TTFB, LATENCY_PHASE_TOTAL, LATENCY_PHASE_RESPONSE_PARSE);
+            LATENCY_PHASE_TTFB, LATENCY_PHASE_SDK_UNMARSHAL, LATENCY_PHASE_TOTAL,
+            LATENCY_PHASE_RESPONSE_PARSE);
 
     /**
      * Read back every populated {@code call_class}/{@code phase} Timer's p50/p90/p99/max/count
@@ -2252,9 +2280,11 @@ public final class RunMetrics {
      * generic {@code meters[]} readback (§1) carries a Timer's count/total_ms/max_ms only, never its
      * percentiles.
      *
-     * <p>The fifth span of the decomposition — response PARSE — is deliberately not here: it is
-     * attributable per call class, so it lives in {@code probe_latency[]} as {@code phase=}{@value
-     * #LATENCY_PHASE_RESPONSE_PARSE} rather than being flattened into a call-class-blind row.
+     * <p>The two response-side spans of the decomposition — the SDK's response handling and swath's
+     * own response PARSE — are deliberately not here: both are attributable per call class, so they
+     * live in {@code probe_latency[]} as {@code phase=}{@value #LATENCY_PHASE_SDK_UNMARSHAL} and
+     * {@code phase=}{@value #LATENCY_PHASE_RESPONSE_PARSE} rather than being flattened into
+     * call-class-blind rows.
      *
      * <p>{@value #CLIENT_COST_SPAN_PARQUET_WRITE} is the one member measured OFF the page's critical
      * path — a Parquet run's sink work is done by the writer-pool lanes, so {@code emit} sees only
