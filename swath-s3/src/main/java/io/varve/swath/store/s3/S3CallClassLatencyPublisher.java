@@ -91,9 +91,11 @@ public final class S3CallClassLatencyPublisher implements MetricPublisher {
          * plus the XML parse and POJO construction. Not pure client CPU, and not a true unmarshal
          * span — a close upper bound on one.
          *
-         * <p>It stops before the SDK's response-INTERCEPTOR chain (S3's always-on {@code
-         * encoding-type=url} percent-decode, which rebuilds the response object), so that part
-         * stays inside the total-minus-TTFB residual.
+         * <p>It stops before the SDK's response-INTERCEPTOR chain — including the percent-decode of
+         * the {@code encoding-type=url} response {@link S3PageFetcher} itself asks for (the SDK's
+         * decode interceptor is always registered, but engages because of that request choice), which
+         * rebuilds the response object — so that part stays inside the total-minus-TTFB residual,
+         * along with everything request-side of the attempt's first byte.
          *
          * <p>Derived per {@link MetricCollection}, so both stamps always come from the SAME attempt,
          * and a collection reporting a first byte always supersedes an earlier attempt's window (see

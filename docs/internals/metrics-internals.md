@@ -151,23 +151,46 @@ decomposition. Two of the five phases now sit inside it:
   1000-key page.
 
   **Why it is derived rather than read.** `CoreMetric.UNMARSHALLING_DURATION` is the exact boundary and
-  was this phase's first implementation — but the SDK does not publish it for S3 `ListObjectsV2` at
-  all in the version swath pins, so the phase was simply absent from real runs while every unit test
-  (which hand-builds the metric tree) stayed green. `S3SdkUnmarshalPhaseLocalStackIT` is what caught
-  that, and it is now the standing guard. What the SDK *does* publish is `TIME_TO_LAST_BYTE`, stamped
-  in `HandleResponseStage` **after** the response handler returned — so the publisher derives
-  `TimeToLastByte - TimeToFirstByte`, taking both stamps from the SAME `MetricCollection` so a retried
-  call can never cross attempts, and rejecting a negative difference rather than clamping it to `0`.
-  Treat the result as a close UPPER bound on the SDK's client-side response cost, never as pure CPU.
+  was this phase's first implementation — but it is never published for an S3 `ListObjectsV2`, and that
+  is true **by construction, not by accident**: `DefaultS3Client` holds an `AwsS3ProtocolFactory`, which
+  overrides `createCombinedResponseHandler` to route through its own
+  `createErrorCouldBeInBodyResponseHandler` (S3 can return an error document under a `200`), and that
+  path never goes through `AwsXmlProtocolFactory.timeUnmarshalling` — the decorator that reports the
+  metric. So no S3 operation reports it and no SDK upgrade within that design will start. The phase was
+  simply absent from real runs while every unit test (which hand-builds the metric tree) stayed green;
+  `S3SdkUnmarshalPhaseLocalStackIT` is what caught that, and it is now the standing guard.
+
+  What the SDK *does* publish is `TIME_TO_LAST_BYTE`, stamped in `HandleResponseStage` **after** the
+  response handler returned — so the publisher derives `TimeToLastByte - TimeToFirstByte`, taking both
+  stamps from the SAME `MetricCollection` so a retried call can never cross attempts, and letting a
+  collection that reports a first byte supersede any earlier attempt's window (a final attempt that
+  read-timed-out mid-body has no window of its own, and an earlier attempt's must not stand in for it).
+  A negative difference is rejected rather than clamped; an exact-zero window is admissible and records
+  as a real sample. Treat the result as a close UPPER bound on the SDK's client-side response cost,
+  never as pure CPU.
 - **`response_parse`** — swath's own conversion of the returned response object into `ListEntry`/
   `KeyBytes`, after the call returned. Cheap by comparison.
 
-What is still only-a-residual after subtracting both: the SDK's response-INTERCEPTOR chain, which
-runs after the timed handler and is therefore outside `sdk_unmarshal` — for S3 that includes the
-always-on `encoding-type=url` percent-decode, which walks every key and rebuilds the response object
-— plus the fetcher's own bookkeeping. So `total - ttfb - sdk_unmarshal - response_parse` is the
-narrowed residual, not zero, and a per-page cost analysis must still report it rather than assume the
-decomposition is complete. The subtraction is legitimate for these three (they follow one another in
+**What is still only-a-residual after subtracting both.** `total - ttfb - sdk_unmarshal -
+response_parse` is NOT zero. It still contains, at minimum:
+
+- **The SDK's response-INTERCEPTOR chain**, which runs after the response handler and is therefore
+  outside `sdk_unmarshal` — for S3 that includes the percent-decode of the `encoding-type=url`
+  response **swath itself requests** (`S3PageFetcher` sets `EncodingType.URL` on every request; the
+  SDK's decode interceptor is always registered and engages because of that choice), which walks every
+  key and rebuilds the response object.
+- **Everything request-side, because `ttfb`'s zero is the ATTEMPT start, not the API call's.** The SDK
+  reports `TimeToFirstByte` equal to `ServiceCallDuration` — i.e. measured from the HTTP execute —
+  so marshalling, endpoint resolution, credential fetch and SigV4 signing all sit in the residual, in
+  front of `ttfb`.
+- **Retry backoff sleep and every superseded attempt.** `total` is the fetcher's wall-clock around the
+  whole API call including all attempts, while `ttfb`/`sdk_unmarshal` describe the LAST attempt only.
+  On a retried call (a 503 ridden out transiently) the residual therefore absorbs the earlier attempts
+  and their backoff delays outright — material, and the reason a per-page cost read should be taken on
+  a low-throttle run or cross-checked against `swath.throttle.events`.
+
+So a per-page cost analysis must still report the residual rather than assume the decomposition is
+complete. The subtraction itself is legitimate for these phases (they follow one another in
 wall-clock); it is `connect_acquire` and `ttfb` that must never be summed — see §1's meter row.
 
 **`client_cost[]`**: the per-page **client-service-cost** decomposition — what one page costs the

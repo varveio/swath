@@ -316,9 +316,10 @@ public final class RunMetrics {
      * unmarshal-duration metric is not reported at all for this operation, so the window is DERIVED
      * from the SDK's time-to-last-byte and time-to-first-byte stamps (see the store layer's
      * publisher for the exact derivation and why it is a close upper bound rather than the true
-     * boundary). It also EXCLUDES the SDK's response-interceptor chain (for S3, the always-on
-     * percent-decode of an {@code encoding-type=url} response, which rebuilds the response object)
-     * and {@link #LATENCY_PHASE_RESPONSE_PARSE}, which happens after the call returns. So this phase
+     * boundary). It also EXCLUDES the SDK's response-interceptor chain (for S3, the percent-decode of
+     * the {@code encoding-type=url} response the store layer itself requests, which rebuilds the
+     * response object), everything request-side of the attempt's first byte, any retry backoff, and
+     * {@link #LATENCY_PHASE_RESPONSE_PARSE}, which happens after the call returns. So this phase
      * narrows the residual, it does not close it.
      *
      * <p>Best-effort like {@link #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}: absent
