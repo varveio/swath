@@ -92,8 +92,8 @@ ci-drift:
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [[ ! "{{VERSION}}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-        echo "error: VERSION must be stable SemVer X.Y.Z (no pre-release/build metadata)" >&2; exit 2
+    if [[ ! "{{VERSION}}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
+        echo "error: VERSION must be X.Y.Z or X.Y.Z-rc.N (no other pre-release forms, no build metadata)" >&2; exit 2
     fi
     if [[ -n "$(git status --porcelain)" ]]; then
         echo "error: working tree is not clean; commit or stash first" >&2; exit 2
@@ -103,4 +103,10 @@ release VERSION:
     git commit -m "Release v{{VERSION}}"
     git tag -a "v{{VERSION}}" -m "swath v{{VERSION}}"
     echo "Prepared v{{VERSION}}. Review, then: git push origin main v{{VERSION}}"
-    echo "After it publishes, set gradle.properties to the next X.Y.Z-SNAPSHOT and commit."
+    if [[ "{{VERSION}}" == *-rc.* ]]; then
+        echo "This is a PRE-RELEASE: it publishes the X.Y.Z-rc.N container tag only —"
+        echo "no :latest, no :X.Y — and creates a GitHub pre-release. It is a rehearsal of"
+        echo "the publish path; the final tag is a separate, fresh build."
+    else
+        echo "After it publishes, set gradle.properties to the next X.Y.Z-SNAPSHOT and commit."
+    fi

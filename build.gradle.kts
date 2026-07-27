@@ -21,17 +21,23 @@ plugins {
 
 val verifyReleaseVersion by tasks.registering {
     group = "verification"
-    description = "Verifies a required stable vX.Y.Z release tag matches the canonical version."
+    description = "Verifies a required vX.Y.Z or vX.Y.Z-rc.N release tag matches the canonical version."
     val releaseTag = providers.gradleProperty("releaseTag")
     inputs.property("releaseTag", releaseTag.orNull ?: "")
     doLast {
         val tag = checkNotNull(releaseTag.orNull) { "Release builds require -PreleaseTag=vX.Y.Z" }
-        val stableSemVer = Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
-        check(stableSemVer.matches(project.version.toString())) {
-            "Release versions must be stable SemVer X.Y.Z; pre-release and build metadata are not supported"
+        // Stable X.Y.Z, or an -rc.N pre-release. Deliberately NOT the full SemVer
+        // pre-release grammar: `-rc.N` is the only pre-release form this project ships, and
+        // an exhaustive pattern would accept `-alpha`, `-beta.2+build`, and other identifiers
+        // whose publish semantics nothing here implements. Build metadata (`+…`) stays
+        // unsupported — it does not affect precedence, so it cannot mean anything useful on
+        // a release tag.
+        val releaseVersion = Regex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-rc\\.[1-9][0-9]*)?$")
+        check(releaseVersion.matches(project.version.toString())) {
+            "Release versions must be X.Y.Z or X.Y.Z-rc.N; found ${project.version}"
         }
-        check(Regex("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$").matches(tag)) {
-            "Release tag must be stable SemVer vX.Y.Z; found $tag"
+        check(Regex("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-rc\\.[1-9][0-9]*)?$").matches(tag)) {
+            "Release tag must be vX.Y.Z or vX.Y.Z-rc.N; found $tag"
         }
         val expected = "v${project.version}"
         check(tag == expected) {
