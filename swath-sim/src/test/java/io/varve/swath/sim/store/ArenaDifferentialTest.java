@@ -57,7 +57,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  * stubs size, last-modified, etag, storage class, owner and checksum on every row (see
  * {@link ArenaListingStore}). That is by design — a simulator decides splits, steals and
  * pagination from keys alone, and loading metadata for every key of every fixture would defeat the
- * tier. {@link #metadataIsStubbedOnTheArenaAndFullOnParquet} pins the difference so it stays a
+ * tier. {@link #metadataIsStubbedOnTheArenaFullOnParquetAndFullOnWindowed} pins the difference so it stays a
  * documented contract rather than an undetected regression; the windowed tier carries full
  * metadata, exactly like the Parquet tier it wraps. Full byte-for-byte comparison of metadata
  * across every field is the replay module's own sorted-vs-DuckDB differential suite.
@@ -125,11 +125,15 @@ class ArenaDifferentialTest {
     }
 
     /**
-     * Windowing over a single row group would be vacuously correct — a miss always covers the
-     * whole fixture. The edge-case-inventory fixture (the largest of {@link #fixtures}) must
-     * actually split into more than one row group under the production sorter's small-row-group
-     * config, so the differential above genuinely exercises window-boundary and window-refill
-     * behaviour, not just a full-fixture single window.
+     * A window's own boundaries are row-COUNT bounded ({@code windowRows}), never row-group
+     * bounded, and the small-{@code maxKeys} scenarios above (not row-group count) are what force
+     * the many continuation hops that drive most refills. What a single row group WOULD make
+     * vacuous is different: every delegate fill the windowed tier issues would then resolve to the
+     * exact same one row group every time, so {@code SortedParquetStore}'s index-driven routing
+     * across row-group boundaries would never actually run. The edge-case-inventory fixture (the
+     * largest of {@link #fixtures}) must actually split into more than one row group under the
+     * production sorter's small-row-group config, so at least one delegate fill in the differential
+     * above genuinely crosses a row-group boundary.
      */
     @Test
     void theEdgeCaseInventoryFixtureSpansMultipleRowGroups() throws IOException {
