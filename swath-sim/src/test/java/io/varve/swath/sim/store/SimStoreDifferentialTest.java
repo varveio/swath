@@ -74,13 +74,17 @@ class SimStoreDifferentialTest {
     private static final String BUCKET = "bucket";
 
     /**
-     * A generous arena budget, and a deliberately tight streaming residency budget — a few decoded
-     * row groups of the fixtures below, so the streaming tier genuinely evicts and re-faults as a
-     * walk advances and as a rollup hops. A budget that held the whole fixture would make that tier
-     * an arena with extra steps and would never exercise eviction, which is exactly where a store
-     * serving from cached decodes is most likely to lose or repeat a key.
+     * A generous arena budget, and a deliberately tight streaming residency budget — enough to hold
+     * the edge-case-inventory fixture's larger row group (measured at 3,568 decoded bytes; two long
+     * keys near the 1024-byte maximum push it well above the others) but not both of its row groups
+     * at once (4,739 bytes together), so the streaming tier genuinely evicts and re-faults as a walk
+     * advances and as a rollup hops — pinned, not just claimed, by
+     * {@link #theTightStreamingBudgetForcesGenuineEvictionOnTheEdgeCaseInventoryFixture}. A budget
+     * that held the whole fixture would make that tier an arena with extra steps and would never
+     * exercise eviction, which is exactly where a store serving from cached decodes is most likely to
+     * lose or repeat a key.
      */
-    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20, 8L << 10);
+    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20, 4000);
 
     /** Beyond the pager's default seek-scan threshold (32), so a rollup takes the seek path. */
     private static final int WIDE_DIRECTORY_CHILDREN = 150;
@@ -150,6 +154,27 @@ class SimStoreDifferentialTest {
     void theEdgeCaseInventoryFixtureSpansMultipleRowGroups() throws IOException {
         Path fixture = writeCapture(dir, edgeCaseKeys());
         assertThat(rowGroupCount(fixture)).isGreaterThan(1);
+    }
+
+    /**
+     * {@link #GENEROUS}'s own javadoc claims its tight streaming budget "genuinely evicts and
+     * re-faults" on the fixtures the differential above drives it against — checked here rather than
+     * left as an unverified comment, mirroring how {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups}
+     * pins its own precondition. {@code Opened#close} only closes the store, so the registry behind
+     * it is still readable after the walk that drove the eviction.
+     */
+    @Test
+    void theTightStreamingBudgetForcesGenuineEvictionOnTheEdgeCaseInventoryFixture() throws IOException {
+        List<byte[]> keys = edgeCaseKeys();
+        Path fixture = writeCapture(dir, keys);
+        List<Scenario> scenarios = scenarios(keys.size());
+
+        Opened streaming = streamingStore(fixture);
+        transcripts(scenarios, streaming);
+
+        var evictions = streaming.metrics().registry().find(SimStoreMetrics.SEGMENT_EVICT_METRIC).counter();
+        assertThat(evictions).isNotNull();
+        assertThat(evictions.count()).isPositive();
     }
 
     @Test
