@@ -59,4 +59,12 @@ tasks.test {
     // forwarded and the bench test's own assumeTrue skips it, exactly as before.
     System.getProperty("swath.sim.bench.fixture")?.let { systemProperty("swath.sim.bench.fixture", it) }
     System.getProperty("swath.sim.bench.giant-fixture")?.let { systemProperty("swath.sim.bench.giant-fixture", it) }
+    // Same forwarding, same reason, for the real-listing run (RealListingRunTest, @Tag("perf")):
+    // `-Dswath.sim.listing.fixture=<local sorted capture>`. The repo never names a fixture -- the
+    // path is the operator's, supplied per invocation, and the test skips itself without one.
+    System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
+    // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
+    // synthetic benches; raise the forked JVM's heap for one invocation with
+    // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.
+    (project.findProperty("simTestHeap") as String?)?.let { maxHeapSize = it }
 }

@@ -460,6 +460,27 @@ outside this module. That rule is mechanical rather than conventional: a source 
 on an object-store URI in `src/main`, alongside the scans for ambient clocks and for reads of row
 metadata a keys-only fixture does not have (`SimAmbientSourceGuardTest`).
 
+### Running the real policies against a real listing
+
+A generated keyspace is a hypothesis about what a bucket looks like. `RealListingRunTest`
+(`@Tag("perf")`) runs the same fleet, seeds, page regimes and measured client cost over a **captured
+listing** instead, and prints the sensing race's own table so the two read side by side — plus a run
+cost table (wall time, events, store calls) that is how a corpus sweep gets sized, and a "where does
+the tail live" leg that reports the longest common prefix of the keys committed after the last split.
+
+```shell
+./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=/path/to/sorted-fixture
+# a listing of tens of millions of keys wants more than the perf tier's 2 GB:
+./gradlew :swath-sim:test -PonlyPerf -PsimTestHeap=6g -Dswath.sim.listing.fixture=...
+```
+
+The path is the operator's, supplied per invocation: **the repo never names a fixture, a bucket or a
+location**, and with the property unset the run skips itself. One store handle (resolved through
+`AUTO`, with the arena budget at a third of the heap) serves every leg, because opening a
+multi-million-key fixture costs more than the runs do. Nothing there asserts a magnitude — a
+threshold invented against a real bucket's numbers would be a threshold fitted to them — but every
+leg must complete and every leg must emit the same key count as the first.
+
 ### Keyspace shapes, generated
 
 A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
