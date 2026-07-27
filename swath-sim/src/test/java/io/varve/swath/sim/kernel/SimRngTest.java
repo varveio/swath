@@ -58,6 +58,11 @@ class SimRngTest {
      * Adjacent actors must not get near-identical tapes. A linear seed offset would leave them
      * weakly decorrelated, which is why the derivation mixes rather than adds; this checks the mixing
      * actually happened, by requiring the first draws of adjacent actors to differ throughout.
+     *
+     * <p>Distinctness alone is necessary but nowhere near sufficient — {@code seed = base + actor}
+     * also gives 32 distinct first draws and is exactly the derivation this property exists to rule
+     * out. So distinctness is checked here and the mixing itself is pinned by
+     * {@link #theDerivationIsPinnedToItsMixedForm()}.
      */
     @Test
     void adjacentActorsAreNotCorrelated() {
@@ -67,6 +72,39 @@ class SimRngTest {
         }
 
         assertThat(new HashSet<>(firstDraws)).hasSize(firstDraws.size());
+    }
+
+    /**
+     * Golden vectors for the derivation and the first draw off each derived tape.
+     *
+     * <p>These are the check that has teeth. A distinctness assertion passes for any injective
+     * derivation, including the additive one the mixing exists to avoid; pinning the actual values
+     * fails the moment {@code deriveStreamSeed} stops being {@code mix64(mix64(base + actor*gamma) +
+     * ordinal*gamma)} — an offset, a dropped mix round, a reordered {@link SimRngStream} constant, or
+     * a swapped multiplier. That is also why the vectors are written out rather than recomputed from
+     * the constants: a test that recomputed them would agree with whatever the implementation became.
+     *
+     * <p>These numbers are a compatibility surface, not an implementation detail. Every recorded run
+     * replays against them, so a failure here means old traces no longer reproduce — the fix is
+     * ordinarily to restore the derivation, and re-pinning is a deliberate break of every trace on
+     * disk.
+     */
+    @Test
+    void theDerivationIsPinnedToItsMixedForm() {
+        assertPinned(0L, 0, SimRngStream.DECISION, 0L, -2152535657050944081L);
+        assertPinned(0L, 1, SimRngStream.DECISION, 5197578548964807871L, 6235967106033911276L);
+        assertPinned(0L, 2, SimRngStream.DECISION, -3642288131749336026L, -8675236160134566309L);
+        assertPinned(42L, 7, SimRngStream.LATENCY, -4026654402003481814L, 2620904494501322228L);
+        assertPinned(42L, 7, SimRngStream.CLIENT_COST, 3833205896053839730L, 3613847663784274578L);
+    }
+
+    private static void assertPinned(long baseSeed, int actorId, SimRngStream stream, long expectedSeed,
+            long expectedFirstDraw) {
+        String where = "base=" + baseSeed + " actor=" + actorId + " stream=" + stream;
+        assertThat(SimRng.deriveStreamSeed(baseSeed, actorId, stream)).as("derived seed, " + where)
+                .isEqualTo(expectedSeed);
+        assertThat(SimRng.forStream(baseSeed, actorId, stream).nextLong()).as("first draw, " + where)
+                .isEqualTo(expectedFirstDraw);
     }
 
     @Test

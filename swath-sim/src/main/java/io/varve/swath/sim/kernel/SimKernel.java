@@ -162,7 +162,16 @@ public final class SimKernel implements SimContext {
         if (delayNanos < 0) {
             throw new IllegalArgumentException("cannot schedule into the past, delay " + delayNanos);
         }
-        enqueue(nowNanos + delayNanos, actorId, kind, action);
+        long atNanos;
+        try {
+            atNanos = Math.addExact(nowNanos, delayNanos);
+        } catch (ArithmeticException overflow) {
+            // A wrapped instant is worse than a rejected one: it lands negative, sorts ahead of every
+            // legitimate event, and drags the virtual clock backwards when it is dispatched.
+            throw new IllegalArgumentException("scheduling " + delayNanos + "ns past now (" + nowNanos
+                    + "ns) overflows the nanosecond clock", overflow);
+        }
+        enqueue(atNanos, actorId, kind, action);
     }
 
     @Override
@@ -191,6 +200,9 @@ public final class SimKernel implements SimContext {
     }
 
     private void enqueue(long atNanos, int actorId, String kind, SimAction action) {
+        if (atNanos < 0) {
+            throw new IllegalArgumentException("an event instant must be >= 0, got " + atNanos);
+        }
         queue.add(new ScheduledEvent(atNanos, sequence++, actorId, kind, action));
     }
 }

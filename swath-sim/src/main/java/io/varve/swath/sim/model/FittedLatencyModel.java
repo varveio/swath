@@ -93,10 +93,15 @@ public final class FittedLatencyModel implements LatencyModel {
         // the logarithm is always finite -- the draw can be zero but never infinite. StrictMath, not
         // Math: see the class javadoc, this is the run's only floating-point timeline input.
         double excess = -StrictMath.log(1.0 - rng.nextDouble()) * tailMean;
-        // The interface promises a non-negative service time. Nothing above can produce a negative
-        // one for sane parameters, but a tail mean large enough to overflow the long cast would, and a
-        // negative latency would schedule an event into the past -- so the promise is enforced here
-        // rather than assumed to follow from the arithmetic.
-        return Math.max(params.minNanos(), params.minNanos() + (long) excess);
+        // The interface promises a non-negative service time, and a tail mean large enough to overflow
+        // the long cast would break that promise -- so it is enforced here rather than assumed to
+        // follow from the arithmetic. It saturates rather than clamping to the floor: adding an
+        // already-saturated excess to minNanos wraps negative, and taking max(minNanos, negative)
+        // would turn the most extreme draw in the tail into the fastest call the class can make --
+        // exactly inverting the sample, which is worse than a value that is merely too large.
+        if (excess >= (double) (Long.MAX_VALUE - params.minNanos())) {
+            return Long.MAX_VALUE;
+        }
+        return params.minNanos() + (long) excess;
     }
 }

@@ -34,6 +34,16 @@ import io.varve.swath.sim.kernel.SimContext;
  */
 public sealed interface ClientCostModel permits IidClientCost, ContendedClientCost {
 
+    /**
+     * Counter naming the number of pages charged. Declared once here, and not per form, because a
+     * run's counters are compared <em>across</em> the two forms — which is the whole point of having
+     * both — and a name that drifted in one of them would silently compare nothing.
+     */
+    String CHARGES_COUNTER = "client_cost.charges";
+
+    /** Counter naming the total client-side nanoseconds charged. See {@link #CHARGES_COUNTER}. */
+    String NANOS_COUNTER = "client_cost.nanos";
+
     /** The term this form is paying out, including its provenance. */
     ClientCostTerm term();
 

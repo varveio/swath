@@ -81,4 +81,30 @@ class ClientCostTermTest {
         assertThatThrownBy(() -> ClientCostTerm.zeroedForExactMode("x").costNanos(-1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /**
+     * A term without a provenance is rejected outright. Accepting one would be the worst of the
+     * available failures: {@link ClientCostTerm#isPredictive()} tests for the zeroed constant, so a
+     * null would answer "predictive" — a run built on an unlabelled input would report itself as
+     * quotable about the real system.
+     */
+    @Test
+    void aTermWithoutAProvenanceIsRejected() {
+        assertThatThrownBy(() -> new ClientCostTerm(null, 100, 5, "unlabelled"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("provenance");
+    }
+
+    /**
+     * An overflowing cost is an error about its input, not a negative duration. Wrapping would hand
+     * the charging model a negative delay, which schedules the continuation into the past.
+     */
+    @Test
+    void aCostThatOverflowsNanosecondsIsRejectedRatherThanWrappingNegative() {
+        ClientCostTerm huge = new ClientCostTerm(Provenance.PROVISIONAL, 1, Long.MAX_VALUE / 2,
+                "illustrative term, this test only");
+
+        assertThat(huge.costNanos(1)).isEqualTo(1 + Long.MAX_VALUE / 2);
+        assertThatThrownBy(() -> huge.costNanos(3))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("overflows");
+    }
 }

@@ -107,6 +107,30 @@ class LatencyModelTest {
         }
     }
 
+    /**
+     * A tail draw too large for a {@code long} saturates at the top of the range. It must not clamp
+     * to the floor, which is what an unchecked {@code max(min, min + excess)} does once the addition
+     * wraps: that inverts the sample outright, turning the most extreme call in the tail into the
+     * fastest one the class can make — a model that reports the opposite of what it drew is worse
+     * than one that reports a number too large to be physical.
+     */
+    @Test
+    void aTailDrawTooLargeForALongSaturatesInsteadOfCollapsingToTheFloor() {
+        FittedLatencyModel model = uniformlyFitted(1_000L, Long.MAX_VALUE);
+        SimRng rng = SimRng.of(123L);
+
+        long smallest = Long.MAX_VALUE;
+        boolean sawSaturated = false;
+        for (int i = 0; i < DRAWS; i++) {
+            long drawn = model.drawNanos(CallClass.WORKER_PAGE, rng);
+            smallest = Math.min(smallest, drawn);
+            sawSaturated |= drawn == Long.MAX_VALUE;
+        }
+
+        assertThat(sawSaturated).as("an absurd tail mean must reach the saturation path at all").isTrue();
+        assertThat(smallest).as("no draw may collapse back to the floor").isGreaterThan(1_000_000_000L);
+    }
+
     @Test
     void negativeAndInvertedParametersAreRejected() {
         assertThatThrownBy(() -> ConstantLatencyModel.uniform(-1))

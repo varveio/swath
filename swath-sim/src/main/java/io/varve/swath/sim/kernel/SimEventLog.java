@@ -65,11 +65,19 @@ public final class SimEventLog {
         return entries != null;
     }
 
-    /** Appends one entry, assigning it the next ordinal. A disabled log drops it. */
+    /**
+     * Appends one entry, assigning it the next ordinal. A disabled log drops it.
+     *
+     * <p>Separators are rejected here, on the way in, rather than only when the trace is serialized:
+     * a caller bug that is caught at write time names the event that caused it, whereas one caught at
+     * {@link #canonicalBytes()} has already let an unserializable trace survive an entire run.
+     */
     void append(long atNanos, int actorId, String kind, String detail) {
         if (entries == null) {
             return;
         }
+        requireSeparatorFree(kind);
+        requireSeparatorFree(detail);
         entries.add(new Entry(atNanos, ordinal++, actorId, kind, detail));
     }
 

@@ -100,13 +100,34 @@ class SimAmbientSourceGuardTest {
             AmbientShape.literal("new Random("),
             AmbientShape.literal("new SecureRandom("),
             AmbientShape.literal("RandomGenerator.getDefault("),
-            // Host-variable arithmetic; the bit-exact StrictMath.* equivalents stay legal.
+            // Host-variable arithmetic; the bit-exact StrictMath.* equivalents stay legal. The whole
+            // family is listed, not just the functions the module happens to use today: the point of a
+            // source guard is to catch the call that has not been written yet, and a model reaching
+            // for Math.hypot next year is exactly as trace-breaking as one reaching for Math.log.
+            // Math.abs/max/min/round and the *Exact integer helpers are exactly specified, so they
+            // are deliberately absent.
             AmbientShape.hostVariableMath("log"),
             AmbientShape.hostVariableMath("log10"),
+            AmbientShape.hostVariableMath("log1p"),
             AmbientShape.hostVariableMath("exp"),
+            AmbientShape.hostVariableMath("expm1"),
             AmbientShape.hostVariableMath("pow"),
             AmbientShape.hostVariableMath("sqrt"),
-            AmbientShape.hostVariableMath("cbrt"));
+            AmbientShape.hostVariableMath("cbrt"),
+            AmbientShape.hostVariableMath("hypot"),
+            AmbientShape.hostVariableMath("IEEEremainder"),
+            AmbientShape.hostVariableMath("sin"),
+            AmbientShape.hostVariableMath("cos"),
+            AmbientShape.hostVariableMath("tan"),
+            AmbientShape.hostVariableMath("asin"),
+            AmbientShape.hostVariableMath("acos"),
+            AmbientShape.hostVariableMath("atan"),
+            AmbientShape.hostVariableMath("atan2"),
+            AmbientShape.hostVariableMath("sinh"),
+            AmbientShape.hostVariableMath("cosh"),
+            AmbientShape.hostVariableMath("tanh"),
+            AmbientShape.hostVariableMath("toRadians"),
+            AmbientShape.hostVariableMath("toDegrees"));
 
     @Test
     void noSimulatorSourceReadsAnAmbientClockOrAnAmbientRandomSource() throws Exception {

@@ -170,6 +170,53 @@ class SimKernelTest {
         assertThat(kernel.run().eventsProcessed()).isEqualTo(1);
     }
 
+    /**
+     * A delay that overflows the clock is rejected, not wrapped. Wrapping is the worse failure by
+     * far: the instant comes back negative, sorts ahead of every legitimate event, and dragging the
+     * virtual clock backwards when it dispatches — so a scenario with one absurd delay would not
+     * fail, it would quietly produce a reordered trace and a plausible-looking result.
+     */
+    @Test
+    void aDelayThatOverflowsTheClockIsRejectedRatherThanWrappingIntoThePast() {
+        SimKernel kernel = kernel(BUDGETS, 100);
+        kernel.scheduleBootstrap(1_000, 0, "far-future", ctx ->
+                assertThatThrownBy(() -> ctx.schedule(Long.MAX_VALUE, "wraps", ignored -> {
+                })).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("overflows"));
+
+        SimRunResult result = kernel.run();
+
+        assertThat(result.eventsProcessed()).isEqualTo(1);
+        assertThat(result.wallNanos()).isEqualTo(1_000);
+    }
+
+    /** The same guard on the bootstrap path, which takes an absolute instant rather than a delay. */
+    @Test
+    void aNegativeBootstrapInstantIsRejected() {
+        SimKernel kernel = kernel(BUDGETS, 100);
+
+        assertThatThrownBy(() -> kernel.scheduleBootstrap(-1, 0, "before-time", ctx -> {
+        })).isInstanceOf(IllegalArgumentException.class).hasMessageContaining(">= 0");
+    }
+
+    /**
+     * An unserializable field fails at the append that produced it, not at the end of the run. The
+     * distinction matters for diagnosis: the write-time failure names the event, whereas a failure at
+     * serialization time has already let the whole simulation finish around a trace it cannot emit.
+     */
+    @Test
+    void anEventLogFieldContainingASeparatorIsRejectedWhenItIsWrittenNotWhenItIsSerialized() {
+        SimEventLog log = SimEventLog.recording();
+        SimKernel kernel = new SimKernel(1L, BUDGETS, log, 100);
+        kernel.scheduleBootstrap(0, 0, "start", ctx ->
+                assertThatThrownBy(() -> ctx.record("split\tkind", "detail"))
+                        .isInstanceOf(IllegalStateException.class).hasMessageContaining("separator"));
+
+        kernel.run();
+
+        assertThat(log.entries()).noneMatch(entry -> entry.kind().contains("\t"));
+        assertThat(new String(log.canonicalBytes(), StandardCharsets.UTF_8)).doesNotContain("split");
+    }
+
     /** Reschedules itself every 100 ms forever — the shape both ceilings exist to bound. */
     private static void tick(SimContext ctx, List<Long> ticks) {
         ticks.add(ctx.nowNanos());

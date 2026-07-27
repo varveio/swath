@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * A minimal in-memory {@link ListingStore} over a fixed, sorted key list — the range seam and nothing
@@ -43,9 +44,17 @@ final class KeyListStore implements ListingStore {
         return new KeyListStore(keys);
     }
 
-    /** The {@code i}-th generated key, so a test can name a range bound without guessing the format. */
+    /**
+     * The {@code i}-th generated key, so a test can name a range bound without guessing the format.
+     *
+     * <p>The width covers every non-negative {@code int}, so generation order stays byte order no
+     * matter how large a fixture some later test asks for — a narrower field would silently start
+     * sorting {@code key-100000} ahead of {@code key-99999} and quietly truncate range scans. The
+     * locale is pinned for the same reason: a default locale with non-ASCII digits would reorder the
+     * whole fixture.
+     */
     static byte[] key(int i) {
-        return String.format("key-%05d", i).getBytes(StandardCharsets.UTF_8);
+        return String.format(Locale.ROOT, "key-%010d", i).getBytes(StandardCharsets.UTF_8);
     }
 
     /** Store calls served since construction — the count a lifecycle assertion reads. */

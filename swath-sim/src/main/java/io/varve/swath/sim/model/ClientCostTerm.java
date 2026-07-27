@@ -41,6 +41,10 @@ public record ClientCostTerm(Provenance provenance, long perPageNanos, long perK
     }
 
     public ClientCostTerm {
+        if (provenance == null) {
+            throw new IllegalArgumentException("a client cost term must carry its provenance; a term "
+                    + "without one would be read as predictive by default");
+        }
         if (perPageNanos < 0 || perKeyNanos < 0) {
             throw new IllegalArgumentException("client cost must be >= 0, got perPage=" + perPageNanos
                     + " perKey=" + perKeyNanos);
@@ -73,11 +77,22 @@ public record ClientCostTerm(Provenance provenance, long perPageNanos, long perK
         return provenance != Provenance.ZEROED_FOR_EXACT_MODE;
     }
 
-    /** The total client-side cost of one page of {@code keys} keys. */
+    /**
+     * The total client-side cost of one page of {@code keys} keys.
+     *
+     * <p>The arithmetic is checked rather than wrapping: a cost that overflowed would come back
+     * negative, and a negative charge is scheduled as a delay into the past, so an unusable
+     * parameterisation would surface as a corrupt timeline rather than as an error about its input.
+     */
     public long costNanos(int keys) {
         if (keys < 0) {
             throw new IllegalArgumentException("keys must be >= 0, got " + keys);
         }
-        return perPageNanos + perKeyNanos * keys;
+        try {
+            return Math.addExact(perPageNanos, Math.multiplyExact(perKeyNanos, (long) keys));
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException("client cost overflows a nanosecond count: perPage="
+                    + perPageNanos + " perKey=" + perKeyNanos + " keys=" + keys, overflow);
+        }
     }
 }

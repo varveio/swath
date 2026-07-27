@@ -30,8 +30,8 @@ public record IidClientCost(ClientCostTerm term) implements ClientCostModel {
     @Override
     public void chargePage(SimContext ctx, int keys, SimAction onComplete) {
         long cost = term.costNanos(keys);
-        ctx.count("client_cost.charges", 1);
-        ctx.count("client_cost.nanos", cost);
+        ctx.count(CHARGES_COUNTER, 1);
+        ctx.count(NANOS_COUNTER, cost);
         ctx.schedule(cost, CHARGE_EVENT, onComplete);
     }
 }
