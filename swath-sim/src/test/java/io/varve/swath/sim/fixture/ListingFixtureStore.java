@@ -29,7 +29,7 @@ import java.util.Locale;
  * read once per modelled call, so a linear walk per read would make the fixture's own cost dominate
  * every measurement taken through it.
  */
-public final class ListingFixtureStore implements ListingStore {
+public class ListingFixtureStore implements ListingStore {
 
     private final List<byte[]> keys;
     private int reads;

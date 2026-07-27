@@ -273,6 +273,31 @@ three are choices. So a run record carries them — which store served it, which
 against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
 the counters every policy path engaged, and how many events the kernel dispatched to produce it.
 
+### What a run costs to produce
+
+Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
+duration** is the modelled system's answer. Its **wall time** is what this machine spent computing that
+answer, and the only thing it says about swath is whether sweeping over many runs is affordable.
+
+Measured on one 8-core arm64 development box, 2M keys under the real policies, 32 workers, 1000-key
+pages, no seed:
+
+| | |
+|---|---|
+| modelled store calls | 2,872 |
+| events dispatched | 44,752 (**15.6 per call**), of which 16,712 were retired park timers |
+| wall time | 0.34 s (**117 µs per modelled call**, including materialising every page from the fixture) |
+| virtual duration | 6.8 s |
+
+The shape that matters is **events per modelled call**, because that is what does not change with the
+fixture's size. At ~15 events per call, a 150,000-call run — the scale of a very large bucket —
+dispatches roughly 2.3M events and costs on the order of 15–20 s here, which is inside the budget such
+a run has to fit for sweeping to be practical. Two caveats travel with that, and neither is small: the
+measurement above reads its pages from an in-memory fixture, where a real large-fixture backend serves
+a call in ~175 µs and would dominate the total; and a timeout-heavy scenario arms events a healthy one
+never does, so a run's budget has to be sized including the ones that turn out not to matter. The
+bench that produces these numbers is `PolicyRunBudgetBenchTest` (`@Tag("perf")`, opt-in).
+
 ### Why the kernel's own tests assert equalities
 
 With a constant latency and the client-cost term explicitly zeroed, a run's wall time is pure
@@ -289,6 +314,22 @@ A fixture is a **local path** — a swath Parquet capture file, or a directory o
 by the caller (config or CLI argument). Nothing in this module hardcodes, or is allowed to
 hardcode, a remote object-store location; fetching a fixture to local disk is the caller's job,
 outside this module.
+
+### Keyspace shapes, generated
+
+A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
+sits in a few of them or spreads evenly, whether a split can find a populated pivot — so the tests also
+generate small keyspaces shaped like real buckets: a deep date-partitioned observation archive, a
+hash-fanned content-addressed corpus, a tree with one object per directory, and a single dense flat
+leaf. Each runs in milliseconds and each provokes different policy paths, which a fixture of uniformly
+named keys does not.
+
+One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
+number of calls in flight: the fleet's own success makes every call slower. It exists because one
+control rung — the adaptive controller's latency freeze — reacts to nothing else, so a store that
+degrades under load is the only thing that can exercise it. Staging that against a real store is not
+something anyone can do deliberately; here it is a constructor argument, and the fleet's reaction is
+observable event by event.
 
 ## Building and testing
 
