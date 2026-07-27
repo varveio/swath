@@ -25,7 +25,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,21 +52,52 @@ class SequentialListingDriverStoreTest {
     private static final int RANGE_COUNT = 4;
     private static final long LATENCY_NANOS = 2_000_000L;
 
-    /** A store handle that records what the driver did with it — most importantly, closing it. */
-    private static final class CountingStore implements ListingStore {
+    /**
+     * A store handle that records what the driver did with it: how many calls, whether it was closed,
+     * and — for the key-coverage assertion — the keys each call returned, tagged by which range's
+     * upper bound the call carried. Each range here has a distinct {@code toExclusive}, so that bound
+     * identifies the range a call belongs to without the decorator needing to know about ranges.
+     */
+    private static final class RecordingStore implements ListingStore {
+        private record Call(String rangeTag, List<String> keys) {
+        }
+
         private final ListingStore delegate;
-        private int calls;
+        private final List<Call> callLog = new ArrayList<>();
         private int closes;
 
-        private CountingStore(ListingStore delegate) {
+        private RecordingStore(ListingStore delegate) {
             this.delegate = delegate;
         }
 
         @Override
         public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                        Projection projection) {
-            calls++;
-            return delegate.rows(from, fromInclusive, toExclusive, limit, projection);
+            List<ListedObject> rows = delegate.rows(from, fromInclusive, toExclusive, limit, projection);
+            callLog.add(new Call(toExclusive == null ? "*" : toExclusive.toString(),
+                    rows.stream().map(row -> new String(row.key(), StandardCharsets.UTF_8)).toList()));
+            return rows;
+        }
+
+        int calls() {
+            return callLog.size();
+        }
+
+        /**
+         * The keys this store served, per range, concatenated in the order the calls were made and
+         * with the ranges themselves in ascending key order. Order is preserved throughout: an earlier
+         * version of this test sorted the observations before comparing, which meant a driver that
+         * walked a range backwards, or resumed one range's cursor inside another, still passed.
+         */
+        List<String> keysByRangeInCallOrder() {
+            Map<String, List<String>> byRange = new LinkedHashMap<>();
+            for (Call call : callLog) {
+                byRange.computeIfAbsent(call.rangeTag(), tag -> new ArrayList<>()).addAll(call.keys());
+            }
+            return byRange.values().stream()
+                    .sorted(Comparator.comparing(keys -> keys.isEmpty() ? "" : keys.getFirst()))
+                    .flatMap(List::stream)
+                    .toList();
         }
 
         @Override
@@ -73,21 +107,32 @@ class SequentialListingDriverStoreTest {
         }
     }
 
+    /**
+     * Every key of a real fixture, listed exactly once and in ascending order — asserted against the
+     * keys themselves, not against page sizes. Page sizes alone cannot distinguish a correct run from
+     * one that dropped key {@code j} and served key {@code k} twice, nor from one that swapped two
+     * ranges' cursors; the key sequence can.
+     */
     @Test
-    void listsEveryKeyOfArealFixtureExactlyOnceInOrder(@TempDir Path dir) throws IOException {
+    void listsEveryKeyOfARealFixtureExactlyOnceInOrder(@TempDir Path dir) throws IOException {
         SimStoreFactory.Result opened = SimStoreFactory.open(fixture(dir), SimStoreBackend.ARENA);
-        try (ListingStore store = opened.store()) {
+        RecordingStore store = new RecordingStore(opened.store());
+        try (store) {
             SimRunResult result = SequentialListingDriver.run(scenario(true), store);
 
             assertThat(opened.resolvedBackend()).isEqualTo(SimStoreBackend.ARENA);
             assertThat(result.stopReason()).isEqualTo(SimStopReason.QUIESCED);
+            assertThat(store.keysByRangeInCallOrder())
+                    .as("the fixture's whole key set, in ascending order, with nothing dropped, "
+                            + "duplicated or reordered")
+                    .isEqualTo(allFixtureKeys());
             assertThat(result.counter(SequentialListingDriver.KEYS_LISTED_COUNTER)).isEqualTo(KEY_COUNT);
             assertThat(result.counter(SequentialListingDriver.RANGES_CLAIMED_COUNTER)).isEqualTo(RANGE_COUNT);
             assertThat(result.counter(SequentialListingDriver.STORE_CALLS_COUNTER))
                     .as("sum over ranges of floor(n_r / 7) + 1").isEqualTo(expectedCalls());
             assertThat(result.wallNanos())
                     .as("virtual time advanced, and only by modelled latency").isPositive();
-            assertThat(pagesFromTrace(result)).as("every page of the fixture, and no page twice")
+            assertThat(pageSizesFromTrace(result)).as("and the page shape the closed form predicts")
                     .isEqualTo(expectedPageSizes());
         }
     }
@@ -95,16 +140,16 @@ class SequentialListingDriverStoreTest {
     @Test
     void oneStoreHandleServesTwoRunsAndIsNeverClosedByTheDriver(@TempDir Path dir) throws IOException {
         SimStoreFactory.Result opened = SimStoreFactory.open(fixture(dir), SimStoreBackend.ARENA);
-        CountingStore handle = new CountingStore(opened.store());
+        RecordingStore handle = new RecordingStore(opened.store());
         try (handle) {
             SimRunResult first = SequentialListingDriver.run(scenario(true), handle);
-            int callsAfterFirst = handle.calls;
+            int callsAfterFirst = handle.calls();
             SimRunResult second = SequentialListingDriver.run(scenario(true), handle);
 
             assertThat(handle.closes).as("the run API borrows the handle; closing it is the caller's")
                     .isZero();
             assertThat(callsAfterFirst).isEqualTo((int) expectedCalls());
-            assertThat(handle.calls).as("the second run served from the same open handle")
+            assertThat(handle.calls()).as("the second run served from the same open handle")
                     .isEqualTo(2 * callsAfterFirst);
             assertThat(second.log().canonicalBytes())
                     .as("a reused handle changes nothing about the run's outcome")
@@ -116,8 +161,17 @@ class SequentialListingDriverStoreTest {
         assertThat(handle.closes).as("closing is the caller's, and it happened exactly once").isEqualTo(1);
     }
 
+    /** Every key the fixture holds, in ascending order. */
+    private static List<String> allFixtureKeys() {
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < KEY_COUNT; i++) {
+            keys.add(new String(key(i), StandardCharsets.UTF_8));
+        }
+        return keys;
+    }
+
     /** Page sizes in the order the pages were served, read out of the recorded trace. */
-    private static List<Integer> pagesFromTrace(SimRunResult result) {
+    private static List<Integer> pageSizesFromTrace(SimRunResult result) {
         List<Integer> pages = new ArrayList<>();
         for (var entry : result.log().entries()) {
             if (entry.kind().equals("list.rows")) {
