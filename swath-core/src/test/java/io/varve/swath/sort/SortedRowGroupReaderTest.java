@@ -21,8 +21,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link SortedRowGroupReader} — the replay server's delimiter skip-scan reads a sorted fixture
  * through exactly this class, so its per-row-group decode must be exact at a row-group boundary
- * (never bleed a neighboring group's rows in or drop the group's own), for both of its tiers ({@link
- * SortedRowGroupReader.KeyCursor} key-only, {@link SortedRowGroupReader#rows} full row).
+ * (never bleed a neighboring group's rows in or drop the group's own), for all three of its tiers
+ * ({@link SortedRowGroupReader.KeyCursor} key-only resumable, {@link SortedRowGroupReader#forEachKey}
+ * key-only bulk, {@link SortedRowGroupReader#rows} full row).
  */
 class SortedRowGroupReaderTest {
 
@@ -152,6 +153,50 @@ class SortedRowGroupReaderTest {
             // Advancing past the group's last key exhausts it.
             cursor.advanceTo(bytes("99999999"), true);
             assertThat(cursor.hasCurrent()).isFalse();
+        }
+    }
+
+    /**
+     * The bulk key tier and the cursor tier are two decoders over the same column, so a caller
+     * choosing between them on speed must not be choosing between two answers: {@link
+     * SortedRowGroupReader#forEachKey} must visit exactly the keys {@link
+     * SortedRowGroupReader.KeyCursor} steps through, in the same order, group for group — including
+     * across a row-group boundary, where a column-API reader that mis-scoped its page store would
+     * bleed a neighbour's rows in.
+     */
+    @Test
+    void forEachKeyVisitsExactlyTheKeysTheCursorSteps(@TempDir Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 300; i++) {
+            keys.add(String.format("%08d", i) + "x".repeat(190));
+        }
+        Path path = dir.resolve("part-00001.parquet");
+        SortConfig tinyRowGroups = config(Map.of("final-row-group-bytes", "4096"));
+        try (SortedFileWriter writer = new SortedParquetWriter(path, tinyRowGroups, SortMode.OBJECTS, 1)) {
+            for (String k : keys) {
+                writer.write(object(k));
+            }
+        }
+
+        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        assertThat(spans.size()).isGreaterThan(1);
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            int offset = 0;
+            for (SortedFileIndex.RowGroupSpan span : spans) {
+                List<byte[]> stepped = drain(reader.openKeyCursor(span.blockIndex()));
+                List<byte[]> bulk = new ArrayList<>();
+                long visited = reader.forEachKey(span.blockIndex(), bulk::add);
+
+                assertThat(visited).isEqualTo(span.rowCount());
+                assertThat(bulk).hasSize(stepped.size());
+                for (int i = 0; i < bulk.size(); i++) {
+                    assertThat(bulk.get(i)).isEqualTo(stepped.get(i));
+                    assertThat(utf8(bulk.get(i))).isEqualTo(keys.get(offset + i));
+                }
+                offset += (int) span.rowCount();
+            }
+            assertThat(offset).isEqualTo(keys.size());
         }
     }
 

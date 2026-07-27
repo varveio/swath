@@ -122,9 +122,9 @@ class ArenaListingStoreTest {
         for (Projection projection : List.of(Projection.KEYS_ONLY, Projection.WITH_OWNER)) {
             ListedObject row = arena.rows(null, true, null, 1, projection).getFirst();
             assertThat(row.key()).isEqualTo("a".getBytes(StandardCharsets.UTF_8));
-            assertThat(row.size()).isEqualTo(ArenaListingStore.STUB_SIZE);
+            assertThat(row.size()).isEqualTo(SimModeRows.STUB_SIZE);
             assertThat(row.lastModifiedEpochMicros())
-                    .isEqualTo(ArenaListingStore.STUB_LAST_MODIFIED_EPOCH_MICROS);
+                    .isEqualTo(SimModeRows.STUB_LAST_MODIFIED_EPOCH_MICROS);
             assertThat(row.etag()).isNull();
             assertThat(row.storageClass()).isNull();
             assertThat(row.ownerId()).isNull();

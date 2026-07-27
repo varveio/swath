@@ -20,18 +20,8 @@ import java.util.Optional;
  * bounded Parquet query's tens of milliseconds would dominate the whole run.
  *
  * <h2>The sim-mode projection: keys are ground truth, metadata is not</h2>
- * The arena loads <b>keys only</b>. Every metadata column of a returned row is a stub —
- * {@link #STUB_SIZE}, {@link #STUB_LAST_MODIFIED_EPOCH_MICROS}, and {@code null} etag / storage
- * class / owner / checksum fields — and the {@link Projection} argument is deliberately ignored,
- * because there is nothing loaded for it to select from.
- *
- * <p>This is <b>not</b> {@link Projection#KEYS_ONLY}, despite the name: that projection only
- * drops the two owner fields, and a store honouring it still materialises size, etag and dates
- * because the replay server's XML renderer needs them. A simulator renders no XML; it decides
- * splits, steals and pagination from keys. Skipping metadata entirely is what makes an arena of a
- * bucket's whole key set affordable — so responses from this store are ground truth for
- * <b>keys, pagination and truncation, and nothing else</b>. A caller that needs real metadata
- * must use a Parquet-backed backend.
+ * The arena loads <b>keys only</b> and answers through {@link SimModeRows}, which states that
+ * contract for every keys-only tier in this module.
  *
  * <h2>No {@code delimitedRollup} override</h2>
  * {@link ListingStore#delimitedRollup} exists because a store with a high fixed per-call cost
@@ -44,12 +34,6 @@ public final class ArenaListingStore implements ListingStore {
 
     /** Rows pulled per source read while loading. Large enough that load is a scan, not a ping-pong. */
     static final int LOAD_BATCH_ROWS = 65_536;
-
-    /** The stubbed object size every arena row reports; see the sim-mode projection above. */
-    static final long STUB_SIZE = 0L;
-
-    /** The stubbed last-modified every arena row reports; see the sim-mode projection above. */
-    static final long STUB_LAST_MODIFIED_EPOCH_MICROS = 0L;
 
     private final KeyArena arena;
 
@@ -119,7 +103,7 @@ public final class ArenaListingStore implements ListingStore {
         }
         List<ListedObject> rows = new ArrayList<>(Math.min(limit, end - start));
         for (int i = start; i < end && rows.size() < limit; i++) {
-            rows.add(stub(arena.keyAt(i)));
+            rows.add(SimModeRows.stub(arena.keyAt(i)));
         }
         return rows;
     }
@@ -135,10 +119,5 @@ public final class ArenaListingStore implements ListingStore {
         }
         byte[] bound = from.toByteArray();
         return fromInclusive ? arena.lowerBound(bound) : arena.upperBound(bound);
-    }
-
-    private static ListedObject stub(byte[] key) {
-        return new ListedObject(key, STUB_SIZE, STUB_LAST_MODIFIED_EPOCH_MICROS,
-                null, null, null, null, null, null);
     }
 }

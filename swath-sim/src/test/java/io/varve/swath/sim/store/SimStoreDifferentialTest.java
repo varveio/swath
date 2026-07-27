@@ -39,40 +39,52 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The arena tier and the windowed tier each answer the same key sequence as the Parquet-backed
+ * The arena, streaming and windowed tiers each answer the same key sequence as the Parquet-backed
  * tier, over the same fixture, the same pager, and the same request sequence — including
  * delimiter rollups, the edge-case keys of {@code docs/internals/algorithms.md} §11, and the
  * truncation boundaries around a fixture's exact key count.
  *
  * <p>Every fixture here is written through the production sorter ({@link #writeCapture}), never a
- * bare unsorted capture: the windowed tier requires a sorted-eligible fixture, and running the
- * SAME sorted fixture through the arena and Parquet tiers too keeps all three comparisons over
- * identical bytes on disk. {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups} pins that the
- * largest fixture is genuinely multi-row-group, so the windowed tier's window-boundary and
- * window-refill paths are actually exercised here, not vacuously true of a single-group file.
+ * bare unsorted capture: the streaming and windowed tiers require a sorted-eligible fixture, and
+ * running the SAME sorted fixture through the arena and Parquet tiers too keeps all four comparisons
+ * over identical bytes on disk. {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups} pins that
+ * the largest fixture is genuinely multi-row-group, so the windowed tier's window-refill paths and
+ * the streaming tier's segment-boundary crossings are actually exercised here, not vacuously true of
+ * a single-group file.
  *
  * <p><b>What is compared, and what deliberately is not.</b> The transcript is keys, common
  * prefixes, page boundaries, {@code IsTruncated} and the continuation token. Object <b>metadata is
- * not compared for the arena, because the arena does not load it</b>: its sim-mode projection
- * stubs size, last-modified, etag, storage class, owner and checksum on every row (see
- * {@link ArenaListingStore}). That is by design — a simulator decides splits, steals and
- * pagination from keys alone, and loading metadata for every key of every fixture would defeat the
- * tier. {@link #metadataIsStubbedOnTheArenaFullOnParquetAndFullOnWindowed} pins the difference so it stays a
- * documented contract rather than an undetected regression; the windowed tier carries full
+ * not compared for the two keys-only tiers, because they do not load it</b>: the sim-mode projection
+ * ({@link SimModeRows}) stubs size, last-modified, etag, storage class, owner and checksum on every
+ * row. That is by design — a simulator decides splits, steals and pagination from keys alone, and
+ * loading metadata for every key of every fixture would defeat both tiers.
+ * {@link #metadataIsStubbedOnTheKeysOnlyTiersAndFullOnTheParquetBackedOnes} pins the difference so it
+ * stays a documented contract rather than an undetected regression; the windowed tier carries full
  * metadata, exactly like the Parquet tier it wraps. Full byte-for-byte comparison of metadata
  * across every field is the replay module's own sorted-vs-DuckDB differential suite.
  *
  * <p>Every backend is driven through the identical {@link ListObjectsV2Pager}, so any
  * disagreement is attributable to a store by construction. Backends are selected explicitly
- * ({@link SimStoreBackend#ARENA} / {@link SimStoreBackend#WINDOWED} / {@link SimStoreBackend#PARQUET})
- * rather than through {@link SimStoreBackend#AUTO}, which would resolve to one tier and compare it
- * against itself.
+ * ({@link SimStoreBackend#ARENA} / {@link SimStoreBackend#STREAMING} / {@link SimStoreBackend#WINDOWED}
+ * / {@link SimStoreBackend#PARQUET}) rather than through {@link SimStoreBackend#AUTO}, which would
+ * resolve to one tier and compare it against itself.
  */
-class ArenaDifferentialTest {
+class SimStoreDifferentialTest {
 
     private static final String BUCKET = "bucket";
 
-    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20);
+    /**
+     * A generous arena budget, and a deliberately tight streaming residency budget — enough to hold
+     * the edge-case-inventory fixture's larger row group (measured at 3,568 decoded bytes; two long
+     * keys near the 1024-byte maximum push it well above the others) but not both of its row groups
+     * at once (4,739 bytes together), so the streaming tier genuinely evicts and re-faults as a walk
+     * advances and as a rollup hops — pinned, not just claimed, by
+     * {@link #theTightStreamingBudgetForcesGenuineEvictionOnTheEdgeCaseInventoryFixture}. A budget
+     * that held the whole fixture would make that tier an arena with extra steps and would never
+     * exercise eviction, which is exactly where a store serving from cached decodes is most likely to
+     * lose or repeat a key.
+     */
+    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20, 4000);
 
     /** Beyond the pager's default seek-scan threshold (32), so a rollup takes the seek path. */
     private static final int WIDE_DIRECTORY_CHILDREN = 150;
@@ -104,7 +116,7 @@ class ArenaDifferentialTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("fixtures")
-    void arenaAndWindowedAgreeWithParquetOnKeysPaginationAndTruncation(String name, List<byte[]> keys)
+    void everyTierAgreesWithParquetOnKeysPaginationAndTruncation(String name, List<byte[]> keys)
             throws IOException {
         Path fixture = writeCapture(dir, keys);
         List<Scenario> scenarios = scenarios(keys.size());
@@ -114,12 +126,14 @@ class ArenaDifferentialTest {
         // reassembled wrongly would show up as a pager-visible disagreement, not just a unit failure.
         List<List<String>> arena = transcripts(scenarios, arenaStore(fixture));
         List<List<String>> tightlySegmented = transcripts(scenarios, tightlySegmentedArenaStore(fixture));
+        List<List<String>> streaming = transcripts(scenarios, streamingStore(fixture));
         List<List<String>> windowed = transcripts(scenarios, windowedStore(fixture));
 
         for (int i = 0; i < scenarios.size(); i++) {
             assertThat(arena.get(i)).as("%s / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
             assertThat(tightlySegmented.get(i))
                     .as("%s / tight segments / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
+            assertThat(streaming.get(i)).as("%s / streaming / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
             assertThat(windowed.get(i)).as("%s / windowed / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
         }
     }
@@ -130,15 +144,37 @@ class ArenaDifferentialTest {
      * the many continuation hops that drive most refills. What a single row group WOULD make
      * vacuous is different: every delegate fill the windowed tier issues would then resolve to the
      * exact same one row group every time, so {@code SortedParquetStore}'s index-driven routing
-     * across row-group boundaries would never actually run. The edge-case-inventory fixture (the
-     * largest of {@link #fixtures}) must actually split into more than one row group under the
-     * production sorter's small-row-group config, so at least one delegate fill in the differential
-     * above genuinely crosses a row-group boundary.
+     * across row-group boundaries would never actually run — and the streaming tier, whose segments
+     * ARE row groups, would never cross a segment boundary, evict one, or re-fault it. The
+     * edge-case-inventory fixture (the largest of {@link #fixtures}) must actually split into more
+     * than one row group under the production sorter's small-row-group config, so both of those
+     * paths genuinely run in the differential above.
      */
     @Test
     void theEdgeCaseInventoryFixtureSpansMultipleRowGroups() throws IOException {
         Path fixture = writeCapture(dir, edgeCaseKeys());
         assertThat(rowGroupCount(fixture)).isGreaterThan(1);
+    }
+
+    /**
+     * {@link #GENEROUS}'s own javadoc claims its tight streaming budget "genuinely evicts and
+     * re-faults" on the fixtures the differential above drives it against — checked here rather than
+     * left as an unverified comment, mirroring how {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups}
+     * pins its own precondition. {@code Opened#close} only closes the store, so the registry behind
+     * it is still readable after the walk that drove the eviction.
+     */
+    @Test
+    void theTightStreamingBudgetForcesGenuineEvictionOnTheEdgeCaseInventoryFixture() throws IOException {
+        List<byte[]> keys = edgeCaseKeys();
+        Path fixture = writeCapture(dir, keys);
+        List<Scenario> scenarios = scenarios(keys.size());
+
+        Opened streaming = streamingStore(fixture);
+        transcripts(scenarios, streaming);
+
+        var evictions = streaming.metrics().registry().find(SimStoreMetrics.SEGMENT_EVICT_METRIC).counter();
+        assertThat(evictions).isNotNull();
+        assertThat(evictions.count()).isPositive();
     }
 
     @Test
@@ -159,19 +195,24 @@ class ArenaDifferentialTest {
     }
 
     @Test
-    void metadataIsStubbedOnTheArenaFullOnParquetAndFullOnWindowed() throws IOException {
+    void metadataIsStubbedOnTheKeysOnlyTiersAndFullOnTheParquetBackedOnes() throws IOException {
         Path fixture = writeCapture(dir, List.of(utf8("solo")));
 
-        try (Opened arena = arenaStore(fixture); Opened parquet = parquetStore(fixture);
-             Opened windowed = windowedStore(fixture)) {
+        try (Opened arena = arenaStore(fixture); Opened streaming = streamingStore(fixture);
+             Opened parquet = parquetStore(fixture); Opened windowed = windowedStore(fixture)) {
             ListedObject fromArena = arena.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
+            ListedObject fromStreaming = streaming.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
             ListedObject fromParquet = parquet.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
             ListedObject fromWindowed = windowed.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
 
             assertThat(fromArena.key()).isEqualTo(fromParquet.key());
-            assertThat(fromArena.size()).isEqualTo(ArenaListingStore.STUB_SIZE);
+            assertThat(fromArena.size()).isEqualTo(SimModeRows.STUB_SIZE);
             assertThat(fromArena.etag()).isNull();
             assertThat(fromArena.ownerId()).isNull();
+            assertThat(fromStreaming.key()).isEqualTo(fromParquet.key());
+            assertThat(fromStreaming.size()).isEqualTo(SimModeRows.STUB_SIZE);
+            assertThat(fromStreaming.etag()).isNull();
+            assertThat(fromStreaming.ownerId()).isNull();
             assertThat(fromParquet.etag()).isEqualTo("etag-solo");
             assertThat(fromParquet.ownerId()).isEqualTo("owner-id");
             assertThat(fromWindowed.etag()).isEqualTo(fromParquet.etag());
@@ -292,6 +333,10 @@ class ArenaDifferentialTest {
 
     private static Opened arenaStore(Path fixture) {
         return forced(fixture, SimStoreBackend.ARENA);
+    }
+
+    private static Opened streamingStore(Path fixture) {
+        return forced(fixture, SimStoreBackend.STREAMING);
     }
 
     private static Opened windowedStore(Path fixture) {

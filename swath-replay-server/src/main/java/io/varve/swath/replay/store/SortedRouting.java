@@ -36,8 +36,15 @@ import java.util.Set;
  * assumption is sound only because sorted-serving eligibility ({@code SortedFixtures#loadIndex})
  * refuses to build an index over any row group that isn't provably pure {@code
  * row_type='OBJECT'} — this class never re-checks that itself; it trusts the index it was handed.
+ *
+ * <p>The class is public for one member only: {@link #startRowGroup}, the "which row group contains
+ * this key" search. A second in-tree store keys off the very same derived index — {@code swath-sim}'s
+ * decode-once streaming tier seeks to the group a fresh cursor lands in — and re-deriving that search
+ * there would make two places responsible for agreeing on what "contains" means at a group boundary.
+ * Everything else here is the bounded-query planner {@link SortedParquetStore} alone needs and stays
+ * package-private.
  */
-final class SortedRouting {
+public final class SortedRouting {
 
     private SortedRouting() {
     }
@@ -61,7 +68,7 @@ final class SortedRouting {
     }
 
     /** The row group that contains {@code from}: the last one whose first key is {@code <= from}. */
-    static int startRowGroup(List<IndexEntry> index, ByteKey from) {
+    public static int startRowGroup(List<IndexEntry> index, ByteKey from) {
         if (from == null) {
             return 0;
         }
