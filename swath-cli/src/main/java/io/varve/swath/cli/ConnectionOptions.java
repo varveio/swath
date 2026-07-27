@@ -201,9 +201,19 @@ final class ConnectionOptions {
      * Resolve {@code --bearer-token-command}/{@code --bearer-token-refresh-interval} into a {@link
      * BearerTokenSupplier}, or {@code null} when unset (the overwhelmingly common case: normal
      * SigV4/{@code --profile} signing).
+     *
+     * <p>A refresh interval without a command is rejected rather than ignored: the two flags only
+     * mean anything together, and on {@code swath resume} — where the command is {@link
+     * ResumeClass#FREE} and must be re-passed by hand — dropping just the command is a plausible
+     * slip. Silently signing with SigV4 instead would surface as a confusing auth failure (or, worse,
+     * a run against the wrong identity) rather than as the operator's actual mistake.
      */
     private BearerTokenSupplier resolveBearerTokenSupplier() throws InvalidConfigException {
         if (bearer.command == null) {
+            if (bearer.refreshInterval != null) {
+                throw new InvalidConfigException(
+                        "--bearer-token-refresh-interval requires --bearer-token-command");
+            }
             return null;
         }
         Duration refreshInterval = bearer.refreshInterval == null

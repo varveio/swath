@@ -443,7 +443,7 @@ prefixes, endpoints, paths, filters, or keys are sensitive.
 | `--endpoint-url URL` | — | Custom S3-compatible endpoint (LocalStack, MinIO, etc.) |
 | `--force-path-style` / `--no-force-path-style` | on when `--endpoint-url` is set | Force path-style S3 addressing |
 | `--bearer-token-command CMD` | — | Shell command whose stdout is a fresh OAuth bearer token, used instead of AWS SigV4 signing for every request |
-| `--bearer-token-refresh-interval DURATION` | `45m` | How often to re-run `--bearer-token-command` for a fresh token |
+| `--bearer-token-refresh-interval DURATION` | `45m` | How often to re-run `--bearer-token-command` for a fresh token; rejected without that flag |
 | `--fetch-owner` | off | Request the `Owner` field from S3 (`FetchOwner=true`); populates `owner_id` and `owner_display_name` in output |
 | `--requester-pays requester` | off | Requester-pays buckets: send `x-amz-request-payer: requester` on every S3 request (only accepted value: `requester`) |
 | `--metrics-endpoint URL` | environment or off | Export OTLP metrics to URL; overrides `SWATH_OTLP_ENDPOINT` |
@@ -495,7 +495,8 @@ swath resume ./out --bearer-token-command 'gcloud auth print-access-token'
 ```
 
 Omit it and the resumed run falls back to SigV4 signing, which a bearer-auth endpoint will
-reject.
+reject. Re-passing only `--bearer-token-refresh-interval` — the likeliest version of that
+slip — is rejected outright (exit 2) rather than silently signing with SigV4.
 
 #### Seeding
 
