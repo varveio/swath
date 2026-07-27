@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import picocli.CommandLine;
+import picocli.CommandLine.ArgGroup;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
@@ -39,8 +40,9 @@ import picocli.CommandLine.Spec;
  * and re-drives {@link ListCommand} in resume mode, continuing each non-COMPLETED node from its
  * cursor (text) / durable_cursor (Parquet). A {@code <dir>} whose dataset is already complete (its
  * checkpoint was deleted on completion) reports "already complete" and exits 0. Credentials and
- * region resolve from the environment, exactly as a fresh {@code list} would. A directory-dataset
- * output is the only resumable regime.
+ * region resolve from the environment, exactly as a fresh {@code list} would — the one exception is
+ * {@code --bearer-token-command}, which is never stored in a checkpoint and so must be re-passed
+ * here. A directory-dataset output is the only resumable regime.
  */
 @Command(name = "resume", mixinStandardHelpOptions = true,
         description = "Resume a run by its output directory: swath resume <dir>.")
@@ -85,6 +87,15 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
             description = "Print live progress records to stderr (default: on when stderr is a "
                     + "terminal and neither -q nor -v was given).")
     Boolean progress;
+
+    /**
+     * The bearer-token levers, forwarded to the delegated {@link ListCommand} like {@code --stats}
+     * and {@code --progress} — but shared with {@link ConnectionOptions} via one {@link
+     * BearerTokenOptions} declaration rather than re-declared here, because the two copies must not
+     * drift. See that class for why they are the one connection setting a resume cannot restore.
+     */
+    @ArgGroup(exclusive = false, validate = false)
+    final BearerTokenOptions bearer = new BearerTokenOptions();
 
     @Mixin
     final GlobalOptions global = new GlobalOptions();
@@ -140,6 +151,10 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         list.uri = id.scheme() + "://" + id.bucket() + "/"
                 + new String(id.prefix() == null ? new byte[0] : id.prefix(), StandardCharsets.UTF_8);
         list.connection.endpointUrl = id.endpoint();
+        // The one connection setting the checkpoint deliberately does not carry (see the field's
+        // javadoc): forward what the operator passed to `swath resume`, or leave it null for the
+        // ordinary SigV4 path.
+        list.connection.bearer.copyFrom(bearer);
         // Important: `list` is driven directly via #call(), never through picocli's
         // own parse of the "list" subcommand -- its OWN @Mixin GlobalOptions instance never sees
         // whatever -q/-v the user actually passed to `swath resume`. Propagate explicitly,

@@ -49,4 +49,32 @@ final class SafeInputTest {
                 "--include", "first\\x0aforged\\x9bline");
         assertThat(String.join(" ", safe)).doesNotContain("secret").doesNotContain("\n");
     }
+
+    /**
+     * {@code --bearer-token-command} is nominally a command, but nothing obliges it to MINT a
+     * token: {@code 'echo <token>'} is a plausible shortcut for someone already holding one, and
+     * argv is written verbatim into the durable JSON run summary. So the VALUE never survives, in
+     * either syntax — the option name does, because "a bearer command was supplied" is legitimate
+     * summary information and is not itself the secret.
+     *
+     * <p>The refresh interval is deliberately NOT redacted: it is a duration, and blanking it would
+     * cost real diagnostic value for no gain.
+     */
+    @Test
+    void persistedArgvRedactsTheBearerTokenCommandInBothSyntaxes() {
+        List<String> safe = SafeInput.argv(List.of(
+                "list", "s3://bucket/prefix",
+                "--bearer-token-command", "echo eyJhbGciOiJSUzI1NiRealTokenHere",
+                "--bearer-token-refresh-interval=30m",
+                "--bearer-token-command=printf another-live-token"));
+
+        assertThat(safe).containsExactly(
+                "list", "s3://bucket/prefix",
+                "--bearer-token-command", SafeInput.REDACTED_SECRET,
+                "--bearer-token-refresh-interval=30m",
+                "--bearer-token-command=" + SafeInput.REDACTED_SECRET);
+        assertThat(String.join(" ", safe))
+                .doesNotContain("eyJhbGci")
+                .doesNotContain("another-live-token");
+    }
 }

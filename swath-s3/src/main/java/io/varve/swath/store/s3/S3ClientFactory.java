@@ -126,6 +126,14 @@ public final class S3ClientFactory {
                 .forcePathStyle(config.forcePathStyle())
                 .credentialsProvider(config.credentials());
 
+        // --bearer-token-command: install in place of the SDK's real SigV4 auth scheme (same scheme
+        // id — see BearerTokenAuthScheme's javadoc for why that's what makes the client actually use
+        // it). config.credentials() above is still set (the builder requires a non-null provider) but
+        // goes unused: this scheme's signer never consults it.
+        if (config.bearerTokenSupplier() != null) {
+            builder.putAuthScheme(new BearerTokenAuthScheme(config.bearerTokenSupplier()));
+        }
+
         if (config.region() != null) {
             builder.region(config.region());
         }

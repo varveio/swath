@@ -1,6 +1,8 @@
 Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--no-metrics] [--no-sign-request] [--[no-]progress]
                   [--restart] [--[no-]sort] [--[no-]stats]
+                  [--bearer-token-command=CMD]
+                  [--bearer-token-refresh-interval=DURATION]
                   [--checkpoint=PATH|none|auto] [--color=MODE]
                   [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
                   [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
@@ -47,6 +49,17 @@ Output:
                                downstream pipe stays silent).
 
 Connection:
+      --bearer-token-command=CMD
+                             Shell command whose stdout is a fresh OAuth bearer
+                               token (e.g. 'gcloud auth print-access-token' for
+                               GCS's XML API), used instead of AWS SigV4
+                               signing for every request. Never stored in the
+                               checkpoint, so a resumed run against a
+                               bearer-auth endpoint must re-pass it.
+      --bearer-token-refresh-interval=DURATION
+                             How often to re-run --bearer-token-command for a
+                               fresh token (default: 45m). Size it comfortably
+                               under the token source's real expiry.
       --concurrency=N        Maximum concurrent listing requests (default: 64).
       --endpoint-url=URL     Custom S3 endpoint (LocalStack/MinIO).
       --fetch-owner          Request object owner fields from S3.

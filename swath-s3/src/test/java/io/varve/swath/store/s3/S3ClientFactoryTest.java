@@ -132,6 +132,29 @@ class S3ClientFactoryTest {
         }
     }
 
+    /**
+     * A {@code bearerTokenSupplier}-configured {@link S3Config} must still build a client without
+     * touching the network — {@link S3ClientFactory#create} installs {@link BearerTokenAuthScheme}
+     * via {@code putAuthScheme}, which is a builder-time registration, not a connection.
+     */
+    @Test
+    void bearerTokenSupplierConfigBuildsAClientWithoutNetwork() {
+        S3Config config = new S3Config(
+                Region.US_EAST_1,
+                URI.create("https://storage.googleapis.com"),
+                true,
+                64,
+                S3Config.DEFAULT_MAX_ATTEMPTS,
+                S3Config.DEFAULT_ATTEMPT_TIMEOUT,
+                S3Config.DEFAULT_API_CALL_TIMEOUT,
+                StaticCredentialsProvider.create(AwsBasicCredentials.create("unused", "unused")),
+                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT,
+                () -> "test-token");
+        try (S3Client client = S3ClientFactory.create(config)) {
+            assertThat(client).isNotNull();
+        }
+    }
+
     private static S3Config testConfig(Region region) {
         return new S3Config(
                 region,

@@ -12,8 +12,12 @@ import io.varve.swath.observability.SafeInput;
 import io.varve.swath.store.ApiRateLimiter;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.RateLimitedPageFetcher;
+import io.varve.swath.store.s3.BearerTokenSupplier;
+import io.varve.swath.store.s3.ProcessBearerTokenSupplier;
 import io.varve.swath.store.s3.S3Config;
 import java.net.URI;
+import java.time.Duration;
+import picocli.CommandLine.ArgGroup;
 import picocli.CommandLine.Option;
 import software.amazon.awssdk.auth.credentials.AnonymousCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -65,6 +69,11 @@ final class ConnectionOptions {
     @Resume(ResumeClass.STICKY)
     @Option(names = "--region", paramLabel = "REGION", description = "AWS region (else resolved from the environment).")
     String region;
+
+    // FREE, not STICKY like the auth flags above it, and shared with `swath resume` rather than
+    // re-declared there — see BearerTokenOptions for why both of those matter.
+    @ArgGroup(exclusive = false, validate = false)
+    final BearerTokenOptions bearer = new BearerTokenOptions();
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--concurrency", paramLabel = "N", description = "Maximum concurrent listing requests (default: 64).")
@@ -161,6 +170,11 @@ final class ConnectionOptions {
         return new RateLimitedPageFetcher(fetcher, ApiRateLimiter.perSecond(rateLimitApi), metrics);
     }
 
+    /** Default {@code --bearer-token-refresh-interval}: comfortably under a typical ~1h Google OAuth
+     * access-token TTL, without so short a cadence that ordinary listing runs mint tokens needlessly
+     * often. */
+    static final Duration DEFAULT_BEARER_TOKEN_REFRESH_INTERVAL = Duration.ofMinutes(45);
+
     /** Build the resolved S3 connection config (region defaulting included) from the flags. */
     S3Config buildConfig() throws InvalidConfigException {
         URI endpoint;
@@ -179,7 +193,23 @@ final class ConnectionOptions {
                 S3Config.DEFAULT_ATTEMPT_TIMEOUT,
                 S3Config.DEFAULT_API_CALL_TIMEOUT,
                 resolveCredentials(),
-                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
+                S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT,
+                resolveBearerTokenSupplier());
+    }
+
+    /**
+     * Resolve {@code --bearer-token-command}/{@code --bearer-token-refresh-interval} into a {@link
+     * BearerTokenSupplier}, or {@code null} when unset (the overwhelmingly common case: normal
+     * SigV4/{@code --profile} signing).
+     */
+    private BearerTokenSupplier resolveBearerTokenSupplier() throws InvalidConfigException {
+        if (bearer.command == null) {
+            return null;
+        }
+        Duration refreshInterval = bearer.refreshInterval == null
+                ? DEFAULT_BEARER_TOKEN_REFRESH_INTERVAL
+                : DurationParser.parse(bearer.refreshInterval, "bearer-token-refresh-interval", false);
+        return new ProcessBearerTokenSupplier(bearer.command, refreshInterval);
     }
 
     /**

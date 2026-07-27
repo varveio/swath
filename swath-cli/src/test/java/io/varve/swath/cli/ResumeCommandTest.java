@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,6 +45,7 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
+import picocli.CommandLine.Model.OptionSpec;
 
 /**
  * End-to-end coverage for {@link ResumeCommand#call()} via the {@code <dir>} run handle. Proves that
@@ -803,6 +805,72 @@ final class ResumeCommandTest {
                             + "\",\"version\":\"1\",\"fileFormat\":\"Parquet\",\"files\":[]}");
             Files.writeString(layout.success(), "");
         }
+    }
+
+    /**
+     * {@code --bearer-token-command} must never reach the checkpoint: a persisted row would make
+     * {@code run_meta} decide which command a later {@code swath resume} executes, so whoever can
+     * write a checkpoint file could choose that command. FREE (no row) is the security property;
+     * {@link ResumeRegistryDriftTest#everyFreeOptionHasNoRegistryRow()} enforces the same invariant
+     * generically, but this names the reason so the classification is not "simplified" back to
+     * STICKY to match the {@code --profile}/{@code --region} block it sits in.
+     */
+    @Test
+    void bearerTokenOptionsAreNeverPersistedToTheCheckpoint() {
+        assertThat(ResumeRegistry.hasPersistedRow("--bearer-token-command")).isFalse();
+        assertThat(ResumeRegistry.hasPersistedRow("--bearer-token-refresh-interval")).isFalse();
+    }
+
+    /**
+     * {@code list} and {@code resume} must expose ONE declaration of these flags, not a copy each.
+     * The FREE classification is a security property and the help text is what tells an operator to
+     * re-pass the flag on resume; two copies can drift on either, and the drift would be silent —
+     * {@code --stats}/{@code --progress} are duplicated between {@link OutputOptions} and
+     * {@link ResumeCommand} today and nothing would catch them diverging. Pins the shared
+     * {@link BearerTokenOptions} so a later "just declare it on the command" edit fails here.
+     */
+    @Test
+    void bearerTokenOptionsAreOneDeclarationSharedByListAndResume() {
+        for (String name : List.of("--bearer-token-command", "--bearer-token-refresh-interval")) {
+            OptionSpec onList =
+                    App.commandLine().getSubcommands().get("list").getCommandSpec().findOption(name);
+            OptionSpec onResume =
+                    App.commandLine().getSubcommands().get("resume").getCommandSpec().findOption(name);
+            assertThat(onList).as("%s on list", name).isNotNull();
+            assertThat(onResume).as("%s on resume", name).isNotNull();
+            assertThat(((Field) onList.userObject()).getDeclaringClass())
+                    .as("%s on list must come from the shared declaration", name)
+                    .isEqualTo(BearerTokenOptions.class);
+            assertThat(((Field) onResume.userObject()).getDeclaringClass())
+                    .as("%s on resume must come from the shared declaration", name)
+                    .isEqualTo(BearerTokenOptions.class);
+            assertThat(onResume.description()).as("%s help text must not drift", name)
+                    .isEqualTo(onList.description());
+        }
+    }
+
+    /**
+     * Because they are never persisted (above), re-passing them on {@code swath resume} is the ONLY
+     * way a resumed run against a bearer-auth endpoint can authenticate — so the forwarding onto the
+     * delegated {@link ListCommand} is load-bearing, not a convenience.
+     *
+     * <p>One malformed-duration assertion pins BOTH forwardings at once, because
+     * {@code ConnectionOptions#resolveBearerTokenSupplier()} parses the interval only when the
+     * command is non-null: drop the command forwarding and it returns early (no throw); drop the
+     * interval forwarding and the 45m default is used (no throw).
+     */
+    @Test
+    void bearerTokenOptionsForwardOntoTheDelegatedListCommand(@TempDir Path tempDir) throws Exception {
+        Path outputDir = seedCompletedRunDir(tempDir);
+
+        ResumeCommand cmd = new ResumeCommand();
+        cmd.directory = outputDir;
+        cmd.bearer.command = "printf token";
+        cmd.bearer.refreshInterval = "not-a-duration";
+
+        assertThatThrownBy(cmd::call)
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("bearer-token-refresh-interval");
     }
 
     private static void overwriteOutputFormat(Path db, String format) throws Exception {
