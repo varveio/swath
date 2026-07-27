@@ -91,8 +91,8 @@ public record RunSummary(
     /**
      * One {@code call_class}/{@code phase} latency-percentile summary row — {@code callClass} is
      * one of {@code worker_page}/{@code pivot_probe}/{@code structure_probe} ({@code RunMetrics.CALL_CLASS_*}),
-     * {@code phase} one of {@code connect_acquire}/{@code ttfb}/{@code total} ({@code
-     * RunMetrics.LATENCY_PHASE_*}). {@code p50Ms}/{@code p90Ms}/{@code p99Ms} come from the underlying
+     * {@code phase} one of {@code connect_acquire}/{@code ttfb}/{@code total}/{@code response_parse}
+     * ({@code RunMetrics.LATENCY_PHASE_*}). {@code p50Ms}/{@code p90Ms}/{@code p99Ms} come from the underlying
      * Micrometer Timer's {@code publishPercentiles} snapshot; {@code maxMs} and {@code count} are the
      * Timer's own max/count.
      */

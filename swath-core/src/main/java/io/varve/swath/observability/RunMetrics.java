@@ -992,11 +992,11 @@ public final class RunMetrics {
      * One call-class/phase latency observation ({@code swath.fetch.latency.phase{call_class,
      * phase}}) -- {@code callClass} is one of {@link #CALL_CLASS_WORKER_PAGE}/{@link
      * #CALL_CLASS_PIVOT_PROBE}/{@link #CALL_CLASS_STRUCTURE_PROBE}, {@code phase} one of {@link
-     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link #LATENCY_PHASE_TOTAL}.
-     * {@code nanos < 0} is the SDK-didn't-report-this-phase sentinel (a best-effort SDK metric
-     * publisher observation, not guaranteed present on every attempt) and is silently skipped --
-     * never fabricates a 0 sample. Bounded cardinality (9 series max), lazily registered the same
-     * {@code computeIfAbsent} idiom as {@link #stealReasonCounter}.
+     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link #LATENCY_PHASE_TOTAL}/{@link
+     * #LATENCY_PHASE_RESPONSE_PARSE}. {@code nanos < 0} is the SDK-didn't-report-this-phase sentinel
+     * (a best-effort SDK metric publisher observation, not guaranteed present on every attempt) and
+     * is silently skipped -- never fabricates a 0 sample. Bounded cardinality (12 series max), lazily
+     * registered the same {@code computeIfAbsent} idiom as {@link #stealReasonCounter}.
      */
     public void recordCallClassLatency(String callClass, String phase, long nanos) {
         if (nanos < 0) {
