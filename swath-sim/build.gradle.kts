@@ -44,3 +44,14 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
     testRuntimeOnly(libs.logback.classic)
 }
+
+tasks.test {
+    // Forward the store bench's fixture-path switches (StoreThroughputBenchTest, @Tag("perf")) from
+    // the `./gradlew -Dswath.sim.bench.fixture=... -Dswath.sim.bench.giant-fixture=...` invocation
+    // into the forked test JVM -- the same forwarding gap swath.java-conventions already documents
+    // for swath.it.sigkill/swath.goldens.update: a Gradle-CLI `-D` only sets the DAEMON's system
+    // property by default, not the forked Test JVM's. Absent (the common case), nothing is
+    // forwarded and the bench test's own assumeTrue skips it, exactly as before.
+    System.getProperty("swath.sim.bench.fixture")?.let { systemProperty("swath.sim.bench.fixture", it) }
+    System.getProperty("swath.sim.bench.giant-fixture")?.let { systemProperty("swath.sim.bench.giant-fixture", it) }
+}
