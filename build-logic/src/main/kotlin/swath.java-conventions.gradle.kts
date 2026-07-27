@@ -73,12 +73,55 @@ tasks.withType<JavaCompile>().configureEach {
     // No --enable-preview — shipped artifacts must run without a flag.
 }
 
+// Byte-for-byte reproducible archives. Without these, every Jar/Zip/Tar embeds the
+// build's wall-clock timestamps and the filesystem's directory order, so two builds
+// of the same commit produce different bytes. That matters here specifically: the
+// container-promotion contract carries the tested uber-jar into the image and
+// `cmp`s it, and the release pipeline's "the image ships exactly what was tested"
+// claim is only as strong as the build being deterministic. It also removes the
+// residual risk documented in ci.yml's docker-publish provenance note (a BuildKit
+// cache miss between the smoke build and the pushed build could otherwise yield
+// different bytes).
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
+// The commit that produced this artifact. `Implementation-Version` alone cannot
+// answer "which build am I running?" between releases — every merge on the 0.1.0
+// -SNAPSHOT line reports the same string, and dev container images are now
+// published per merge. Resolution order:
+//   1. GITHUB_SHA — always set in Actions, and correct even in a detached-HEAD
+//      checkout where `git rev-parse HEAD` would report the merge commit.
+//   2. `git rev-parse HEAD` for local builds, guarded on .git existing so a build
+//      from an extracted source archive degrades instead of failing.
+//   3. "unknown".
+val gitDirectory = rootProject.layout.projectDirectory.dir(".git").asFile
+val commitFromGit: Provider<String> =
+    if (gitDirectory.exists()) {
+        providers.exec {
+            workingDir = rootProject.layout.projectDirectory.asFile
+            commandLine("git", "rev-parse", "HEAD")
+            isIgnoreExitValue = true
+        }.standardOutput.asText.map { it.trim() }
+    } else {
+        providers.provider { "" }
+    }
+val implementationCommit: Provider<String> =
+    providers.environmentVariable("GITHUB_SHA")
+        .orElse(commitFromGit)
+        .map { it.trim().ifBlank { "unknown" } }
+        .orElse("unknown")
+
 // Every shipped Java archive carries the canonical Gradle version. The CLI uses
 // this manifest entry for `--version`; applying it here also prevents ordinary
 // jars and internal module jars from silently reporting an unstamped build.
 tasks.withType<Jar>().configureEach {
     manifest {
-        attributes("Implementation-Version" to project.version)
+        attributes(
+            "Implementation-Version" to project.version,
+            "Implementation-Commit" to implementationCommit.get(),
+        )
     }
 }
 
