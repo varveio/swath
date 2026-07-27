@@ -53,7 +53,7 @@ all of these.
 | `--endpoint-url` | unset |
 | `--force-path-style` | on when `--endpoint-url` is set |
 | `--bearer-token-command` | unset |
-| `--bearer-token-refresh-interval` | `45m` |
+| `--bearer-token-refresh-interval` | `45m` (requires `--bearer-token-command`) |
 | `--fetch-owner` | off |
 | `--requester-pays` | off |
 
