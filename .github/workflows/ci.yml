@@ -206,12 +206,16 @@ jobs:
   # build would just be a redundant second multi-arch build per merge. No push, no
   # credentials, no network — fork-safe.
   #
+  # Named `docker-check`, not `docker-image`: it is a gate that builds and smokes
+  # an image and throws it away, so the name says what it does rather than what it
+  # touches, and pairs with `docker-publish` as validate/publish.
+  #
   # Deliberately NO docker/setup-qemu-action: the runtime stage only pulls the
   # JRE base and COPYs the arch-neutral uber-jar (no RUN), so building the foreign
   # arch on this amd64 runner is pure pull+copy+metadata and needs no emulation.
   # That also makes this job a guard -- add a RUN to the runtime stage and the
   # arm64 build here starts needing QEMU and fails, flagging the regression.
-  docker-image:
+  docker-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
