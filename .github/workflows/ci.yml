@@ -78,7 +78,7 @@ jobs:
       # from-source recompile inside the Docker build. docker-publish promotes it via a
       # BuildKit --build-context override of the Dockerfile's `build` stage — ship exactly
       # what was tested. PR runs do not publish an image, so they do not need this artifact.
-      - name: Prepare checked container-promotion payload
+      - name: Prepare container-promotion payload
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/prepare-container-promotion.sh promote
 
