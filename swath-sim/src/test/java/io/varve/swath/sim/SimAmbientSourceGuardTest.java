@@ -22,7 +22,8 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * No source in this module may read the host's clock or the host's randomness.
+ * No source in this module may read the host's clock or the host's randomness, or compute a
+ * transcendental function whose result the host is allowed to vary.
  *
  * <p>This is the rule that makes every other claim in the module true. A simulated run's wall time
  * is a modelled quantity computed from declared inputs; one call to a real clock anywhere in it, and
@@ -31,6 +32,16 @@ import org.junit.jupiter.api.Test;
  * from the run's seed, and a single ambient draw breaks that without breaking any test that is not
  * this one. Both failures are invisible in a passing suite, which is exactly why they get a
  * mechanical check rather than a convention.
+ *
+ * <p><b>The third shape, which is less obvious than the other two: {@code Math}'s transcendental
+ * functions.</b> {@code Math.log}/{@code exp}/{@code pow}/{@code sqrt} are specified only to within
+ * one unit in the last place and may be replaced by platform intrinsics, so two JVMs or two CPU
+ * architectures can each be correct and still disagree in the last bit. In this module a floating
+ * point result becomes a nanosecond count, which becomes an event instant, which orders the trace —
+ * so that last bit can reorder two events and change which of two racing actors wins. The
+ * bit-exact {@code StrictMath} equivalents are deliberately NOT forbidden: the rule is "no
+ * host-variable arithmetic in the timeline", not "no arithmetic". {@code Math.min}/{@code max} and
+ * the other exact integer operations are untouched by this and stay legal.
  *
  * <p><b>What is checked, and how.</b> Every {@code .java} file under this module's {@code src/main}
  * is scanned for the literal call shapes below, after comments and string literals are stripped —
@@ -60,6 +71,17 @@ class SimAmbientSourceGuardTest {
         static AmbientShape wholeWord(String identifier) {
             return new AmbientShape(identifier, Pattern.compile("\\b" + Pattern.quote(identifier) + "\\b"));
         }
+
+        /**
+         * A {@code Math.<name>(} call, matched so that the legal {@code StrictMath.<name>(} is NOT a
+         * hit. A plain substring match would flag it, because {@code "StrictMath.log("} literally
+         * contains {@code "Math.log("} — hence both a word-boundary anchor (there is none between
+         * {@code Strict} and {@code Math}) and an explicit negative lookbehind, belt and braces.
+         */
+        static AmbientShape hostVariableMath(String name) {
+            return new AmbientShape("Math." + name + "(",
+                    Pattern.compile("(?<!Strict)\\bMath\\." + Pattern.quote(name) + "\\("));
+        }
     }
 
     private static final List<AmbientShape> FORBIDDEN = List.of(
@@ -77,7 +99,14 @@ class SimAmbientSourceGuardTest {
             AmbientShape.wholeWord("ThreadLocal"),
             AmbientShape.literal("new Random("),
             AmbientShape.literal("new SecureRandom("),
-            AmbientShape.literal("RandomGenerator.getDefault("));
+            AmbientShape.literal("RandomGenerator.getDefault("),
+            // Host-variable arithmetic; the bit-exact StrictMath.* equivalents stay legal.
+            AmbientShape.hostVariableMath("log"),
+            AmbientShape.hostVariableMath("log10"),
+            AmbientShape.hostVariableMath("exp"),
+            AmbientShape.hostVariableMath("pow"),
+            AmbientShape.hostVariableMath("sqrt"),
+            AmbientShape.hostVariableMath("cbrt"));
 
     @Test
     void noSimulatorSourceReadsAnAmbientClockOrAnAmbientRandomSource() throws Exception {
@@ -125,6 +154,26 @@ class SimAmbientSourceGuardTest {
         assertThat(matches(planted)).containsExactly("System.nanoTime(");
         assertThat(matches(documented))
                 .as("prose naming a forbidden API to explain its absence must not be flagged").isEmpty();
+    }
+
+    /**
+     * The transcendental half of the rule, planted and then shown legal in its bit-exact form. Both
+     * halves matter: a check that missed {@code Math.log} would not have caught the ulp-level
+     * portability leak this module actually had, and a check that flagged {@code StrictMath.log} would
+     * have made the fix for it impossible.
+     */
+    @Test
+    void theScanDetectsAPlantedHostVariableMathCallAndAllowsItsStrictForm() {
+        String planted = "class Leaky { double f(double u) { return -Math.log(1.0 - u); } }";
+        String strict = "class Exact { double f(double u) { return -StrictMath.log(1.0 - u); } }";
+        String exactInteger = "class Fine { int f(int a, int b) { return Math.max(a, Math.min(a, b)); } }";
+
+        assertThat(matches(planted)).containsExactly("Math.log(");
+        assertThat(matches(strict))
+                .as("StrictMath is bit-exact everywhere and is the prescribed fix, not a violation")
+                .isEmpty();
+        assertThat(matches(exactInteger))
+                .as("Math.min/max are exact integer operations and must stay legal").isEmpty();
     }
 
     private static List<String> matches(String source) {

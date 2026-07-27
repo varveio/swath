@@ -25,6 +25,17 @@ import java.util.Map;
  * <p>The draw is inverse-transform sampled, so it consumes exactly one draw from the actor's tape per
  * call — a property worth keeping, since a rejection-sampled model would make the number of random
  * values consumed depend on the values themselves and so couple every later draw to this one.
+ *
+ * <p><b>{@code StrictMath}, not {@code Math}, and this is not a style preference.</b> The logarithm
+ * below is the only floating-point operation anywhere in a run's timeline: its result becomes a
+ * nanosecond count, which becomes an event instant, which orders the whole trace. {@code Math.log} is
+ * permitted to differ from the exact result by one unit in the last place and is free to be replaced
+ * by a platform intrinsic, so two JVMs — or two CPU architectures — may legitimately return values
+ * that differ in that last bit. One bit is enough: it rounds to a different nanosecond, which
+ * reorders two events, which produces a different trace. {@code StrictMath} is specified to be
+ * bit-for-bit identical everywhere, which is what makes the byte-identical-trace claim portable
+ * rather than true only on the machine that first recorded it. The module's source guard rejects the
+ * {@code Math} transcendental family outright so this cannot quietly come back.
  */
 public final class FittedLatencyModel implements LatencyModel {
 
@@ -79,8 +90,13 @@ public final class FittedLatencyModel implements LatencyModel {
             return params.minNanos();
         }
         // Inverse transform of Exp(1/tailMean). nextDouble() is in [0, 1), so 1 - u is in (0, 1] and
-        // the logarithm is always finite -- the draw can be zero but never infinite.
-        double excess = -Math.log(1.0 - rng.nextDouble()) * tailMean;
-        return params.minNanos() + (long) excess;
+        // the logarithm is always finite -- the draw can be zero but never infinite. StrictMath, not
+        // Math: see the class javadoc, this is the run's only floating-point timeline input.
+        double excess = -StrictMath.log(1.0 - rng.nextDouble()) * tailMean;
+        // The interface promises a non-negative service time. Nothing above can produce a negative
+        // one for sane parameters, but a tail mean large enough to overflow the long cast would, and a
+        // negative latency would schedule an event into the past -- so the promise is enforced here
+        // rather than assumed to follow from the arithmetic.
+        return Math.max(params.minNanos(), params.minNanos() + (long) excess);
     }
 }

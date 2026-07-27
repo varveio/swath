@@ -91,6 +91,22 @@ class LatencyModelTest {
         assertThat(draws).containsExactly(7L);
     }
 
+    /**
+     * The interface promises a non-negative service time, and a negative one would schedule an event
+     * into the past. An absurd tail mean saturates the {@code double} to {@code long} conversion at
+     * {@code Long.MAX_VALUE}, which then overflows when the floor is added to it — so the promise is
+     * clamped rather than inferred from the arithmetic.
+     */
+    @Test
+    void anAbsurdTailMeanCannotProduceANegativeServiceTime() {
+        FittedLatencyModel model = uniformlyFitted(1_000L, Long.MAX_VALUE);
+        SimRng rng = SimRng.of(123L);
+
+        for (int i = 0; i < DRAWS; i++) {
+            assertThat(model.drawNanos(CallClass.WORKER_PAGE, rng)).isGreaterThanOrEqualTo(1_000L);
+        }
+    }
+
     @Test
     void negativeAndInvertedParametersAreRejected() {
         assertThatThrownBy(() -> ConstantLatencyModel.uniform(-1))
