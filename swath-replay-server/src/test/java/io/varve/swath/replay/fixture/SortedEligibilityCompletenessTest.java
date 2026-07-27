@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.replay.server;
+package io.varve.swath.replay.fixture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -14,12 +14,12 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link ReplayServingFactory#multiFileCompletenessViolation} — the pure completeness math,
+ * {@link SortedEligibility#multiFileCompletenessViolation} — the pure completeness math,
  * exercised directly over fabricated {@link SortStamp}s so every edge case (complete set, truncated
  * tail from a crashed publish, missing middle file, duplicate/out-of-range index) is a fast in-memory
  * check, no parquet I/O.
  */
-class ReplayServingFactoryCompletenessTest {
+class SortedEligibilityCompletenessTest {
 
     private static final Path F1 = Path.of("part-00001.parquet");
     private static final Path F2 = Path.of("part-00002.parquet");
@@ -30,7 +30,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1);
         List<SortStamp> stamps = List.of(stamp(1, true));
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNull();
     }
 
     @Test
@@ -38,7 +38,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F2, F3);
         List<SortStamp> stamps = List.of(stamp(1, false), stamp(2, false), stamp(3, true));
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNull();
     }
 
     /**
@@ -51,7 +51,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F2);
         List<SortStamp> stamps = List.of(stamp(1, false), stamp(2, false));   // neither is final
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNotNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
     @Test
@@ -61,7 +61,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F3);
         List<SortStamp> stamps = List.of(stamp(1, false), stamp(3, true));
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNotNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
     @Test
@@ -69,7 +69,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F2);
         List<SortStamp> stamps = List.of(stamp(1, false), stamp(1, true));   // both claim index 1
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNotNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
     @Test
@@ -77,7 +77,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F2);
         List<SortStamp> stamps = List.of(stamp(1, true), stamp(2, true));   // two finals
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNotNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
     @Test
@@ -85,7 +85,7 @@ class ReplayServingFactoryCompletenessTest {
         List<Path> files = List.of(F1, F2);
         List<SortStamp> stamps = List.of(stamp(1, true), stamp(2, false));   // final on 1, not max index 2
 
-        assertThat(ReplayServingFactory.multiFileCompletenessViolation(files, stamps)).isNotNull();
+        assertThat(SortedEligibility.multiFileCompletenessViolation(files, stamps)).isNotNull();
     }
 
     private static SortStamp stamp(int fileIndex, boolean fileFinal) {
