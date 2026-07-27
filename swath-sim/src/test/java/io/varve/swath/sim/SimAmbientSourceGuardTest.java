@@ -53,7 +53,10 @@ import org.junit.jupiter.api.Test;
  * reached through an interface this module is handed from outside; and an ambient read inside a
  * dependency this module calls. The first two are unclosable statically. The third is bounded by
  * what this module depends on — a store answers from a fixture and takes no part in the timeline —
- * but it is a real edge of the check, not a gap the scan covers.
+ * but it is a real edge of the check, not a gap the scan covers. Nor is <em>implicit</em> identity
+ * ordering: {@code identityHashCode} is forbidden by name, but a {@code HashSet} of objects without
+ * a value-based {@code hashCode} iterates in an order derived from the same per-run value, and no
+ * source scan can tell that set from one whose elements hash by value.
  */
 class SimAmbientSourceGuardTest {
 
@@ -100,6 +103,9 @@ class SimAmbientSourceGuardTest {
             AmbientShape.literal("new Random("),
             AmbientShape.literal("new SecureRandom("),
             AmbientShape.literal("RandomGenerator.getDefault("),
+            // Identity hash codes are per-JVM-run values; iterating a collection ordered by one would
+            // order events differently on the next run of the same seed.
+            AmbientShape.wholeWord("identityHashCode"),
             // Host-variable arithmetic; the bit-exact StrictMath.* equivalents stay legal. The whole
             // family is listed, not just the functions the module happens to use today: the point of a
             // source guard is to catch the call that has not been written yet, and a model reaching
@@ -128,6 +134,21 @@ class SimAmbientSourceGuardTest {
             AmbientShape.hostVariableMath("tanh"),
             AmbientShape.hostVariableMath("toRadians"),
             AmbientShape.hostVariableMath("toDegrees"));
+
+    /** Object-store URI schemes a fixture path may not carry — see the scan that reads this. */
+    private static final List<String> REMOTE_SCHEMES = List.of("s3://", "gs://");
+
+    /**
+     * Row metadata a listed object carries and a simulated run does not have. The keys-only store
+     * tiers construct their rows with zeros and nulls in these positions — a fixture holds keys,
+     * because keys are what a listing policy divides — so a decision that read one would be reading a
+     * placeholder and would never say so. Named individually, because these accessors belong to one
+     * record and nothing else; {@code size()} is deliberately absent, since every collection in the
+     * codebase has one and a scan for it would report nothing but noise.
+     */
+    private static final List<String> ABSENT_ROW_METADATA = List.of(
+            "lastModifiedEpochMicros(", "etag(", "storageClass(", "ownerId(", "ownerDisplayName(",
+            "checksumAlgorithm(", "checksumType(");
 
     @Test
     void noSimulatorSourceReadsAnAmbientClockOrAnAmbientRandomSource() throws Exception {
@@ -236,6 +257,119 @@ class SimAmbientSourceGuardTest {
                 .as("Math.min/max are exact integer operations and must stay legal").isEmpty();
     }
 
+    /**
+     * The module's other mechanical rule, which was prose until now: <b>a fixture is a local path.</b>
+     * Nothing under {@code src/main} may name a remote object-store location, because the moment one
+     * does, a run's inputs stop being something the caller supplied and start being something the
+     * module went and fetched — which is both a hidden dependency on somebody's bucket existing and a
+     * hidden dependency on its contents not having changed. Fetching a fixture to local disk is the
+     * caller's job, outside this module.
+     *
+     * <p>Scanned with <b>string literals intact</b>, unlike the ambient-source scan above: a hardcoded
+     * location <em>is</em> a string literal, so stripping them would remove the only thing worth
+     * looking for. Comments are still stripped, so a javadoc explaining this rule — or naming a scheme
+     * to say the module does not use it — is not a violation. Test sources are exempt by construction
+     * (the scan walks {@code src/main} only), which is the same boundary the guard above draws: a
+     * fixture-authoring test may name whatever it likes.
+     */
+    @Test
+    void noSimulatorSourceNamesARemoteObjectStoreLocation() throws Exception {
+        List<Path> sources = mainSources();
+        assertThat(sources).as("must resolve this module's real sources, or this test checks nothing")
+                .hasSizeGreaterThan(10);
+
+        List<String> violations = new ArrayList<>();
+        for (Path source : sources) {
+            String stripped = stripComments(Files.readString(source));
+            for (String scheme : REMOTE_SCHEMES) {
+                if (stripped.contains(scheme)) {
+                    violations.add(source.getFileName() + " names `" + scheme + "`");
+                }
+            }
+        }
+
+        assertThat(violations)
+                .as("a fixture is a local path the caller supplies; this module may not know where one "
+                        + "lives remotely")
+                .isEmpty();
+    }
+
+    /** The remote-location scan must be able to fail, and must not fire on prose. */
+    @Test
+    void theScanDetectsAPlantedRemoteLocationAndAllowsOneNamedInProse() {
+        String planted = """
+                class Leaky {
+                    static final String FIXTURE = "s3://a-bucket/captures/latest.parquet";
+                }
+                """;
+        String documented = """
+                class Clean {
+                    /** Never resolves an s3:// or gs:// location: a fixture is a local path. */
+                    static final String FIXTURE = "captures/latest.parquet";
+                }
+                """;
+
+        assertThat(remoteMatches(planted)).containsExactly("s3://");
+        assertThat(remoteMatches(documented))
+                .as("prose naming a scheme to explain its absence must not be flagged").isEmpty();
+    }
+
+    /**
+     * The third mechanical rule: <b>no decision this simulator drives may read row metadata.</b>
+     *
+     * <p>A simulated run is keys-only by design, and the store tiers fill a row's size, modification
+     * time and etag with zeros. That is honest as long as nothing reads them — and catastrophic the
+     * moment something does, because a policy steering on a zero size produces a sweep that is wrong
+     * with no error anywhere. The scan covers the same two source sets the rules above do: this
+     * module's own sources, which build every view a decision sees, and the engine classes a policy
+     * run executes.
+     */
+    @Test
+    void noDecisionTheSimulatorDrivesReadsRowMetadataAFixtureDoesNotHave() throws Exception {
+        List<Path> sources = new ArrayList<>(mainSources());
+        sources.addAll(drivenEngineSources());
+
+        List<String> violations = new ArrayList<>();
+        for (Path source : sources) {
+            String stripped = stripCommentsAndLiterals(Files.readString(source));
+            for (String accessor : ABSENT_ROW_METADATA) {
+                if (stripped.contains(accessor)) {
+                    violations.add(source.getFileName() + " reads `" + accessor + ")`");
+                }
+            }
+        }
+
+        assertThat(violations)
+                .as("a simulated row's metadata is a placeholder; a decision that reads one is reading "
+                        + "a zero somebody wrote to fill the field")
+                .isEmpty();
+    }
+
+    /** The metadata scan must be able to fail, and must not fire on prose. */
+    @Test
+    void theScanDetectsAPlantedRowMetadataRead() {
+        String planted = "class Leaky { boolean big(ListedObject row) { return row.etag() != null; } }";
+        String documented = """
+                class Clean {
+                    /** Never reads etag() — a simulated row has none. */
+                    boolean big(ListedObject row) { return row.key().length > 0; }
+                }
+                """;
+
+        assertThat(metadataMatches(planted)).containsExactly("etag(");
+        assertThat(metadataMatches(documented)).isEmpty();
+    }
+
+    private static List<String> metadataMatches(String source) {
+        String stripped = stripCommentsAndLiterals(source);
+        return ABSENT_ROW_METADATA.stream().filter(stripped::contains).toList();
+    }
+
+    private static List<String> remoteMatches(String source) {
+        String stripped = stripComments(source);
+        return REMOTE_SCHEMES.stream().filter(stripped::contains).toList();
+    }
+
     private static List<String> matches(String source) {
         String stripped = stripCommentsAndLiterals(source);
         List<String> found = new ArrayList<>();
@@ -306,6 +440,18 @@ class SimAmbientSourceGuardTest {
      * codebase's javadoc routinely names a forbidden API while explaining why it is not called.
      */
     private static String stripCommentsAndLiterals(String text) {
+        return strip(text, true);
+    }
+
+    /**
+     * Strips comments only, keeping string literals — what a scan for a hardcoded <em>value</em> needs,
+     * as opposed to one for a call shape.
+     */
+    private static String stripComments(String text) {
+        return strip(text, false);
+    }
+
+    private static String strip(String text, boolean stripLiterals) {
         StringBuilder out = new StringBuilder(text.length());
         int n = text.length();
         int i = 0;
@@ -326,13 +472,17 @@ class SimAmbientSourceGuardTest {
                 continue;
             }
             if (c == '"' || c == '\'') {
+                // The literal is consumed either way, even when it is being kept: a `//` inside one is
+                // not a comment, and treating it as one would truncate the very text a value scan is
+                // looking for.
                 char quote = c;
-                out.append(' ');
+                int from = i;
                 i++;
                 while (i < n && text.charAt(i) != quote) {
                     i += (text.charAt(i) == '\\' && i + 1 < n) ? 2 : 1;
                 }
                 i = Math.min(i + 1, n);
+                out.append(stripLiterals ? " " : text.substring(from, i));
                 continue;
             }
             out.append(c);

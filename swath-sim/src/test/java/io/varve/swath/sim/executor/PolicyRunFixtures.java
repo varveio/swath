@@ -25,6 +25,19 @@ final class PolicyRunFixtures {
     static final LatencyModel REMOTE_LATENCY = perClass(
             TimeUnit.MILLISECONDS.toNanos(30), TimeUnit.MILLISECONDS.toNanos(8));
 
+    /**
+     * The regime measured on a real deployment's own serial tail: a full page answered in 110 ms and a
+     * one-key probe in 35 ms. Belongs with {@link #MEASURED_TAIL_PAGE_SIZE} — the two were measured
+     * together and neither means anything alone, since what a footrace turns on is how many keys a
+     * victim drains while a thief is probing, which is the page's <em>latency</em> and its <em>size</em>
+     * at once.
+     */
+    static final LatencyModel MEASURED_TAIL_LATENCY = perClass(
+            TimeUnit.MILLISECONDS.toNanos(110), TimeUnit.MILLISECONDS.toNanos(35));
+
+    /** The page size {@link #MEASURED_TAIL_LATENCY} was measured at: a full listing page. */
+    static final int MEASURED_TAIL_PAGE_SIZE = 1_000;
+
     private PolicyRunFixtures() {
     }
 

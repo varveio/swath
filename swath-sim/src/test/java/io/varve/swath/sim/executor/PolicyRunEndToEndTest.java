@@ -11,6 +11,10 @@ import io.varve.swath.sim.fixture.KeyspaceFixtures;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.model.ClientCostTerm;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -45,8 +49,63 @@ class PolicyRunEndToEndTest {
         assertThat(result.counter("seed.ranges"))
                 .as("the descent found cuts, so the fleet starts parallel").isGreaterThan(1L);
         assertThat(result.virtualNanos()).isPositive();
+        // A run's duration is its time to QUIESCENCE. The kernel's own last event is later — it cannot
+        // cancel a park timer, so parks armed before the last range completed still fire afterwards and
+        // still move the clock — and that residue is an artifact of the kernel rather than anything the
+        // policies did. Quoting it as the duration would charge every run a constant of up to the
+        // steal-attempt-slot park, which is more than the difference between two variants on a fixture
+        // this size.
+        assertThat(result.virtualNanos()).isEqualTo(result.timeline().endNanos());
+        assertThat(result.kernelNanos())
+                .as("the kernel's last event is the quiescence instant plus the retired-park drain")
+                .isGreaterThan(result.virtualNanos());
         assertThat(result.scenario().clientCost().term().provenance())
                 .isEqualTo(ClientCostTerm.Provenance.FINAL);
+    }
+
+    /**
+     * The run record's field set, pinned by name.
+     *
+     * <p>A record that quietly loses a field is worse than one that never had it: everything still
+     * prints, everything still parses, and the reader is left inferring an input that was stated
+     * yesterday. The seed is the sharpest case — without it a record cannot be reproduced at all, and
+     * nothing about the rest of the line would look wrong. So the whole set is asserted exactly:
+     * adding a field is a deliberate act, and so is removing one.
+     */
+    @Test
+    void theRunRecordStatesEveryInputAReproductionNeeds() {
+        ListingFixtureStore store = new ListingFixtureStore(
+                KeyspaceFixtures.hashFannedCorpus(4, 4, 100));
+
+        PolicyRunResult result = SimExecutor.run(
+                PolicyRunFixtures.scenario(4, 100, PolicyRunFixtures.REMOTE_LATENCY,
+                        PolicyRunFixtures.measuredCost()),
+                store, "in-memory hash-fanned corpus");
+
+        Set<String> fields = new TreeSet<>();
+        Matcher matcher = Pattern.compile("([a-z_]+)=").matcher(result.describe());
+        while (matcher.find()) {
+            fields.add(matcher.group(1));
+        }
+
+        assertThat(fields).containsExactlyInAnyOrder(
+                // what the run was asked to do
+                "seed", "workers", "page_size", "seed_mode", "store", "client_cost",
+                "store_server_capacity", "max_events", "fault_disposition",
+                // its declared budgets
+                "worker_attempt_timeout", "probe_attempt_timeout", "clean_window", "idle_park",
+                "attempt_slot_park",
+                // what it did
+                "virtual_duration", "stop_reason", "completed", "stuck", "events", "stale_events",
+                "final_concurrency_target", "keys_emitted", "pages", "store_calls", "store_reads",
+                "ranges", "owner_split_children", "thief_children", "splits_lost_revalidation",
+                "splits_rejected", "seed_probes", "seed_ranges",
+                // when it did it
+                "seed_end", "last_split", "quiesced", "kernel_end", "tail_fraction",
+                "keys_per_virtual_second", "tail_keys_per_virtual_second", "keys_in_tail",
+                "mean_ranges", "mean_tail_ranges", "serial_fraction", "max_concurrent_ranges",
+                // and what its position sensor read while it did
+                "cursor_advance_invisible", "victims_scanned", "est_ignores_keys", "est_zero");
     }
 
     @Test

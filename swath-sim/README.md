@@ -276,6 +276,24 @@ is hardest. The full ordering contract, including the two disclosed timing widen
 models and what a cancelled timer costs a run's event budget, is in
 [`docs/executor-ordering.md`](docs/executor-ordering.md).
 
+**There are two losers of that race, and only one of them is where the losses are.** The engine
+re-validates its pivot against the victim as it stands *now*, immediately before proposing the split,
+and then the durable split is guarded again on the same facts. The first check is where a thief that
+spent its probes on a drainer it cannot catch finds out — `RETRY.cursor_passed_pivot`,
+`RETRY.bound_moved`, reported as `splits_lost_revalidation`. The second can only fire when something
+changed *between* a re-validation that passed and the split it authorised, which needs a second
+proposer, and the fleet admits one steal attempt at a time. So `splits_rejected` sits at zero on runs
+that are losing four proposals in five, and that zero is a fact about the ordering rather than a
+simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
+
+How often the race is lost is a property of the *keyspace*, not of the timings a scenario declares.
+Where a pivot lands relative to the cursor and how far the cursor travels while the probes are in
+flight both scale with the page, so moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms
+a real deployment was measured at leaves the loss share in the same place (81% and 66% on the same
+fixture). What moves it is mass: the same geometry with a twentieth of the keys per directory loses
+52%. The measured page/probe regime is available as a named pair of inputs so that claim can be
+re-checked rather than believed.
+
 **What a run reports.** A duration on its own is not a result: the same fixture yields a different one
 under a different store backend, a different client-cost term, or different declared budgets, and all
 three are choices. So a run record carries them — which store served it, which cost term it was charged
@@ -307,8 +325,12 @@ Two parts of that record are worth naming, because a counter total cannot expres
 ### What a run costs to produce
 
 Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
-duration** is the modelled system's answer. Its **wall time** is what this machine spent computing that
-answer, and the only thing it says about swath is whether sweeping over many runs is affordable.
+duration** is the modelled system's answer — its time to quiescence, per the timeline note above. Its
+**wall time** is what this machine spent computing that answer, and the only thing it says about swath
+is whether sweeping over many runs is affordable. (The two virtual durations below are ~0.9 s shorter
+than the same runs reported before the duration was re-pointed off the kernel's last event; the
+difference is that run's retired-park drain, and it was a near-constant, so nothing that compared two
+runs was affected by it.)
 
 Measured on one 8-core arm64 development box, the same keyspace shape at two sizes, 32 workers,
 1000-key pages, no seed:
@@ -319,8 +341,8 @@ Measured on one 8-core arm64 development box, the same keyspace shape at two siz
 | events dispatched | 30,345 | 46,936 |
 | of those, retired park timers | 13,195 (43%) | 18,056 (38%) |
 | **events per modelled call** | **30.3** | **16.7** |
-| wall time | 0.22 s (216 µs/call) | 0.14 s (49 µs/call) |
-| virtual duration | 3.6 s | 5.9 s |
+| wall time | 0.21 s (206 µs/call) | 0.13 s (48 µs/call) |
+| virtual duration (to quiescence) | 2.7 s | 5.0 s |
 
 **Events per call is not a constant, and the second size point is what shows it.** A large share of a
 run's events are park timers — an idle worker waiting to be woken — and their number is driven by how
@@ -349,7 +371,9 @@ durations, so more workers legitimately stop helping.
 A fixture is a **local path** — a swath Parquet capture file, or a directory of them — supplied
 by the caller (config or CLI argument). Nothing in this module hardcodes, or is allowed to
 hardcode, a remote object-store location; fetching a fixture to local disk is the caller's job,
-outside this module.
+outside this module. That rule is mechanical rather than conventional: a source scan fails the build
+on an object-store URI in `src/main`, alongside the scans for ambient clocks and for reads of row
+metadata a keys-only fixture does not have (`SimAmbientSourceGuardTest`).
 
 ### Keyspace shapes, generated
 
@@ -385,6 +409,20 @@ geometry decides what can be *measured* and the mass distribution decides whethe
 measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed law a real archive
 follows is what makes the second visible.
 
+**Where that mass sits is a third property, and it is the one that reaches the run.** Real deep-nested
+buckets do not thin out as the tree descends: a third of a bucket's objects sat in one subtree and 90%
+in five, and the chain leading down to them had a fan-out of one or two the whole way, ending in a
+single directory holding some 1.8 million objects. `LEAF_CONCENTRATED` reproduces that last step —
+the same species ranks as the heavy-tailed law, with each accession's whole file count in *one* of its
+data directories and a token file in the others. Two things follow that a keyspace whose leaves hold
+thousands cannot produce. Structure discovery stops rescuing the run: the fan-out it finds is real and
+carries no mass, so a cut at it sheds a directory holding one file. And once a range lies inside the
+heavy directory there is no structure below it at all, so every pivot has to come from arithmetic over
+the frozen position window. Both show up as measurements: at a million keys not one thief child is
+placed by a structure probe (219 probes, zero wins), against three on the same mass spread across the
+accession, and the estimate discards its victim's emitted keys for 72% of the victims it is computed
+over.
+
 Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
 to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
 against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
@@ -396,6 +434,15 @@ ten times further up, where the difference reaches the run: 8.4% of it after the
 publishes 205 split children there against the control's 64. The division is not missing; it is late,
 driven by thieves that spend 691 attempts to place 118 of them, and refused four thousand times over by
 the owner's own estimate.
+
+`MassConcentrationAtScaleTest` (`@Tag("perf")`) is the same geometry at a million keys with the mass
+where a real archive's is, and it is the fixture that reaches the régime worth curing: a third of the
+post-seed run with at most one range in flight, a third of it after the last split anything managed to
+make, and four split proposals in five lost to the victim's own cursor. That is within a factor of two
+of the 60% of a run a real deep-nested bucket spends serial, against the 3.5% the same shape produces
+with its mass spread over 20,000-key leaves. Its control differs in one property only — the same eight
+subtrees holding the same number of keys each, spread across an accession instead of concentrated in
+one directory — which is what makes the pair a comparison rather than two experiments.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

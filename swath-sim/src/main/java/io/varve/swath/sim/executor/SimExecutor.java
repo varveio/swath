@@ -97,10 +97,12 @@ import java.util.Set;
  * <h2>Timing, and the two timing widenings this reproduces</h2>
  * A call's duration is drawn when the request is issued; the store is read when the response arrives.
  * A modelled attempt timeout is decided at issue too, wherever the completion instant is known then:
- * the executor schedules the response <em>or</em> the timeout, never both, so a timeout costs no extra
- * event. It cannot be decided at issue when a queueing store is modelled, and there the executor arms
- * both and retires the loser by attempt generation — a dead event that is counted
- * ({@code events.stale}) rather than absorbed.
+ * the executor tells the caller once, scheduling the response <em>or</em> the timeout, never both. It
+ * cannot be decided at issue when a queueing store is modelled, and there the executor arms both and
+ * retires the loser by attempt generation — a dead event that is counted ({@code events.stale}) rather
+ * than absorbed. Either way the store's own occupancy is retired when the <em>store</em> finishes, not
+ * when the client gives up, so a timed-out call keeps crowding the store for as long as it really
+ * would.
  *
  * <p>Three disclosed read-window widenings from the policy extraction are reproduced as the current
  * engine behaves, not as it behaved before the seam existed — modelling the narrower pre-seam versions
@@ -164,6 +166,13 @@ public final class SimExecutor {
      * other, so a budget has to be sized including them.
      */
     public static final String STALE_EVENTS_COUNTER = "events.stale";
+    /**
+     * Events whose only work is retiring a timed-out call's occupancy at the instant the store would
+     * have answered. A sibling of {@link #STALE_EVENTS_COUNTER}: it is the same kind of cost — an event
+     * the kernel dispatches because it cannot cancel one — but it is not dead, so it is counted apart
+     * from the events that are.
+     */
+    public static final String OCCUPANCY_DRAIN_EVENTS_COUNTER = "events.timeout_occupancy_drain";
     /** Seed-descent probes issued. */
     public static final String SEED_PROBES_COUNTER = "seed.probes";
     /** Children published by the owner-side proactive split. */
@@ -210,7 +219,31 @@ public final class SimExecutor {
      */
     public static final String SENSOR_EST_IGNORES_KEYS_COUNTER = "sensor.victim_est_ignores_keys";
 
+    /**
+     * The event-kind prefix a wake is traced under; the signal that caused it follows. Carried in the
+     * kind rather than a detail string so a trace can be read for wake sources without parsing details.
+     */
+    public static final String WAKE_EVENT_PREFIX = "worker.wake.";
+    /** A parked worker was woken because a split child was published and is claimable. */
+    public static final String WAKE_CHILD_PUBLISHED = "child_published";
+    /** A parked worker was woken because a range completed — a quiescence signal in the engine's ledger. */
+    public static final String WAKE_RANGE_COMPLETED = "range_completed";
+    /** A parked worker was woken because the fleet's single steal-attempt slot was released. */
+    public static final String WAKE_STEAL_ATTEMPT_FINISHED = "steal_attempt_finished";
+    /**
+     * A parked worker was woken because some worker committed a non-empty page — the engine's own
+     * prompt-rebalance signal, and by an order of magnitude the most frequent of the four.
+     */
+    public static final String WAKE_PAGE_COMMITTED = "page_committed";
+
     private static final HexFormat HEX = HexFormat.of();
+
+    /**
+     * The per-call-class counter names, by ordinal. Built once: every modelled call increments one of
+     * them, and composing the name per call would put a string concatenation and a locale-sensitive
+     * lower-casing on the hottest path in the executor.
+     */
+    private static final String[] CALL_CLASS_COUNTERS = callClassCounters();
 
     private final PolicyScenario scenario;
     private final String storeLabel;
@@ -460,7 +493,11 @@ public final class SimExecutor {
             if (slotsHeld >= gauge.effectiveT()) {
                 pendingAttempt = attemptNumber;
                 slotWaiters.add(this);
-                ctx.record("slot.wait", "worker=" + id);
+                if (log.isRecording()) {
+                    // Guarded like page.commit's: this fires once per denied page on a slot-starved
+                    // fleet, and a sweep leg runs with the trace off.
+                    ctx.record("slot.wait", "worker=" + id);
+                }
                 return;
             }
             slotsHeld++;
@@ -583,7 +620,7 @@ public final class SimExecutor {
             long remaining = ledger.decrement();
             // A decrement is a quiescence signal in the engine's ledger; here it wakes every parked
             // worker so none of them sits out the end of the run on a stale park timer.
-            wakeParked(at);
+            wakeParked(at, WAKE_RANGE_COMPLETED);
             if (remaining == 0L) {
                 timeline.quiesced(at.nowNanos());
                 at.record("run.quiescent", "");
@@ -649,7 +686,7 @@ public final class SimExecutor {
             at.count(OWNER_SPLIT_COUNTER, 1);
             at.count("OWNER_SPLIT.self_published", 1);
             at.record("owner_split", "node=" + nodeId + "|child=" + childId);
-            wakeParked(at);
+            wakeParked(at, WAKE_CHILD_PUBLISHED);
         }
 
         /**
@@ -795,6 +832,14 @@ public final class SimExecutor {
             });
         }
 
+        /**
+         * A retried probe, which is the same call under a second attempt number — including its own
+         * right to retry again. The declared {@code probeAttemptRetryCap} is what bounds the chain: a
+         * scenario that declares three gets three, and one that declares the engine's default of one
+         * gets exactly the single retry it asked for. Consulting the budget here rather than
+         * fail-fasting unconditionally is what keeps the cap a declared input instead of a constant
+         * that happens to agree with today's default.
+         */
         private void probeRetry(CallClass callClass, ProbeResponse onArrival, boolean keyProbe, int attemptNumber) {
             issueCall(ctx, callClass, scenario.budgets().probeAttemptTimeoutNanos(), attemptNumber,
                     new CallOutcome() {
@@ -810,9 +855,19 @@ public final class SimExecutor {
                             at.count(PROBE_TIMEOUTS_COUNTER, 1);
                             gauge.onTransientTimeout(at.nowNanos(), false);
                             if (!keyProbe) {
+                                // Counted on every attempt, not only the first: the streak this feeds is
+                                // what eventually suppresses structure probing against a victim, and a
+                                // tally that stopped at the first attempt would understate the evidence
+                                // the suppression is made of.
                                 victim.recordTimedOutStructureProbe();
+                                at.count("STRUCTURE.probe_timed_out", 1);
                             }
-                            finishSteal("RETRY", "probe_retry_cap_failfast", false);
+                            if (attempt > scenario.budgets().probeAttemptRetryCap()) {
+                                finishSteal("RETRY", "probe_retry_cap_failfast", false);
+                                return;
+                            }
+                            at.schedule(scenario.budgets().transientRetryBackoffNanos(), "probe.retry",
+                                    retry -> enter(retry).probeRetry(callClass, onArrival, keyProbe, attempt));
                         }
                     });
         }
@@ -873,7 +928,7 @@ public final class SimExecutor {
             }
             // Whatever the outcome, the attempt slot is free again, so anyone parked behind it should
             // re-evaluate rather than sit out its full backstop.
-            wakeParked(ctx);
+            wakeParked(ctx, WAKE_STEAL_ATTEMPT_FINISHED);
             idle(ctx);
         }
 
@@ -934,9 +989,11 @@ public final class SimExecutor {
      * Issues one store call and schedules its outcome.
      *
      * <p><b>Where the completion instant is known at issue</b> — the ordinary case, a store that
-     * answers independently — exactly one event is scheduled: the response if the drawn duration fits
-     * the attempt budget, the timeout if it does not. Nothing has to be cancelled, because nothing
-     * competing was ever armed.
+     * answers independently — the caller is told once: the response if the drawn duration fits the
+     * attempt budget, the timeout if it does not. Nothing has to be cancelled, because nothing
+     * competing was ever armed. A timed-out call keeps a second, silent event at the instant the store
+     * would have answered, which retires its occupancy there rather than at the client's timeout —
+     * the same semantics the queueing branch has, for the same reason.
      *
      * <p><b>Where it is not</b> — a modelled store with a queue, whose answer depends on what else is
      * in flight — both are armed and the loser is retired when it fires, by comparing the call's
@@ -947,16 +1004,23 @@ public final class SimExecutor {
     private void issueCall(SimContext ctx, CallClass callClass, long timeoutNanos, int attemptNumber,
                            CallOutcome outcome) {
         ctx.count(STORE_CALLS_COUNTER, 1);
-        ctx.count("store.calls." + callClass.name().toLowerCase(Locale.ROOT), 1);
+        ctx.count(CALL_CLASS_COUNTERS[callClass.ordinal()], 1);
         int attempt = attemptNumber + 1;
         long serviceNanos = scenario.latency().drawNanos(callClass, ctx.rng(SimRngStream.LATENCY),
                 callsInFlight);
         callsInFlight++;
         if (storeServer == null) {
             if (serviceNanos > timeoutNanos) {
-                ctx.schedule(timeoutNanos, "call.timeout", at -> {
+                ctx.schedule(timeoutNanos, "call.timeout", at -> outcome.onTimeout(at, attempt));
+                // Occupancy is retired on the STORE's completion, not on the client's timeout, exactly
+                // as the queueing branch below does it: a call the client has given up on is still work
+                // the store is doing and still crowds out the next one, and retiring it early would
+                // understate occupancy by precisely the calls a struggling store is struggling with.
+                // That costs one extra event per timed-out call — the only case where a timeout is not
+                // free here — and it is charged rather than hidden, like every other event.
+                ctx.schedule(serviceNanos, "call.service_completed", at -> {
+                    at.count(OCCUPANCY_DRAIN_EVENTS_COUNTER, 1);
                     callsInFlight--;
-                    outcome.onTimeout(at, attempt);
                 });
             } else {
                 ctx.schedule(serviceNanos, "call.response", at -> {
@@ -1027,8 +1091,14 @@ public final class SimExecutor {
     /**
      * Wakes every parked worker. Bumping the generation is what retires their outstanding park timers:
      * the timer still fires, sees a generation it does not recognise, and returns.
+     *
+     * <p>The {@code reason} rides on the wake event's kind so a trace says which of the four signals
+     * fired it.
+     * There are exactly four, they are the engine's four, and the last of them dominates the other
+     * three by an order of magnitude — see {@code docs/executor-ordering.md}, and
+     * {@code WorkerWakeSourcesTest}, which reads them back out of a trace so that list cannot go stale.
      */
-    private void wakeParked(SimContext ctx) {
+    private void wakeParked(SimContext ctx, String reason) {
         if (parked.isEmpty()) {
             return;
         }
@@ -1036,7 +1106,7 @@ public final class SimExecutor {
         List<Worker> woken = List.copyOf(parked);
         parked.clear();
         for (Worker worker : woken) {
-            ctx.scheduleFor(worker.id, 0, "worker.wake", at -> worker.enter(at).idle(at));
+            ctx.scheduleFor(worker.id, 0, WAKE_EVENT_PREFIX + reason, at -> worker.enter(at).idle(at));
         }
     }
 
@@ -1046,7 +1116,7 @@ public final class SimExecutor {
      */
     private void signalStealableProgress(SimContext ctx) {
         pacingState = idlePacing.onReset();
-        wakeParked(ctx);
+        wakeParked(ctx, WAKE_PAGE_COMMITTED);
     }
 
     /**
@@ -1102,6 +1172,15 @@ public final class SimExecutor {
                 ctx.count(SENSOR_EST_IGNORES_KEYS_COUNTER, 1);
             }
         }
+    }
+
+    private static String[] callClassCounters() {
+        CallClass[] classes = CallClass.values();
+        String[] names = new String[classes.length];
+        for (int i = 0; i < classes.length; i++) {
+            names[i] = "store.calls." + classes[i].name().toLowerCase(Locale.ROOT);
+        }
+        return names;
     }
 
     /** Records every engagement a policy fired, under the same category and reason the engine uses. */

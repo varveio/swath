@@ -53,6 +53,21 @@ public final class KeyspaceFixtures {
     static final int LEAF_DIR_COUNT = LEAF_DIRS.length;
 
     /**
+     * The one leaf directory an accession's files sit in under {@link SubtreeMass#LEAF_CONCENTRATED}:
+     * the raw-read tree, which is where a sequencing archive's objects actually are. Last of
+     * {@link #LEAF_DIRS} in byte order, so the mass sits at the end of the accession rather than at its
+     * start — a cursor reaches it after the directories above it, exactly as a drainer does.
+     */
+    private static final int DOMINANT_LEAF_DIR = LEAF_DIRS.length - 1;
+
+    /**
+     * Files each of the other leaf directories holds under {@link SubtreeMass#LEAF_CONCENTRATED}. One,
+     * not zero: the directory has to exist for a structure probe to find it, and finding it has to buy
+     * nothing. A fan-out that is real and carries no mass is the measured defect this reproduces.
+     */
+    private static final int TOKEN_LEAF_DIR_FILES = 1;
+
+    /**
      * The stride the heavy-tailed mass law deals ranks by. Prime, so it is coprime with every species
      * count these limits allow and the dealing is therefore a permutation: every rank is used once.
      */
@@ -156,9 +171,12 @@ public final class KeyspaceFixtures {
      * @param filesPerLeafDir     files in each leaf directory of an accession — of every accession
      *                            under {@link SubtreeMass#UNIFORM}, of the largest species under
      *                            {@link SubtreeMass#HEAVY_TAILED}, where the rest hold a fraction of
-     *                            it and no species is ever left with none. At most
+     *                            it and no species is ever left with none. Under
+     *                            {@link SubtreeMass#LEAF_CONCENTRATED} the same count lands in a
+     *                            <em>single</em> leaf directory rather than in each. At most
      *                            {@value #FILES_PER_LEAF_DIR_LIMIT}, the width of the file-name field
-     * @param mass                how the file count is distributed across species
+     * @param mass                how the file count is distributed across species, and across the
+     *                            leaf directories within one
      */
     public static List<byte[]> deepNestedSharedPrefix(int genusGroups, int speciesPerGroup,
                                                       int accessionsPerSpecies, int filesPerLeafDir,
@@ -182,10 +200,11 @@ public final class KeyspaceFixtures {
                     String directory = String.format(Locale.ROOT, "species/%s_%s/%s%s%s%d/",
                             genus, epithet, CLASS_LETTERS[species % CLASS_LETTERS.length],
                             syllable(genus), syllable(epithet), accession + 1);
-                    for (String leafDir : LEAF_DIRS) {
-                        for (int file = 0; file < files; file++) {
+                    for (int leafDir = 0; leafDir < LEAF_DIRS.length; leafDir++) {
+                        int inThisDir = leafDirFileCount(files, mass, leafDir);
+                        for (int file = 0; file < inThisDir; file++) {
                             keys.add(utf8(String.format(Locale.ROOT, "%s%s/%06d.fastq.gz",
-                                    directory, leafDir, file)));
+                                    directory, LEAF_DIRS[leafDir], file)));
                         }
                     }
                 }
@@ -194,7 +213,7 @@ public final class KeyspaceFixtures {
         return keys;
     }
 
-    /** How {@link #deepNestedSharedPrefix} spreads its file count across species. */
+    /** How {@link #deepNestedSharedPrefix} spreads its file count across species, and within one. */
     public enum SubtreeMass {
         /** Every species holds the same number of files: the control on mass, not on shape. */
         UNIFORM,
@@ -206,7 +225,26 @@ public final class KeyspaceFixtures {
          * everything else for free. The deal is a permutation — every rank is used exactly once — so
          * which species is heaviest is a property of the stride and offset, not of its position.
          */
-        HEAVY_TAILED
+        HEAVY_TAILED,
+        /**
+         * The same species ranks as {@link #HEAVY_TAILED}, with each accession's whole file count in
+         * <b>one</b> of its leaf directories instead of spread over all of them; the others hold a
+         * single file each. Species for species this is the identical mass distribution — only the
+         * <em>depth</em> the mass sits at moves — so the two laws differ in one property and a run
+         * compared across them is a controlled comparison rather than a second experiment.
+         *
+         * <p><b>Why the depth is worth a law of its own.</b> Measured on real deep-nested buckets, the
+         * mass does not thin out as the tree descends: one directory held about a third of a bucket —
+         * some 1.8 million objects — reached through seven levels whose fan-out was one or two the
+         * whole way down, while the long tail of sibling directories held a single object each. Two
+         * things follow, and neither is reproducible by a shape whose leaves hold thousands. Structure
+         * discovery cannot rescue the run: the fan-out it finds is real and carries no mass, so cutting
+         * at it sheds a directory holding one file and leaves the other holding everything. And once a
+         * range lies inside that directory there is no structure left at all, which makes interpolation
+         * over the frozen position window the only remaining source of a pivot — the regime where the
+         * blind sensor of {@link #deepNestedSharedPrefix} finally has to be acted on.
+         */
+        LEAF_CONCENTRATED
     }
 
     /**
@@ -243,6 +281,18 @@ public final class KeyspaceFixtures {
         }
         int rank = 1 + (species * RANK_STRIDE + speciesCount / 2) % speciesCount;
         return Math.max(1, largest / rank);
+    }
+
+    /**
+     * How many of a species' {@code files} land in the leaf directory at {@code leafDir}: all of them
+     * under every law but {@link SubtreeMass#LEAF_CONCENTRATED}, which puts them in one directory and
+     * leaves the rest a token file apiece.
+     */
+    private static int leafDirFileCount(int files, SubtreeMass mass, int leafDir) {
+        if (mass != SubtreeMass.LEAF_CONCENTRATED) {
+            return files;
+        }
+        return leafDir == DOMINANT_LEAF_DIR ? files : TOKEN_LEAF_DIR_FILES;
     }
 
     /** The three-letter, initial-capital syllable an accession name is built from. */

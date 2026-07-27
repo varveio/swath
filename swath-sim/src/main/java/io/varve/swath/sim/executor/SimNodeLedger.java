@@ -17,13 +17,20 @@ import java.util.Map;
  * queue of claimable ranges, and the compare-and-set that decides whether a proposed split is allowed
  * to become a node.
  *
- * <p><b>The CAS is the part that matters.</b> A thief picks its pivot against a snapshot it read
+ * <p><b>The CAS is the back-stop, not the race.</b> A thief picks its pivot against a snapshot it read
  * earlier, without holding anything; between that read and the split the victim may have advanced past
  * the pivot, or another thief may have narrowed the same bound. The durable split is guarded on all
  * three facts — the bound is still the one the proposal was made against, the cursor has not reached
- * the pivot, and the node has not completed — and rejects the proposal otherwise. Reproducing that
- * guard, rather than assuming a proposal succeeds, is what makes a simulated steal able to lose a race
- * the way a real one does.
+ * the pivot, and the node has not completed — and rejects the proposal otherwise.
+ *
+ * <p>The engine checks the first two of those <em>again</em>, immediately before proposing, and that
+ * earlier check is where a lost race is normally observed ({@code RETRY.cursor_passed_pivot} /
+ * {@code bound_moved}). What reaches this guard is only what survived it, so a rejection here needs a
+ * change between the two — a second proposer, or a node that completed in between. The fleet admits one
+ * steal attempt at a time, so {@link #splitsAborted()} stays at or near zero on runs that are losing
+ * most of their steals: it is the late loser, and reading it as the run's footrace record is a mistake
+ * (see {@code PolicyRunResult#splitsLostAtRevalidation()}). The guard is reproduced anyway because the
+ * engine has it and because the completion case is genuinely reachable.
  *
  * <p>What is deliberately <b>not</b> modelled: durability itself. Writing a row costs time, and that
  * time is charged by the client-cost model's checkpoint stage, which is where it belongs; the ledger
@@ -140,7 +147,7 @@ final class SimNodeLedger {
         return splitsCommitted;
     }
 
-    /** Split proposals the guard rejected — the races the simulator actually lost. */
+    /** Split proposals the guard rejected — the late loser; see the class note for why it is rare. */
     long splitsAborted() {
         return splitsAborted;
     }

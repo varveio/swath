@@ -266,7 +266,12 @@ class SimConcurrencyPolicyTest {
         List<Long> lengths = new ArrayList<>();
 
         for (long seed = 1; seed <= 12; seed++) {
-            lengths.add(new SimConcurrencyPolicy(64, jittered, SimRng.of(seed)).shedWindowLengthNanos());
+            SimConcurrencyPolicy gauge = new SimConcurrencyPolicy(64, jittered, SimRng.of(seed));
+            // The first window is rolled by the first signal, not by construction: until then there is
+            // no window, and a controller that drew one up front would be taking a value off the tape
+            // that nothing could ever measure against.
+            gauge.onSuccess(0L);
+            lengths.add(gauge.shedWindowLengthNanos());
         }
 
         assertThat(lengths).as("a window outside its declared bounds is not jitter, it is a bug")

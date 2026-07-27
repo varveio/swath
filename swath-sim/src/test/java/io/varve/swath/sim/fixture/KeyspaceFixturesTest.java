@@ -139,6 +139,57 @@ class KeyspaceFixturesTest {
                 .isLessThan(largestSubtree(heavy));
     }
 
+    /**
+     * The depth law's own claim: species for species the mass is the one the heavy-tailed law deals, and
+     * all of it sits in a single directory instead of being shared out among an accession's four.
+     *
+     * <p>The two are compared at file counts in that ratio — a quarter each way — because the comparison
+     * they exist for is a controlled one: a run over either keyspace faces the same subtrees holding the
+     * same number of keys, and differs only in how deep it has to go before the keys stop being
+     * separated by anything a structure probe can find. The counts are multiples of 840 so that the rank
+     * law's integer division lands exactly on both sides and "the same number" is literal.
+     */
+    @Test
+    void theDepthLawPutsOneSpeciesWorthOfFilesInOneDirectory() {
+        List<byte[]> spread = KeyspaceFixtures.deepNestedSharedPrefix(2, 4, 1, 840,
+                SubtreeMass.HEAVY_TAILED);
+        List<byte[]> concentrated = KeyspaceFixtures.deepNestedSharedPrefix(2, 4, 1, 4 * 840,
+                SubtreeMass.LEAF_CONCENTRATED);
+
+        // Every species holds what it held, to the three token files the other leaf directories keep.
+        assertThat(largestSubtree(concentrated)).isEqualTo(largestSubtree(spread) + 3);
+        assertThat(concentrated).hasSize(spread.size() + 3 * 8);
+        // And it is one directory deep rather than four wide.
+        assertThat(largestLeafDirectory(concentrated)).isEqualTo(4 * 840);
+        assertThat(largestLeafDirectory(spread)).isEqualTo(840);
+    }
+
+    /** Keys under the busiest deepest {@code .../<dir>/} directory. */
+    private static int largestLeafDirectory(List<byte[]> keys) {
+        int largest = 0;
+        int current = 0;
+        byte[] currentDir = NO_KEY;
+        for (byte[] key : keys) {
+            byte[] dir = Arrays.copyOf(key, lastSlash(key));
+            if (!Arrays.equals(dir, currentDir)) {
+                largest = Math.max(largest, current);
+                current = 0;
+                currentDir = dir;
+            }
+            current++;
+        }
+        return Math.max(largest, current);
+    }
+
+    private static int lastSlash(byte[] key) {
+        for (int i = key.length - 1; i >= 0; i--) {
+            if (key[i] == '/') {
+                return i + 1;
+            }
+        }
+        return 0;
+    }
+
     /** Keys under the first {@code species/<name>/} directory. */
     private static int firstSubtree(List<byte[]> keys) {
         byte[] first = Arrays.copyOf(keys.getFirst(), 30);
