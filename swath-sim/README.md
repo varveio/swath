@@ -62,8 +62,10 @@ A single Java `byte[]` cannot exceed 2 GiB, so arena key bytes are held in fixed
 reassembled on read. Capacity is therefore governed by **estimated encoded bytes**
 (`key bytes + (n + 1) × 8` for the offset table), never by a key count: keys are legal up to
 1024 bytes each, so two fixtures with identical key counts can differ by three orders of
-magnitude in footprint. `SimStoreConfig.arenaMaxEncodedBytes` is the configurable threshold,
-also settable via the `swath.sim.arena.max-encoded-bytes` system property.
+magnitude in footprint. `SimStoreConfig.arenaMaxEncodedBytes` is the configurable threshold;
+`SimStoreFactory.open(fixturePath, backend)` reads it from the `swath.sim.arena.max-encoded-bytes`
+system property, so an operator can retune the tier without a code change, while the
+config-taking overload lets a caller pin it outright.
 
 Keys are stored raw. Front-coding a sorted key set often buys 3–5×, but that is a *measured*
 optimisation to make later against a real fixture, not an assumption to build in now.

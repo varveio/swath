@@ -29,7 +29,7 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
         ┌─────────┴──┐   ┌──┴──────────────────┐
         │  swath-s3  │   │ swath-replay-server │  dev/test replay server (non-published)
         └─────▲──────┘   └──────────▲──────────┘
-       impl │  │ impl               │ impl
+       impl │  │ impl               │ api
         ┌────┴──┴────┐        ┌─────┴─────┐
         │  swath-cli │        │ swath-sim │  policy simulator's store (non-published)
         └────────────┘        └───────────┘
@@ -47,7 +47,7 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
 | **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | ❌ (dev/test tool) |
-| **`swath-sim`** | `java-library` | The policy simulator's ground-truth store (`io.varve.swath.sim`): backends that answer the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`. Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `impl` → swath-replay-server | ❌ (dev/analysis tool) |
+| **`swath-sim`** | `java-library` | The policy simulator's ground-truth store (`io.varve.swath.sim`): backends that answer the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`. Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server | ❌ (dev/analysis tool) |
 
 Only `swath-cli` ships. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
 `runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped
@@ -79,8 +79,15 @@ repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
   - `swath-s3 → swath-core` is **`api`** (`S3PageFetcher`'s Java-visible surface exposes core types), and
     the **AWS SDK itself is `api` on `swath-s3`** because `swath-cli`'s `ListCommand` wires
     `S3Client`/credentials/`Region` directly while depending on `swath-s3` only via `implementation`.
-  - `swath-cli → {swath-core, swath-s3}`, `swath-replay-server → swath-core` and
-    `swath-sim → swath-replay-server` are **`implementation`** (apps and tools expose nothing).
+  - `swath-cli → {swath-core, swath-s3}` and `swath-replay-server → swath-core` are
+    **`implementation`** (apps expose nothing).
+  - **`swath-sim → swath-replay-server` is `api`** — unlike the two apps above, `swath-sim` is a
+    library whose Java-visible surface exposes the upstream module's types (`ArenaListingStore`
+    implements `ListingStore` and returns `ListedObject`; `SimStoreFactory.Result` carries a
+    `ListingStore` and a `ReplayMetrics`), so a consumer needs them on its compile classpath.
+    This edge is deliberate and stays as-is: the `ListingStore`/`ListObjectsV2Pager` seam the
+    simulator reuses lives in `swath-replay-server` today, and extracting it into a shared module
+    is a separate refactor (see the roadmap below), not a precondition for depending on it.
 - **§0.7 compile-classpath purity** — `swath-replay-server`'s *main* code must not import any
   `org.apache.parquet`/`org.apache.hadoop` type; parquet reaches it only *transitively at runtime*
   via `implementation(project(":swath-core"))`. Enforced by the module's

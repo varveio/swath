@@ -89,6 +89,31 @@ class SimStoreFactoryTest {
                 .tag("reason", SimStoreMetrics.DECLINE_OVER_BUDGET).counter().count()).isEqualTo(1);
     }
 
+    @Test
+    void theConfiglessEntryPointReadsTheThresholdFromTheSystemProperty(@TempDir Path dir) throws IOException {
+        // The forced-ARENA failure message tells an operator to raise this property, so the
+        // property must actually drive a resolution rather than being a dead accessor.
+        Path fixture = fixture(dir);
+        System.setProperty(SimStoreConfig.ARENA_MAX_ENCODED_BYTES_PROPERTY,
+                String.valueOf(TINY.arenaMaxEncodedBytes()));
+        try {
+            SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.AUTO);
+            try (var store = result.store()) {
+                assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.PARQUET);
+                assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
+            }
+        } finally {
+            System.clearProperty(SimStoreConfig.ARENA_MAX_ENCODED_BYTES_PROPERTY);
+        }
+
+        // Without the property the default budget applies and the same fixture fits the arena.
+        SimStoreFactory.Result withDefaults = SimStoreFactory.open(fixture, SimStoreBackend.AUTO);
+        try (var store = withDefaults.store()) {
+            assertThat(withDefaults.resolvedBackend()).isEqualTo(SimStoreBackend.ARENA);
+            assertThat(store).isInstanceOf(ArenaListingStore.class);
+        }
+    }
+
     private static Path fixture(Path dir) throws IOException {
         Path capture = dir.resolve("part-0.parquet");
         try (var writer = ParquetFixtures.open(capture)) {

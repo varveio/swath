@@ -47,7 +47,17 @@ public final class SimStoreFactory {
     }
 
     /**
-     * Opens {@code fixturePath} under the requested {@code backend}.
+     * Opens {@code fixturePath} under the requested {@code backend}, configured from the
+     * {@code swath.sim.*} system properties — the entry point a runner uses, so an operator can
+     * retune the tier threshold without a code change (the same idiom as the replay server's
+     * {@code swath.replay.prefetch.*}). Tests that pin a threshold pass an explicit config instead.
+     */
+    public static Result open(Path fixturePath, SimStoreBackend backend) {
+        return open(fixturePath, backend, SimStoreConfig.fromSystemProperties());
+    }
+
+    /**
+     * Opens {@code fixturePath} under the requested {@code backend} and an explicit {@code config}.
      *
      * @throws IllegalArgumentException under {@link SimStoreBackend#ARENA} when the fixture's keys
      *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}
@@ -55,10 +65,12 @@ public final class SimStoreFactory {
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
         SimStoreMetrics simMetrics = new SimStoreMetrics(registry);
-        // Every backend reads the fixture through the Parquet-backed store -- the arena tiers only
-        // differ in whether they keep it -- so the replay-side serving tag describes that store
-        // truthfully in all three cases. Which backend SERVES the simulation is a separate signal,
-        // swath.sim.store.backend, because the two genuinely differ under ARENA and AUTO.
+        // SERVING_MODE_DUCKDB even under ARENA, and that is not a mislabel: every backend here
+        // reads the fixture through the DuckDB-over-Parquet store -- ARENA and AUTO open it to
+        // stream the keys out, and only then decide whether to keep it -- so the replay-side
+        // serving tag describes the store that actually touched the file, truthfully, in all three
+        // cases. Which backend SERVES the simulation afterwards is a genuinely different fact and
+        // gets its own signal, swath.sim.store.backend, because under ARENA the two differ.
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
 
         return switch (backend) {

@@ -17,7 +17,12 @@ dependencies {
     // one place S3 ListObjectsV2 pagination lives (`ListObjectsV2Pager`) and the metrics sink
     // both of those take. The simulator reuses that seam wholesale rather than restating
     // pagination/truncation semantics behind a second implementation of the same protocol.
-    implementation(project(":swath-replay-server"))
+    //
+    // `api`, not `implementation`: this module's Java-visible surface EXPOSES those types --
+    // ArenaListingStore implements ListingStore and returns ListedObject, SimStoreFactory.Result
+    // carries a ListingStore and a ReplayMetrics -- so per the api-vs-implementation rule in
+    // docs/internals/build-and-modules.md a consumer needs them on its compile classpath.
+    api(project(":swath-replay-server"))
     // ReplayMetrics/SimStoreMetrics are Micrometer-backed and this module registers its own
     // meters on the shared registry, so Micrometer is a direct compile-time need, not a
     // transitive convenience.
