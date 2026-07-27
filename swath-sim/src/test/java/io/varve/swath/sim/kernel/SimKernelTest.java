@@ -223,6 +223,27 @@ class SimKernelTest {
         ctx.schedule(TimeUnit.MILLISECONDS.toNanos(100), "tick", next -> tick(next, ticks));
     }
 
+    /**
+     * A draw taken outside any event body has no actor to own it, so every such caller would share one
+     * tape and each of their values would depend on which ran first. That is a reproducibility hole
+     * rather than a mild inaccuracy, so it fails at the call rather than at the disagreement it would
+     * eventually cause. A fleet-wide instrument that legitimately has no owning actor draws on the
+     * reserved fleet id instead, which cannot collide with this case.
+     */
+    @Test
+    void aDrawOutsideAnyEventBodyIsRefusedRatherThanMintingAnOwnerlessTape() {
+        SimKernel kernel = kernel(BUDGETS, 10);
+
+        assertThatThrownBy(() -> kernel.rng(SimRngStream.DECISION))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("outside an event body");
+        assertThat(SimKernel.FLEET_ACTOR)
+                .as("the fleet's own id must differ from the no-actor id, or the two collide")
+                .isNotEqualTo(SimKernel.NO_ACTOR);
+        assertThat(SimRng.forStream(1L, SimKernel.FLEET_ACTOR, SimRngStream.AIMD_JITTER).nextLong())
+                .isNotEqualTo(SimRng.forStream(1L, SimKernel.NO_ACTOR, SimRngStream.AIMD_JITTER).nextLong());
+    }
+
     private static SimKernel kernel(EngineTimeBudgets budgets, long maxEvents) {
         return new SimKernel(1L, budgets, SimEventLog.disabled(), maxEvents);
     }

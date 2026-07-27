@@ -200,8 +200,40 @@ Three packages, in dependency order:
 | Package | Holds |
 |---|---|
 | `sim.kernel` | The clock, the event queue, the scheduler, the per-actor SplitMix64 draw streams, the event log, and a FIFO server for modelling a shared resource. A few hundred lines, deliberately: a general-purpose simulation framework would bring its own clock and its own randomness, which is precisely what the closed-form invariants below need to own. |
-| `sim.model` | The physics, all of it pluggable: `LatencyModel` (constant, or a fitted shifted-exponential per call class), `ClientCostModel` (independent per page, or contended through a shared server), and `EngineTimeBudgets`. |
+| `sim.model` | The physics, all of it pluggable: `LatencyModel` (constant, fitted per call class, or scaled by how many calls are in flight), `ClientCostModel` (independent per page, contended through a shared server, or the measured composite of both), and `EngineTimeBudgets`. |
 | `sim.driver` | A scenario, and a trivial "list every range with T workers" driver that exercises the whole stack against a real store. The real split/steal policies are not wired up here. |
+| `sim.executor` | The real policies, wired: the seed planner, the owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing, and the simulator's own adaptive-concurrency controller. |
+
+### What a page costs the client, and why it is three things
+
+Charging a page one number is the mistake this model exists to avoid. Direct measurement of a real
+client found the per-page cost split across stages that behave differently under load: the fetch
+worker's own conversion work is independent per page and parallel across workers; the durability
+commit is a single serial writer every page waits on before it may emit; the output sink is another
+serial stage whose service rate is a real ceiling on how fast pages can leave. A columnar sink adds a
+fourth, measured to run on its own threads and off the page's critical path.
+
+`CompositeClientCost` charges the first three in series on the page's own timeline and the fourth in
+parallel, because that is the order the engine does them in — and getting it wrong in the other
+direction would let a simulated fleet emit pages faster than any real client could absorb, which is
+exactly the impossible strategy a client-cost term exists to prevent the simulator from "discovering".
+Two of the stages have a mean several times their median, so those are **sampled** from their measured
+quantiles rather than averaged: a policy that bursts should pay for its bursts, not pay the average
+twice.
+
+Every term carries where it came from and how far it can be trusted. A term is never defaulted and
+never silently zero; zeroing one is legal only through the constructor that records the zero as a
+deliberate choice, which marks the run as an arithmetic check rather than a prediction.
+
+### The timeouts are inputs, not constants
+
+A timeout only means something relative to the latencies it bounds. Under a scaled-down real-time
+experiment those ratios move, which is how a timeout pathology disappears from a reproduction — the
+budget stayed at three seconds while the call it bounds got ten times faster. Virtual time can state
+the ratio exactly, so every one of them is a declared input: probe and worker attempt timeouts, the
+transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Defaults
+restate what the shipped engine uses, so a scenario that wants "today's engine" says so, and a
+scenario that wants a different ratio states the difference against a written reference.
 
 An action body runs atomically in virtual time — the clock does not move and no other actor runs
 inside it — which is how a lock hold is expressed without a lock. State read in one event and used

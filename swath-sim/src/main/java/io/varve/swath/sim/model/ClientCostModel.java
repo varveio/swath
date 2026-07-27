@@ -12,8 +12,9 @@ import io.varve.swath.sim.kernel.SimContext;
  * How a {@link ClientCostTerm} is actually paid: the model FORM, as distinct from the term's
  * magnitude.
  *
- * <p>The two permitted forms are the two answers to "is this cost private to a page, or shared
- * between all pages in flight?".
+ * <p>The first two forms are the two answers to "is this cost private to a page, or shared between all
+ * pages in flight?"; the third is the answer measurement actually gave, which is "both, in named
+ * stages".
  *
  * <ul>
  *   <li>{@link IidClientCost} — each page pays its own cost on its own timeline. Right when the work
@@ -22,6 +23,10 @@ import io.varve.swath.sim.kernel.SimContext;
  *   <li>{@link ContendedClientCost} — every page queues for a shared resource. Right when the work
  *       funnels through something serial: a single consumer stage, one writer thread, one database
  *       connection.</li>
+ *   <li>{@link CompositeClientCost} — a parallel per-page term in series with a serial writer and a
+ *       serial consumer stage, plus an optional parallel offload pool. Right because that is what the
+ *       spans measure: one form for the whole client would have to be wrong about one of the stages,
+ *       and which stage it was wrong about would decide which policies the simulator prefers.</li>
  * </ul>
  *
  * <p>They are not interchangeable, and the difference is not a second-order correction. Under the
@@ -32,7 +37,7 @@ import io.varve.swath.sim.kernel.SimContext;
  * between them is a measurement question, which is why both are expressible here rather than one
  * being assumed.
  */
-public sealed interface ClientCostModel permits IidClientCost, ContendedClientCost {
+public sealed interface ClientCostModel permits IidClientCost, ContendedClientCost, CompositeClientCost {
 
     /**
      * Counter naming the number of pages charged. Declared once here, and not per form, because a

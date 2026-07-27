@@ -39,4 +39,21 @@ public interface LatencyModel {
      * @param rng       the calling actor's latency tape
      */
     long drawNanos(CallClass callClass, SimRng rng);
+
+    /**
+     * The service time of one call issued while {@code inFlight} calls are already outstanding — the
+     * overload the executor actually calls, so a model whose latency depends on how hard the store is
+     * being pushed can say so.
+     *
+     * <p>Default: ignore the occupancy, which is the right answer for every model whose service time
+     * is a property of the call rather than of the load. A model that overrides this states the
+     * opposite — that the store degrades under concurrency — which is the one shape a per-call draw
+     * cannot otherwise express and the shape the adaptive-concurrency controller's latency-freeze rung
+     * exists to react to.
+     *
+     * @param inFlight calls outstanding at the instant this one is issued, not counting it
+     */
+    default long drawNanos(CallClass callClass, SimRng rng, int inFlight) {
+        return drawNanos(callClass, rng);
+    }
 }

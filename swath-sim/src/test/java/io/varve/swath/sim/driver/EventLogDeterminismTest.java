@@ -8,6 +8,7 @@ package io.varve.swath.sim.driver;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimRunResult;
 import io.varve.swath.sim.model.CallClass;
 import io.varve.swath.sim.model.ClientCostTerm;
@@ -53,8 +54,8 @@ class EventLogDeterminismTest {
     void twoRunsAtOneSeedProduceByteIdenticalTraces() {
         SimScenario scenario = scenario(42L, 4);
 
-        SimRunResult first = SequentialListingDriver.run(scenario, KeyListStore.ofGeneratedKeys(TOTAL_KEYS));
-        SimRunResult second = SequentialListingDriver.run(scenario, KeyListStore.ofGeneratedKeys(TOTAL_KEYS));
+        SimRunResult first = SequentialListingDriver.run(scenario, ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS));
+        SimRunResult second = SequentialListingDriver.run(scenario, ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS));
 
         assertThat(first.log().canonicalBytes())
                 .as("a recorded trace must be non-trivial, or this comparison checks nothing")
@@ -68,9 +69,9 @@ class EventLogDeterminismTest {
     @Test
     void differentSeedsProduceDifferentTraces() {
         SimRunResult first = SequentialListingDriver.run(scenario(42L, 4),
-                KeyListStore.ofGeneratedKeys(TOTAL_KEYS));
+                ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS));
         SimRunResult other = SequentialListingDriver.run(scenario(43L, 4),
-                KeyListStore.ofGeneratedKeys(TOTAL_KEYS));
+                ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS));
 
         assertThat(other.log().canonicalBytes()).isNotEqualTo(first.log().canonicalBytes());
         assertThat(other.wallNanos()).isNotEqualTo(first.wallNanos());
@@ -99,7 +100,7 @@ class EventLogDeterminismTest {
 
     /** The service times worker {@code actorId} drew, in order, read out of the recorded trace. */
     private static List<Long> latenciesOfWorker(int actorId, SimScenario scenario) {
-        SimRunResult result = SequentialListingDriver.run(scenario, KeyListStore.ofGeneratedKeys(TOTAL_KEYS));
+        SimRunResult result = SequentialListingDriver.run(scenario, ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS));
         List<Long> latencies = new ArrayList<>();
         Long requestedAt = null;
         for (var entry : result.log().entries()) {
@@ -138,8 +139,8 @@ class EventLogDeterminismTest {
         int perRange = TOTAL_KEYS / RANGE_COUNT;
         List<KeyRange> ranges = new ArrayList<>();
         for (int r = 0; r < RANGE_COUNT; r++) {
-            ByteKey from = r == 0 ? null : ByteKey.copyOf(KeyListStore.key(r * perRange));
-            ByteKey to = r == RANGE_COUNT - 1 ? null : ByteKey.copyOf(KeyListStore.key((r + 1) * perRange));
+            ByteKey from = r == 0 ? null : ByteKey.copyOf(ListingFixtureStore.key(r * perRange));
+            ByteKey to = r == RANGE_COUNT - 1 ? null : ByteKey.copyOf(ListingFixtureStore.key((r + 1) * perRange));
             ranges.add(new KeyRange(from, to));
         }
         return ranges;

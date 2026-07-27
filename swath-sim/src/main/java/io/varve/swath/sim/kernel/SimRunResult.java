@@ -14,7 +14,9 @@ import java.util.TreeMap;
  * stopped, the trace, and the counters actors incremented along the way.
  *
  * @param wallNanos       the virtual instant the run ended at — the headline result
- * @param eventsProcessed events dispatched; the kernel's own cost, not the modelled system's
+ * @param eventsProcessed events dispatched — the kernel's own cost, not the modelled system's, and
+ *                        inclusive of every event an actor invalidated when it ran (see
+ *                        {@link SimKernel}'s {@code maxEvents} note)
  * @param stopReason      why the run ended
  * @param log             the trace (empty unless the scenario asked for one)
  * @param counters        run counters, defensively copied into name order so a printed result is

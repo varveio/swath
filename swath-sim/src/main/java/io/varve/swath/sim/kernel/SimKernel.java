@@ -45,6 +45,19 @@ public final class SimKernel implements SimContext {
     /** No actor — the id an event scheduled by the run's bootstrap, rather than by an actor, carries. */
     public static final int NO_ACTOR = -1;
 
+    /**
+     * The reserved actor id a <b>fleet-wide</b> instrument draws on — one that belongs to the whole
+     * run rather than to any actor (the AIMD controller's shed-window jitter is the case that exists).
+     * Such a draw must not be attributed to whichever actor happened to trigger it, or its value would
+     * become a function of the interleaving, which is exactly what per-actor tapes exist to prevent.
+     *
+     * <p>Deliberately <b>not</b> {@link #NO_ACTOR}: that value is also what {@link #actorId()} reports
+     * outside any dispatch, so keying fleet streams on it would let a stray out-of-dispatch
+     * {@link #rng(SimRngStream)} silently share a tape with the fleet's own. A distinct id makes the
+     * two impossible to collide, and the out-of-dispatch call is rejected outright below.
+     */
+    public static final int FLEET_ACTOR = -2;
+
     /** The kind stamped on the automatic trace entry every dispatched event produces. */
     private static final String DISPATCH_DETAIL = "";
 
@@ -77,7 +90,15 @@ public final class SimKernel implements SimContext {
      * @param budgets   the run's declared engine time budgets; {@link EngineTimeBudgets#maxDurationNanos()}
      *                  is enforced here, the rest are read by the actors that model them
      * @param log       the trace to append to ({@link SimEventLog#disabled()} to record nothing)
-     * @param maxEvents the runaway guard: dispatch at most this many events, {@code > 0}
+     * @param maxEvents the runaway guard: dispatch at most this many events, {@code > 0}. Counted as
+     *                  events <b>dispatched</b>, which includes any an actor invalidates when it runs:
+     *                  the kernel has no cancellation, so a model that arms a timer against an
+     *                  in-flight operation retires the loser by ignoring it in its own body, and that
+     *                  dispatch is charged here like any other. A budget therefore has to be sized
+     *                  against the events a scenario schedules, not against the ones that turn out to
+     *                  matter; an executor that arms such timers reports how many were invalidated (see
+     *                  its own {@code .stale} counter) so the difference is measured rather than
+     *                  guessed at.
      */
     public SimKernel(long baseSeed, EngineTimeBudgets budgets, SimEventLog log, long maxEvents) {
         if (maxEvents <= 0) {
@@ -147,8 +168,21 @@ public final class SimKernel implements SimContext {
         return currentActorId;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Rejected outside a dispatch. There is no actor to attribute the draw to there, so the tape it
+     * would mint is keyed on {@link #NO_ACTOR} — a tape shared by every such caller, whose values then
+     * depend on which of them ran first. Failing loudly turns that into a defect at its first use
+     * rather than a reproducibility hole discovered when two runs disagree.
+     */
     @Override
     public SimRng rng(SimRngStream stream) {
+        if (currentActorId == NO_ACTOR) {
+            throw new IllegalStateException("rng(" + stream + ") was called outside an event body, where "
+                    + "there is no actor to own the tape; a fleet-wide instrument draws on FLEET_ACTOR "
+                    + "through SimRng.forStream instead");
+        }
         return streamFor(currentActorId, stream);
     }
 

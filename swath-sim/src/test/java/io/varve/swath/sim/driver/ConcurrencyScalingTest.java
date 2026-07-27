@@ -8,6 +8,7 @@ package io.varve.swath.sim.driver;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimRunResult;
 import io.varve.swath.sim.model.ClientCostTerm;
 import io.varve.swath.sim.model.ConstantLatencyModel;
@@ -88,7 +89,7 @@ class ConcurrencyScalingTest {
                 EngineTimeBudgets.engineDefaults(),
                 false,
                 SimScenario.DEFAULT_MAX_EVENTS);
-        return SequentialListingDriver.run(scenario, KeyListStore.ofGeneratedKeys(totalKeys));
+        return SequentialListingDriver.run(scenario, ListingFixtureStore.ofGeneratedKeys(totalKeys));
     }
 
     private static List<KeyRange> ranges() {
@@ -96,8 +97,8 @@ class ConcurrencyScalingTest {
         int start = 0;
         for (int i = 0; i < RANGE_SIZES.size(); i++) {
             int end = start + RANGE_SIZES.get(i);
-            ByteKey from = start == 0 ? null : ByteKey.copyOf(KeyListStore.key(start));
-            ByteKey to = i == RANGE_SIZES.size() - 1 ? null : ByteKey.copyOf(KeyListStore.key(end));
+            ByteKey from = start == 0 ? null : ByteKey.copyOf(ListingFixtureStore.key(start));
+            ByteKey to = i == RANGE_SIZES.size() - 1 ? null : ByteKey.copyOf(ListingFixtureStore.key(end));
             ranges.add(new KeyRange(from, to));
             start = end;
         }
