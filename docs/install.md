@@ -40,11 +40,9 @@ jar is built and what it bundles.
 The tagged-release workflow attaches the
 `distZip` and `distTar` application archives, a
 `SHA256SUMS` file, an SPDX SBOM, and a keyless Sigstore bundle for every shipped
-jar/archive. The archives contain Gradle application launchers and require a
-JDK 25 runtime; they are not native per-platform binaries. Verify the checksum before use; with
-[`cosign`](https://github.com/sigstore/cosign), verify an archive's adjacent
-bundle with `cosign verify-blob --bundle <archive>.sigstore.json <archive>`.
-The workflow also keylessly signs the immutable GHCR image digest.
+asset. The archives contain Gradle application launchers and require a
+JDK 25 runtime; they are not native per-platform binaries. See
+[Verifying a download](#verifying-a-download) below.
 
 ## Build from source
 
@@ -91,3 +89,59 @@ queries directly, no merge step needed. If the run gets interrupted,
 re-listing from scratch. See [`usage.md`](usage.md) for the full flag
 reference and [`configuration.md`](configuration.md) for every flag/knob's
 default at a glance.
+
+## Verifying a download
+
+Every release asset is signed with keyless [Sigstore](https://www.sigstore.dev/) and carries
+a SLSA build-provenance attestation. The same commands below run inside the release pipeline
+before it publishes, so a release that cannot be verified never goes out.
+
+`IDENTITY` names the workflow that built the release — substituting a different tag or repo
+is the point of the check, so paste it exactly.
+
+```
+TAG=v0.1.0
+IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
+ISSUER=https://token.actions.githubusercontent.com
+
+sha256sum --check SHA256SUMS
+
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" SHA256SUMS
+
+gh attestation verify SHA256SUMS --repo varveio/swath
+```
+
+Checking `SHA256SUMS` is enough for the whole release: its signature makes the file
+trustworthy, and the file covers every other asset. For the container image, verify the
+immutable digest rather than a tag:
+
+```
+cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+  ghcr.io/varveio/swath@sha256:<digest>
+
+gh attestation verify oci://ghcr.io/varveio/swath@sha256:<digest> --repo varveio/swath
+```
+
+## Running the container: two things that surprise people
+
+**Write permissions.** The image runs as a non-root numeric UID (10001), so a host output
+directory you own is *not* writable by it — the run fails with
+`AccessDeniedException`. Rather than loosening permissions with `chmod 777`, run the
+container as yourself, which also leaves the output owned by you:
+
+```
+mkdir -p /tmp/swath-out
+docker run --rm --user "$(id -u):$(id -g)" -v /tmp/swath-out:/out \
+  ghcr.io/varveio/swath:latest \
+  list s3://my-bucket/prefix/ --no-sign-request --format parquet -o /out/data
+```
+
+The output path must be inside the mount: `-o /out/data` lands in `/tmp/swath-out/data`.
+Anywhere else and the results stay in the container and vanish with `--rm`.
+
+**A short run looks silent.** Progress goes to stderr, and off a terminal it is *appended*
+every 30s rather than redrawn — so a run that finishes in ten seconds prints nothing until
+the summary. Pass `--progress-interval 2s` for periodic records in a log, or `docker run -t`
+to get the live redrawing display (a real terminal is required for that; `--progress` alone
+cannot force control sequences onto a stream that cannot act on them).

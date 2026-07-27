@@ -7,9 +7,10 @@ human side of it.
 
 ## Versioning
 
-- **Semantic Versioning, stable `X.Y.Z` only.** Pre-release and build-metadata tags
-  (`v1.2.3-rc1`, `v1.2.3+build`) are intentionally **not** supported — the release build
-  rejects them.
+- **Semantic Versioning: `X.Y.Z`, or `X.Y.Z-rc.N` for a pre-release.** No other
+  pre-release identifiers (`-alpha`, `-beta.2`) and no build metadata (`+build`) — the
+  release build rejects them. `-rc.N` is the only pre-release form the pipeline
+  implements publish semantics for.
 - **One source of truth.** `version` in [`gradle.properties`](gradle.properties) drives
   every produced artifact: the Gradle build, `swath --version`, jar manifests, archive
   names, and the container image labels. Between releases it carries a `-SNAPSHOT`
@@ -30,6 +31,24 @@ human side of it.
   regress them. To pin an exact build, use the immutable digest:
   `ghcr.io/varveio/swath@sha256:…`.
 
+## Release candidates
+
+A `vX.Y.Z-rc.N` tag runs the **entire** publish path — promotion, digest push, deep
+container smoke, signing, attestation, self-verification — and differs only in what it
+names: the `X.Y.Z-rc.N` container tag alone (no `:latest`, no rolling `X.Y`) and a GitHub
+**pre-release**.
+
+Use one whenever the publish path itself has changed. Its purpose is that a failure costs
+an `rc` number instead of a version number: tags are immutable, so a `vX.Y.Z` that dies
+half-way leaves a partial release and a version you cannot cleanly reuse.
+
+**An RC is not promoted.** `gradle.properties` reads `X.Y.Z-rc.N`, and that string is
+baked into the jar manifest and reported by `swath --version`, so shipping those bytes as
+`X.Y.Z` would contradict the tag — which `verifyReleaseVersion` exists to prevent. The
+final tag is a fresh build. What the rehearsal proves is the *pipeline*: credentials,
+signing identity, attestation subjects, and whether the verification commands below
+actually work.
+
 ## Cutting a release
 
 1. Make sure `main` is green and you are on a clean checkout of the commit you want to
@@ -45,8 +64,11 @@ human side of it.
    git push origin main v0.2.0
    ```
 4. The `Release` workflow builds the assets once, generates checksums and an SBOM, and
-   then waits on the protected `public-release` environment. **Approve it** to publish the
-   signed jar, distributions, container image, and GitHub release.
+   then waits on the protected `public-release` environment. **Approve it.** The publish
+   job then pushes the image by digest, smokes that digest, tags it, signs and attests
+   everything, creates the GitHub release as a **draft**, runs the verification commands
+   below against what it just published, and only then un-drafts it. If verification
+   fails the release stays a draft — fix and re-tag rather than publishing by hand.
 5. Bump the canonical version to the next development cycle and commit:
    ```
    # edit gradle.properties: version=0.3.0-SNAPSHOT   (or 0.2.1-SNAPSHOT)
@@ -71,3 +93,31 @@ For each `vX.Y.Z` tag, once the environment is approved:
   that in mind.
 - The version bump is manual by design (the canonical version lives in `gradle.properties`).
   `just release` wraps the mechanical steps so the tag and version cannot drift.
+
+## Verifying a release
+
+These are the commands a user runs, and the same ones the publish job runs against itself
+before un-drafting. `IDENTITY` is the workflow that produced the release — renaming
+`release.yml` would change it and invalidate every published instruction, which is why the
+filename is frozen.
+
+```
+TAG=v0.1.0
+IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
+ISSUER=https://token.actions.githubusercontent.com
+
+# 1. Checksums cover every asset.
+sha256sum --check SHA256SUMS
+
+# 2. The checksum file itself is signed, so step 1 is trustworthy.
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" SHA256SUMS
+
+# 3. The image, by digest.
+cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+  ghcr.io/varveio/swath@sha256:<digest>
+
+# 4. Build provenance — which workflow, at which commit, built this.
+gh attestation verify oci://ghcr.io/varveio/swath@sha256:<digest> --repo varveio/swath
+gh attestation verify SHA256SUMS --repo varveio/swath
+```
