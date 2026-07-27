@@ -77,6 +77,15 @@ import java.util.function.Supplier;
  * and no material loss of throughput. A variant that fixes the bench by making these worse has moved
  * the pathology rather than cured it.
  *
+ * <p><b>Qualification, recorded 2026-07-27 on the control legs.</b> The near-zero-tail half of this
+ * criterion is <b>not applicable to the uniform guard at the {@code < 0.05} line the hash-fanned guard
+ * is held to</b>: the uniform <em>control</em> — the shipped algorithm on a fixture that is healthy by
+ * construction — reads a tail fraction of 0.0343–0.0686 across the four seeds, so the line would fail
+ * the incumbent. That is a fact about the fixture's own geometry, not about any candidate. The uniform
+ * guard is therefore held on serial fraction, occupancy and throughput, and its tail is <b>reported
+ * rather than asserted</b>. Nothing else in this section is relaxed, and the hash-fanned guard carries
+ * the tail criterion as written.
+ *
  * <h2>Regime disclosure discipline</h2>
  * The bench's tail magnitude is page-regime-dependent — 0.33 at a 100-key page against ~0.001 at the
  * measured 1,000-key page, because pages per range is the scaling variable. The race therefore runs a

@@ -59,14 +59,21 @@ import org.junit.jupiter.api.Test;
  * that — then suppresses owner splitting for the rest of the run. Division falls back onto the
  * thief's probe-driven path, which is what the extra calls and the extra time are.
  *
- * <p><b>E1 alone also damages a healthy keyspace.</b> On the hash-fanned guard it reaches serial
- * fraction 0.120 at seed 20260727 and 0.030 at 987654321, against a control range of 0.0004–0.0093,
- * with the NO_VICTIM share at 0.80 and 0.48 against 0.012 and 0.075. The trace says why: with no
- * position term, a nearly-finished range still outranks everything, thieves attack it, fail, and the
- * per-victim futility cooldown pages every candidate out — {@code NO_VICTIM.all_futility_paced} 381
- * against the control's 1. That is a <b>2-of-4-seed regression and is reported as the split verdict
- * it is</b>, not averaged away; it is also exactly the cost E1's own note predicted for an estimator
- * that gives up position. E2 and E1+E2 hold both guards at all four seeds.
+ * <p><b>E1 alone also damages a healthy keyspace — at one of the four seeds.</b> All three candidates
+ * are read here on <b>one</b> yardstick, the hash-fanned control's own serial fraction <em>at the same
+ * seed</em>: that control moves 25-fold across the four seeds (0.0004, 0.0049, 0.0093, 0.0037), so a
+ * fixed line lets the same reading be called a regression for one candidate and a hold for another. On
+ * that yardstick E1 reaches <b>0.1198 at seed 20260727 — 300× the control at that seed, and 15× what
+ * E1+E2 does at it</b> — with mean occupancy falling below 7 of 8 workers, the NO_VICTIM share at 0.80
+ * against the control's 0.012, and {@code NO_VICTIM.all_futility_paced} at 381 against the control's 1.
+ * At 987654321 it is elevated at 0.0301, 8× the control — but E1+E2 reads 0.0293 there, 8× the control
+ * too, so <b>that seed does not separate the candidates and is not counted against E1</b>. At the
+ * remaining two seeds E1 sits at or below the control. The verdict is therefore <b>one decisive seed of
+ * four, reported as the split verdict it is</b> rather than averaged away, and the mechanism is exactly
+ * the cost E1's own note predicted for an estimator that gives up position: with no position term a
+ * nearly-finished range still outranks everything, thieves attack it, fail, and the per-victim futility
+ * cooldown pages every candidate out. E2 and E1+E2 hold both guards at all four seeds — on serial
+ * fraction, on occupancy, and on throughput.
  *
  * <h2>What this says, and what it does not</h2>
  * The sensor was the thing gating division on this keyspace: fixing the reading, and nothing else,
@@ -201,29 +208,35 @@ class SensingRaceTest {
         SensingRaceProtocol.printTable("== guards: the two healthy shapes", legs);
 
         // The uniform guard is held by every candidate at every seed: same geometry, mass spread, and
-        // nothing any of them does to the estimate costs it anything.
+        // nothing any of them does to the estimate costs it anything -- not the serial fraction, not
+        // occupancy, and not throughput. Its tail is reported rather than asserted, per the dated
+        // qualification in the protocol: the uniform CONTROL's own tail is 0.034-0.069, so the
+        // hash-fanned guard's <0.05 line would fail the shipped algorithm on a healthy fixture.
         for (SensingVariant variant : CANDIDATES) {
             for (long seed : SensingRaceProtocol.SEEDS) {
-                assertThat(SensingRaceProtocol.at(uniform, variant, seed).serialFraction())
-                        .as("%s on the uniform guard at seed %d", variant, seed).isLessThan(0.05);
+                assertGuardHeld(SensingRaceProtocol.at(uniform, variant, seed),
+                        SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
+                        variant + " on the uniform guard at seed " + seed);
             }
         }
         // The hash-fanned guard separates the candidates. The two that keep a position term hold it at
-        // every seed, on the guard's own health threshold.
+        // every seed, on the guard's own health threshold and on the tail as well.
         for (SensingVariant variant : new SensingVariant[] {
             SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED}) {
             for (long seed : SensingRaceProtocol.SEEDS) {
                 SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(hashFanned, variant, seed);
-                assertThat(leg.serialFraction()).as("%s on the hash-fanned guard at seed %d", variant, seed)
-                        .isLessThan(0.05);
+                assertGuardHeld(leg, SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed),
+                        variant + " on the hash-fanned guard at seed " + seed);
                 assertThat(leg.tailFraction()).as("%s hash-fanned tail at seed %d", variant, seed)
                         .isLessThan(0.05);
             }
         }
-        // E1 does not. Stated as what it is -- a regression at two of the four seeds, so the claim
-        // pinned here is over the four-seed set rather than at any one of them: its worst seed is an
-        // order of magnitude past the control's worst, with the fleet spending most of its steal
-        // attempts finding every candidate paged out by the futility cooldown.
+        // E1 does not, at one of the four seeds -- read on the same-seed yardstick as everything above.
+        // Only a four-seed reading may be pinned, so what is asserted is the set-level one: E1's worst
+        // seed is an order of magnitude past the control's worst, with the fleet spending most of its
+        // steal attempts finding every candidate paged out by the futility cooldown. The per-seed
+        // detail, including the seed where E1 and E1+E2 are 3% apart and neither is separated from the
+        // other, is in this class's own prose.
         double controlWorst = 0.0;
         double rateWorst = 0.0;
         double rateWorstNoVictim = 0.0;
@@ -238,6 +251,25 @@ class SensingRaceTest {
                 .isGreaterThan(10.0 * controlWorst);
         assertThat(rateWorstNoVictim).as("and the fleet finding no victim while it happens")
                 .isGreaterThan(0.5);
+    }
+
+    /**
+     * The regression-guard criterion the protocol declares, in full: a near-zero serial fraction,
+     * <b>healthy occupancy</b>, and <b>no material loss of throughput</b>. The last two were declared
+     * and then left unasserted in this test's first cut; both are read against the control <em>at the
+     * same seed</em>, because a guard's own numbers move across re-seeding and a fixed line would be a
+     * different yardstick per seed. Five percent is the "material" line: the widest same-seed spread
+     * any candidate that holds a guard actually shows is 3%.
+     */
+    private static void assertGuardHeld(SensingRaceProtocol.Leg leg, SensingRaceProtocol.Leg control,
+                                        String at) {
+        assertThat(leg.serialFraction()).as("%s: serial fraction", at).isLessThan(0.05);
+        assertThat(leg.result().timeline().meanOccupancy()).as("%s: mean occupancy", at)
+                .isGreaterThan(7.0);
+        assertThat(leg.result().virtualNanos()).as("%s: virtual duration against the control's", at)
+                .isLessThan((long) (1.05 * control.result().virtualNanos()));
+        assertThat(leg.result().storeCalls()).as("%s: store calls against the control's", at)
+                .isLessThan((long) (1.05 * control.result().storeCalls()));
     }
 
     @Test
