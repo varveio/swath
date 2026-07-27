@@ -1,0 +1,85 @@
+# Dependabot keeps the SHA-pinned inputs current.
+#
+# Every action in .github/workflows/ is pinned by commit SHA and every Dockerfile
+# FROM by image digest, which is the right call for supply-chain integrity — but a
+# pin never moves on its own. Without this file the pins silently rot: in a year the
+# workflows run year-old runners and the image ships a year-old JRE with known CVEs,
+# and nobody notices because nothing is red. Pinning and automated bumping are one
+# practice, not two; this file is the second half.
+#
+# Dependabot rewrites the SHA and updates the trailing `# v4` comment, so the pins
+# stay readable after a bump.
+#
+# Everything is grouped and weekly on purpose: this is a solo-maintainer repo, and a
+# dozen individual dependency PRs a week is how update automation gets muted. One PR
+# per ecosystem per week is reviewable; muted automation is not.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  # The root build: version catalog (gradle/libs.versions.toml) + module build files.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Test-only dependencies can move on their own cadence — a JUnit or Testcontainers
+      # bump carries no shipped-artifact risk, so it should not queue behind review of a
+      # Parquet/Hadoop bump that does.
+      test-dependencies:
+        patterns:
+          - "org.junit*"
+          - "org.assertj*"
+          - "org.mockito*"
+          - "org.testcontainers*"
+          - "net.jqwik*"
+      production-dependencies:
+        exclude-patterns:
+          - "org.junit*"
+          - "org.assertj*"
+          - "org.mockito*"
+          - "org.testcontainers*"
+          - "net.jqwik*"
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # build-logic is a separate included build (settings.gradle.kts: includeBuild), so
+  # its dependencies are invisible to the root scan above and need their own entry.
+  - package-ecosystem: gradle
+    directory: /build-logic
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      build-logic:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+
+  # Keeps the digest-pinned eclipse-temurin base images current — the pin that would
+  # otherwise leave a stale JRE in every published image.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    groups:
+      base-images:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
