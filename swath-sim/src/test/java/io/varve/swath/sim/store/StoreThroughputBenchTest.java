@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -59,6 +60,9 @@ import org.junit.jupiter.api.Test;
  * {@link #FIXTURE_PROPERTY} at a multi-million-key sorted, stamped fixture and (optionally)
  * {@link #GIANT_FIXTURE_PROPERTY} at a much larger one — the arena tier is skipped for the latter,
  * outside its design envelope by construction (an arena sized to hold it would dwarf a sane heap).
+ * A forced backend that declines its fixture at open time (ARENA over {@link #BENCH_CONFIG}'s
+ * budget, on a fixture large enough to exceed it) is reported and skipped, not fatal — see
+ * {@link #openOrSkip} — so one declined tier never hides the others' numbers.
  */
 @Tag("perf")
 class StoreThroughputBenchTest {
@@ -132,7 +136,11 @@ class StoreThroughputBenchTest {
     /** Measurement 1: warm sustained rate over a fixed wall-clock window. */
     private static void sustainedRate(Path fixture, String label, SimStoreBackend backend) {
         Instant openedAt = Instant.now();
-        SimStoreFactory.Result result = SimStoreFactory.open(fixture, backend, BENCH_CONFIG);
+        Optional<SimStoreFactory.Result> opened = openOrSkip(fixture, "sustained", label, backend, BENCH_CONFIG);
+        if (opened.isEmpty()) {
+            return;
+        }
+        SimStoreFactory.Result result = opened.get();
         Duration open = Duration.between(openedAt, Instant.now());
         try (ListingStore store = result.store()) {
             ListObjectsV2Pager pager = new ListObjectsV2Pager(store, result.metrics());
@@ -153,7 +161,11 @@ class StoreThroughputBenchTest {
      */
     private static void wholeRun(Path fixture, String label, SimStoreBackend backend) {
         Instant openedAt = Instant.now();
-        SimStoreFactory.Result result = SimStoreFactory.open(fixture, backend, BENCH_CONFIG);
+        Optional<SimStoreFactory.Result> opened = openOrSkip(fixture, "run", label, backend, BENCH_CONFIG);
+        if (opened.isEmpty()) {
+            return;
+        }
+        SimStoreFactory.Result result = opened.get();
         Duration open = Duration.between(openedAt, Instant.now());
         try (ListingStore store = result.store()) {
             ListObjectsV2Pager pager = new ListObjectsV2Pager(store, result.metrics());
@@ -189,6 +201,25 @@ class StoreThroughputBenchTest {
                             + "rows=%d elapsed_us=%d%s%n",
                     label, SimStoreBackend.STREAMING, index.size(), index.size() / 2, rows,
                     elapsed.toNanos() / 1_000, segmentReport(result, store));
+        }
+    }
+
+    /**
+     * Opens {@code backend} against {@code fixture}, or — for a forced backend that declines its
+     * fixture (ARENA over its configured byte budget is the only case any of this test's own
+     * fixtures hit) — reports the skip and returns empty rather than letting the
+     * {@link IllegalArgumentException} propagate out of one backend's measurement and abort every
+     * other backend's. Package-private so a unit test can drive it directly without waiting through
+     * a warmup/measured window.
+     */
+    static Optional<SimStoreFactory.Result> openOrSkip(Path fixture, String phase, String label,
+                                                        SimStoreBackend backend, SimStoreConfig config) {
+        try {
+            return Optional.of(SimStoreFactory.open(fixture, backend, config));
+        } catch (IllegalArgumentException declined) {
+            System.out.printf(Locale.ROOT, "store_bench phase=%s fixture=%s backend=%s skipped=over-budget%n",
+                    phase, label, backend);
+            return Optional.empty();
         }
     }
 
