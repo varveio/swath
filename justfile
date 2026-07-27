@@ -84,15 +84,27 @@ jmh:
 ci-drift:
     ./scripts/ci/check-instrumentation-drift.sh
 
-# Prepare a release: set the canonical version, commit, and create the vX.Y.Z tag.
+# Prepare a release: set the canonical version, commit, tag, and open the next dev cycle.
 # Accepts X.Y.Z or a X.Y.Z-rc.N release candidate; no other pre-release identifiers and
 # no build metadata, matching what the release build enforces.
-# Does NOT push — review, then `git push origin main vX.Y.Z` to trigger release.yml.
-# After a stable release publishes, bump gradle.properties to the next -SNAPSHOT.
-# An -rc.N tag publishes only its own container tag and a GitHub pre-release, and is NOT
-# promoted — the final tag is a fresh build. See RELEASING.md.
-# Usage: just release 0.2.0   |   just release 0.2.0-rc.1
-release VERSION:
+#
+# Produces TWO commits and tags the first:
+#   1. "Release vX.Y.Z"        <- tagged; this is what the release workflow builds
+#   2. "Begin <next> development"  <- restores a -SNAPSHOT version on main
+# so `main` can never be left sitting on a released version. That happened after v0.1.0:
+# every dev build, including the container image published on each merge, then reports the
+# released version string. Nothing breaks (this recipe overwrites the version at the next
+# release regardless) but X.Y.Z should mean exactly one thing.
+#
+# NEXT defaults sensibly and can be overridden:
+#   just release 0.1.1            -> next dev cycle 0.1.2-SNAPSHOT   (patch + 1)
+#   just release 0.2.0-rc.1       -> next dev cycle 0.2.0-SNAPSHOT   (still working TOWARD 0.2.0)
+#   just release 0.1.1 0.2.0      -> next dev cycle 0.2.0-SNAPSHOT   (explicit)
+#
+# Does NOT push — review, then `git push origin main vX.Y.Z`, which sends both commits and
+# the tag together. An -rc.N tag publishes only its own container tag and a GitHub
+# pre-release, and is NOT promoted: the final tag is a fresh build. See RELEASING.md.
+release VERSION NEXT="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ ! "{{VERSION}}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
@@ -101,15 +113,35 @@ release VERSION:
     if [[ -n "$(git status --porcelain)" ]]; then
         echo "error: working tree is not clean; commit or stash first" >&2; exit 2
     fi
+    base="{{VERSION}}"; base="${base%%-rc.*}"
+    next="{{NEXT}}"
+    if [[ -z "$next" ]]; then
+        if [[ "{{VERSION}}" == *-rc.* ]]; then
+            # An RC is a rehearsal for X.Y.Z, so development continues toward the SAME
+            # version -- not the next patch.
+            next="$base"
+        else
+            IFS='.' read -r ma mi pa <<< "$base"
+            next="${ma}.${mi}.$((pa + 1))"
+        fi
+    fi
+    if [[ ! "$next" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+        echo "error: NEXT must be a stable X.Y.Z (the -SNAPSHOT suffix is added for you); got '$next'" >&2; exit 2
+    fi
     sed -i -E 's/^version=.*/version={{VERSION}}/' gradle.properties
     git add gradle.properties
     git commit -m "Release v{{VERSION}}"
     git tag -a "v{{VERSION}}" -m "swath v{{VERSION}}"
-    echo "Prepared v{{VERSION}}. Review, then: git push origin main v{{VERSION}}"
+    sed -i -E "s/^version=.*/version=${next}-SNAPSHOT/" gradle.properties
+    git add gradle.properties
+    git commit -m "Begin ${next} development"
+    echo
+    echo "Prepared v{{VERSION}}, and reopened development at ${next}-SNAPSHOT."
+    echo "The tag points at the release commit; main ends on the snapshot."
+    echo "Review both commits, then: git push origin main v{{VERSION}}"
     if [[ "{{VERSION}}" == *-rc.* ]]; then
+        echo
         echo "This is a PRE-RELEASE: it publishes the X.Y.Z-rc.N container tag only —"
         echo "no :latest, no :X.Y — and creates a GitHub pre-release. It is a rehearsal of"
         echo "the publish path; the final tag is a separate, fresh build."
-    else
-        echo "After it publishes, set gradle.properties to the next X.Y.Z-SNAPSHOT and commit."
     fi

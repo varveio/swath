@@ -53,13 +53,20 @@ actually work.
 
 1. Make sure `main` is green and you are on a clean checkout of the commit you want to
    release.
-2. Prepare the release commit and tag:
+2. Prepare the release commits and tag:
    ```
    just release 0.2.0
    ```
-   This sets the canonical version, commits `Release v0.2.0`, and creates the annotated
-   tag `v0.2.0`. It does **not** push — review first.
-3. Push to trigger the release pipeline:
+   This produces **two** commits and tags the first:
+
+   1. `Release v0.2.0` — the canonical version, **tagged**; this is what the workflow builds
+   2. `Begin 0.2.1 development` — restores a `-SNAPSHOT` version on `main`
+
+   so `main` can never be left sitting on a released version. Override the next cycle with a
+   second argument (`just release 0.2.0 0.3.0`); after an `-rc.N` the default returns to the
+   same `X.Y.Z-SNAPSHOT`, since development continues toward that release. It does **not**
+   push — review both commits first.
+3. Push to trigger the release pipeline — this sends both commits and the tag together:
    ```
    git push origin main v0.2.0
    ```
@@ -69,12 +76,6 @@ actually work.
    everything, creates the GitHub release as a **draft**, runs the verification commands
    below against what it just published, and only then un-drafts it. If verification
    fails the release stays a draft — fix and re-tag rather than publishing by hand.
-5. Bump the canonical version to the next development cycle and commit:
-   ```
-   # edit gradle.properties: version=0.3.0-SNAPSHOT   (or 0.2.1-SNAPSHOT)
-   git commit -am "Begin 0.3.0 development"
-   git push
-   ```
 
 ## What the pipeline produces
 
@@ -91,8 +92,9 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 - Release notes are generated from merged PRs (`--generate-notes`); write PR titles with
   that in mind.
-- The version bump is manual by design (the canonical version lives in `gradle.properties`).
-  `just release` wraps the mechanical steps so the tag and version cannot drift.
+- Choosing the version is manual by design (the canonical version lives in
+  `gradle.properties`); `just release` wraps the mechanical steps so the tag and version
+  cannot drift, and reopens the next `-SNAPSHOT` cycle in the same invocation.
 
 ## Verifying a release
 
