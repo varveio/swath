@@ -677,7 +677,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             if (madeProgress) {
                                 signalStealableProgress();
                             }
+                            // Client service cost: what THIS page paid for durability, measured on
+                            // the worker that paid it (the writer-thread meters decompose the same
+                            // work per task/per batch instead). Pure observation around the existing
+                            // await -- no extra synchronization, one nanoTime pair per page.
+                            long commitWaitStartedNs = System.nanoTime();
                             awaitCommit(commit);   // durable before emit (I1); the await never holds ws.lock
+                            metrics.recordCheckpointCommitWait(System.nanoTime() - commitWaitStartedNs);
                             if (trace.enabled()) {
                                 trace.pageCommitted(RunContext.workerIdOrNone(), claim.nodeId(),
                                         inRange.size(), cursorTo, completed);

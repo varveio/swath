@@ -126,6 +126,13 @@ public final class SimStoreFactory {
                 yield resolved(windowedStore(files, index, metrics), SimStoreBackend.WINDOWED,
                         metrics, simMetrics);
             }
+            // AUTO is a fixture-tier router, not an engine algorithm path: AGENTS.md's "instrument
+            // every new algorithm path" doctrine (recordStealReason) is scoped to the LISTING
+            // ENGINE's own split/steal/pivot/seed/backoff decisions, whose post-hoc keyspace-shape
+            // classification that counter family exists for. Choosing a simulator fixture's backing
+            // store is a different concern with its own engagement counters
+            // (SimStoreMetrics#recordArenaDecline / #recordStreamingDecline, both tagged with why),
+            // not an omission of the engine's.
             case AUTO -> {
                 ReplayMetrics duckdbMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ListingStore source = parquetStore(fixturePath, duckdbMetrics);
@@ -221,9 +228,14 @@ public final class SimStoreFactory {
         // recordPageReadLatency=false: the wrapper owns the outer per-page timer, same reasoning as
         // the replay server's own sorted-serving wiring (SortedParquetStore's javadoc).
         SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
-        log.info("sim_store windowed prefetch ENABLED (window_rows={} max_windows={}) for {}",
-                prefetch.windowRows(), prefetch.maxWindows(), files);
-        return new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
+        try {
+            log.info("sim_store windowed prefetch ENABLED (window_rows={} max_windows={}) for {}",
+                    prefetch.windowRows(), prefetch.maxWindows(), files);
+            return new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
+        } catch (RuntimeException e) {
+            backing.close();
+            throw e;
+        }
     }
 
     private static List<Path> resolveFiles(Path fixturePath) {

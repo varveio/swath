@@ -64,6 +64,13 @@ public record SimStoreConfig(long arenaMaxEncodedBytes, long streamingMaxResiden
 
     private static long longProperty(String name, long fallback) {
         String value = System.getProperty(name);
-        return value == null ? fallback : Long.parseLong(value.trim());
+        if (value == null) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(name + " must be a valid long, got \"" + value + "\"", e);
+        }
     }
 }

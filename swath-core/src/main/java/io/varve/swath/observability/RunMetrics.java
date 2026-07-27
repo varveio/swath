@@ -176,6 +176,7 @@ public final class RunMetrics {
     private final Timer idleBackoffParkTime;
     private final Timer checkpointCommitLatency;
     private final Timer checkpointQueueWait;
+    private final Timer checkpointCommitWait;
     private final DistributionSummary checkpointCommitBatchSize;
     private final ConcurrentMap<String, Counter> parquetRotations = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> parquetParts = new ConcurrentHashMap<>();
@@ -188,6 +189,7 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> outputFiles = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> outputBytes = new ConcurrentHashMap<>();
     private final Counter outputBrokenPipe;
+    private final Timer emitLatency;
     private final Timer runDuration;
     private final AtomicReference<Double> runThroughputKeysPerSec = new AtomicReference<>();
 
@@ -291,7 +293,7 @@ public final class RunMetrics {
 
     // Per-call-class latency-phase decomposition (worker page fetch vs the thief's 1-key pivot
     // probe vs its delimiter=/ structure probe) -- lazily-registered Timers, same computeIfAbsent idiom
-    // as stealReasonCounters/apiCalls above. Bounded cardinality: 3 call classes x 3 phases = 9 series.
+    // as stealReasonCounters/apiCalls above. Bounded cardinality: 3 call classes x 4 phases = 12 series.
     /** {@code call_class} tag value: a worker's slot-gated range page fetch. */
     public static final String CALL_CLASS_WORKER_PAGE = "worker_page";
     /** {@code call_class} tag value: the thief's 1-key ({@code max_keys<=1}, no delimiter) pivot probe. */
@@ -304,6 +306,13 @@ public final class RunMetrics {
     public static final String LATENCY_PHASE_TTFB = "ttfb";
     /** {@code phase} tag value: this fetcher's own measured wall-clock total. */
     public static final String LATENCY_PHASE_TOTAL = "total";
+    /**
+     * {@code phase} tag value: the client-side conversion of an already-received response into
+     * swath's own page model (entries + common prefixes) — the one parse cost swath itself owns and
+     * can time. NOT the SDK's own unmarshalling, which happens inside the call and is only visible
+     * as the {@link #LATENCY_PHASE_TOTAL} minus {@link #LATENCY_PHASE_TTFB} residual.
+     */
+    public static final String LATENCY_PHASE_RESPONSE_PARSE = "response_parse";
     private final ConcurrentMap<String, Timer> callClassLatencyTimers = new ConcurrentHashMap<>();
 
     /**
@@ -336,6 +345,18 @@ public final class RunMetrics {
         return Timer.builder(name)
                 .distributionStatisticExpiry(DISTRIBUTION_WINDOW)
                 .distributionStatisticBufferLength(1);
+    }
+
+    /** The percentiles every distribution-reporting timer here publishes. */
+    private static final double[] PUBLISHED_PERCENTILES = {0.5, 0.90, 0.99};
+
+    /**
+     * A {@link #runScopedTimer} that also publishes {@link #PUBLISHED_PERCENTILES} — the builder
+     * every client-service-cost span goes through, so the whole decomposition reports the same
+     * distribution statistics rather than a per-span mix of mean-only and percentile-bearing rows.
+     */
+    private static Timer.Builder clientCostSpanTimer(String name) {
+        return runScopedTimer(name).publishPercentiles(PUBLISHED_PERCENTILES);
     }
 
     /** The {@link DistributionSummary} sibling of {@link #runScopedTimer}. */
@@ -423,8 +444,12 @@ public final class RunMetrics {
         // Publish client-side p50/p99 so the regime-confound RTT is real (the timer
         // otherwise exposes only mean/max) — read back into the shape block at end of run.
         listObjectsLatency = runScopedTimer("swath.api.latency").tag("op", "listObjectsV2")
-                .publishPercentiles(0.5, 0.90, 0.99).register(registry);
-        queueWait = runScopedTimer("swath.queue.wait").register(registry);
+                .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
+        // A client-service-cost span (see #buildClientCostSummary): every span in that
+        // decomposition publishes percentiles, because a per-page cost is only interpretable as a
+        // DISTRIBUTION — a mean hides the contended-writer tail that separates "iid per-page cost"
+        // from "queued behind a shared writer".
+        queueWait = clientCostSpanTimer("swath.queue.wait").register(registry);
         rateLimitWait = runScopedTimer("swath.rate_limit.wait").register(registry);
         // Splits the reactive AIMD concurrency-slot wait (above) from the opt-in
         // `--rate-limit-api` proactive client-side cap, which accrues here
@@ -438,9 +463,11 @@ public final class RunMetrics {
         idleBackoffParkTime = runScopedTimer("swath.idle_backoff.park_time").register(registry);
         Gauge.builder("swath.idle_backoff.level", idleBackoffLevel, AtomicLong::get).register(registry);
 
-        // Checkpoint/resume (the SqliteCheckpointStore single-writer path).
-        checkpointCommitLatency = runScopedTimer("swath.checkpoint.commit.latency").register(registry);
-        checkpointQueueWait = runScopedTimer("swath.checkpoint.queue.wait").register(registry);
+        // Checkpoint/resume (the SqliteCheckpointStore single-writer path). The three timers are
+        // client-service-cost spans (see #buildClientCostSummary).
+        checkpointCommitLatency = clientCostSpanTimer("swath.checkpoint.commit.latency").register(registry);
+        checkpointQueueWait = clientCostSpanTimer("swath.checkpoint.queue.wait").register(registry);
+        checkpointCommitWait = clientCostSpanTimer("swath.checkpoint.commit.wait").register(registry);
         checkpointCommitBatchSize = runScopedSummary("swath.checkpoint.commit_batch_size").register(registry);
 
         // Parquet writer pool (rotation/finalize/discard).
@@ -448,6 +475,9 @@ public final class RunMetrics {
 
         // Text-sink broken-pipe outcome + end-of-run duration/throughput aggregates.
         outputBrokenPipe = Counter.builder("swath.output.broken_pipe").register(registry);
+        // The consumer stage's own per-page sink-write span (client service cost, see
+        // #buildClientCostSummary).
+        emitLatency = clientCostSpanTimer("swath.emit.latency").register(registry);
         runDuration = runScopedTimer("swath.run.duration").register(registry);
         Gauge.builder("swath.run.throughput", runThroughputKeysPerSec,
                         r -> r.get() == null ? Double.NaN : r.get())
@@ -962,11 +992,11 @@ public final class RunMetrics {
      * One call-class/phase latency observation ({@code swath.fetch.latency.phase{call_class,
      * phase}}) -- {@code callClass} is one of {@link #CALL_CLASS_WORKER_PAGE}/{@link
      * #CALL_CLASS_PIVOT_PROBE}/{@link #CALL_CLASS_STRUCTURE_PROBE}, {@code phase} one of {@link
-     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link #LATENCY_PHASE_TOTAL}.
-     * {@code nanos < 0} is the SDK-didn't-report-this-phase sentinel (a best-effort SDK metric
-     * publisher observation, not guaranteed present on every attempt) and is silently skipped --
-     * never fabricates a 0 sample. Bounded cardinality (9 series max), lazily registered the same
-     * {@code computeIfAbsent} idiom as {@link #stealReasonCounter}.
+     * #LATENCY_PHASE_CONNECT_ACQUIRE}/{@link #LATENCY_PHASE_TTFB}/{@link #LATENCY_PHASE_TOTAL}/{@link
+     * #LATENCY_PHASE_RESPONSE_PARSE}. {@code nanos < 0} is the SDK-didn't-report-this-phase sentinel
+     * (a best-effort SDK metric publisher observation, not guaranteed present on every attempt) and
+     * is silently skipped -- never fabricates a 0 sample. Bounded cardinality (12 series max), lazily
+     * registered the same {@code computeIfAbsent} idiom as {@link #stealReasonCounter}.
      */
     public void recordCallClassLatency(String callClass, String phase, long nanos) {
         if (nanos < 0) {
@@ -976,7 +1006,7 @@ public final class RunMetrics {
         callClassLatencyTimers.computeIfAbsent(key, ignored -> runScopedTimer("swath.fetch.latency.phase")
                         .tag("call_class", callClass)
                         .tag("phase", phase)
-                        .publishPercentiles(0.5, 0.90, 0.99)
+                        .publishPercentiles(PUBLISHED_PERCENTILES)
                         .register(registry))
                 .record(nanos, TimeUnit.NANOSECONDS);
     }
@@ -1344,6 +1374,19 @@ public final class RunMetrics {
         checkpointQueueWait.record(Math.max(0L, waitNanos), TimeUnit.NANOSECONDS);
     }
 
+    /**
+     * The FETCH WORKER's own blocking wait for its page commit to become durable (the I1
+     * commit-before-emit await), one observation per committed page. Distinct from the two
+     * writer-thread meters above, which decompose the SAME work as the single-writer thread sees it
+     * (per-task queue wait + per-BATCH commit): this is what one page actually paid, so a per-page
+     * client-service-cost model reads it directly instead of re-deriving it from a batch mean.
+     * Recorded only when the await returns normally — a failed/interrupted commit is a terminal
+     * state, not a representative sample (same discipline as {@link #recordCheckpointCommit}).
+     */
+    public void recordCheckpointCommitWait(long waitNanos) {
+        checkpointCommitWait.record(Math.max(0L, waitNanos), TimeUnit.NANOSECONDS);
+    }
+
     /** Live depth of the checkpoint writer's task queue. */
     public void registerCheckpointQueueDepthGauge(IntSupplier depthSupplier) {
         // Micrometer gauges hold their state object via WeakReference by default; the caller's
@@ -1451,6 +1494,18 @@ public final class RunMetrics {
     public void recordRunCompletion(Duration duration, double keysPerSecond) {
         runDuration.record(duration);
         runThroughputKeysPerSec.set(keysPerSecond);
+    }
+
+    /**
+     * The consumer stage's per-page sink-write span: how long ONE {@code PageBatch} took to go
+     * through the installed output (format + write for the text sinks, pool dispatch for Parquet,
+     * lane admission for {@code --sort}), including that stage's own row tally. Exactly one consumer
+     * stage runs per run, so this stays a single untagged series — which output produced it is
+     * already in the summary's {@code config.format}. Recorded only when the write returned normally
+     * (a broken pipe truncates the page mid-write and is not a representative sample).
+     */
+    public void recordEmit(long nanos) {
+        emitLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
     public void recordEntriesEmitted(long keyCount) {
@@ -2057,6 +2112,9 @@ public final class RunMetrics {
                 // Per-call-class latency-phase percentiles -- cheap regardless of rawPageCount
                 // (an empty list when no fetch of any class has completed); never null.
                 buildCallClassLatencySummary(),
+                // Per-page client-service-cost spans -- same shape and same cheapness (an empty
+                // list when no page was ever serviced); never null.
+                buildClientCostSummary(),
                 // Demand-gate T-vs-Tmax visibility -- null when OWNER_SPLIT.demand_gated never
                 // fired this run (the writer omits the whole block, same idiom as seed/shape/trajectory).
                 demandGatedEvents.get() > 0
@@ -2127,9 +2185,9 @@ public final class RunMetrics {
     /** All 3 {@code call_class} tag values, in a fixed, stable iteration order for the summary. */
     private static final List<String> CALL_CLASSES =
             List.of(CALL_CLASS_WORKER_PAGE, CALL_CLASS_PIVOT_PROBE, CALL_CLASS_STRUCTURE_PROBE);
-    /** All 3 {@code phase} tag values, in a fixed, stable iteration order for the summary. */
-    private static final List<String> LATENCY_PHASES =
-            List.of(LATENCY_PHASE_CONNECT_ACQUIRE, LATENCY_PHASE_TTFB, LATENCY_PHASE_TOTAL);
+    /** All 4 {@code phase} tag values, in a fixed, stable iteration order for the summary. */
+    private static final List<String> LATENCY_PHASES = List.of(LATENCY_PHASE_CONNECT_ACQUIRE,
+            LATENCY_PHASE_TTFB, LATENCY_PHASE_TOTAL, LATENCY_PHASE_RESPONSE_PARSE);
 
     /**
      * Read back every populated {@code call_class}/{@code phase} Timer's p50/p90/p99/max/count
@@ -2153,6 +2211,52 @@ public final class RunMetrics {
             }
         }
         return out;
+    }
+
+    /** {@code span} name: the fetch worker's blocking wait for its page commit to become durable. */
+    public static final String CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT = "checkpoint_commit_wait";
+    /** {@code span} name: a checkpoint task's wait on the single-writer queue before its batch drained. */
+    public static final String CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT = "checkpoint_queue_wait";
+    /** {@code span} name: the checkpoint writer thread's own batch op-execution + {@code conn.commit()}. */
+    public static final String CLIENT_COST_SPAN_CHECKPOINT_COMMIT = "checkpoint_commit";
+    /** {@code span} name: the consumer stage's per-page sink write. */
+    public static final String CLIENT_COST_SPAN_EMIT = "emit";
+    /** {@code span} name: the fetch worker's blocked-on-a-full-channel wait handing the page downstream. */
+    public static final String CLIENT_COST_SPAN_WRITER_BACKPRESSURE = "writer_backpressure";
+
+    /**
+     * Read back every client-service-cost span's p50/p90/p99/max/count into the JSON summary's
+     * {@code client_cost[]} — the per-page cost of SERVICING a page once the store has answered,
+     * decomposed into the spans that can contend independently, so a replay/perf analysis can tell an
+     * iid per-page cost from a queue behind a shared writer (the latter grows with worker count; the
+     * former does not). Same dedicated-readback reason as {@link #buildCallClassLatencySummary}: the
+     * generic {@code meters[]} readback (§1) carries a Timer's count/total_ms/max_ms only, never its
+     * percentiles.
+     *
+     * <p>The fifth span of the decomposition — response PARSE — is deliberately not here: it is
+     * attributable per call class, so it lives in {@code probe_latency[]} as {@code phase=}{@value
+     * #LATENCY_PHASE_RESPONSE_PARSE} rather than being flattened into a call-class-blind row.
+     *
+     * <p>Omits any span with zero observations — never a fabricated all-zero row.
+     */
+    private List<RunSummary.ClientCostSpan> buildClientCostSummary() {
+        List<RunSummary.ClientCostSpan> out = new ArrayList<>();
+        addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT, checkpointCommitWait);
+        addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT, checkpointQueueWait);
+        addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT, checkpointCommitLatency);
+        addClientCostSpan(out, CLIENT_COST_SPAN_EMIT, emitLatency);
+        addClientCostSpan(out, CLIENT_COST_SPAN_WRITER_BACKPRESSURE, queueWait);
+        return out;
+    }
+
+    /** Appends one populated {@link #buildClientCostSummary} row; a never-observed span contributes none. */
+    private static void addClientCostSpan(List<RunSummary.ClientCostSpan> out, String span, Timer timer) {
+        if (timer.count() == 0L) {
+            return;
+        }
+        out.add(new RunSummary.ClientCostSpan(span, timer.count(),
+                timerPercentileMs(timer, 0.5), timerPercentileMs(timer, 0.90), timerPercentileMs(timer, 0.99),
+                timer.max(TimeUnit.MILLISECONDS)));
     }
 
     /** As {@link #latencyPercentileMs}, generalized to any Timer with {@code publishPercentiles} enabled. */

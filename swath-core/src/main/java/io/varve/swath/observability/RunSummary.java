@@ -85,18 +85,32 @@ public record RunSummary(
         TrajectorySummary trajectory,
         List<SlowRange> slowRanges,
         List<CallClassLatencySummary> callClassLatency,
+        List<ClientCostSpan> clientCost,
         DemandGateSummary demandGate) {
 
     /**
      * One {@code call_class}/{@code phase} latency-percentile summary row — {@code callClass} is
      * one of {@code worker_page}/{@code pivot_probe}/{@code structure_probe} ({@code RunMetrics.CALL_CLASS_*}),
-     * {@code phase} one of {@code connect_acquire}/{@code ttfb}/{@code total} ({@code
-     * RunMetrics.LATENCY_PHASE_*}). {@code p50Ms}/{@code p90Ms}/{@code p99Ms} come from the underlying
+     * {@code phase} one of {@code connect_acquire}/{@code ttfb}/{@code total}/{@code response_parse}
+     * ({@code RunMetrics.LATENCY_PHASE_*}). {@code p50Ms}/{@code p90Ms}/{@code p99Ms} come from the underlying
      * Micrometer Timer's {@code publishPercentiles} snapshot; {@code maxMs} and {@code count} are the
      * Timer's own max/count.
      */
     public record CallClassLatencySummary(String callClass, String phase, long count, Double p50Ms, Double p90Ms,
                                            Double p99Ms, double maxMs) {
+    }
+
+    /**
+     * One client-service-cost span's percentile summary — the per-page cost of servicing a page
+     * once the store has answered, decomposed into the parts that can contend independently.
+     * {@code span} is one of {@code checkpoint_commit_wait}/{@code checkpoint_queue_wait}/{@code
+     * checkpoint_commit}/{@code emit}/{@code writer_backpressure} ({@code
+     * RunMetrics.CLIENT_COST_SPAN_*}); the remaining part of the decomposition, response parse, is
+     * per-call-class and is carried by {@link CallClassLatencySummary} instead. Percentile/max/count
+     * semantics are identical to {@link CallClassLatencySummary}'s.
+     */
+    public record ClientCostSpan(String span, long count, Double p50Ms, Double p90Ms, Double p99Ms,
+                                  double maxMs) {
     }
 
     /**

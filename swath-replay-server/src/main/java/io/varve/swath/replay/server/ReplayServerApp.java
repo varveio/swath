@@ -58,17 +58,18 @@ public final class ReplayServerApp implements Callable<Integer> {
     private static Integer serve(Path fixture, String bucket, ServeOptions options) throws Exception {
         int connections = options.parquetConnections > 0
                 ? options.parquetConnections : DuckDbListingStore.defaultConnectionCount();
-        ShapeLatency injected = ShapeLatency.parse(options.injectLatency, options.latencyJitter);
+        ShapeLatency injected =
+                ShapeLatency.parse(options.injectLatency, options.latencyJitter, options.latencyScale);
         try (ReplayServer server = injected == null
                 ? new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode)
                 : new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode,
                         injected)) {
             server.start();
             System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
-                            + "serving_mode=%s parquet_connections=%d inject_latency=%s%n",
+                            + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s%n",
                     options.host, server.port(), bucket, fixture.toAbsolutePath(),
                     server.resolvedServingMode(), connections,
-                    injected == null ? "off" : options.injectLatency);
+                    injected == null ? "off" : options.injectLatency, options.latencyScale);
             server.join();
         }
         return 0;

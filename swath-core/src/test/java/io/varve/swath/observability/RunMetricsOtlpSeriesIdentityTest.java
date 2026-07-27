@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code MeterRegistries} builds a {@code SimpleMeterRegistry} by default and an {@link
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT register the same meters: {@code SimpleMeterRegistry.newTimer} registers {@code
- * HistogramGauges} — 30 extra {@code *.percentile{phi}} GAUGE meters for the 10
+ * HistogramGauges} — 54 extra {@code *.percentile{phi}} GAUGE meters for the 18
  * percentile-publishing timers — that {@code OtlpMeterRegistry.newTimer} never creates, because
  * OTLP encodes those percentiles as {@code SUMMARY} quantiles on the wire instead. So the same run
  * is {@value RunMetricsSimpleRegistrySeriesIdentityTest#EXPECTED_SIMPLE_METER_COUNT} Simple meters
@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 112;
+    static final int EXPECTED_OTLP_METER_COUNT = 117;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -185,14 +185,19 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.workers.active|{}",
             "TIMER|swath.api.latency|{op=listObjectsV2}",
             "TIMER|swath.checkpoint.commit.latency|{}",
+            "TIMER|swath.checkpoint.commit.wait|{}",
             "TIMER|swath.checkpoint.queue.wait|{}",
+            "TIMER|swath.emit.latency|{}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
+            "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
@@ -206,22 +211,31 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.merge.range.latency|{}");
 
     /**
-     * The 10 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
-     * single {@code swath.api.latency} op series plus all nine {@code swath.fetch.latency.phase}
-     * call_class/phase distributions. Asserting the EXACT set (not just count + allowed names)
-     * catches one attribute set being duplicated while another silently disappears.
+     * The 18 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
+     * single {@code swath.api.latency} op series, all twelve {@code swath.fetch.latency.phase}
+     * call_class/phase distributions, and the five client-service-cost spans. Asserting the EXACT
+     * set (not just count + allowed names) catches one attribute set being duplicated while another
+     * silently disappears.
      */
     private static final List<String> EXPECTED_SUMMARY_SERIES = List.of(
             "SUMMARY|swath.api.latency|{op=listObjectsV2}",
+            "SUMMARY|swath.checkpoint.commit.latency|{}",
+            "SUMMARY|swath.checkpoint.commit.wait|{}",
+            "SUMMARY|swath.checkpoint.queue.wait|{}",
+            "SUMMARY|swath.emit.latency|{}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=connect_acquire}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=response_parse}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=pivot_probe,phase=ttfb}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=connect_acquire}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=response_parse}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=structure_probe,phase=ttfb}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=connect_acquire}",
+            "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=response_parse}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
-            "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}");
+            "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
+            "SUMMARY|swath.queue.wait|{}");
 
     @Test
     void otlpMeterSetIdentityIsFrozen(@TempDir Path scratchDir) {

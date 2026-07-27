@@ -42,4 +42,12 @@ final class ServeOptions {
             description = "Deterministic jitter fraction in [0,1) applied to injected latency, "
                     + "keyed off the request bytes (reproducible across runs).")
     double latencyJitter;
+
+    @Option(names = "--latency-scale", defaultValue = "1",
+            description = "Divide every injected latency by this factor, for compressed-time replay "
+                    + "runs (e.g. 50 walks a profile in a fiftieth of the wall clock it describes). "
+                    + "Requires --inject-latency. Only the injected delay scales, not the server's "
+                    + "own per-request cost, so a scaled run's absolute wall clock is not the "
+                    + "unscaled run's divided. Default 1 injects the profile as written.")
+    double latencyScale;
 }

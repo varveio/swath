@@ -133,10 +133,45 @@ readback of `swath.fetch.latency.phase` (§1) since the generic `meters[]` array
 Timer's `count`/`total_ms`/`max_ms` only, not its percentiles (the same reason `shape.regime.
 api_latency_p50_ms`/`_p99_ms` needed one). Each entry is `{call_class, phase, count, p50_ms, p90_ms,
 p99_ms, max_ms}` — `call_class` is `worker_page`/`pivot_probe`/`structure_probe`, `phase` is
-`connect_acquire`/`ttfb`/`total` (see §1's meter row for exactly what each phase does and does NOT
-capture — they are NOT guaranteed additive to `total`). Always present as an array (possibly empty —
-never omitted); a `call_class`/`phase` pair with zero observations is omitted from the array, never a
-fabricated all-zero row.
+`connect_acquire`/`ttfb`/`total`/`response_parse` (see §1's meter row for exactly what each phase
+does and does NOT capture — they are NOT guaranteed additive to `total`). Always present as an array
+(possibly empty — never omitted); a `call_class`/`phase` pair with zero observations is omitted from
+the array, never a fabricated all-zero row.
+
+**`client_cost[]`**: the per-page **client-service-cost** decomposition — what one page costs the
+CLIENT once the store has answered, split into the spans that can contend independently. Each entry
+is `{span, count, p50_ms, p90_ms, p99_ms, max_ms}`, the same shape and the same dedicated-readback
+reason as `probe_latency[]` above (the generic `meters[]` array carries a Timer's
+`count`/`total_ms`/`max_ms` only, never its percentiles). Always present as an array (possibly empty);
+a span with zero observations is omitted, never a fabricated all-zero row.
+
+| `span` | source meter | what it measures |
+|---|---|---|
+| `checkpoint_commit_wait` | `swath.checkpoint.commit.wait` | the FETCH WORKER's own blocking wait for its page commit to become durable (the I1 commit-before-emit await) — **one observation per page**. This is what a page actually paid; the two writer-thread spans below decompose the same work as the single writer sees it. |
+| `checkpoint_queue_wait` | `swath.checkpoint.queue.wait` | per checkpoint TASK: enqueue → the batch drain that picked it up. **Not page-scoped**: the queue also carries the run's lifecycle tasks (`openRun`/`insertNode`/`completeNode`), so its count is `>=` the page count, never exactly it. |
+| `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
+| `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
+| `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
+
+**Reading it.** The spans are percentile-bearing precisely because a per-page cost read as a MEAN
+cannot distinguish an iid per-page cost from a queue behind a shared single writer — whose tail grows
+with worker count while its mean may not. `checkpoint_commit_wait` ≫ `checkpoint_commit` with
+`checkpoint_queue_wait` climbing as `T` climbs is the contended-writer signature; the three moving
+together and flat in `T` is the iid one. The **parse** member of the same decomposition is
+deliberately NOT here: it is attributable per call class, so it lives in `probe_latency[]` as
+`phase=response_parse` rather than being flattened into a call-class-blind row. Note also that
+`checkpoint_commit_wait` is near-zero (but still recorded) on a run with no checkpoint — there is
+nothing to wait for, which is a real client cost of zero, not a missing measurement.
+
+**Not additive — same non-additivity discipline as `probe_latency[]` above.** Two pairs of spans
+here overlap in wall-clock rather than stacking, so summing spans (or cross-checking their sum
+against a run's wall-clock/page count) must account for both: (1) `checkpoint_commit_wait` is the
+SAME durability work as that page's share of `checkpoint_queue_wait` + `checkpoint_commit` — one is
+the fetch worker's own observed wait, the other two are the writer thread's per-task/per-batch view
+of the identical commit, not additional cost on top of it; and (2) `emit` and `writer_backpressure`
+overlap in wall-clock by construction — the worker blocks handing a page onto the downstream channel
+precisely because the consumer stage is still inside that page's (or an earlier page's) `emit` span,
+so the two are two ends of the same handoff, not sequential costs.
 
 **`demand_gate`**: the `OWNER_SPLIT.demand_gated` fixed-threshold/effective-T snapshot — `{events, last_t, min_t,
 t_max}`. `events` is the total count of demand-gate suppressions this run; `last_t`/`min_t` are the

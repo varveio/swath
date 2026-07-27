@@ -157,7 +157,7 @@ outside this module.
 
 `swath-sim` is part of the ordinary build:
 
-```
+```shell
 ./gradlew :swath-sim:test
 ./gradlew :swath-sim:test --tests 'io.varve.swath.sim.store.SimStoreDifferentialTest'
 ```
