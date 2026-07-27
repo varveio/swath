@@ -48,14 +48,18 @@ public record PolicyRunResult(
         boolean stuck) {
 
     /**
-     * Merges the kernel's counters with the controller's own, so a reader has one map rather than two
-     * places to look for a run's engagement counts.
+     * Assembles a result, merging the kernel's counters with the controller's own so a reader has one map
+     * rather than two places to look for a run's engagement counts.
+     *
+     * <p>A named factory rather than a second constructor: the two would have had the same arity and
+     * differed only by which of several {@code long}/{@code int} positions carried what, which is a
+     * call-site mistake the compiler would have been happy to accept.
      */
-    PolicyRunResult(SimRunResult run, PolicyScenario scenario, String storeLabel,
-                    SortedMap<String, Long> gaugeCounters, int finalConcurrencyTarget, long nodesCreated,
-                    long splitsRejected, long storeReads, boolean stuck) {
-        this(run, scenario, storeLabel, merge(run.counters(), gaugeCounters), nodesCreated, splitsRejected,
-                storeReads, finalConcurrencyTarget, stuck);
+    static PolicyRunResult of(SimRunResult run, PolicyScenario scenario, String storeLabel,
+                              SortedMap<String, Long> gaugeCounters, int finalConcurrencyTarget,
+                              long nodesCreated, long splitsRejected, long storeReads, boolean stuck) {
+        return new PolicyRunResult(run, scenario, storeLabel, merge(run.counters(), gaugeCounters),
+                nodesCreated, splitsRejected, storeReads, finalConcurrencyTarget, stuck);
     }
 
     public PolicyRunResult {

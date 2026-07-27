@@ -6,6 +6,7 @@
 package io.varve.swath.sim.executor;
 
 import io.varve.swath.engine.ConfettiFeedbackGate;
+import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.Commit;
@@ -62,6 +63,7 @@ import io.varve.swath.sim.model.CallClass;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -99,13 +101,25 @@ import java.util.Set;
  * both and retires the loser by attempt generation — a dead event that is counted
  * ({@code events.stale}) rather than absorbed.
  *
- * <p>Two disclosed timing widenings from the policy extraction are reproduced as the current engine
- * behaves, not as it behaved before the seam existed. The idle-steal pacing window is checked and
- * consumed as one step at the top of an attempt, rather than checked at one instant and consumed at
- * another; and a victim's structure-probe suppression streaks are read when the attempt's view is
- * built, so a streak that changes mid-cascade is not observed until the next attempt. Both are
- * widenings of a read window, both are benign, and modelling the narrower pre-seam versions would make
- * the simulator disagree with the engine that actually ships.
+ * <p>Three disclosed read-window widenings from the policy extraction are reproduced as the current
+ * engine behaves, not as it behaved before the seam existed — modelling the narrower pre-seam versions
+ * would make the simulator disagree with the engine that actually ships:
+ *
+ * <ul>
+ *   <li><b>The per-victim futility cooldown is read and consumed as two steps.</b> Whether a candidate
+ *       has a cooldown skip left is read while the pool is being scanned, and the skip is consumed
+ *       afterwards, for exactly the candidates the policy reports it skipped — where the pre-seam code
+ *       checked and decremented in one call. A cooldown can therefore end a call or two later than it
+ *       used to.</li>
+ *   <li><b>A victim's structure-probe suppression streaks are read once, at view construction.</b> A
+ *       streak that changes mid-cascade is not observed until the next attempt.</li>
+ *   <li><b>The zero-fan-out streak is applied one step late.</b> The policy returns it as a mutation
+ *       alongside the action it decided, so it lands after that step rather than during it.</li>
+ * </ul>
+ *
+ * <p>The fleet-wide idle-steal pacing window is <em>not</em> one of them: its arithmetic moved behind
+ * the seam unchanged, still consulted under the same monitor, so this executor's single check-then-act
+ * at the top of an attempt is the engine's own shape rather than a widening of it.
  *
  * <h2>Determinism</h2>
  * One scenario at one seed against one store reproduces itself exactly, including its event trace. That
@@ -146,6 +160,8 @@ public final class SimExecutor {
     public static final String OWNER_SPLIT_COUNTER = "owner_split.published";
     /** Children published by a thief's steal. */
     public static final String THIEF_SPLIT_COUNTER = "steal.children";
+
+    private static final HexFormat HEX = HexFormat.of();
 
     private final PolicyScenario scenario;
     private final String storeLabel;
@@ -220,7 +236,7 @@ public final class SimExecutor {
         SimKernel kernel = new SimKernel(scenario.seed(), scenario.budgets(), log, scenario.maxEvents());
         kernel.scheduleBootstrap(0, 0, "seed.start", this::startSeedPhase);
         SimRunResult result = kernel.run();
-        return new PolicyRunResult(result, scenario, storeLabel, gauge.counters(), gauge.effectiveT(),
+        return PolicyRunResult.of(result, scenario, storeLabel, gauge.counters(), gauge.effectiveT(),
                 ledger.nodesCreated(), ledger.splitsAborted(), view.storeReads(), runStuck);
     }
 
@@ -312,6 +328,8 @@ public final class SimExecutor {
         private final int id;
         private final StealPolicy thief;
         private SimContext ctx;
+        /** The attempt number a worker waiting for a slot will resume on. */
+        private int pendingAttempt;
 
         // The claim in progress.
         private long nodeId = -1L;
@@ -376,7 +394,7 @@ public final class SimExecutor {
             livePool.put(nodeId, state);
             ctx.count(RANGES_CLAIMED_COUNTER, 1);
             ctx.record("range.claim", "node=" + nodeId);
-            requestPage();
+            requestPage(0);
         }
 
         /**
@@ -384,14 +402,15 @@ public final class SimExecutor {
          * target has room for it. A worker denied a slot waits for one to be released rather than
          * spinning, which is what a permit does in the engine.
          */
-        private void requestPage() {
+        private void requestPage(int attemptNumber) {
             if (slotsHeld >= gauge.effectiveT()) {
+                pendingAttempt = attemptNumber;
                 slotWaiters.add(this);
                 ctx.record("slot.wait", "worker=" + id);
                 return;
             }
             slotsHeld++;
-            issuePage(0);
+            issuePage(attemptNumber);
         }
 
         private void issuePage(int attemptNumber) {
@@ -404,6 +423,10 @@ public final class SimExecutor {
                             releaseSlot(arrived);
                             gauge.onSuccess(arrived.nowNanos());
                             gauge.onAttemptLatency(arrived.nowNanos(), arrived.nowNanos() - issuedAt);
+                            // The success may have grown the target; the slots that growth released are
+                            // handed out now rather than at whatever later instant a slot happens to be
+                            // returned.
+                            grantSlots(arrived);
                             onPage(arrived);
                         }
 
@@ -417,24 +440,19 @@ public final class SimExecutor {
                             // sampled: it is censored at the budget, and feeding it would poison the
                             // baseline the freeze reads.
                             gauge.onTransientTimeout(at.nowNanos(), true);
-                            if (attempt > scenario.budgets().workerAttemptRetryCap()) {
+                            if (scenario.faultDisposition() == PolicyScenario.FaultDisposition.BOUNDED
+                                    && attempt > scenario.budgets().workerAttemptRetryCap()) {
+                                // The bounded disposition: the retry ceiling ends the run. Under the
+                                // shipped default a watchdog owns storm death instead, so the fetch keeps
+                                // retrying and the run ends on its declared ceilings, not here.
                                 runStuck = true;
                                 at.record("run.stuck", "worker_attempt_retry_cap");
                                 return;
                             }
                             at.schedule(scenario.budgets().transientRetryBackoffNanos(), "page.retry",
-                                    retry -> enter(retry).requestPageRetry(attempt));
+                                    retry -> enter(retry).requestPage(attempt));
                         }
                     });
-        }
-
-        private void requestPageRetry(int attempt) {
-            if (slotsHeld >= gauge.effectiveT()) {
-                slotWaiters.add(this);
-                return;
-            }
-            slotsHeld++;
-            issuePage(attempt);
         }
 
         /**
@@ -465,7 +483,12 @@ public final class SimExecutor {
             ledger.commitPage(nodeId, cursorTo, completed);
             arrived.count(PAGES_COUNTER, 1);
             arrived.count(KEYS_EMITTED_COUNTER, inRange.size());
+            // The page's own emitted interval goes into the trace, not just its size: a total tells a
+            // reader that the right NUMBER of keys came out, which a gap and an overlap of equal size
+            // would also satisfy. The interval makes both visible.
             arrived.record("page.commit", "node=" + nodeId + "|keys=" + inRange.size()
+                    + "|from=" + (inRange.isEmpty() ? "" : HEX.formatHex(inRange.getFirst()))
+                    + "|to=" + (cursorTo == null ? "" : HEX.formatHex(cursorTo))
                     + (completed ? "|completed" : ""));
             if (scenario.toggles().ownerSplit() && !inRange.isEmpty() && !completed) {
                 maybeOwnerSelfSplit(arrived, cursorTo);
@@ -480,7 +503,7 @@ public final class SimExecutor {
                 if (completed) {
                     completeClaim(charged);
                 } else {
-                    requestPage();
+                    requestPage(0);
                 }
             });
         }
@@ -512,11 +535,7 @@ public final class SimExecutor {
             ConfettiFeedbackGate.Snapshot confetti = confettiFeedback.snapshot();
             OwnerSplitView splitView = new OwnerSplitView(hi, state.lo(), cursorTo, state.keysEmitted(),
                     committed, lastSelfSplitPage, ledger.outstanding(), state.densityFraction(),
-                    // The raw, pre-toggle ratio the governor expects: this overload reads the worker's
-                    // own value when the density toggle is on and substitutes the governor's own
-                    // no-signal fallback when it is off, which is what the governor would derive from
-                    // the raw value either way.
-                    scenario.toggles().observedDensityRatio(state),
+                    rawObservedDensityRatio(state),
                     state.alphabetDigest().snapshot(),
                     new ConfettiObservation(confetti.taggedTotal(), confetti.taggedConfetti(),
                             confetti.probeSeq()));
@@ -591,7 +610,7 @@ public final class SimExecutor {
             if (stealAttemptInFlight) {
                 // The fleet allows one steal attempt at a time; the others wait on the slot rather than
                 // multiplying probes against the same pool.
-                ctx.count("STEAL.in_flight_denied", 1);
+                ctx.count("IDLE_SLOT.in_flight", 1);
                 park(scenario.budgets().idleStealAttemptParkNanos());
                 return;
             }
@@ -599,7 +618,7 @@ public final class SimExecutor {
             if (idlePacing.decide(pacingState, now) == IdleStealPacingDecision.PACED) {
                 // The pacing window is checked and consumed as one step here, which is the current
                 // engine's own (widened) shape since the pacing arithmetic became a policy.
-                ctx.count("STEAL.paced_denied", 1);
+                ctx.count("IDLE_SLOT.paced", 1);
                 park(idlePacing.parkNanos(pacingState, now));
                 return;
             }
@@ -879,13 +898,18 @@ public final class SimExecutor {
         }
         boolean[] resolved = {false};
         storeServer.submit(ctx, serviceNanos, at -> {
+            // Occupancy is retired HERE, on the store's own completion, whether or not the caller gave
+            // up first: a call the client has timed out on is still work the store is doing, and it is
+            // still crowding out the next one. Retiring it at the timeout instead would understate
+            // occupancy by exactly the calls a struggling store is struggling with -- the one regime
+            // where an occupancy-sensitive latency model has anything to say.
+            callsInFlight--;
             if (resolved[0]) {
                 at.count(STALE_EVENTS_COUNTER, 1);
                 at.count("events.stale.store_response", 1);
                 return;
             }
             resolved[0] = true;
-            callsInFlight--;
             outcome.onResponse(at);
         });
         ctx.schedule(timeoutNanos, "call.timeout", at -> {
@@ -895,7 +919,6 @@ public final class SimExecutor {
                 return;
             }
             resolved[0] = true;
-            callsInFlight--;
             outcome.onTimeout(at, attempt);
         });
     }
@@ -907,18 +930,28 @@ public final class SimExecutor {
                 at -> issueCall(at, callClass, timeoutNanos, attemptNumber, outcome));
     }
 
-    /**
-     * Returns a page-fetch slot and hands it to whoever has been waiting longest. The wake is scheduled
-     * rather than run inline so the waiter's own work happens in its own event body — the slot changes
-     * hands at this instant, but the two workers never share one.
-     */
+    /** Returns a page-fetch slot; whoever the target now has room for is handed one. */
     private void releaseSlot(SimContext ctx) {
         slotsHeld--;
-        if (slotWaiters.isEmpty()) {
-            return;
+        grantSlots(ctx);
+    }
+
+    /**
+     * Hands out every slot the current target has room for, in the order workers began waiting.
+     *
+     * <p>Called both when a slot is returned and after the controller has had a chance to move the
+     * target, because a growth step releases as many slots as it grew by: waking one worker per
+     * completion would let the fleet lag its own target indefinitely on a run where completions are rare.
+     * The slot is reserved here and the waiter is woken in its own event body, so the two workers never
+     * hold one between them.
+     */
+    private void grantSlots(SimContext ctx) {
+        while (!slotWaiters.isEmpty() && slotsHeld < gauge.effectiveT()) {
+            Worker next = slotWaiters.removeFirst();
+            slotsHeld++;
+            int attempt = next.pendingAttempt;
+            ctx.scheduleFor(next.id, 0, "slot.granted", granted -> next.enter(granted).issuePage(attempt));
         }
-        Worker next = slotWaiters.removeFirst();
-        ctx.scheduleFor(next.id, 0, "slot.granted", granted -> next.enter(granted).requestPage());
     }
 
     /**
@@ -951,6 +984,20 @@ public final class SimExecutor {
         for (Engagement engagement : engagements) {
             ctx.count(engagement.category() + "." + engagement.reason(), 1);
         }
+    }
+
+    /**
+     * The worker's <b>raw, pre-toggle</b> observed density ratio — what the view's contract asks for, and
+     * what the engine passes it.
+     *
+     * <p>The accessor itself is package-private to the engine, so it is read through the one public
+     * overload that returns it untouched: the all-on toggle namespace applies no substitution, so this is
+     * the identical value, obtained without widening anything in swath-core. The scenario's own toggles
+     * are deliberately not applied here — the governor applies them itself, and pre-applying them would
+     * hand it a value its own contract says is raw.
+     */
+    private static double rawObservedDensityRatio(WorkerState state) {
+        return EngineToggles.DEFAULT.observedDensityRatio(state);
     }
 
     /**

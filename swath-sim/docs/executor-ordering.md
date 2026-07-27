@@ -71,16 +71,25 @@ The kernel has no cancellation. So:
 The same mechanism retires a park timer whose worker was woken early by a signal — a child being
 published, or a range completing.
 
-## The two disclosed widenings this reproduces
+## The three disclosed widenings this reproduces
 
-The policy extraction widened two read windows, both benign, both disclosed. The simulator models the
-**current** semantics, not the pre-extraction ones, because the point of the exercise is to predict
-the engine that ships:
+Extracting the policies widened three read windows, all benign, all disclosed. The simulator models the
+**current** semantics, not the pre-extraction ones, because the point of the exercise is to predict the
+engine that ships:
 
-- **Idle-steal pacing** is checked and consumed as one step at the top of an attempt, rather than
-  checked at one instant and consumed at another.
-- **A victim's structure-probe suppression streaks** are read when the attempt's view is built, so a
+- **The per-victim futility cooldown is now read and consumed as two steps.** Whether a candidate still
+  has a cooldown skip is read while the pool is being scanned, without a lock; the skip is consumed
+  afterwards, for exactly the candidates the policy reports it skipped. The pre-extraction code checked
+  and decremented in one call, so a cooldown can now end a call or two later than it used to. The
+  executor models the split pair, which is what production runs.
+- **A victim's structure-probe suppression streaks are read once, when the attempt's view is built.** A
   streak that changes mid-cascade is not observed until the next attempt.
+- **The zero-fan-out streak lands one step late.** The policy returns it as a mutation attached to the
+  action it decided, so the executor applies it after that step rather than during it.
+
+The **fleet-wide idle-steal pacing window is not one of them.** Its arithmetic moved behind the seam
+unchanged and is still consulted under the same monitor, so this executor's single check-then-act at the
+top of an attempt is the engine's own shape rather than a widening of it.
 
 ## What is deliberately not modelled
 
@@ -89,7 +98,17 @@ the engine that ships:
   resumed: a simulated run is one process's lifetime by construction.
 - **Threads and permits.** The concurrency target bounds how many page fetches may be outstanding; a
   worker denied a slot waits for one to be released. There is no permit to leak and no thread to park.
-- **Cancellation, watchdogs, and the retry policy's jitter.** A run that exhausts a page's transient
-  retries is recorded as stuck; the backoff between retries is one declared interval rather than the
+- **Cancellation and watchdogs.** What a page fetch does when its transient retries run out is a
+  **declared input**, because the shipped client has two dispositions and they end a run differently.
+  Under the default the client rides the storm out — a watchdog owns storm death — so the fetch keeps
+  retrying and the run ends on the ceilings it declared. Under the bounded disposition (no watchdog
+  armed) the retry ceiling ends the run as *stuck*. A scenario that picks the bounded one and then
+  models a store that times out will therefore end stuck exactly where a real ride-out run would have
+  kept making progress; that is the disposition's own meaning, not a simulator artefact, and it is
+  stated in the scenario rather than assumed.
+- **The retry backoff's jitter.** The backoff between retries is one declared interval rather than the
   engine's full-jitter draw, because jitter's live purpose is desynchronising separate processes and a
   single-threaded kernel has no analogue of that.
+- **Permit hand-off in detail.** The concurrency target bounds outstanding page fetches; slots are
+  handed to waiting workers in the order they began waiting, and a growth step hands out as many as it
+  released rather than one per completion. There is still no permit to leak and no thread to park.

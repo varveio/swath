@@ -70,13 +70,29 @@ public final class MeasuredClientCost {
     }
 
     /**
-     * The fetch worker's own per-page cost: response unmarshalling plus page-model conversion plus the
-     * narrowed residual around them, at the low-concurrency end of the measured range. Sampled through
-     * the measured unmarshal quantiles, shifted so the ladder carries the other two stages' means with
-     * it — they are small, flat, and were published without their own ladders.
+     * The fetch worker's own per-page cost, at the low-concurrency end of the measured range: three
+     * spans, summed, because all three are that worker's own serial work on that page.
+     *
+     * <ul>
+     *   <li><b>SDK response unmarshalling</b> — 5.2 ms/page uncontended, rising to 7.4–7.5 at ~15
+     *       concurrent. The dominant term by an order of magnitude, and the only one of the three with a
+     *       published distribution (p50 3.65–6.02, p90 8.90–14.41, p99 17.8–30.9), so it is the one the
+     *       ladder below is built from.</li>
+     *   <li><b>Response parsing into the page model</b> — measured band 0.098–0.178 ms/page; 0.1 ms is
+     *       its low end, matching the uncontended arm the rest of this term is taken from.</li>
+     *   <li><b>The narrowed residual</b> — what the worker's page time still holds after the two spans
+     *       above and the time-to-first-byte are removed; measured band 0.487–0.617 ms/page, flat in
+     *       concurrency, published as a mean only. 0.55 ms is its midpoint.</li>
+     * </ul>
+     *
+     * <p>The two smaller spans have no ladders of their own, so they are carried as a flat shift on the
+     * unmarshal ladder rather than sampled independently — which is the honest treatment of a term
+     * published as a mean, and immaterial at a twentieth of the dominant span.
      */
     public static SampledClientCostTerm worker() {
-        long parseAndResidualNanos = 100_000L + 550_000L;
+        long responseParseNanos = 100_000L;
+        long narrowedResidualNanos = 550_000L;
+        long parseAndResidualNanos = responseParseNanos + narrowedResidualNanos;
         ClientCostTerm term = new ClientCostTerm(Provenance.FINAL,
                 5_200_000L + parseAndResidualNanos, 0L, SOURCE + " — worker page service");
         return SampledClientCostTerm.quantiles(term,
@@ -88,7 +104,13 @@ public final class MeasuredClientCost {
                 });
     }
 
-    /** The serial checkpoint writer's per-batch service time at the low-concurrency end. */
+    /**
+     * The serial checkpoint writer's per-batch service time at the low-concurrency end: measured
+     * 0.109 ms/batch at eight-way concurrency, rising to 0.240 at 128-way. The service time is taken here
+     * and the growth is produced structurally by the queue in front of it, which is what the measurement
+     * says is actually happening — the per-page <em>wait</em> grows several-fold across that range while
+     * the service time barely moves.
+     */
     public static SampledClientCostTerm checkpoint() {
         return SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 109_000L, 0L,
                 SOURCE + " — checkpoint commit service"));
@@ -97,14 +119,25 @@ public final class MeasuredClientCost {
     /** The consumer stage's per-page service time for {@code sink}. */
     public static SampledClientCostTerm sink(SinkKind sink) {
         return switch (sink) {
+            // Text: measured band 0.93-1.07 ms/page at ~165 KB/page, midpoint 1.03. Its reciprocal is a
+            // real serial ceiling, independently corroborated against a measured page-rate plateau.
             case TEXT -> SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 1_030_000L, 0L,
                     SOURCE + " — text consumer stage"));
+            // Columnar: measured band 0.042-0.046 ms/page, and it is dispatch only -- the sink's real
+            // work is the pool below, off this stage entirely.
             case COLUMNAR -> SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 46_000L, 0L,
                     SOURCE + " — columnar consumer dispatch"));
         };
     }
 
-    /** The columnar sink's encode pool: parallel, off the page's critical path, heavy-tailed. */
+    /**
+     * The columnar sink's encode pool: measured 1.88–2.11 ms/page and flat across a sixteen-fold range of
+     * concurrency, because the work is per row and rows per page are set by the fixture rather than by
+     * the fleet. Its mean is 3.2x its median (p50 0.62–0.65, p90 1.74–2.03, p99 16.0–19.4 ms), so it is
+     * sampled rather than averaged. Parallel to everything and off the page's critical path; the
+     * measurement ran the pool at a tenth of a core, so it establishes the service cost and says nothing
+     * about the pool's own ceiling.
+     */
     public static SampledClientCostTerm offload() {
         ClientCostTerm term = new ClientCostTerm(Provenance.FINAL, 2_000_000L, 0L,
                 SOURCE + " — columnar encode pool");

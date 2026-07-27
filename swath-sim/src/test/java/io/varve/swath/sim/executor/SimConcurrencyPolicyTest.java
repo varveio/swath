@@ -7,8 +7,12 @@ package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.sim.kernel.SimKernel;
 import io.varve.swath.sim.kernel.SimRng;
+import io.varve.swath.sim.kernel.SimRngStream;
 import io.varve.swath.sim.model.EngineTimeBudgets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +34,55 @@ class SimConcurrencyPolicyTest {
             // A fixed shed window keeps the boundary arithmetic below exact; the jitter's own effect is
             // asserted separately.
             .withAimd(EngineTimeBudgets.AimdBudgets.engineDefaults().withFixedShedWindow(30 * SECOND));
+
+    /**
+     * The first success of a run must be able to grow the target, at whatever instant it arrives.
+     *
+     * <p>This is a virtual clock, so a run begins at zero and its first page can complete a microsecond
+     * later. The shipped controller expresses "no growth step has happened yet" as a zero timestamp,
+     * which is unreachably far in the past on a clock that counts from process start and is the *current
+     * instant* on a clock that counts from the run's. Reusing that sentinel here would pace out the first
+     * step of every run and, worse, would make a valve paced at thirty seconds unable to open at all in a
+     * run shorter than thirty virtual seconds — which is the length of exactly the runs that need it.
+     */
+    @Test
+    void theFirstGrowthStepIsNotPacedOutWhenTheRunBeginsAtVirtualZero() {
+        SimConcurrencyPolicy gauge = gauge(64);
+
+        gauge.onSuccess(0L);
+
+        assertThat(gauge.effectiveT())
+                .as("a success at the very start of a run is a growth opportunity, not a paced-out one")
+                .isEqualTo(8);
+
+        gauge.onSuccess(1L);
+
+        assertThat(gauge.effectiveT()).as("and the pace applies normally from there").isEqualTo(8);
+    }
+
+    /**
+     * The same inversion, seen where it actually bites: the latency-freeze valve is paced at the shed
+     * window's own length, so on a zero sentinel it could never admit a step inside a run shorter than
+     * that — and a poisoned-store run that ends in twenty virtual seconds is exactly such a run.
+     */
+    @Test
+    void theLatencyValveCanOpenInsideARunShorterThanItsOwnPacingInterval() {
+        SimConcurrencyPolicy gauge = gauge(64);
+        gauge.onAttemptLatency(0L, TimeUnit.MILLISECONDS.toNanos(20));
+        for (int i = 0; i < 20; i++) {
+            gauge.onAttemptLatency(i, TimeUnit.MILLISECONDS.toNanos(400));
+        }
+        int before = gauge.effectiveT();
+
+        for (int i = 0; i < 8; i++) {
+            gauge.onSuccess(i);   // still inside the first second of the run
+        }
+
+        assertThat(gauge.counters()).containsKey("FREEZE.latency_inflation");
+        assertThat(gauge.effectiveT())
+                .as("the valve's first step is owed immediately, not one valve interval into the run")
+                .isEqualTo(before + 1);
+    }
 
     @Test
     void growthDoublesUntilTheFirstCongestionSignalAndIsAdditiveForeverAfter() {
@@ -206,15 +259,31 @@ class SimConcurrencyPolicyTest {
     }
 
     @Test
-    void theShedWindowLengthIsDrawnFromTheDeclaredJitterBounds() {
+    void theShedWindowLengthIsDrawnInsideTheDeclaredBoundsAndReallyVaries() {
         EngineTimeBudgets jittered = EngineTimeBudgets.engineDefaults();
-        SimRng tape = SimRng.forStream(99L, -2, io.varve.swath.sim.kernel.SimRngStream.AIMD_JITTER);
-        SimConcurrencyPolicy first = new SimConcurrencyPolicy(64, jittered, tape);
-        SimConcurrencyPolicy second = new SimConcurrencyPolicy(64, jittered,
-                SimRng.forStream(99L, -2, io.varve.swath.sim.kernel.SimRngStream.AIMD_JITTER));
+        long min = jittered.aimd().shedWindowMinNanos();
+        long max = jittered.aimd().shedWindowMaxNanos();
+        List<Long> lengths = new ArrayList<>();
 
-        // Two controllers on the same tape roll identical windows: the jitter desynchronises windows
-        // within a run, it does not make a run irreproducible.
+        for (long seed = 1; seed <= 12; seed++) {
+            lengths.add(new SimConcurrencyPolicy(64, jittered, SimRng.of(seed)).shedWindowLengthNanos());
+        }
+
+        assertThat(lengths).as("a window outside its declared bounds is not jitter, it is a bug")
+                .allSatisfy(length -> assertThat(length).isBetween(min, max));
+        assertThat(lengths).as("a constant length would satisfy the bounds and desynchronise nothing")
+                .doesNotHaveDuplicates();
+    }
+
+    @Test
+    void twoControllersOnOneTapeRollIdenticalWindows() {
+        EngineTimeBudgets jittered = EngineTimeBudgets.engineDefaults();
+        SimConcurrencyPolicy first = new SimConcurrencyPolicy(64, jittered,
+                SimRng.forStream(99L, SimKernel.FLEET_ACTOR, SimRngStream.AIMD_JITTER));
+        SimConcurrencyPolicy second = new SimConcurrencyPolicy(64, jittered,
+                SimRng.forStream(99L, SimKernel.FLEET_ACTOR, SimRngStream.AIMD_JITTER));
+
+        // The jitter desynchronises windows within a run; it does not make a run irreproducible.
         for (int i = 0; i < 50; i++) {
             first.onSuccess(i * SECOND);
             second.onSuccess(i * SECOND);
@@ -228,9 +297,13 @@ class SimConcurrencyPolicyTest {
         return new SimConcurrencyPolicy(tMax, BUDGETS, SimRng.of(4242L));
     }
 
-    /** Drives the slow-start ramp to at least {@code target}, one paced step per second. */
+    /**
+     * Drives the slow-start ramp to at least {@code target}, one paced step per second, <b>starting at
+     * virtual zero</b> — where a run really starts, and where a pacing sentinel that means "long ago" on
+     * a wall clock means "right now" on this one.
+     */
     private static void rampTo(SimConcurrencyPolicy gauge, int target) {
-        for (int second = 1; gauge.effectiveT() < target && second < 40; second++) {
+        for (int second = 0; gauge.effectiveT() < target && second < 40; second++) {
             gauge.onSuccess(second * SECOND);
         }
         assertThat(gauge.effectiveT()).isGreaterThanOrEqualTo(target);

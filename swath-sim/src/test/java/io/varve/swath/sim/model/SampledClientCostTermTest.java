@@ -77,6 +77,32 @@ class SampledClientCostTermTest {
                 .isInstanceOf(MissingSimDependencyException.class);
     }
 
+    /**
+     * The disclosed bias, pinned. Holding the ladder flat outside its measured ends overstates the lower
+     * half (no minimum was ever published, so everything below the median is charged at the median) and
+     * understates the extreme tail. The javadoc quotes the net effect on the measured worker term; this
+     * is what makes that quote a fact rather than a claim, and what fails if the ladder's shape changes.
+     */
+    @Test
+    void theWorkerTermsDrawnMeanMatchesTheBiasItsJavadocDiscloses() {
+        SampledClientCostTerm worker = MeasuredClientCost.worker();
+        SimRng tape = SimRng.of(20260727L);
+        long total = 0;
+        int draws = 200_000;
+
+        for (int i = 0; i < draws; i++) {
+            total += worker.drawNanos(0, tape);
+        }
+
+        double drawnMeanMillis = total / (double) draws / 1_000_000.0;
+        double publishedMeanMillis = worker.term().perPageNanos() / 1_000_000.0;
+        assertThat(drawnMeanMillis).as("the disclosed ~6.36 ms/page drawn mean").isBetween(6.30, 6.42);
+        assertThat(publishedMeanMillis).as("against the published 5.85 ms/page mean").isEqualTo(5.85);
+        assertThat((drawnMeanMillis - publishedMeanMillis) / publishedMeanMillis)
+                .as("net +8.8%: overstated below the median, understated beyond the top quantile")
+                .isBetween(0.075, 0.100);
+    }
+
     @Test
     void theMeasuredCompositeCarriesItsProvenanceIntoEverySink() {
         for (MeasuredClientCost.SinkKind sink : MeasuredClientCost.SinkKind.values()) {

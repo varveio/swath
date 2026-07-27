@@ -55,13 +55,15 @@ final class PolicyRunFixtures {
                                            ClientCostModel cost) {
         return new PolicyScenario(20260727L, workers, pageSize, new byte[0],
                 PolicyScenario.SimSeedMode.NONE, EngineToggles.DEFAULT, latency, cost,
-                EngineTimeBudgets.engineDefaults(), 0, false, PolicyScenario.DEFAULT_MAX_EVENTS);
+                EngineTimeBudgets.engineDefaults(),
+                PolicyScenario.FaultDisposition.RIDE_OUT, 0, false, PolicyScenario.DEFAULT_MAX_EVENTS);
     }
 
     /** The default policy scenario: today's engine, its own budgets, a shallow seed. */
     static PolicyScenario scenario(int workers, int pageSize, LatencyModel latency, ClientCostModel cost) {
         return new PolicyScenario(20260727L, workers, pageSize, new byte[0],
                 PolicyScenario.SimSeedMode.SHALLOW, EngineToggles.DEFAULT, latency, cost,
-                EngineTimeBudgets.engineDefaults(), 0, false, PolicyScenario.DEFAULT_MAX_EVENTS);
+                EngineTimeBudgets.engineDefaults(),
+                PolicyScenario.FaultDisposition.RIDE_OUT, 0, false, PolicyScenario.DEFAULT_MAX_EVENTS);
     }
 }

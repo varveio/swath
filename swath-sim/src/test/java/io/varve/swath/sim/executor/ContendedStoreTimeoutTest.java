@@ -44,7 +44,8 @@ class ContendedStoreTimeoutTest {
                 PolicyScenario.SimSeedMode.NONE, EngineToggles.DEFAULT,
                 PolicyRunFixtures.perClass(TimeUnit.SECONDS.toNanos(2), TimeUnit.SECONDS.toNanos(2)),
                 PolicyRunFixtures.zeroedCost("a run that emits nothing has no client cost to model"),
-                budgets, SERIAL_STORE, false, PolicyScenario.DEFAULT_MAX_EVENTS);
+                budgets, PolicyScenario.FaultDisposition.BOUNDED, SERIAL_STORE, false,
+                PolicyScenario.DEFAULT_MAX_EVENTS);
 
         PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
 
@@ -78,8 +79,8 @@ class ContendedStoreTimeoutTest {
                 PolicyRunFixtures.perClass(TimeUnit.MILLISECONDS.toNanos(30),
                         TimeUnit.MILLISECONDS.toNanos(8)),
                 PolicyRunFixtures.zeroedCost("the point here is the event accounting"),
-                EngineTimeBudgets.engineDefaults(), SERIAL_STORE, false,
-                PolicyScenario.DEFAULT_MAX_EVENTS);
+                EngineTimeBudgets.engineDefaults(), PolicyScenario.FaultDisposition.RIDE_OUT,
+                SERIAL_STORE, false, PolicyScenario.DEFAULT_MAX_EVENTS);
 
         PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
 

@@ -21,11 +21,28 @@ import io.varve.swath.sim.kernel.SimRng;
  *
  * <p><b>What the ladder is, exactly.</b> An empirical inverse CDF through the published quantiles,
  * linear between neighbours, flat below the lowest and flat above the highest. It deliberately does
- * <b>not</b> extrapolate past the largest measured value: nothing was measured out there, and a
- * simulator that invents its own tail is making a claim the data does not support. The consequence is
- * stated rather than hidden — a sampled term understates the extreme tail beyond its last quantile,
- * and its own drawn mean will not equal the published mean, because a mean is not recoverable from a
- * handful of quantiles.
+ * <b>not</b> invent values outside the measured range in either direction: nothing was measured out
+ * there, and a simulator that fabricates its own tail — or its own floor — is making a claim the data
+ * does not support.
+ *
+ * <p><b>The bias that buys, stated in both directions.</b> Holding the ladder flat outside its ends is
+ * not free, and it is not one-sided:
+ *
+ * <ul>
+ *   <li><b>Above the top quantile it understates.</b> Beyond the last measured point every draw returns
+ *       that point, so the extreme tail is truncated. The measured maxima are several times the
+ *       published p99, so a run's very worst pages are cheaper here than they were in reality.</li>
+ *   <li><b>Below the bottom quantile it overstates.</b> No minimum was published, so every draw under
+ *       the lowest quantile returns that quantile — the entire lower half of the distribution is
+ *       charged at its median. This is the larger of the two effects.</li>
+ * </ul>
+ *
+ * <p>Concretely, for the measured worker term (median 4.30, p90 9.55, p99 18.45 ms/page): the ladder's
+ * own mean is <b>≈6.36 ms/page against a published mean of 5.85</b>, i.e. <b>+8.8%</b>. A run charged
+ * through it is therefore slightly pessimistic per page, and deliberately so — the alternative was
+ * inventing a floor. A caller that needs the published mean exactly asks for {@link #scalar} instead
+ * and gives up the shape; a caller that needs both takes the two runs and reads the difference. A test
+ * pins the ≈6.36 figure, so a change to the ladder that moves this bias cannot pass silently.
  *
  * <p>Sampling is per <b>page</b>. The per-key component of the underlying term (if any) is added
  * unsampled: it is a linear cost of the page's size, not a random quantity.

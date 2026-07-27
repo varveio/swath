@@ -33,6 +33,15 @@ Virtual time buys two things beyond speed.
   runs of one scenario at one seed therefore produce byte-identical event logs — and a policy change
   shows up as a difference in the log rather than as noise. (This is determinism *inside the
   simulator*; a real multi-worker run's thread scheduling stays outside anyone's control.)
+
+  The **byte-identity check** is stated on traces that fit in memory: the log accumulates entries on
+  the heap and serialises the whole trace to compare it, so it is enabled for invariant and
+  determinism runs and disabled for sweeps, where it would dominate the cost. A rolling digest would
+  lift that ceiling and is deliberately **not** built yet: the measured event volume of a run at
+  realistic scale (a few million events for a very large bucket, see below) is well inside what the
+  in-memory log handles, so the ceiling is not currently reached. The claim is therefore "identical
+  traces, on fixtures whose traces fit" — and a fixture large enough to need the digest needs it
+  built first, rather than needing this sentence reinterpreted.
 - **Inputs you state rather than inherit.** Request latencies, the client-side cost of processing a
   page, and the engine's own time budgets (probe timeouts, pacing windows, run duration ceiling) are
   all **declared parameters** of a scenario, not properties of the machine the simulation runs on.
@@ -279,24 +288,29 @@ Two different numbers, and confusing them is the classic simulator mistake. A ru
 duration** is the modelled system's answer. Its **wall time** is what this machine spent computing that
 answer, and the only thing it says about swath is whether sweeping over many runs is affordable.
 
-Measured on one 8-core arm64 development box, 2M keys under the real policies, 32 workers, 1000-key
-pages, no seed:
+Measured on one 8-core arm64 development box, the same keyspace shape at two sizes, 32 workers,
+1000-key pages, no seed:
 
-| | |
-|---|---|
-| modelled store calls | 2,872 |
-| events dispatched | 44,752 (**15.6 per call**), of which 16,712 were retired park timers |
-| wall time | 0.34 s (**117 µs per modelled call**, including materialising every page from the fixture) |
-| virtual duration | 6.8 s |
+| | 500K keys | 2M keys |
+|---|---|---|
+| modelled store calls | 1,001 | 2,813 |
+| events dispatched | 30,345 | 46,936 |
+| of those, retired park timers | 13,195 (43%) | 18,056 (38%) |
+| **events per modelled call** | **30.3** | **16.7** |
+| wall time | 0.22 s (216 µs/call) | 0.14 s (49 µs/call) |
+| virtual duration | 3.6 s | 5.9 s |
 
-The shape that matters is **events per modelled call**, because that is what does not change with the
-fixture's size. At ~15 events per call, a 150,000-call run — the scale of a very large bucket —
-dispatches roughly 2.3M events and costs on the order of 15–20 s here, which is inside the budget such
-a run has to fit for sweeping to be practical. Two caveats travel with that, and neither is small: the
-measurement above reads its pages from an in-memory fixture, where a real large-fixture backend serves
-a call in ~175 µs and would dominate the total; and a timeout-heavy scenario arms events a healthy one
-never does, so a run's budget has to be sized including the ones that turn out not to matter. The
-bench that produces these numbers is `PolicyRunBudgetBenchTest` (`@Tag("perf")`, opt-in).
+**Events per call is not a constant, and the second size point is what shows it.** A large share of a
+run's events are park timers — an idle worker waiting to be woken — and their number is driven by how
+long the run lasts and how many workers are idle in it, not by how many calls it makes. So the figure
+*falls* as a fixture grows and calls come to dominate: the small-fixture number is an upper bound, not
+the rate. Extrapolating the larger point, a 150,000-call run is on the order of 2.5M events and single-
+digit seconds of compute here, which is comfortably inside what sweeping requires; extrapolating the
+smaller one would have overstated it by nearly twice, which is exactly why a single point was not left
+to stand. Two further caveats: these read pages from an in-memory fixture, where a real large-fixture
+backend serves a call in ~175 µs and would dominate the total; and the two runs above are in one JVM, so
+the first pays warmup the second does not. The bench is `PolicyRunBudgetBenchTest` (`@Tag("perf")`,
+opt-in).
 
 ### Why the kernel's own tests assert equalities
 

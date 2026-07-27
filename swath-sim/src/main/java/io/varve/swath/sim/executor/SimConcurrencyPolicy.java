@@ -19,10 +19,19 @@ import java.util.TreeMap;
  * shape exists to survive concurrency the simulator does not have.
  *
  * <p>Every reactive signal arrives with its own instant, so this class reads no clock; the shed
- * window's jitter is drawn from a supplied stream, so it reads no ambient randomness either. Those two
- * substitutions are the entire difference from the shipped controller's inputs, and both are forced:
- * a virtual-time run has no wall clock to read and no thread-local generator that would be
- * reproducible if it did.
+ * window's jitter is drawn from a supplied stream, so it reads no ambient randomness either. Both
+ * substitutions are forced: a virtual-time run has no wall clock to read and no thread-local generator
+ * that would be reproducible if it did.
+ *
+ * <p><b>A third difference, and it is not cosmetic.</b> The shipped controller uses {@code 0} as the
+ * "never happened yet" value for its pacing timestamps, which works only because it reads a clock whose
+ * values are enormous: a zero there is unreachably far in the past, so the first growth step after a
+ * cool-down fires immediately, exactly as its own comment intends. A virtual run starts at zero. Reusing
+ * that sentinel here would invert its meaning — the first success of every run would be paced out, and a
+ * relaxation valve paced at thirty seconds could never open in a run shorter than thirty virtual
+ * seconds, which is precisely the length of the runs that exercise it. Every timestamp here therefore
+ * carries an explicit {@link #UNARMED} value that is never confused with an instant, and every read of
+ * one checks for it rather than doing arithmetic against it.
  *
  * <h2>The behaviour this reproduces</h2>
  * <ul>
@@ -82,6 +91,15 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     /** Smoothing factor of the trailing EWMA of successful-attempt latency. */
     static final double LATENCY_EWMA_ALPHA = 0.2;
 
+    /**
+     * The "this has never happened" value for every timestamp below. Explicit, and deliberately not
+     * {@code 0}: zero is a perfectly ordinary instant on a virtual clock — it is the instant every run
+     * begins at — so a zero sentinel would make "never" and "at the very start" the same value, and the
+     * two have opposite meanings for every window and pace this class keeps. Never used in arithmetic;
+     * every site tests for it first, which also avoids the overflow that subtracting it would cause.
+     */
+    private static final long UNARMED = Long.MIN_VALUE;
+
     private final int tMax;
     private final EngineTimeBudgets budgets;
     private final SimRng shedJitter;
@@ -90,24 +108,26 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     private int effectiveT;
     private boolean congestionSeen;
     private boolean stealingAllowed = true;
-    private long lastThrottleNanos;
-    private long lastGrowthNanos;
-    private long lastValveGrowthNanos;
+    private long lastThrottleNanos = UNARMED;
+    private long lastGrowthNanos = UNARMED;
+    private long lastValveGrowthNanos = UNARMED;
 
-    private long transientWindowStartNanos;
+    private long transientWindowStartNanos = UNARMED;
     private int transientWindowCount;
 
-    private long shedWindowStartNanos;
+    private long shedWindowStartNanos = UNARMED;
     private long shedWindowLengthNanos;
     private int shedWindowTimeouts;
     private int shedWindowSuccesses;
     private int shedWindowWorkerTimeouts;
     private int shedWindowProbeTimeouts;
-    private long shedFiredWindowNanos = Long.MIN_VALUE;
+    /** The window a shed most recently fired in; {@link #UNARMED} until one has. Every path that reads
+     *  it has already rolled the window, so it can never be compared against an unarmed start. */
+    private long shedFiredWindowNanos = UNARMED;
 
     private long latencyBaselineNanos;
     private long latencyWindowMinNanos;
-    private long latencyDecayWindowStartNanos;
+    private long latencyDecayWindowStartNanos = UNARMED;
     private long latencyEwmaNanos;
 
     /**
@@ -139,7 +159,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
             stealingAllowed = true;
             return;
         }
-        if (lastThrottleNanos != 0L && atNanos - lastThrottleNanos < budgets.concurrencyCleanWindowNanos()) {
+        if (lastThrottleNanos != UNARMED && atNanos - lastThrottleNanos < budgets.concurrencyCleanWindowNanos()) {
             count("AIMD.growth_blocked_cooldown");
             return;
         }
@@ -161,7 +181,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
             growThroughValve(atNanos);
             return;
         }
-        if (atNanos - lastGrowthNanos < budgets.aimd().growthPaceNanos()) {
+        if (lastGrowthNanos != UNARMED && atNanos - lastGrowthNanos < budgets.aimd().growthPaceNanos()) {
             return;   // paced
         }
         lastGrowthNanos = atNanos;
@@ -190,7 +210,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
             return;
         }
         markCongestion();
-        if (transientWindowStartNanos == 0L
+        if (transientWindowStartNanos == UNARMED
                 || atNanos - transientWindowStartNanos > budgets.aimd().transientTimeoutWindowNanos()) {
             transientWindowStartNanos = atNanos;
             transientWindowCount = 1;
@@ -234,6 +254,15 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         return latencyBaselineNanos;
     }
 
+    /**
+     * The jittered length drawn for the current shed window. Package-private: the draw is a property a
+     * test has to be able to read directly, since a controller that always drew the same length would
+     * behave identically to a correct one on every other observable.
+     */
+    long shedWindowLengthNanos() {
+        return shedWindowLengthNanos;
+    }
+
     private void growThroughValve(long atNanos) {
         // A latency-inflation-only freeze is a damper, not a latch: one paced step, and only while the
         // run is demonstrably progressing (the exact complement of the shed's starvation gate).
@@ -241,7 +270,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         if (shedWindowSuccesses <= successGate) {
             return;
         }
-        if (atNanos - lastValveGrowthNanos < budgets.aimd().valvePaceNanos()) {
+        if (lastValveGrowthNanos != UNARMED && atNanos - lastValveGrowthNanos < budgets.aimd().valvePaceNanos()) {
             return;
         }
         lastValveGrowthNanos = atNanos;
@@ -281,10 +310,16 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         if (next >= effectiveT) {
             // At the floor, or rounding produced no change: removing zero concurrency buys no fresh
             // cool-down, so the recovery window is deliberately NOT re-armed here.
+            // Both names, as the shipped controller records them: one says a decrease removed nothing,
+            // the other that it therefore bought no fresh recovery window. A comparison against a real
+            // run reads whichever it knows, and a missing name reads as a silent zero.
+            count("AIMD.floor_noop_rearm");
             count("AIMD.floor_rearm_suppressed");
             return;
         }
         effectiveT = next;
+        // Monotonic, so a late signal carrying an older instant cannot walk a real decrease's recovery
+        // window backwards. UNARMED loses that comparison by construction.
         lastThrottleNanos = Math.max(lastThrottleNanos, atNanos);
     }
 
@@ -294,14 +329,14 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         if (shedWindowTimeouts >= timeoutGate && shedWindowSuccesses <= successGate
                 && shedFiredWindowNanos != shedWindowStartNanos) {
             shedFiredWindowNanos = shedWindowStartNanos;
-            count("SHED.worker_fed", shedWindowWorkerTimeouts);
-            count("SHED.probe_fed", shedWindowProbeTimeouts);
+            count("SHED.timeout_storm_worker_fed", shedWindowWorkerTimeouts);
+            count("SHED.timeout_storm_probe_fed", shedWindowProbeTimeouts);
             multiplicativeDecrease(atNanos, SHED_FACTOR, false);
         }
     }
 
     private void rollShedWindowIfElapsed(long atNanos) {
-        if (shedWindowStartNanos != 0L && atNanos - shedWindowStartNanos <= shedWindowLengthNanos) {
+        if (shedWindowStartNanos != UNARMED && atNanos - shedWindowStartNanos <= shedWindowLengthNanos) {
             return;
         }
         shedWindowStartNanos = atNanos;
@@ -325,9 +360,9 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     }
 
     private boolean growthFrozen(long atNanos) {
-        if (transientWindowStartNanos == 0L
+        if (transientWindowStartNanos == UNARMED
                 || atNanos - transientWindowStartNanos > budgets.aimd().transientTimeoutWindowNanos()) {
-            return false;   // the window elapsed with no fresh timeouts: thaw
+            return false;   // never armed, or elapsed with no fresh timeouts: thaw
         }
         return transientWindowCount >= TRANSIENT_FREEZE_THRESHOLD;
     }

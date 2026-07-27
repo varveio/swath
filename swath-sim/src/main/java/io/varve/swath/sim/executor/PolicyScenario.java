@@ -36,6 +36,7 @@ import io.varve.swath.sim.model.MissingSimDependencyException;
  * @param latency        per-call service times
  * @param clientCost     what a page costs the client after it arrives, and in which form
  * @param budgets        the engine time budgets this run declares
+ * @param faultDisposition what a page fetch does when its transient retries run out
  * @param storeServerCapacity how many calls the modelled store serves at once, or {@code 0} for a store
  *                       that never queues. Zero is the honest default: measurement of the live system
  *                       never reached a store ceiling, so a queueing store would be modelling a system
@@ -55,12 +56,31 @@ public record PolicyScenario(
         LatencyModel latency,
         ClientCostModel clientCost,
         EngineTimeBudgets budgets,
+        FaultDisposition faultDisposition,
         int storeServerCapacity,
         boolean recordEventLog,
         long maxEvents) {
 
     /** The event cap a scenario gets when it does not choose one; ample for any in-repo fixture. */
     public static final long DEFAULT_MAX_EVENTS = 100_000_000L;
+
+    /**
+     * What a worker page fetch does when its transient retries run out — a real choice the shipped
+     * client makes, not an implementation detail, so a scenario states which one it is modelling.
+     */
+    public enum FaultDisposition {
+        /**
+         * Keep retrying, as the shipped default does: a watchdog owns storm death, so the fetch rides the
+         * storm out rather than failing the run, and the run ends on the ceilings it declared.
+         */
+        RIDE_OUT,
+        /**
+         * Stop at the retry ceiling, as the client does when no watchdog is armed. A timeout-heavy leg
+         * then ends <b>stuck</b> where a real ride-out run would keep making progress, which is a
+         * difference worth declaring rather than discovering.
+         */
+        BOUNDED
+    }
 
     /** How the keyspace is cut before the fleet starts. */
     public enum SimSeedMode {
@@ -92,6 +112,10 @@ public record PolicyScenario(
             throw new MissingSimDependencyException("client cost model (per-page client service cost, "
                     + "and whether it is independent, contended, or a composite of both)");
         }
+        if (faultDisposition == null) {
+            throw new MissingSimDependencyException("transient-fault disposition (ride the storm out, "
+                    + "as the shipped client does under a watchdog, or stop at the retry ceiling)");
+        }
         if (budgets == null) {
             throw new MissingSimDependencyException("engine time budgets (probe budget, attempt "
                     + "timeouts, pacing windows, adaptive-concurrency windows, max duration)");
@@ -114,13 +138,14 @@ public record PolicyScenario(
     /** This scenario at {@code newWorkerCount} workers, everything else held fixed. */
     public PolicyScenario withWorkerCount(int newWorkerCount) {
         return new PolicyScenario(seed, newWorkerCount, pageSize, scanPrefix, seedMode, toggles, latency,
-                clientCost, budgets, storeServerCapacity, recordEventLog, maxEvents);
+                clientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog, maxEvents);
     }
 
     /** This scenario at {@code newSeed}, everything else held fixed. */
     public PolicyScenario withSeed(long newSeed) {
         return new PolicyScenario(newSeed, workerCount, pageSize, scanPrefix, seedMode, toggles,
-                latency, clientCost, budgets, storeServerCapacity, recordEventLog, maxEvents);
+                latency, clientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog,
+                maxEvents);
     }
 
     /**
@@ -129,12 +154,12 @@ public record PolicyScenario(
      */
     public PolicyScenario withClientCost(ClientCostModel newClientCost) {
         return new PolicyScenario(seed, workerCount, pageSize, scanPrefix, seedMode, toggles, latency,
-                newClientCost, budgets, storeServerCapacity, recordEventLog, maxEvents);
+                newClientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog, maxEvents);
     }
 
     /** This scenario with the trace turned on or off — on for a determinism check, off for a sweep. */
     public PolicyScenario withEventLog(boolean record) {
         return new PolicyScenario(seed, workerCount, pageSize, scanPrefix, seedMode, toggles, latency,
-                clientCost, budgets, storeServerCapacity, record, maxEvents);
+                clientCost, budgets, faultDisposition, storeServerCapacity, record, maxEvents);
     }
 }

@@ -47,7 +47,8 @@ class ConcurrencyPoisonTest {
         ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(400_000));
         PolicyScenario scenario = new PolicyScenario(20260727L, 32, 1_000, new byte[0],
                 PolicyScenario.SimSeedMode.NONE, EngineToggles.DEFAULT, POISONED,
-                PolicyRunFixtures.measuredCost(), EngineTimeBudgets.engineDefaults(), 0, false,
+                PolicyRunFixtures.measuredCost(), EngineTimeBudgets.engineDefaults(),
+                PolicyScenario.FaultDisposition.RIDE_OUT, 0, false,
                 PolicyScenario.DEFAULT_MAX_EVENTS);
 
         PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
@@ -75,7 +76,8 @@ class ConcurrencyPoisonTest {
         ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(400_000));
         PolicyScenario scenario = new PolicyScenario(20260727L, 32, 1_000, new byte[0],
                 PolicyScenario.SimSeedMode.NONE, EngineToggles.DEFAULT, PolicyRunFixtures.REMOTE_LATENCY,
-                PolicyRunFixtures.measuredCost(), EngineTimeBudgets.engineDefaults(), 0, false,
+                PolicyRunFixtures.measuredCost(), EngineTimeBudgets.engineDefaults(),
+                PolicyScenario.FaultDisposition.RIDE_OUT, 0, false,
                 PolicyScenario.DEFAULT_MAX_EVENTS);
 
         PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
