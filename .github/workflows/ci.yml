@@ -371,13 +371,22 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
         with:
           images: ghcr.io/${{ github.repository }}
-          # Dev images only: immutable sha- tags plus the branch name. The mutable
-          # `latest` tag belongs to published releases and is owned solely by
-          # release.yml, so a manual dev publish can never regress it to an
-          # unversioned main build.
+          # Dev images only. The mutable `latest` tag belongs to published releases
+          # and is owned solely by release.yml, so a dev publish can never regress
+          # it to an unversioned main build.
+          #
+          # `sha-<gitsha>` is emitted for every publish — immutable and bisectable,
+          # and enough to pull any branch's image for testing.
+          #
+          # The branch-name tag is deliberately restricted to `main`. A dispatch can
+          # run on ANY ref, and type=ref,event=branch would otherwise paint the
+          # branch name onto a public registry: dispatching `sim/streaming-tier`
+          # would publish ghcr.io/varveio/swath:sim-streaming-tier, leaking internal
+          # branch names to anyone listing the package. That was harmless while the
+          # repository was private; it is not now.
           tags: |
             type=sha,prefix=sha-
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
 
       # Provenance note: the deep smoke above ran the native `--load`ed amd64 image;
       # this step rebuilds the multi-arch manifest from the SAME build cache in the
