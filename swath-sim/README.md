@@ -240,6 +240,39 @@ inside it — which is how a lock hold is expressed without a lock. State read i
 in a later one is correspondingly exposed to whatever other actors do in between, which is how a
 widened read window, and the race it permits, is expressed without a thread.
 
+## Running the real policies
+
+The point of the module. `SimExecutor` runs swath's **actual** decision code — the seed planner, the
+owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing —
+against a fixture, in virtual time. Nothing is reimplemented: those modules are consumed exactly as the
+engine consumes them, as decisions over views that return actions and mutations. What the simulator
+supplies is the other half of that seam: it builds the views, issues what the decisions ask for,
+applies the mutations they return, and owns everything the policies deliberately never see — the clock,
+the concurrency target, the ranges' bookkeeping, and the check that decides whether a proposed split
+survives.
+
+One mechanism is a **port** rather than the real thing: the adaptive-concurrency controller. It is the
+most timing-coupled code in the engine — jittered windows, paced valves, a decaying latency baseline,
+all racing under compare-and-set — and carving it out from under its concurrent callers would have been
+a far larger risk than writing a faithful equivalent whose every signal carries its own timestamp. That
+is a reimplementation, and it is treated as one: it is reviewed against the controller's own documented
+guarantees, a change to one is a change that has to be made to both, and no test here can prove they
+agree.
+
+**A simulated split can fail, and that is the point.** A thief reads its victim's cursor, spends probes
+placing a pivot, and by the time it proposes the split the victim may have drained past it. The
+proposal is then refused — exactly as in a real run, and for exactly the same reason. A simulator that
+let it through would report splits a real fleet never gets, on precisely the workloads where stealing
+is hardest. The full ordering contract, including the two disclosed timing widenings the executor
+models and what a cancelled timer costs a run's event budget, is in
+[`docs/executor-ordering.md`](docs/executor-ordering.md).
+
+**What a run reports.** A duration on its own is not a result: the same fixture yields a different one
+under a different store backend, a different client-cost term, or different declared budgets, and all
+three are choices. So a run record carries them — which store served it, which cost term it was charged
+against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
+the counters every policy path engaged, and how many events the kernel dispatched to produce it.
+
 ### Why the kernel's own tests assert equalities
 
 With a constant latency and the client-cost term explicitly zeroed, a run's wall time is pure
