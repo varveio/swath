@@ -1476,9 +1476,11 @@ public final class RunMetrics {
 
     /**
      * One stretch of writer-LANE work: the encode+write of a batch's rows into the open part, plus
-     * whatever finalize that stretch triggered (footer fsync, part MD5, manifest rewrite) — measured
-     * on the lane's own thread, between two waits on its queue, so summing this span over a run
-     * accounts for the pool's CPU. A client-service-cost span (see {@link #buildClientCostSummary}),
+     * whatever part finalize (footer fsync, part MD5, manifest rewrite) or drain-time discard that
+     * stretch performed — measured on the lane's own thread, between two waits on its queue, so
+     * summing this span over a run accounts for the pool's CPU (an aborted run's lanes drain their
+     * queued batches without writing them, and those record nothing). A client-service-cost span
+     * (see {@link #buildClientCostSummary}),
      * but the ONE that is not on the page's critical path: the lanes run concurrently with fetch and
      * {@link #recordEmit emit} (for Parquet, {@code emit} is the pool DISPATCH only), so this span
      * overlaps them in wall-clock and must never be added to a page's serial cost. It also strictly

@@ -286,10 +286,20 @@ public final class ParquetWriterPool implements AutoCloseable {
      * rotation, drain-time finalize/discard), so summing the span over a run accounts for the pool's
      * CPU rather than for the dispatch that {@code emit} sees. Measured on {@link #nanoClock}, the
      * same monotonic clock the rotation triggers read.
+     *
+     * <p>Swallows anything thrown while recording. This is the only work in the lane loop that is
+     * NOT already inside a catch-all, and it is pure observation: letting a metrics/clock failure
+     * escape would kill the lane thread before it consumes the poison sentinel, which is exactly the
+     * lane-failure deadlock the "always drain to POISON" rule exists to prevent.
      */
     private void recordLaneWork(long startedAtNanos) {
-        if (metrics != null) {
+        if (metrics == null) {
+            return;
+        }
+        try {
             metrics.recordParquetWrite(nanoClock.getAsLong() - startedAtNanos);
+        } catch (Throwable ignored) {
+            // observation only — never take the lane down with it
         }
     }
 

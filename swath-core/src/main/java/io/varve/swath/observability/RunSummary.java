@@ -101,13 +101,19 @@ public record RunSummary(
     }
 
     /**
-     * One client-service-cost span's percentile summary — the per-page cost of servicing a page
+     * One client-service-cost span's percentile summary — what servicing a page costs the client
      * once the store has answered, decomposed into the parts that can contend independently.
      * {@code span} is one of {@code checkpoint_commit_wait}/{@code checkpoint_queue_wait}/{@code
-     * checkpoint_commit}/{@code emit}/{@code writer_backpressure} ({@code
+     * checkpoint_commit}/{@code emit}/{@code writer_backpressure}/{@code parquet_write} ({@code
      * RunMetrics.CLIENT_COST_SPAN_*}); the remaining part of the decomposition, response parse, is
      * per-call-class and is carried by {@link CallClassLatencySummary} instead. Percentile/max/count
      * semantics are identical to {@link CallClassLatencySummary}'s.
+     *
+     * <p>The first five spans are PER PAGE. {@code parquet_write} is the deviation: it is one
+     * observation per stretch of Parquet writer-lane work (per batch written, plus each idle-cadence
+     * rotation and each lane's drain-time finalize/discard), measured on the pool's own threads —
+     * so it is neither page-scoped nor part of a page's serial latency. See {@code
+     * RunMetrics#recordParquetWrite} for the overlaps that follow from it.
      */
     public record ClientCostSpan(String span, long count, Double p50Ms, Double p90Ms, Double p99Ms,
                                   double maxMs) {
