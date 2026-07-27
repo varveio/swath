@@ -207,26 +207,22 @@ no such script in between, so those variables have no effect here.
 
 ## 6. Container images (GHCR)
 
-After the Phase 10 human acceptance gate makes the repository public and enables
-the protected `public-release` environment, the tag-driven release workflow
-publishes a multi-arch image at
-`ghcr.io/<owner>/<repository>`, using the repository that ran the workflow.
-The exact image path and digest are printed in the workflow run summary. Package
-visibility is controlled by that repository's GHCR settings; build from source
-(§3–§5) when the package is not available to your account.
-Set the package visibility to public in GHCR when the project intends to offer
-anonymous pulls.
+The tag-driven release workflow publishes a multi-arch image at
+`ghcr.io/varveio/swath`. The exact image path and digest are printed in the
+workflow run summary. Package visibility is controlled by the repository's GHCR
+settings; build from source (§3–§5) if the package is not available to your
+account.
 
 Prefer pinning by **digest** over a mutable tag — the digest is the only
 immutable reference:
 
 ```
-docker pull ghcr.io/<owner>/<repository>@sha256:<digest>
+docker pull ghcr.io/varveio/swath@sha256:<digest>
 ```
 
-The public-release workflow prints the pushed manifest's digest to its run
-summary, so a consumer can copy the exact digest to pin against. Tags in the
-current private repository are build-and-artifact dry runs and do not publish.
+The release workflow prints the pushed manifest's digest to its run summary, so
+a consumer can copy the exact digest to pin against. **No release has been
+published yet** — until the first `vX.Y.Z` tag ships, build from source (§3–§5).
 
 ### Tags & versioning
 
@@ -249,8 +245,8 @@ builds the multi-arch image (validating both `linux/amd64` and `linux/arm64`,
 no QEMU per §5), loads the native-arch build, and smoke-tests it
 (`docker run … --help`) — it never pushes. **`docker-publish`** is a manual
 maintainer-only smoke/publish path; ordinary `main` pushes never publish.
-Public tagged publication belongs to `.github/workflows/release.yml` and is
-disabled while this repository is private.
+Tagged publication belongs to `.github/workflows/release.yml`, behind the
+protected `public-release` environment.
 
 Which jobs run depends on the trigger:
 
@@ -266,9 +262,9 @@ because `docker-publish` builds the image itself (running it too would just be a
 redundant second multi-arch build).
 
 The manual `docker-publish` path is gated on green tests and its deep container
-smoke. The public release job is separately protected by the `public-release`
-environment and requires both public repository visibility and the explicit
-`PUBLIC_RELEASE_ENABLED=true` repository variable after Phase 10 acceptance.
+smoke. The release publish job is separately protected by the `public-release`
+environment and requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository
+variable, which acts as a publish kill-switch.
 
 The **CI image checks** have no scheduled run — they fire only on pull
 requests, pushes to `main`, and manual dispatch. (A separate `nightly` workflow
