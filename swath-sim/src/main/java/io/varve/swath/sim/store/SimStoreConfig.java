@@ -42,6 +42,11 @@ public record SimStoreConfig(long arenaMaxEncodedBytes) {
         if (value == null) {
             return defaults();
         }
-        return new SimStoreConfig(Long.parseLong(value.trim()));
+        try {
+            return new SimStoreConfig(Long.parseLong(value.trim()));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    ARENA_MAX_ENCODED_BYTES_PROPERTY + " must be a valid long, got \"" + value + "\"", e);
+        }
     }
 }
