@@ -38,6 +38,11 @@ backend per fixture, so a conformance or differential run could never compare th
 | `PARQUET` | The replay module's Parquet-backed store, unchanged. The differential reference. | Full |
 | `AUTO` | `ARENA` when the fixture's encoded key bytes fit the configured budget, otherwise `PARQUET`. | Depends on the resolution |
 
+Which backend actually served a fixture is recorded, not just returned: every resolution bumps
+`swath.sim.store.backend{backend}`, and an `AUTO` resolution that declines the arena bumps
+`swath.sim.store.arena.decline{reason}` and logs why. A sweep's results therefore carry a record
+of what produced them, so a threshold regression cannot masquerade as a throughput regression.
+
 ### The sim-mode projection
 
 The arena loads **keys only**. Every metadata column it returns is a stub: size `0`, epoch-`0`
