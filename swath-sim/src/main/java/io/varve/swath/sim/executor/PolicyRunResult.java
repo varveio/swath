@@ -38,6 +38,10 @@ import java.util.TreeMap;
  * @param stuck        whether the run ended because a page fetch exhausted its transient retries, which
  *                     is a modelled failure of the run rather than a completed one
  * @param timeline     when the run did what: its phase boundaries, and the tail's own rates and occupancy
+ * @param sensing      which position sensor the run's victim selection and owner-split gates steered
+ *                     on. Part of the record for the same reason the store label is: two runs of one
+ *                     scenario under different sensors are different runs, and a number quoted without
+ *                     saying which one produced it is not a result
  */
 public record PolicyRunResult(
         SimRunResult run,
@@ -49,7 +53,8 @@ public record PolicyRunResult(
         long storeReads,
         int finalConcurrencyTarget,
         boolean stuck,
-        PolicyRunTimeline timeline) {
+        PolicyRunTimeline timeline,
+        SensingVariant sensing) {
 
     /**
      * Assembles a result, merging the kernel's counters with the controller's own so a reader has one map
@@ -62,9 +67,10 @@ public record PolicyRunResult(
     static PolicyRunResult of(SimRunResult run, PolicyScenario scenario, String storeLabel,
                               SortedMap<String, Long> gaugeCounters, int finalConcurrencyTarget,
                               long nodesCreated, long splitsRejected, long storeReads, boolean stuck,
-                              PolicyRunTimeline timeline) {
+                              PolicyRunTimeline timeline, SensingVariant sensing) {
         return new PolicyRunResult(run, scenario, storeLabel, merge(run.counters(), gaugeCounters),
-                nodesCreated, splitsRejected, storeReads, finalConcurrencyTarget, stuck, timeline);
+                nodesCreated, splitsRejected, storeReads, finalConcurrencyTarget, stuck, timeline,
+                sensing);
     }
 
     public PolicyRunResult {
@@ -183,8 +189,9 @@ public record PolicyRunResult(
                 stopReason(), completed(), stuck, scenario.faultDisposition()));
         out.append(String.format(Locale.ROOT, "events=%d stale_events=%d%n", run.eventsProcessed(),
                 staleEvents()));
-        out.append(String.format(Locale.ROOT, "workers=%d page_size=%d final_concurrency_target=%d%n",
-                scenario.workerCount(), scenario.pageSize(), finalConcurrencyTarget));
+        out.append(String.format(Locale.ROOT,
+                "workers=%d page_size=%d final_concurrency_target=%d sensing=%s%n",
+                scenario.workerCount(), scenario.pageSize(), finalConcurrencyTarget, sensing));
         // The seed and the two ceilings are the inputs a reader needs to RE-RUN this record, as opposed
         // to the ones needed to interpret it: without the seed the run cannot be reproduced at all, and
         // without the store's server capacity and the event ceiling a reproduction can differ from it

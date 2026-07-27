@@ -129,9 +129,15 @@ import java.util.Set;
  * quantity: {@link StealMath#estRemaining}, a local density times a remaining span, both measured in
  * the window-relative fraction {@link StealMath#fracIn} defines. Whether that sensor can actually see a
  * given keyspace is a property of the keys, not of the policies, so the executor measures it where the
- * policies read it — at every bounded page commit, and at every victim scanned — using the same public
- * arithmetic the decisions use. Nothing in swath-core changes to produce these counters; they are a
- * second reader of a function the engine already exports.
+ * policies read it — at every bounded page commit, and at every victim scanned. Nothing in swath-core
+ * changes to produce these counters.
+ *
+ * <p><b>The sensor is swappable, and the counters follow whichever one is installed.</b> A run may
+ * steer on a candidate estimator instead of the shipped one ({@link SensingVariant}), and when it does
+ * the readings below are taken through that estimator: the question a counter answers is "could the
+ * sensor THIS run steers on see this?", so reading the incumbent's arithmetic under a variant would
+ * report the disease while the cure was running. A run that does not ask for a variant gets
+ * {@link SensingVariant#CURRENT}, whose readings are the engine's own public arithmetic, unchanged.
  *
  * <h2>Determinism</h2>
  * One scenario at one seed against one store reproduces itself exactly, including its event trace. That
@@ -246,6 +252,8 @@ public final class SimExecutor {
     private static final String[] CALL_CLASS_COUNTERS = callClassCounters();
 
     private final PolicyScenario scenario;
+    private final SensingVariant sensing;
+    private final RemainingWorkEstimator estimator;
     private final String storeLabel;
     private final SimListingView view;
     private final SimNodeLedger ledger = new SimNodeLedger();
@@ -270,11 +278,17 @@ public final class SimExecutor {
     private long parkGeneration;
     private boolean runStuck;
 
-    private SimExecutor(PolicyScenario scenario, ListingStore store, String storeLabel) {
+    private SimExecutor(PolicyScenario scenario, ListingStore store, String storeLabel,
+                        SensingVariant sensing) {
         this.scenario = scenario;
+        this.sensing = sensing;
+        this.estimator = sensing.estimator(scenario.pageSize());
         this.storeLabel = storeLabel;
         this.view = new SimListingView(store, scenario.scanPrefix());
-        this.governor = new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(), scenario.pageSize());
+        this.governor = sensing == SensingVariant.CURRENT
+                ? new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(), scenario.pageSize())
+                : new EstimatorOwnerSplitPolicy(estimator, scenario.toggles(), scenario.workerCount(),
+                        scenario.pageSize());
         this.seedPlanner = new HybridSeedPlanner(scenario.scanPrefix(), scenario.workerCount(),
                 scenario.toggles());
         // The controller is one instrument for the whole fleet, so its jitter is drawn on the reserved
@@ -304,14 +318,34 @@ public final class SimExecutor {
      *                   of the run record, because a result is not readable without it
      */
     public static PolicyRunResult run(PolicyScenario scenario, ListingStore store, String storeLabel) {
+        return run(scenario, store, storeLabel, SensingVariant.CURRENT);
+    }
+
+    /**
+     * Runs {@code scenario} steering on {@code sensing}'s position sensor rather than the shipped one.
+     *
+     * <p>The variant is not part of the scenario, and deliberately: a scenario is a statement about the
+     * world being modelled — its keyspace, its fleet, its latencies, its budgets — whereas this is a
+     * statement about which candidate algorithm is being run against that world. Keeping it out of the
+     * scenario also keeps every existing run, sweep and golden on the shipped sensor without touching
+     * a single call site.
+     *
+     * @param sensing which position sensor the thief's selection and the owner-split gates read
+     * @see #run(PolicyScenario, ListingStore, String)
+     */
+    public static PolicyRunResult run(PolicyScenario scenario, ListingStore store, String storeLabel,
+                                      SensingVariant sensing) {
         if (store == null) {
             throw new IllegalArgumentException("the run API takes an already-open store handle");
         }
         if (storeLabel == null || storeLabel.isBlank()) {
             throw new IllegalArgumentException("a run record must say which store served it");
         }
+        if (sensing == null) {
+            throw new IllegalArgumentException("a run must say which position sensor it steers on");
+        }
         scenario.clientCost().requireReadyForNewRun();
-        SimExecutor executor = new SimExecutor(scenario, store, storeLabel);
+        SimExecutor executor = new SimExecutor(scenario, store, storeLabel, sensing);
         return executor.execute();
     }
 
@@ -322,7 +356,7 @@ public final class SimExecutor {
         SimRunResult result = kernel.run();
         return PolicyRunResult.of(result, scenario, storeLabel, gauge.counters(), gauge.effectiveT(),
                 ledger.nodesCreated(), ledger.splitsAborted(), view.storeReads(), runStuck,
-                timeline.finish(result.wallNanos()));
+                timeline.finish(result.wallNanos()), sensing);
     }
 
     // ---- seed phase ---------------------------------------------------------------------
@@ -438,7 +472,10 @@ public final class SimExecutor {
             // of the interleaving -- the property a comparison between two simulated variants needs to
             // not have.
             DecisionRng rng = bound -> ctx.rng(SimRngStream.STEAL_DECISION).nextInt(bound);
-            this.thief = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng);
+            StealPolicy cascade = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng);
+            this.thief = sensing == SensingVariant.CURRENT
+                    ? cascade
+                    : new EstimatorStealPolicy(estimator, cascade);
         }
 
         /**
@@ -1133,13 +1170,13 @@ public final class SimExecutor {
      * <p>Only bounded ranges are read. An open frontier has no {@code hi} to define a window and always
      * scores {@code +∞} in selection, so a fraction over it would be measuring nothing.
      */
-    private static void recordSensorReading(SimContext ctx, byte[] lo, byte[] cursorFrom, byte[] cursorTo,
-                                            byte[] hi) {
+    private void recordSensorReading(SimContext ctx, byte[] lo, byte[] cursorFrom, byte[] cursorTo,
+                                     byte[] hi) {
         if (hi == null || cursorTo == null) {
             return;
         }
         ctx.count(SENSOR_BOUNDED_COMMITS_COUNTER, 1);
-        if (StealMath.fracIn(cursorTo, lo, hi) - StealMath.fracIn(cursorFrom, lo, hi) <= 0.0) {
+        if (!estimator.advanceVisible(lo, cursorFrom, cursorTo, hi)) {
             ctx.count(SENSOR_INVISIBLE_ADVANCE_COUNTER, 1);
         }
     }
@@ -1160,7 +1197,7 @@ public final class SimExecutor {
      * readings would put a diagnostic in the engine's decision seam. The inputs are the same view the
      * policy gets and the function is the same public one it calls.
      */
-    private static void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
+    private void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
         for (VictimView candidate : pool) {
             if (candidate.unsplittable() || candidate.pacingSkipAvailable()) {
                 continue;
@@ -1170,12 +1207,11 @@ public final class SimExecutor {
                 continue;
             }
             ctx.count(SENSOR_VICTIMS_BOUNDED_COUNTER, 1);
-            if (StealMath.estRemaining(candidate.cursor(), candidate.lo(), candidate.hi(),
+            if (estimator.estRemaining(candidate.cursor(), candidate.lo(), candidate.hi(),
                     candidate.keysEmitted()) <= 0.0) {
                 ctx.count(SENSOR_EST_ZERO_COUNTER, 1);
             }
-            if (StealMath.spanIn(candidate.lo(), candidate.cursor(), candidate.lo(), candidate.hi())
-                    <= 0.0) {
+            if (estimator.ignoresEmittedKeys(candidate.cursor(), candidate.lo(), candidate.hi())) {
                 ctx.count(SENSOR_EST_IGNORES_KEYS_COUNTER, 1);
             }
         }

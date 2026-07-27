@@ -101,7 +101,7 @@ class PolicyRunEndToEndTest {
         assertThat(fields).containsExactlyInAnyOrder(
                 // what the run was asked to do
                 "seed", "workers", "page_size", "seed_mode", "store", "client_cost",
-                "store_server_capacity", "max_events", "fault_disposition",
+                "store_server_capacity", "max_events", "fault_disposition", "sensing",
                 // its declared budgets
                 "worker_attempt_timeout", "probe_attempt_timeout", "clean_window", "idle_park",
                 "attempt_slot_park",
