@@ -282,6 +282,23 @@ three are choices. So a run record carries them — which store served it, which
 against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
 the counters every policy path engaged, and how many events the kernel dispatched to produce it.
 
+Two parts of that record are worth naming, because a counter total cannot express either.
+
+- **The phase timeline.** Three instants — the seed's end, the last split of any kind, the run's own
+  end — plus what happened between the last two: the keys emitted in that tail, and the *occupancy*,
+  meaning how many ranges were actually being drained while they were. A run that divides its keyspace
+  and one that gives up early can have identical split counts and completely different shapes, and the
+  difference is the whole subject. The run's end here is **quiescence**, not the kernel's last event:
+  a retired park timer still costs a dispatch when it fires, so the clock keeps moving for up to one
+  park window after the last worker has gone home. Both instants are reported, and the gap between them
+  is an artifact of the kernel rather than a property of the modelled fleet.
+- **Position-sensor readings.** Whether the arithmetic the policies steer on can see a given keyspace
+  at all: how many page commits moved the cursor without moving `fracIn`, and how many scanned victims
+  had a consumed span of zero, which is the case where `estRemaining` discards the emitted keys it was
+  given. These are computed by the executor from the same public `StealMath` the decisions call —
+  nothing in swath-core changes to produce them — because whether a sensor works is a property of the
+  keys, and a fixture that defeats it needs to be able to say so in numbers.
+
 ### What a run costs to produce
 
 Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
@@ -334,9 +351,31 @@ outside this module.
 A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
 sits in a few of them or spreads evenly, whether a split can find a populated pivot — so the tests also
 generate small keyspaces shaped like real buckets: a deep date-partitioned observation archive, a
-hash-fanned content-addressed corpus, a tree with one object per directory, and a single dense flat
-leaf. Each runs in milliseconds and each provokes different policy paths, which a fixture of uniformly
-named keys does not.
+hash-fanned content-addressed corpus, a tree with one object per directory, a single dense flat leaf,
+and a deep-nested shared prefix. Each runs in milliseconds and each provokes different policy paths,
+which a fixture of uniformly named keys does not.
+
+**The deep-nested shared prefix is the one aimed at a specific mechanism.** It is taxonomy-shaped —
+`species/<Genus_epithet>/<accession>/<dataset>/<stage>/<file>` — and its numbers are the point: sibling
+species directories diverge ten bytes in, while everything inside either of them varies only from byte
+39 on. Position is measured by `StealMath.fracIn` over the twelve bytes *after* the longest common
+prefix of a range's own bounds, so on a range spanning sibling subtrees the measured window is bytes
+10–22 and a cursor draining a subtree changes nothing inside it. Ninety-odd per cent of that fixture's
+page commits therefore advance the cursor without moving the fraction at all, the consumed span reads
+zero, and `estRemaining` falls back to a raw width with the range's emitted keys discarded — which is
+what every layer downstream (victim choice, pivot mass floors, the owner's self-split, the density
+feedback) is then steering on. How much each subtree holds is a separate parameter, because the
+geometry decides what can be *measured* and the mass distribution decides whether being unable to
+measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed law a real archive
+follows is what makes the second visible.
+
+Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
+to how remaining work is measured is expected to break: `PositionSensorCharacterizationTest` runs it
+against the hash-fanned corpus at the same size, and `PositionSensorAtScaleTest` (`@Tag("perf")`) runs
+the same pair ten times further up, where the fleet's inability to divide the shape turns into a
+measurably emptier tail. The second exists because the first honestly cannot show that: at the smaller
+size the seed's own cut set is large relative to the fixture, so a runtime that cannot divide further is
+never asked to.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

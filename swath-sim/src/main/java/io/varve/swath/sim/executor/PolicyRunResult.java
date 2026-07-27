@@ -35,6 +35,7 @@ import java.util.TreeMap;
  * @param finalConcurrencyTarget the adaptive controller's target when the run ended
  * @param stuck        whether the run ended because a page fetch exhausted its transient retries, which
  *                     is a modelled failure of the run rather than a completed one
+ * @param timeline     when the run did what: its phase boundaries, and the tail's own rates and occupancy
  */
 public record PolicyRunResult(
         SimRunResult run,
@@ -45,7 +46,8 @@ public record PolicyRunResult(
         long splitsRejected,
         long storeReads,
         int finalConcurrencyTarget,
-        boolean stuck) {
+        boolean stuck,
+        PolicyRunTimeline timeline) {
 
     /**
      * Assembles a result, merging the kernel's counters with the controller's own so a reader has one map
@@ -57,9 +59,10 @@ public record PolicyRunResult(
      */
     static PolicyRunResult of(SimRunResult run, PolicyScenario scenario, String storeLabel,
                               SortedMap<String, Long> gaugeCounters, int finalConcurrencyTarget,
-                              long nodesCreated, long splitsRejected, long storeReads, boolean stuck) {
+                              long nodesCreated, long splitsRejected, long storeReads, boolean stuck,
+                              PolicyRunTimeline timeline) {
         return new PolicyRunResult(run, scenario, storeLabel, merge(run.counters(), gaugeCounters),
-                nodesCreated, splitsRejected, storeReads, finalConcurrencyTarget, stuck);
+                nodesCreated, splitsRejected, storeReads, finalConcurrencyTarget, stuck, timeline);
     }
 
     public PolicyRunResult {
@@ -141,6 +144,7 @@ public record PolicyRunResult(
                 + "splits_rejected=%d%n", nodesCreated, ownerSplitChildren(), thiefChildren(), splitsRejected));
         out.append(String.format(Locale.ROOT, "seed_mode=%s seed_probes=%d seed_ranges=%d%n",
                 scenario.seedMode(), counter(SimExecutor.SEED_PROBES_COUNTER), counter("seed.ranges")));
+        out.append(timeline.describe());
         out.append(String.format(Locale.ROOT, "store=%s store_reads=%d%n", storeLabel, storeReads));
         out.append(String.format(Locale.ROOT, "client_cost=%s (%s)%n", term.provenance(), term.sourceLabel()));
         out.append(String.format(Locale.ROOT, "budgets: worker_attempt_timeout=%dms probe_attempt_timeout=%dms "
