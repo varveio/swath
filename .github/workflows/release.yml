@@ -38,10 +38,10 @@ jobs:
         run: |
           echo "version=$(./gradlew -q properties | sed -n 's/^version: //p' | head -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare exact container payload
+      - name: Prepare container-promotion payload
         run: ./scripts/ci/prepare-container-promotion.sh promote
 
-      - name: Stage release payloads
+      - name: Stage release assets
         run: |
           mkdir -p release-assets
           cp swath-cli/build/libs/swath.jar release-assets/
@@ -56,7 +56,7 @@ jobs:
           format: spdx-json
           output-file: release-assets/swath-${{ steps.version.outputs.version }}.spdx.json
 
-      - name: Write checksums for every unsigned release payload
+      - name: Write SHA256SUMS for release assets
         run: (cd release-assets && sha256sum swath.jar swath-*.zip swath-*.tar *.spdx.json > SHA256SUMS)
 
       # actions/upload-artifact@v4

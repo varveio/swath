@@ -78,7 +78,7 @@ jobs:
       # from-source recompile inside the Docker build. docker-publish promotes it via a
       # BuildKit --build-context override of the Dockerfile's `build` stage — ship exactly
       # what was tested. PR runs do not publish an image, so they do not need this artifact.
-      - name: Prepare checked container-promotion payload
+      - name: Prepare container-promotion payload
         if: github.event_name != 'pull_request'
         run: ./scripts/ci/prepare-container-promotion.sh promote
 
@@ -206,12 +206,16 @@ jobs:
   # build would just be a redundant second multi-arch build per merge. No push, no
   # credentials, no network — fork-safe.
   #
+  # Named `docker-check`, not `docker-image`: it is a gate that builds and smokes
+  # an image and throws it away, so the name says what it does rather than what it
+  # touches, and pairs with `docker-publish` as validate/publish.
+  #
   # Deliberately NO docker/setup-qemu-action: the runtime stage only pulls the
   # JRE base and COPYs the arch-neutral uber-jar (no RUN), so building the foreign
   # arch on this amd64 runner is pure pull+copy+metadata and needs no emulation.
   # That also makes this job a guard -- add a RUN to the runtime stage and the
   # arm64 build here starts needing QEMU and fails, flagging the regression.
-  docker-image:
+  docker-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -232,7 +236,7 @@ jobs:
           # (read-only token) — degrade to a warning instead of failing the build.
           cache-to: type=gha,mode=max,ignore-error=true
 
-      - name: Build native image + load for smoke
+      - name: Build image (builder-native arch) + load for smoke
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -243,10 +247,16 @@ jobs:
       - name: Smoke — image runs and entrypoint passes args to swath
         run: docker run --rm swath:ci --help
 
-  # Manual GHCR publish + deep runtime smoke. Tagged releases publish through
-  # release.yml; ordinary main pushes never publish a mutable image. Gated on the tests: `needs`
-  # fast-tests + integration-tests, so an image is never published from code that
-  # fails its tests. It builds the image itself (so it does not need docker-image).
+  # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge and on
+  # manual dispatch from any branch. Tagged releases publish through release.yml
+  # instead; `latest` and the semver tags are owned solely by that workflow, so this
+  # job can never regress a release pointer.
+  #
+  # Running on merges is what gives `main` any Docker coverage at all: docker-check
+  # is PR-only, so without this a merge would build no image, and a break that only
+  # appears in the merge result (a semantic conflict between two green PRs, a RUN
+  # added to the runtime stage) would stay invisible until someone cut a tag.
+  #
   # Gated on ALL test jobs (`needs` fast-tests + integration-tests + deep-tests), so an image
   # is never published from code that fails any tier. It also promotes the tested uber-jar
   # from fast-tests into the image (see the build-context step below) rather than recompiling.
@@ -255,7 +265,9 @@ jobs:
   # settings; the workflow itself does not assume private or public visibility.
   docker-publish:
     needs: [fast-tests, integration-tests, deep-tests]
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     # Serialize ALL publishes globally (main + any dispatched branch share this one
     # group) so two publishes can never race the shared GHCR tags (main/sha-).
     # cancel-in-progress: false — never kill a publish mid-push; queue instead. If
@@ -292,10 +304,10 @@ jobs:
       - name: Verify container-promotion payload
         run: ./scripts/ci/verify-container-promotion.sh promote
 
-      # Smoke BEFORE push: build the native image, run the deep runtime smoke,
+      # Smoke BEFORE push: build the builder-native-arch image, run the deep runtime smoke,
       # and only push if it passes — so a shading/exclude/runtime regression can
       # never reach the GHCR tags (`branch`/`sha-`).
-      - name: Build native image + load for deep smoke
+      - name: Build image (builder-native arch) + load for deep smoke
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
@@ -363,15 +375,24 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
         with:
           images: ghcr.io/${{ github.repository }}
-          # Dev images only: immutable sha- tags plus the branch name. The mutable
-          # `latest` tag belongs to published releases and is owned solely by
-          # release.yml, so a manual dev publish can never regress it to an
-          # unversioned main build.
+          # Dev images only. The mutable `latest` tag belongs to published releases
+          # and is owned solely by release.yml, so a dev publish can never regress
+          # it to an unversioned main build.
+          #
+          # `sha-<gitsha>` is emitted for every publish — immutable and bisectable,
+          # and enough to pull any branch's image for testing.
+          #
+          # The branch-name tag is deliberately restricted to `main`. A dispatch can
+          # run on ANY ref, and type=ref,event=branch would otherwise paint the
+          # branch name onto a public registry: dispatching `sim/streaming-tier`
+          # would publish ghcr.io/varveio/swath:sim-streaming-tier, leaking internal
+          # branch names to anyone listing the package. That was harmless while the
+          # repository was private; it is not now.
           tags: |
             type=sha,prefix=sha-
-            type=ref,event=branch
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
 
-      # Provenance note: the deep smoke above ran the native `--load`ed amd64 image;
+      # Provenance note: the deep smoke above ran the `--load`ed builder-native amd64 image;
       # this step rebuilds the multi-arch manifest from the SAME build cache in the
       # SAME job seconds later, so the pushed amd64 is effectively the smoked amd64.
       # Two residual facts, accepted as low-risk for an arch-neutral RUN-free jar:

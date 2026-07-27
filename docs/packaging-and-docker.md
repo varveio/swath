@@ -240,31 +240,37 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 
 ## 7. CI image checks and release publication
 
-Two jobs in `.github/workflows/ci.yml` handle CI image checks. **`docker-image`**
+Two jobs in `.github/workflows/ci.yml` handle CI images. **`docker-check`**
 builds the multi-arch image (validating both `linux/amd64` and `linux/arm64`,
 no QEMU per §5), loads the native-arch build, and smoke-tests it
-(`docker run … --help`) — it never pushes. **`docker-publish`** is a manual
-maintainer-only smoke/publish path; ordinary `main` pushes never publish.
-Tagged publication belongs to `.github/workflows/release.yml`, behind the
-protected `public-release` environment.
+(`docker run … --help`) — it never pushes. **`docker-publish`** builds, runs a
+deep container smoke, and pushes dev images to GHCR. Tagged publication belongs
+to `.github/workflows/release.yml`, behind the protected `public-release`
+environment.
 
 Which jobs run depends on the trigger:
 
-| Event | fast-tests | integration-tests | docker-image | docker-publish |
-|---|:--:|:--:|:--:|:--:|
-| **Pull request** (feature branch) | ✅ | — | ✅ (build + smoke, no push) | — |
-| **Push to `main`** (i.e. a merge) | ✅ | ✅ | — | — |
-| **Manual** (`workflow_dispatch`) | ✅ | ✅ | — | ✅ (builds + pushes) |
+| Event | fast-tests | integration-tests | deep-tests | docker-check | docker-publish |
+|---|:--:|:--:|:--:|:--:|:--:|
+| **Pull request** (feature branch) | ✅ | — | — | ✅ (build + smoke, no push) | — |
+| **Push to `main`** (i.e. a merge) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` + `main`) |
+| **Manual** (`workflow_dispatch`) | ✅ | ✅ | ✅ | — | ✅ (`sha-<gitsha>` only) |
 
-`docker-image` is the **PR-only** build gate — it validates the multi-arch build
-and runs `--help`, but never pushes. On a merge / dispatch it doesn't run,
-because `docker-publish` builds the image itself (running it too would just be a
+`docker-check` is the **PR-only** build gate — it validates the multi-arch build
+and runs `--help`, but never pushes. On a merge or dispatch it doesn't run,
+because `docker-publish` builds the image itself (running both would just be a
 redundant second multi-arch build).
 
-The manual `docker-publish` path is gated on green tests and its deep container
-smoke. The release publish job is separately protected by the `public-release`
-environment and requires the explicit `PUBLIC_RELEASE_ENABLED=true` repository
-variable, which acts as a publish kill-switch.
+A dispatch can run on any branch, so it publishes the immutable `sha-<gitsha>`
+tag **only** — the mutable branch-name tag is restricted to `main`, keeping
+internal branch names off the public package. Pull a branch build by its
+`sha-` tag.
+
+`docker-publish` is gated on all three test tiers, so no image is published from
+code that failed any of them. The release publish job is separately protected by
+the `public-release` environment and requires the explicit
+`PUBLIC_RELEASE_ENABLED=true` repository variable, which acts as a publish
+kill-switch.
 
 The **CI image checks** have no scheduled run — they fire only on pull
 requests, pushes to `main`, and manual dispatch. (A separate `nightly` workflow
