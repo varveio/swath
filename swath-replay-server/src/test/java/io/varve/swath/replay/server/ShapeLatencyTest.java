@@ -102,7 +102,7 @@ class ShapeLatencyTest {
 
     @Test
     void parsesTheProdCommoncrawlProfile() {
-        ShapeLatency latency = ShapeLatency.parse("prod-commoncrawl", 0.0);
+        ShapeLatency latency = ShapeLatency.parse("prod-commoncrawl", 0.0, ShapeLatency.UNSCALED);
         S3ListRequest probe = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
         S3ListRequest page = req(null, null, 1000);
         S3ListRequest pivot = req(null, null, 1);
@@ -116,7 +116,7 @@ class ShapeLatencyTest {
     @Test
     void parsesACustomShapeSpecWithMixedUnitsAndAPerCpTerm() {
         ShapeLatency latency = ShapeLatency.parse(
-                "structure_probe=1.5s+40ms/cp,pivot_probe=120ms,worker_page=200", 0.0);
+                "structure_probe=1.5s+40ms/cp,pivot_probe=120ms,worker_page=200", 0.0, ShapeLatency.UNSCALED);
         S3ListRequest probe = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
         S3ListRequest pivot = req(null, null, 1);
         S3ListRequest page = req(null, null, 1000);
@@ -125,24 +125,70 @@ class ShapeLatencyTest {
         assertThat(latency.apply(page, result(page, 0))).isEqualTo(Duration.ofMillis(200));   // bare number = ms
     }
 
+    /**
+     * Compressed time: the scale divides the flat base AND the per-CommonPrefix slope, so a scaled
+     * run keeps the profile's shape — a wide structure probe stays as many times a worker page as
+     * it was — and only its absolute magnitude moves.
+     */
+    @Test
+    void latencyScaleDividesEveryTermOfTheProfile() {
+        ShapeLatency latency = ShapeLatency.parse("prod-commoncrawl", 0.0, 50.0);
+        S3ListRequest probe = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
+        S3ListRequest page = req(null, null, 1000);
+        S3ListRequest pivot = req(null, null, 1);
+        assertThat(latency.apply(probe, result(probe, 121)))
+                .as("(223 + 55 × 121) ms ÷ 50, both terms scaled")
+                .isEqualTo(Duration.ofNanos((223_000_000L / 50) + 121 * (55_000_000L / 50)));
+        assertThat(latency.apply(page, result(page, 0))).isEqualTo(Duration.ofNanos(223_000_000L / 50));
+        assertThat(latency.apply(pivot, result(pivot, 0))).isEqualTo(Duration.ofNanos(121_000_000L / 50));
+    }
+
+    /**
+     * The default is conformance-neutral: an unscaled parse must inject the profile to the
+     * nanosecond, never a rounded division by one.
+     */
+    @Test
+    void unscaledIsTheProfileExactlyAsWritten() {
+        ShapeLatency latency = ShapeLatency.parse(
+                "structure_probe=6.865s+55ms/cp,worker_page=223ms", 0.0, ShapeLatency.UNSCALED);
+        S3ListRequest probe = req(new byte[]{'p', '/'}, new byte[]{'/'}, 1000);
+        S3ListRequest page = req(null, null, 1000);
+        assertThat(latency.apply(probe, result(probe, 7))).isEqualTo(Duration.ofMillis(6865 + 55 * 7));
+        assertThat(latency.apply(page, result(page, 0))).isEqualTo(Duration.ofMillis(223));
+    }
+
+    @Test
+    void rejectsALatencyScaleThatIsNotAPositiveFactorOrHasNoProfileToScale() {
+        assertThatThrownBy(() -> ShapeLatency.parse("prod-commoncrawl", 0.0, 0.0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ShapeLatency.parse("prod-commoncrawl", 0.0, -50.0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ShapeLatency.parse("prod-commoncrawl", 0.0, Double.NaN))
+                .as("NaN divides every delay to zero — injection silently off")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ShapeLatency.parse(null, 0.0, 50.0))
+                .as("a scale with nothing to scale is the operator's mistake, not a no-op")
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void blankSpecDeclinesSoTheCallerInstallsANoOp() {
-        assertThat(ShapeLatency.parse(null, 0.0)).isNull();
-        assertThat(ShapeLatency.parse("  ", 0.0)).isNull();
+        assertThat(ShapeLatency.parse(null, 0.0, ShapeLatency.UNSCALED)).isNull();
+        assertThat(ShapeLatency.parse("  ", 0.0, ShapeLatency.UNSCALED)).isNull();
     }
 
     @Test
     void rejectsBadSpecsAndOutOfRangeJitter() {
-        assertThatThrownBy(() -> ShapeLatency.parse("worker_page", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("worker_page", 0.0, ShapeLatency.UNSCALED))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ShapeLatency.parse("bogus_shape=1s", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("bogus_shape=1s", 0.0, ShapeLatency.UNSCALED))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=fast", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=fast", 0.0, ShapeLatency.UNSCALED))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=100ms+5ms/cp", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=100ms+5ms/cp", 0.0, ShapeLatency.UNSCALED))
                 .as("a /cp term is meaningless without a delimiter'd response")
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ShapeLatency.parse("structure_probe=100ms+5ms", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("structure_probe=100ms+5ms", 0.0, ShapeLatency.UNSCALED))
                 .as("the per-entry term must name its unit (/cp)")
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ShapeLatency(Map.of(), 1.0))
@@ -150,7 +196,7 @@ class ShapeLatencyTest {
         assertThatThrownBy(() -> new ShapeLatency(Map.of(), Double.NaN))
                 .as("NaN would scale every delay to zero — injection silently off")
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=-1s", 0.0))
+        assertThatThrownBy(() -> ShapeLatency.parse("worker_page=-1s", 0.0, ShapeLatency.UNSCALED))
                 .as("a negative delay is silently no-sleep at the handler — refuse at parse")
                 .isInstanceOf(IllegalArgumentException.class);
     }

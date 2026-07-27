@@ -48,8 +48,17 @@ import java.util.function.BiFunction;
  * +jitter]}, keyed off the request bytes (never {@code Math.random}, which would make a run
  * irreproducible). Two runs against the same fixture with the same profile see byte-identical
  * delays.
+ *
+ * <p><b>Compressed time.</b> A profile can be divided by a scale factor at parse time, so a long
+ * profile can be walked end to end in a fraction of the wall clock it describes. The scale divides
+ * only what this injector adds; the server's own per-request cost is untouched, so a scaled run
+ * over-weights that fixed cost by the same factor and its absolute wall clock is not a prediction
+ * of the unscaled one.
  */
 public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResult, Duration> {
+
+    /** No compression: the profile's delays are injected exactly as written. */
+    public static final double UNSCALED = 1.0;
 
     /** The three request shapes a work-stealing scan issues, in classification order. */
     public enum Shape {
@@ -173,13 +182,25 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
      * millisecond count like {@code 250}), optionally — for {@code structure_probe} only — followed
      * by a per-CommonPrefix term: {@code structure_probe=223ms+55ms/cp}. An unlisted shape gets no
      * delay. Returns {@code null} for a null/blank spec so the caller can install a no-op.
+     *
+     * <p>{@code scale} divides every parsed delay ({@link #UNSCALED} leaves the profile exactly as
+     * written). A scale other than {@link #UNSCALED} against a spec that injects nothing is refused
+     * rather than ignored: it scales nothing, and an operator who passed it meant to compress a
+     * profile that is not there.
      */
-    public static ShapeLatency parse(String spec, double jitter) {
+    public static ShapeLatency parse(String spec, double jitter, double scale) {
+        // The negated in-range form, so NaN is rejected too (see the constructor's jitter check).
+        if (!(scale > 0.0 && scale < Double.POSITIVE_INFINITY)) {
+            throw new IllegalArgumentException("latency scale must be finite and > 0, got " + scale);
+        }
         if (spec == null || spec.isBlank()) {
+            if (scale != UNSCALED) {
+                throw new IllegalArgumentException("a latency scale requires a latency profile to scale");
+            }
             return null;
         }
         if (spec.trim().toLowerCase(Locale.ROOT).equals("prod-commoncrawl")) {
-            return new ShapeLatency(PROD_COMMONCRAWL, jitter);
+            return new ShapeLatency(scaled(PROD_COMMONCRAWL, scale), jitter);
         }
         Map<Shape, Delay> delays = new LinkedHashMap<>();
         for (String pair : spec.split(",")) {
@@ -194,7 +215,25 @@ public final class ShapeLatency implements BiFunction<S3ListRequest, S3ListResul
             Shape shape = parseShape(trimmed.substring(0, eq).trim());
             delays.put(shape, parseDelay(shape, trimmed.substring(eq + 1).trim()));
         }
-        return new ShapeLatency(delays, jitter);
+        return new ShapeLatency(scaled(delays, scale), jitter);
+    }
+
+    /**
+     * Divides every delay in a profile by {@code scale}. {@link #UNSCALED} returns the profile
+     * itself, so the default path cannot perturb a single nanosecond of the wire behavior.
+     */
+    private static Map<Shape, Delay> scaled(Map<Shape, Delay> delays, double scale) {
+        if (scale == UNSCALED) {
+            return delays;
+        }
+        Map<Shape, Delay> compressed = new LinkedHashMap<>();
+        delays.forEach((shape, delay) -> compressed.put(shape,
+                new Delay(divide(delay.base(), scale), divide(delay.perCommonPrefix(), scale))));
+        return compressed;
+    }
+
+    private static Duration divide(Duration delay, double scale) {
+        return Duration.ofNanos((long) (delay.toNanos() / scale));
     }
 
     private static Shape parseShape(String s) {

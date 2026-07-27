@@ -179,6 +179,31 @@ measurements from the public Common Crawl bucket. Jitter is a deterministic
 fraction in `[0,1)` keyed off the request bytes, so a run is exactly
 reproducible. Injection is off by default and adds no cost when off.
 
+#### Compressed time (`--latency-scale`)
+
+`--latency-scale N` divides every injected delay by `N`, so a profile that
+describes an hour-long run can be walked in a fraction of that wall clock:
+
+```bash
+swath-replay-server serve ... --inject-latency prod-commoncrawl --latency-scale 50
+```
+
+Both terms of a delay scale — the flat base and the `/cp` slope — so the
+profile keeps its *shape*: a wide structure probe stays the same multiple of a
+worker page that it was, which is the relationship a split/steal pathology
+turns on. It requires `--inject-latency` (a scale with no profile to scale is
+rejected, not ignored), and the default `1` injects the profile exactly as
+written, to the nanosecond.
+
+The distortion to keep in mind: **only the injected delay scales.** The
+server's own per-request cost, the client's CPU, and the engine's own
+scheduling do not, so at `--latency-scale 50` those fixed costs are weighted
+~50× heavier relative to the profile than they are in the unscaled run. A
+scaled run's wall clock is therefore not the unscaled run's divided by `N`, and
+must never be quoted as an absolute time. Use it to compress a long profile
+into an affordable iteration loop, and confirm any result that depends on
+absolute timing at `--latency-scale 1`.
+
 ### `--serving-mode` (`auto` | `sorted` | `duckdb`)
 
 `--serving-mode` chooses how a fixture is served (default `auto`):

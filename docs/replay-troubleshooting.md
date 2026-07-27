@@ -108,7 +108,7 @@ know immediately if step (b) didn't stamp a servable file. A healthy start
 prints one line naming the resolved mode and every knob that's live:
 
 ```
-s3_listing_replay_server endpoint=http://127.0.0.1:19090 bucket=<bucket> fixture=<cut-fixture> serving_mode=SORTED parquet_connections=4 inject_latency=off
+s3_listing_replay_server endpoint=http://127.0.0.1:19090 bucket=<bucket> fixture=<cut-fixture> serving_mode=SORTED parquet_connections=4 inject_latency=off latency_scale=1.0
 ```
 
 ### d. Calibrate a per-shape latency profile from the sick run's own metrics
@@ -148,6 +148,17 @@ swath-replay-server serve ... \
 
 The `55ms/cp` slope shown is the current calibration of the built-in reference
 profile.
+
+A faithful profile is also an expensive one — injecting a 6.9 s structure probe
+means waiting 6.9 s per probe, and a run that reproduces a 55-minute tail takes
+55 minutes. `--latency-scale N` (see
+[`swath-replay-server.md`](swath-replay-server.md#compressed-time---latency-scale))
+divides every injected delay by `N` while preserving the profile's shape, which
+turns that into an iteration loop you can run repeatedly. It is a shape-only
+instrument: at `--latency-scale 50` the server's and client's own unscaled
+per-request costs are weighted ~50× heavier relative to the profile, so score a
+compressed run on the trajectory and engagement counters (§4.3) and never on its
+absolute wall clock — confirm any timing-dependent result at `--latency-scale 1`.
 
 The `/cp` term is the reason this lives in the server rather than in a TCP
 proxy: the injector sees the parsed response, so it can charge a structure
