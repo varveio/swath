@@ -81,11 +81,13 @@ jobs:
 
   publish:
     needs: build
-    # Tags remain private-repository dry runs until the Phase 10 human gate has
-    # accepted the public cut and explicitly enables this protected environment.
-    # Operator note: this gate reads visibility from the triggering push event, so
-    # after flipping visibility/PUBLIC_RELEASE_ENABLED you must push a FRESH tag —
-    # re-running an existing dry-run reuses the stale event payload and will skip.
+    # Publishing requires the repository to be public AND the PUBLIC_RELEASE_ENABLED
+    # variable, which stays in place as an emergency kill-switch: unset it and tags
+    # build assets without publishing anything, no code change required.
+    #
+    # Operator note: this gate reads visibility from the TRIGGERING PUSH EVENT, so
+    # re-running an old tag's workflow replays that tag's original payload. If a gate
+    # input has changed since, push a FRESH tag rather than re-running.
     if: github.event.repository.visibility == 'public' && vars.PUBLIC_RELEASE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -127,18 +129,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Classify the tag once; every downstream step reads these outputs rather than
+      # re-deriving the rule. A pre-release publishes its own immutable X.Y.Z-rc.N tag
+      # and nothing else: no `latest`, no rolling `X.Y`, and a GitHub pre-release. The
+      # rehearsal must otherwise take exactly the same path as a real release —
+      # signing, attestation, promotion, self-verification — or it rehearses nothing.
+      - id: kind
+        name: Classify the release
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" == *-rc.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "tags=ghcr.io/${GITHUB_REPOSITORY}:${VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            # Rolling X.Y alongside the immutable X.Y.Z.
+            tags="ghcr.io/${GITHUB_REPOSITORY}:${VERSION} ghcr.io/${GITHUB_REPOSITORY}:${VERSION%.*} ghcr.io/${GITHUB_REPOSITORY}:latest"
+            # Bare major only from 1.0 onward. A `0` tag would imply a stability
+            # contract 0.x explicitly disclaims, so the exception is implemented
+            # here rather than left as a comment nobody remembers at 1.0.
+            if [[ "${VERSION%%.*}" != 0 ]]; then
+              tags="$tags ghcr.io/${GITHUB_REPOSITORY}:${VERSION%%.*}"
+            fi
+            echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Push by DIGEST, with no tags attached yet. The tags are applied further down,
+      # only after the smoke has run against this exact digest — so `latest` and
+      # `X.Y.Z` name bytes that were actually executed, not a second build that is
+      # merely expected to be identical. See the release-pipeline design note §2.1b.
       - id: image
-        name: Publish exact tested jar as a multi-arch image
+        name: Build and push the image by digest (untagged)
         # docker/build-push-action@v6
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           build-contexts: build=promote
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ needs.build.outputs.version }}
-            ghcr.io/${{ github.repository }}:latest
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.version=${{ needs.build.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -146,20 +176,150 @@ jobs:
           sbom: true
           provenance: mode=max
 
+      # Checksum-verified before it runs. This job can publish, sign, attest and
+      # release, so an unverified third-party binary executing here would be the
+      # highest-privilege foothold in the pipeline.
+      - name: Install DuckDB CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+
+      # The release image gets the SAME deep smoke the dev images get — literally the
+      # same script — and it runs against the pushed digest, so what is verified is
+      # exactly what the tags will name. Without this the release was the
+      # least-verified image published: `sha-` dev tags were smoked, `latest` was not.
+      - name: Smoke — Parquet write + read + resume against the pushed digest
+        run: ./scripts/ci/smoke-container.sh "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" releasesmoke
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
+
+      # Only now do the tags exist. imagetools create copies no bytes: it points new
+      # tags at the digest that was just smoked.
+      - name: Apply release tags to the smoked digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          TAGS: ${{ steps.kind.outputs.tags }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          for tag in $TAGS; do ARGS+=(--tag "$tag"); done
+          docker buildx imagetools create "${ARGS[@]}" "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
+          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${{ needs.build.outputs.version }}"
+
       - name: Install cosign
         # sigstore/cosign-installer@v3
         uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
 
-      - name: Keylessly sign release files and image
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+      # SHA256SUMS is signed LAST and deliberately: it is the one file whose integrity
+      # transitively covers every other asset, so a consumer who verifies only its
+      # signature and then runs `sha256sum --check` has covered the whole release. It
+      # and the SBOM were previously left unsigned.
+      #
+      # No COSIGN_EXPERIMENTAL: keyless has been GA since cosign 2.0 (2023) and the
+      # variable is a no-op that only misleads readers.
+      - name: Keylessly sign release assets and the image digest
         run: |
-          for asset in release-assets/swath-*.jar release-assets/swath-*.zip release-assets/swath-*.tar.gz; do
+          set -euo pipefail
+          for asset in release-assets/swath-*.jar release-assets/swath-*.zip \
+                       release-assets/swath-*.tar.gz release-assets/*.spdx.json \
+                       release-assets/SHA256SUMS; do
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"
           done
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
 
-      - name: Create GitHub release from verified assets
+      # Attestations answer a different question from the signatures above: not "are
+      # these the bytes that were signed" but "which workflow, in which repo, at which
+      # commit, produced this" — SLSA v1.0 build provenance, verifiable with `gh
+      # attestation verify` and no extra tooling on the user's side.
+      # actions/attest-build-provenance@v4
+      - name: Attest build provenance for the release assets
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: |
+            release-assets/swath-*.jar
+            release-assets/swath-*.zip
+            release-assets/swath-*.tar.gz
+            release-assets/SHA256SUMS
+
+      # actions/attest-build-provenance@v4
+      - name: Attest build provenance for the image
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      # actions/attest-sbom@v4
+      - name: Attest the SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e
+        with:
+          subject-path: release-assets/swath-${{ needs.build.outputs.version }}.jar
+          sbom-path: release-assets/swath-${{ needs.build.outputs.version }}.spdx.json
+
+      # Created as a DRAFT. `gh release create` publishes the release and then uploads
+      # assets, so a failure mid-upload would otherwise leave a live, incomplete
+      # release — and notify watchers about it. Draft first, verify, then un-draft.
+      - name: Create the GitHub release as a draft
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/* --title "swath ${{ needs.build.outputs.version }}" --generate-notes
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          ARGS=(--draft --title "swath ${{ needs.build.outputs.version }}" --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" release-assets/* "${ARGS[@]}"
+
+      # Run the exact commands the docs tell users to run. If verification would fail
+      # in a user's terminal, the release should be red here instead — a signature
+      # nobody can verify is worse than no signature, because it invites trust. This
+      # is also what makes the -rc rehearsal assert something rather than merely
+      # execute.
+      - name: Self-verify the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # Verify what GitHub actually STORED, not the local copies we uploaded from.
+          # Checking release-assets/ would re-confirm files we already know are good and
+          # would miss a truncated or mis-uploaded asset — the failure this step exists
+          # to catch. Download the draft's assets into a fresh directory and verify there.
+          rm -rf release-verify
+          gh release download "$GITHUB_REF_NAME" --dir release-verify
+
+          echo "::group::checksums (downloaded copies)"
+          (cd release-verify && sha256sum --check SHA256SUMS)
+          echo "::endgroup::"
+
+          echo "::group::cosign verify-blob (SHA256SUMS)"
+          cosign verify-blob \
+            --bundle release-verify/SHA256SUMS.sigstore.json \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            release-verify/SHA256SUMS
+          echo "::endgroup::"
+
+          echo "::group::cosign verify (image)"
+          cosign verify \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" > /dev/null
+          echo "::endgroup::"
+
+          echo "::group::gh attestation verify"
+          gh attestation verify "oci://ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY"
+          gh attestation verify release-verify/SHA256SUMS --repo "$GITHUB_REPOSITORY"
+          echo "::endgroup::"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
