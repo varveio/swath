@@ -89,7 +89,8 @@ public final class ParquetWriterPool implements AutoCloseable {
     private final LongSupplier nanoClock;
     private final PartListener partListener;
     // Optional (null-safe) run metrics — rotation-trigger attribution, finalize/
-    // discard counters, footer-fsync latency. Null for every caller that doesn't pass one
+    // discard counters, footer-fsync latency, and the lanes' own encode/write span
+    // (recordLaneWork). Null for every caller that doesn't pass one
     // (several constructors below + most tests).
     private final RunMetrics metrics;
 
@@ -232,11 +233,14 @@ public final class ParquetWriterPool implements AutoCloseable {
                 if (!aborting && failure.get() == null && lane.current != null) {
                     RotationReason reason = rotationReason(lane);
                     if (reason != RotationReason.NONE) {
+                        long startedAt = nanoClock.getAsLong();
                         try {
                             recordRotation(reason);
                             finalizeCurrent(lane);
                         } catch (Throwable t) {
                             failure.compareAndSet(null, t);
+                        } finally {
+                            recordLaneWork(startedAt);
                         }
                     }
                 }
@@ -248,12 +252,17 @@ public final class ParquetWriterPool implements AutoCloseable {
             if (aborting || failure.get() != null) {
                 continue;   // draining and discarding
             }
+            long startedAt = nanoClock.getAsLong();
             try {
                 writeBatch(lane, batch);
             } catch (Throwable t) {
                 failure.compareAndSet(null, t);
+            } finally {
+                recordLaneWork(startedAt);
             }
         }
+        boolean hasOpenPart = lane.current != null;
+        long startedAt = nanoClock.getAsLong();
         try {
             if (aborting || failure.get() != null) {
                 discardCurrent(lane);   // partial part is NOT durable → delete it
@@ -262,8 +271,36 @@ public final class ParquetWriterPool implements AutoCloseable {
             }
         } catch (Throwable t) {
             failure.compareAndSet(null, t);
+        } finally {
+            if (hasOpenPart) {   // no open part ⇒ both paths no-op; don't record a fabricated zero
+                recordLaneWork(startedAt);
+            }
         }
         return null;
+    }
+
+    /**
+     * Close one stretch of lane-thread work into the {@code parquet_write} client-cost span
+     * ({@code swath.parquet.write.latency}) — see {@link RunMetrics#recordParquetWrite}. Called from
+     * the three places a lane does work between waits on its queue (batch write, idle-cadence
+     * rotation, drain-time finalize/discard), so summing the span over a run accounts for the pool's
+     * CPU rather than for the dispatch that {@code emit} sees. Measured on {@link #nanoClock}, the
+     * same monotonic clock the rotation triggers read.
+     *
+     * <p>Swallows anything thrown while recording. This is the only work in the lane loop that is
+     * NOT already inside a catch-all, and it is pure observation: letting a metrics/clock failure
+     * escape would kill the lane thread before it consumes the poison sentinel, which is exactly the
+     * lane-failure deadlock the "always drain to POISON" rule exists to prevent.
+     */
+    private void recordLaneWork(long startedAtNanos) {
+        if (metrics == null) {
+            return;
+        }
+        try {
+            metrics.recordParquetWrite(nanoClock.getAsLong() - startedAtNanos);
+        } catch (Throwable ignored) {
+            // observation only — never take the lane down with it
+        }
     }
 
     private void writeBatch(Lane lane, PageBatch batch) throws Exception {

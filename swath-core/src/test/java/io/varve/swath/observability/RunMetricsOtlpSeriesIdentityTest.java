@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 120;
+    static final int EXPECTED_OTLP_METER_COUNT = 121;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -205,6 +205,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "TIMER|swath.idle_backoff.park_time|{}",
             "TIMER|swath.parquet.finalize.latency|{}",
+            "TIMER|swath.parquet.write.latency|{}",
             "TIMER|swath.queue.wait|{}",
             "TIMER|swath.rate_limit.api_wait|{}",
             "TIMER|swath.rate_limit.wait|{}",
@@ -214,9 +215,9 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.merge.range.latency|{}");
 
     /**
-     * The 21 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
+     * The 22 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
      * single {@code swath.api.latency} op series, all fifteen {@code swath.fetch.latency.phase}
-     * call_class/phase distributions, and the five client-service-cost spans. Asserting the EXACT
+     * call_class/phase distributions, and the six client-service-cost spans. Asserting the EXACT
      * set (not just count + allowed names) catches one attribute set being duplicated while another
      * silently disappears.
      */
@@ -241,6 +242,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=sdk_unmarshal}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
+            "SUMMARY|swath.parquet.write.latency|{}",
             "SUMMARY|swath.queue.wait|{}");
 
     @Test

@@ -10,11 +10,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.observability.RunSummary;
 import io.varve.swath.runtime.RunContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,8 +27,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The Parquet writer pool: rotation-trigger attribution
  * ({@code swath.parquet.rotation{trigger}}), finalize/discard outcome counters
- * ({@code swath.parquet.parts{outcome}}), and footer-fsync latency
- * ({@code swath.parquet.finalize.latency}). Uses the package-private
+ * ({@code swath.parquet.parts{outcome}}), footer-fsync latency
+ * ({@code swath.parquet.finalize.latency}), and the lanes' own encode/write span
+ * ({@code swath.parquet.write.latency}). Uses the package-private
  * clock+metrics test seam so the time trigger is deterministic.
  */
 class ParquetWriterPoolMetricsTest {
@@ -90,6 +95,44 @@ class ParquetWriterPoolMetricsTest {
 
         assertThat(ctx.meterRegistry().get("swath.parquet.rotation").tag("trigger", "time").counter().count())
                 .isEqualTo(1.0);
+        assertThat(ctx.meterRegistry().get("swath.parquet.write.latency").timer().count())
+                .as("both batch-write stretches; the second CONTAINS the rotation it triggered, and the "
+                        + "drain then has no open part left to finalize")
+                .isEqualTo(2L);
+    }
+
+    /**
+     * The idle-cadence rotation is lane work too: a lane that stopped receiving batches wakes on its
+     * own poll timeout and finalizes a stale part with nothing to write — CPU no batch-write stretch
+     * covers, and the one recording site the batch-driven tests above cannot reach.
+     */
+    @Test
+    void idleCadenceRotationIsRecordedAsLaneWorkToo(@TempDir Path dir) throws Exception {
+        RunContext ctx = RunContext.create();
+        AtomicLong clock = new AtomicLong(0);
+        // A sub-floor interval: the lane's poll WAIT is floored at ROTATION_POLL_FLOOR_NANOS (50 ms)
+        // so it wakes promptly with nothing to write, while the staleness decision itself reads the
+        // injected clock -- which stays at 0 until this test says otherwise.
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 8,
+                ParquetWriterPoolConfig.DEFAULT.withRotationIntervalNanos(1L).withMetrics(ctx.metrics()),
+                clock::get);
+        Timer laneWork = ctx.meterRegistry().get("swath.parquet.write.latency").timer();
+
+        pool.submit(batch(0, 0, 0, 10));
+        // Wait on the span itself, not on the part file: the write stretch is recorded AFTER
+        // writeBatch()'s own rotation check has already read the clock, so advancing it below can no
+        // longer race that check into firing the rotation on the write path instead (#37's lesson).
+        await().atMost(Duration.ofSeconds(5)).until(() -> laneWork.count() == 1L);
+
+        clock.set(2L);   // the open part is now stale: the next idle wake-up must rotate it
+        await().atMost(Duration.ofSeconds(5)).until(() -> pool.committedPartCount() == 1);
+        pool.close();    // the rotation cleared lane.current, so the drain finalizes nothing
+
+        assertThat(laneWork.count())
+                .as("the batch write, plus the idle wake-up's rotation")
+                .isEqualTo(2L);
+        assertThat(ctx.meterRegistry().get("swath.parquet.rotation").tag("trigger", "time").counter().count())
+                .isEqualTo(1.0);
     }
 
     @Test
@@ -152,6 +195,44 @@ class ParquetWriterPoolMetricsTest {
         } finally {
             pool.abort();   // the pool is already in a failed state -- abort() (not close()) shuts it down cleanly
         }
+    }
+
+    /**
+     * The lanes' own encode/write work is a client-service-cost span in its own right
+     * ({@code swath.parquet.write.latency} → {@code client_cost[].parquet_write}). Without it a
+     * Parquet run's measured client cost is the pool DISPATCH alone — what the consumer stage's
+     * {@code emit} span sees, a rounding error next to the encode the lanes then do — so summed
+     * spans cannot account for the process CPU a Parquet run actually burns.
+     */
+    @Test
+    void laneEncodeWorkIsRecordedAsItsOwnClientCostSpan(@TempDir Path dir) throws Exception {
+        RunContext ctx = RunContext.create();
+        // One lane, no rotation trigger reachable: exactly one lane-work stretch per batch, plus
+        // the drain-time finalize close() runs on the lane thread.
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 8,
+                ParquetWriterPoolConfig.DEFAULT.withMetrics(ctx.metrics()));
+
+        for (int p = 0; p < 3; p++) {
+            pool.submit(batch(0, p, p * 1000, p * 1000 + 1000));
+        }
+        pool.close();
+
+        MeterRegistry registry = ctx.meterRegistry();
+        Timer laneWork = registry.get("swath.parquet.write.latency").timer();
+        assertThat(laneWork.count()).as("one per batch written, plus the drain-time finalize").isEqualTo(4L);
+        assertThat(laneWork.totalTime(TimeUnit.NANOSECONDS))
+                .as("the encode/write the pool actually did, not the dispatch that handed it over")
+                .isPositive();
+        // Nested, not additive: a finalize happens INSIDE the lane-work stretch that performed it,
+        // so no finalize SAMPLE can exceed the longest lane-work sample. Asserted per-sample (max vs
+        // max) rather than sum vs sum, which would also hold for a lane-work timer that happened to
+        // record more, shorter, unrelated stretches.
+        assertThat(laneWork.max(TimeUnit.NANOSECONDS)).isGreaterThanOrEqualTo(
+                registry.get("swath.parquet.finalize.latency").timer().max(TimeUnit.NANOSECONDS));
+        assertThat(ctx.metrics().summary(Duration.ofSeconds(1), "work_stealing", 0L, 0L).clientCost())
+                .as("readable from the run summary's client_cost[], where the accounting is done")
+                .extracting(RunSummary.ClientCostSpan::span)
+                .contains(RunMetrics.CLIENT_COST_SPAN_PARQUET_WRITE);
     }
 
     @Test

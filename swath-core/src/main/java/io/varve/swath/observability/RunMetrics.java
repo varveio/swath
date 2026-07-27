@@ -181,6 +181,7 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> parquetRotations = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> parquetParts = new ConcurrentHashMap<>();
     private final Timer parquetFinalizeLatency;
+    private final Timer parquetWriteLatency;
 
     // Output-completeness meters — the Micrometer surface was blind to written output
     // beyond the Parquet main path (JSONL/TSV/TABLE/sort-final all passed 0 bytes / hardcoded
@@ -492,8 +493,10 @@ public final class RunMetrics {
         checkpointCommitWait = clientCostSpanTimer("swath.checkpoint.commit.wait").register(registry);
         checkpointCommitBatchSize = runScopedSummary("swath.checkpoint.commit_batch_size").register(registry);
 
-        // Parquet writer pool (rotation/finalize/discard).
+        // Parquet writer pool (rotation/finalize/discard, plus the lane threads' own encode/write
+        // work — a client-service-cost span, see #buildClientCostSummary).
         parquetFinalizeLatency = runScopedTimer("swath.parquet.finalize.latency").register(registry);
+        parquetWriteLatency = clientCostSpanTimer("swath.parquet.write.latency").register(registry);
 
         // Text-sink broken-pipe outcome + end-of-run duration/throughput aggregates.
         outputBrokenPipe = Counter.builder("swath.output.broken_pipe").register(registry);
@@ -1471,6 +1474,22 @@ public final class RunMetrics {
         sample.stop(parquetFinalizeLatency);
     }
 
+    /**
+     * One stretch of writer-LANE work: the encode+write of a batch's rows into the open part, plus
+     * whatever part finalize (footer fsync, part MD5, manifest rewrite) or drain-time discard that
+     * stretch performed — measured on the lane's own thread, between two waits on its queue, so
+     * summing this span over a run accounts for the pool's CPU (an aborted run's lanes drain their
+     * queued batches without writing them, and those record nothing). A client-service-cost span
+     * (see {@link #buildClientCostSummary}),
+     * but the ONE that is not on the page's critical path: the lanes run concurrently with fetch and
+     * {@link #recordEmit emit} (for Parquet, {@code emit} is the pool DISPATCH only), so this span
+     * overlaps them in wall-clock and must never be added to a page's serial cost. It also strictly
+     * CONTAINS {@code swath.parquet.finalize.latency} whenever a rotation fired inside the stretch.
+     */
+    public void recordParquetWrite(long nanos) {
+        parquetWriteLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
     // ---- Output-completeness + run-level aggregate meters ----------------
 
     /**
@@ -2251,6 +2270,8 @@ public final class RunMetrics {
     public static final String CLIENT_COST_SPAN_EMIT = "emit";
     /** {@code span} name: the fetch worker's blocked-on-a-full-channel wait handing the page downstream. */
     public static final String CLIENT_COST_SPAN_WRITER_BACKPRESSURE = "writer_backpressure";
+    /** {@code span} name: a Parquet writer lane's own encode/write stretch, off the page's critical path. */
+    public static final String CLIENT_COST_SPAN_PARQUET_WRITE = "parquet_write";
 
     /**
      * Read back every client-service-cost span's p50/p90/p99/max/count into the JSON summary's
@@ -2267,6 +2288,12 @@ public final class RunMetrics {
      * {@code phase=}{@value #LATENCY_PHASE_RESPONSE_PARSE} rather than being flattened into
      * call-class-blind rows.
      *
+     * <p>{@value #CLIENT_COST_SPAN_PARQUET_WRITE} is the one member measured OFF the page's critical
+     * path — a Parquet run's sink work is done by the writer-pool lanes, so {@code emit} sees only
+     * the dispatch and the real encode/write cost is only visible here. It is what makes a Parquet
+     * run's client cost measurable rather than a lower bound; see {@link #recordParquetWrite} for
+     * the overlap that follows from it running on its own threads.
+     *
      * <p>Omits any span with zero observations — never a fabricated all-zero row.
      */
     private List<RunSummary.ClientCostSpan> buildClientCostSummary() {
@@ -2276,6 +2303,7 @@ public final class RunMetrics {
         addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT, checkpointCommitLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_EMIT, emitLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_WRITER_BACKPRESSURE, queueWait);
+        addClientCostSpan(out, CLIENT_COST_SPAN_PARQUET_WRITE, parquetWriteLatency);
         return out;
     }
 

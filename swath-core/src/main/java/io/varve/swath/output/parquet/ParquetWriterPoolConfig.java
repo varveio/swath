@@ -28,7 +28,8 @@ import java.util.List;
  *                              disables the time trigger
  * @param rotationMaxRows rotate once a lane's open part has this many rows, even below {@code
  *                        targetBytes}; {@code 0} disables the row-count trigger
- * @param metrics rotation-trigger attribution, finalize/discard counters, footer-fsync latency;
+ * @param metrics rotation-trigger attribution, finalize/discard counters, footer-fsync latency, and
+ *                the lanes' own encode/write span ({@code swath.parquet.write.latency});
  *                {@code null} (the default) attaches no metrics
  */
 public record ParquetWriterPoolConfig(

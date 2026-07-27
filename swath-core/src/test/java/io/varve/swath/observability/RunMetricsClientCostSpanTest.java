@@ -21,8 +21,9 @@ import org.junit.jupiter.api.Test;
  * The per-page CLIENT-SERVICE-COST decomposition read back as {@code RunSummary#clientCost()} (the
  * JSON summary's {@code client_cost[]}): what a page costs the client once the store has answered,
  * split into the spans that can contend independently — the fetch worker's durable-commit wait, the
- * checkpoint writer's own queue wait and batch commit, the consumer stage's sink write, and the
- * worker's blocked-on-a-full-channel handoff.
+ * checkpoint writer's own queue wait and batch commit, the consumer stage's sink write, the
+ * worker's blocked-on-a-full-channel handoff, and — off the page's critical path — a Parquet writer
+ * lane's own encode/write stretch.
  *
  * <p>Each row is a DISTRIBUTION, not a total: a per-page cost read as a mean cannot distinguish an
  * iid per-page cost from a queue behind a shared single writer (whose tail grows with worker count),
@@ -46,6 +47,7 @@ class RunMetricsClientCostSpanTest {
         metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 8);
         metrics.recordEmit(4_000_000L);
         metrics.recordQueueWait(metrics.startQueueWaitTimer());
+        metrics.recordParquetWrite(5_000_000L);
 
         Map<String, RunSummary.ClientCostSpan> spans = spansOf(metrics);
 
@@ -54,7 +56,8 @@ class RunMetricsClientCostSpanTest {
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT,
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT,
                 RunMetrics.CLIENT_COST_SPAN_EMIT,
-                RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE);
+                RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE,
+                RunMetrics.CLIENT_COST_SPAN_PARQUET_WRITE);
         assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT).count())
                 .as("one observation per committed page, not per batch")
                 .isEqualTo(2L);
@@ -86,6 +89,7 @@ class RunMetricsClientCostSpanTest {
         metrics.recordCheckpointCommit(metrics.startCheckpointCommitTimer(), 1);
         metrics.recordEmit(Duration.ofMillis(40).toNanos());
         metrics.recordQueueWait(metrics.startQueueWaitTimer());
+        metrics.recordParquetWrite(Duration.ofMillis(40).toNanos());
         clock.add(Duration.ofMinutes(10));   // comfortably past Micrometer's default 2m expiry
 
         assertThat(spansOf(metrics).values()).allSatisfy(s -> {
@@ -99,7 +103,7 @@ class RunMetricsClientCostSpanTest {
      * Each span reads its own timer — no two rows are wired to the same meter. Every span is given a
      * DISTINCT observation count precisely so two spans silently sharing one backing timer would be
      * caught here: a shared timer's count would be the SUM of the two spans' counts, not either
-     * span's own distinct count, and the touched-timer-id set would also collapse below five.
+     * span's own distinct count, and the touched-timer-id set would also collapse below six.
      */
     @Test
     void eachSpanIsBackedByItsOwnMeter() {
@@ -118,6 +122,9 @@ class RunMetricsClientCostSpanTest {
         for (int i = 0; i < 5; i++) {
             metrics.recordQueueWait(metrics.startQueueWaitTimer());
         }
+        for (int i = 0; i < 6; i++) {
+            metrics.recordParquetWrite(1_000_000L);
+        }
 
         Map<String, Long> touchedCountsByName = metrics.registry().getMeters().stream()
                 .filter(Timer.class::isInstance)
@@ -130,6 +137,7 @@ class RunMetricsClientCostSpanTest {
                 Map.entry("swath.checkpoint.queue.wait", 2L),
                 Map.entry("swath.checkpoint.commit.latency", 3L),
                 Map.entry("swath.emit.latency", 4L),
-                Map.entry("swath.queue.wait", 5L));
+                Map.entry("swath.queue.wait", 5L),
+                Map.entry("swath.parquet.write.latency", 6L));
     }
 }

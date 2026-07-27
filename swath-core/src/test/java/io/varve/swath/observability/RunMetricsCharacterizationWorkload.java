@@ -186,6 +186,7 @@ final class RunMetricsCharacterizationWorkload {
         m.recordParquetPart("discarded");
         m.recordParquetPart("finalize_failed");
         m.recordParquetFinalizeLatency(m.startParquetFinalizeTimer());
+        m.recordParquetWrite(3_000L);
 
         // Output completeness.
         m.recordOutput("parquet", "written", 2L, 4_096L);
