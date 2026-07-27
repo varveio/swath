@@ -1,36 +1,36 @@
 [versions]
-picocli = "4.7.6"
-slf4j = "2.0.16"
-logback = "1.5.18"
+picocli = "4.7.7"
+slf4j = "2.0.18"
+logback = "1.6.0"
 micrometer = "1.17.0"
-awssdk = "2.31.78"
-parquet = "1.15.1"
-hadoop = "3.4.1"
-zstdjni = "1.5.6-9"
+awssdk = "2.49.3"
+parquet = "1.17.1"
+hadoop = "3.5.0"
+zstdjni = "1.5.7-12"
 # Pinned explicitly rather than relying on the transitive version pulled in by
 # parquet-hadoop/hadoop-mapreduce-client-core (currently the same 2.0.2) — see swath-core's
 # PageCodec#LZ4, which references io.airlift.compress.lz4 classes directly.
-aircompressor = "2.0.2"
+aircompressor = "2.0.3"
 junit = "5.11.4"
 assertj = "3.27.3"
 jqwik = "1.9.2"
-awaitility = "4.2.2"
+awaitility = "4.3.0"
 testcontainers = "1.20.6"
-sqlitejdbc = "3.47.1.0"
-jetty = "12.1.10"
-duckdbjdbc = "1.5.4.0"
+sqlitejdbc = "3.53.2.1"
+jetty = "12.1.11"
+duckdbjdbc = "1.5.5.0"
 jmh = "1.37"
 jmhplugin = "0.7.3"
-jackson = "2.22.0"
+jackson = "2.22.1"
 # Terminal geometry for the live progress display's in-place redraw, and nothing else — see
 # TerminalGeometry. The 3.x line is not the superseded one: 3.30.16 postdates 4.3.1, and it is what
 # the ecosystem's shaded consumers ship against.
-jline = "3.30.16"
+jline = "4.3.1"
 bucket4j = "8.10.1"
-commonscodec = "1.16.1"
-shadowplugin = "8.3.9"
+commonscodec = "1.22.0"
+shadowplugin = "9.6.1"
 licensereport = "3.1.4"
-spotless = "7.0.2"
+spotless = "8.8.0"
 otelproto = "1.10.0-alpha"
 
 [libraries]
