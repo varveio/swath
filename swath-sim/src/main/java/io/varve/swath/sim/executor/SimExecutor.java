@@ -6,7 +6,6 @@
 package io.varve.swath.sim.executor;
 
 import io.varve.swath.engine.ConfettiFeedbackGate;
-import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.Commit;
