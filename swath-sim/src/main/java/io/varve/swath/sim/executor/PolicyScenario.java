@@ -30,7 +30,11 @@ import io.varve.swath.sim.model.MissingSimDependencyException;
  * @param seed           the run's one seed; every draw is derived from it
  * @param workerCount    the fleet size, which is also the adaptive controller's ceiling
  * @param pageSize       keys per listing call (a full page for the real protocol is 1000)
- * @param scanPrefix     the listing prefix, {@code null} or empty for the whole bucket
+ * @param scanPrefix     the listing prefix, {@code null} or empty for the whole bucket. Being a
+ *                       {@code byte[]}, it makes this record's generated {@code equals}/{@code hashCode}
+ *                       compare array <em>references</em>: two otherwise-identical scenarios carrying
+ *                       equal prefix bytes in different arrays are unequal, so compare scenarios field by
+ *                       field and never use one as a map key
  * @param seedMode       how the keyspace is cut before any worker starts
  * @param toggles        the engine ablation namespace the policies are constructed with
  * @param latency        per-call service times

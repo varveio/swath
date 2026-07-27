@@ -26,6 +26,11 @@ import org.junit.jupiter.api.Test;
  * same; only the size moves, which is what makes the comparison a scale result rather than a different
  * experiment.
  *
+ * <p><b>The numbers quoted below moved once already</b>, when the simulator stopped charging a
+ * trailing empty listing call on every range whose size happened to divide by the page size — see
+ * {@code SimListingViewProtocolTest}. The shapes and the ordering survived it; the magnitudes did not,
+ * which is what a pin on current behaviour is for.
+ *
  * <p>Opt-in ({@code @Tag("perf")}), for <b>memory</b> rather than time: each run computes in about a
  * third of a second, but the two fixtures are three quarters of a million keys apiece and are held on
  * the heap at once, which is a large share of a default test worker's budget and not something the fast
@@ -48,23 +53,23 @@ class PositionSensorAtScaleTest {
         assertThat(deep.completed()).as(deep::describe).isTrue();
         assertThat(control.completed()).as(control::describe).isTrue();
 
-        // Deep-nested: 8.4% of the run happens after the last split anything managed to make, on a mean
-        // of 1.6 ranges. Control: 0.8%, and it is still splitting when it finishes.
+        // Deep-nested: 17.1% of the run happens after the last split anything managed to make, on a mean
+        // of 1.5 ranges. Control: 0.2%, and it is still splitting when it finishes.
         assertThat(deep.timeline().tailFraction())
                 .as("the fleet runs out of ways to divide before it runs out of work").isGreaterThan(0.05);
         assertThat(control.timeline().tailFraction()).isLessThan(0.02);
-        // Mean ranges in flight after the seed: 7.0 against 7.8 of a possible 8.
+        // Mean ranges in flight after the seed: 6.5 against 7.8 of a possible 8.
         assertThat(deep.timeline().meanOccupancy()).isLessThan(7.3);
         assertThat(control.timeline().meanOccupancy()).isGreaterThan(7.5);
-        // Time spent with at most one range being drained: 3.5% against 0.4%.
+        // Time spent with at most one range being drained: 9.6% against 0.0%.
         assertThat(deep.timeline().serialFraction()).isGreaterThan(0.02);
         assertThat(control.timeline().serialFraction()).isLessThan(0.01);
 
-        // The division itself is not missing — it is the opposite. The deep-nested run publishes 205
-        // children to the control's 64, and is still the less parallel of the two: it divides late,
-        // through the thief rather than the owner, and only after spinning. 691 steal attempts for 118
-        // thief children, 393 of them turned away before a probe was even issued; the control publishes
-        // its 21 from 84 attempts and is never once left without a victim.
+        // The division itself is not missing — it is the opposite. The deep-nested run publishes 115
+        // children to the control's 61, and is still the less parallel of the two: it divides late,
+        // through the thief rather than the owner, and only after spinning. 1,017 steal attempts for 102
+        // thief children, 734 of them turned away before a probe was even issued; the control publishes
+        // its 18 from 82 attempts and is turned away exactly once.
         assertThat(deep.ownerSplitChildren() + deep.thiefChildren())
                 .as("what fails here is when and how the keyspace gets cut, not whether")
                 .isGreaterThan(control.ownerSplitChildren() + control.thiefChildren());
@@ -73,10 +78,12 @@ class PositionSensorAtScaleTest {
                 .as("most of what the thief does on this shape produces nothing")
                 .isGreaterThan(4L * deep.thiefChildren());
         assertThat(control.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)).isLessThan(200L);
-        assertThat(control.counter("steal.outcome.NO_VICTIM")).isZero();
+        assertThat(control.counter("steal.outcome.NO_VICTIM"))
+                .as("the control is never meaningfully short of victims")
+                .isLessThanOrEqualTo(1L);
 
-        // 570 of 1,509 scored bounded victims (38%) score zero remaining span outright, against 13 of
-        // 399 (3%) — the reading a victim-selection cure has to move.
+        // 627 of 1,515 scored bounded victims (41%) score zero remaining span outright, against 3 of
+        // 398 (0.8%) — the reading a victim-selection cure has to move.
         assertThat(estZeroShare(deep)).isGreaterThan(0.25);
         assertThat(estZeroShare(control)).isLessThan(0.10);
     }

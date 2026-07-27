@@ -31,9 +31,17 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>Where the policy declines to act, the arithmetic must still be exact.</b> One worker, nothing
  * to steal from, the owner-side split ablated off: the run degenerates to "list this range to the end",
- * whose cost is `floor(n / pageSize) + 1` calls and whose duration is that many latencies. An equality,
+ * whose cost is `ceil(n / pageSize)` calls and whose duration is that many latencies. An equality,
  * not a tolerance — with constant latency and the cost term deliberately zeroed there is nothing left
  * for a discrepancy to be, except a defect in the executor's own clock or ordering.
+ *
+ * <p>{@code ceil}, not {@code floor(n / pageSize) + 1}: S3 looks one key past the page it returns, so
+ * the page that consumes a range's last key comes back full and <b>not</b> truncated, and the scanner
+ * is finished without an extra empty call. The fixture below is deliberately an exact multiple of the
+ * page size, which is the only size at which the two forms disagree; {@code SimListingViewProtocolTest}
+ * pins the underlying rule against {@code ListObjectsV2Pager}. (The naive short-page rule still
+ * describes {@code SequentialListingDriver}, which is a load generator reading bounded ranges rather
+ * than a model of the listing protocol — see {@code ExactModeInvariantsTest}.)
  *
  * <p><b>Where it does act, scaling must be monotonic and must not be linear.</b> More workers may not
  * make a run slower, and they will not make it proportionally faster: a range is claimed whole, pacing
@@ -59,7 +67,8 @@ class PolicyInvariantsTest {
 
         PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
 
-        long expectedCalls = keys / PAGE_SIZE + 1;   // the last, short page is how a lister learns it is done
+        // 4,000 keys at 100 a page: forty full pages, the fortieth of them not truncated.
+        long expectedCalls = keys / PAGE_SIZE;
         assertThat(result.completed()).as(result::describe).isTrue();
         assertThat(result.keysEmitted()).isEqualTo(keys);
         assertThat(result.storeCalls()).isEqualTo(expectedCalls);

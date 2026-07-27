@@ -45,7 +45,13 @@ final class SimNodeLedger {
     /** What {@link #splitNode} returns when the guard rejects the proposal. */
     static final long SPLIT_ABORTED = -1L;
 
-    /** A claimable range: the node's id, its immutable start, its resume cursor, and its bound. */
+    /**
+     * A claimable range: the node's id, its immutable start, its resume cursor, and its bound.
+     *
+     * <p>Its {@code byte[]} components make the generated {@code equals}/{@code hashCode} compare array
+     * <em>references</em>, so read a claim's fields — never key a map or a set by one. {@code nodeId} is
+     * the identity to look a range up by.
+     */
     record Claim(long nodeId, byte[] lo, byte[] cursor, byte[] hi) {
     }
 

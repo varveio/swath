@@ -368,11 +368,24 @@ opt-in).
 
 With a constant latency and the client-cost term explicitly zeroed, a run's wall time is pure
 arithmetic, so the tests assert it exactly rather than within a tolerance: a range of `n` keys costs
-`floor(n / pageSize) + 1` calls (the last, short page is how a lister learns it is finished); the
-total call count does not depend on the worker count at all; one worker costs the sum of the
-latencies; a worker per range costs the largest range. Scaling is asserted **monotonic and not
-proportional** — a range is claimed whole, and pacing intervals and client costs are fixed
-durations, so more workers legitimately stop helping.
+a fixed number of calls; the total call count does not depend on the worker count at all; one worker
+costs the sum of the latencies; a worker per range costs the largest range. Scaling is asserted
+**monotonic and not proportional** — a range is claimed whole, and pacing intervals and client costs
+are fixed durations, so more workers legitimately stop helping.
+
+The "fixed number of calls" is two different closed forms, and the difference is the point:
+
+* The **policy executor** (`PolicyInvariantsTest`) issues real `ListObjectsV2` requests through
+  `ListObjectsV2Pager`, so a range of `n` keys costs `ceil(n / pageSize)` calls. S3 looks one key
+  past the page it returns, so the page that consumes the last key comes back full **and not
+  truncated** — a range whose size divides by the page size ends there, not on an extra empty call.
+* `SequentialListingDriver` (`ExactModeInvariantsTest`) costs `floor(n / pageSize) + 1`, because it
+  is a load generator that reads a **bounded range** straight off the store seam and stops on a short
+  page. It is deliberately not a model of the listing protocol; it exists so the kernel's clock and
+  ordering can be checked without a policy or a protocol in the way.
+
+A test that pins the second form on the first path is pinning a simulator artefact, which is what
+`SimListingViewProtocolTest` exists to prevent.
 
 ## Fixtures
 

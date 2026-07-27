@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
  * everything, and inside one of them a single directory holding hundreds of thousands of keys.
  *
  * <p><b>Why the mass had to move.</b> The same geometry with its mass spread over 20,000-key leaves
- * ({@code PositionSensorAtScaleTest}) reproduces the blind sensor exactly and costs the run 3.5% of its
+ * ({@code PositionSensorAtScaleTest}) reproduces the blind sensor exactly and costs the run 9.6% of its
  * duration in serial time — against the 60–90% a real deep-nested bucket loses. Two measured properties
  * of those buckets were missing, and both are about depth rather than geometry: a third of the objects
  * sat in one subtree and 90% in five, and the directory chain leading to them had a fan-out of one or
@@ -47,12 +47,19 @@ import org.junit.jupiter.api.Test;
  * range</em>: this fixture's heavy directory is 400,000 keys, which is 4,000 pages at the 100-key page
  * used here and 400 at a real 1,000-key page, against roughly 1,800 for the 1.8-million-object
  * directory measured on a real bucket. At 100 keys a page this run is therefore page-faithful and
- * mass-short — its biggest range is 4,000 of the run's 11,019 pages, where the real one was ~1,800 of
+ * mass-short — its biggest range is 4,000 of the run's 10,969 pages, where the real one was ~1,800 of
  * ~8,800 — and the same fixture at the measured 1,000-key page is mass-faithful and page-short, with a
- * biggest range of 400 pages out of 1,179 and a serial fraction of 0.001. Both are asserted below,
+ * biggest range of 400 pages out of 1,182 and a serial fraction of 0.009. Both are asserted below,
  * because quoting either alone would be quoting a choice of page size as a property of the keyspace.
  * The honest statement of what the tail measurement needs is a bucket about ten times this one's size;
  * the small page buys that at a tenth of the memory, and buys nothing else.
+ *
+ * <p><b>The numbers quoted here moved once already</b>, when the simulator stopped charging a trailing
+ * empty listing call on every range whose size happened to divide by the page size (see
+ * {@code SimListingViewProtocolTest}). The concentrated fixture's tail was almost untouched by that —
+ * it is one enormous range, and one call either way does not change it — but the spread control's
+ * halved, which is the finding the correction actually sharpened: the two fixtures used to look alike
+ * on serial time and no longer do.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory: a million-key fixture is a large share of a default test
  * worker's heap. The fixtures are generated one at a time, and the results compared, so only one is ever
@@ -85,18 +92,24 @@ class MassConcentrationAtScaleTest {
         assertThat(deep.completed()).as(deep::describe).isTrue();
         assertThat(spread.completed()).as(spread::describe).isTrue();
 
-        // 33.2% of the post-seed run has at most one range being drained, and 34.1% of it comes after
-        // the last split anything managed to make — against 3.5% and 8.4% for the same geometry at a
+        // 33.1% of the post-seed run has at most one range being drained, and 34.0% of it comes after
+        // the last split anything managed to make — against 9.6% and 17.1% for the same geometry at a
         // twentieth of the mass per leaf. Within a factor of two of the 60% a real deep-nested bucket
         // loses, and the first fixture in this repository that is in that régime at all.
         assertThat(deep.timeline().serialFraction())
                 .as("the fleet spends a third of the run as one worker").isGreaterThan(0.25);
         assertThat(deep.timeline().tailFraction()).isGreaterThan(0.25);
         assertThat(deep.timeline().meanTailOccupancy()).isLessThan(1.2);
-        // The spread control reaches 31.0% too: at this concentration the tail is bought by the mass
-        // being in a few subtrees, and moving it DOWN adds to it rather than causing it. What the depth
-        // changes is how the run fails, below.
-        assertThat(spread.timeline().serialFraction()).isGreaterThan(0.25);
+        // The spread control reaches 14.8%, and its post-split tail all but vanishes (0.2% against
+        // 34.0%): the same mass in the same few subtrees, divided across an accession's four leaf
+        // directories instead of pooled in one, is a run the fleet can still carve. So depth is not
+        // incidental to this tail — it is what buys it — and what depth changes on top of that is how
+        // the run fails, below.
+        assertThat(spread.timeline().serialFraction())
+                .as("spreading the same mass over four leaves halves the serial time")
+                .isGreaterThan(0.10)
+                .isLessThan(deep.timeline().serialFraction());
+        assertThat(spread.timeline().tailFraction()).isLessThan(0.05);
 
         // Structural rescue runs out. Every child the thief published on the concentrated keyspace was
         // placed by extrapolation or interpolation; not one came from a structure probe, though 219 of
@@ -118,7 +131,7 @@ class MassConcentrationAtScaleTest {
      * split".
      *
      * <p><b>Both sides of that comparison have to be read on one denominator.</b> The share below is
-     * proposals lost over proposals that reached the re-validation at all — 195 of 242. The live
+     * proposals lost over proposals that reached the re-validation at all — 196 of 252. The live
      * measurements are usually quoted per steal <em>attempt</em> (85% and 93%), which counts attempts
      * that never got that far; on this denominator the same live runs read 96% and 90%. Either way the
      * bench loses fewer races than the deployment does, which is the conservative direction for a bench
@@ -136,7 +149,7 @@ class MassConcentrationAtScaleTest {
                 "in-memory deep-nested, mass in one leaf directory");
 
         assertThat(deep.completed()).as(deep::describe).isTrue();
-        // 195 of 242 proposals lost (80.6%), against 128 of 246 (52.0%) at a twentieth of the mass; the
+        // 196 of 252 proposals lost (77.8%), against 140 of 242 (57.9%) at a twentieth of the mass; the
         // same denominator reads 90-96% on the deployment's own runs.
         assertThat(revalidationLossShare(deep))
                 .as("the thief is not refusing to split; it is trying and losing").isGreaterThan(0.7);
@@ -158,8 +171,8 @@ class MassConcentrationAtScaleTest {
      * keyspace, not about its clock.
      *
      * <p>What does <em>not</em> survive is the tail: at a full page this fixture's biggest range is 400
-     * pages of the run's 1,179, the fleet absorbs it, and the serial fraction reads 0.001 against the
-     * other regime's 0.332. That is the pages-per-range arithmetic in the class note, stated as a
+     * pages of the run's 1,182, the fleet absorbs it, and the serial fraction reads 0.009 against the
+     * other regime's 0.331. That is the pages-per-range arithmetic in the class note, stated as a
      * measurement so the tail magnitude cannot be quoted without the page size it was taken at.
      */
     @Test
@@ -169,9 +182,9 @@ class MassConcentrationAtScaleTest {
                 "in-memory deep-nested, mass in one leaf directory");
 
         assertThat(deep.completed()).as(deep::describe).isTrue();
-        // 39 of 59 proposals lost (66.1%) at a tenth of the page count.
+        // 43 of 60 proposals lost (71.7%) at a tenth of the page count.
         assertThat(revalidationLossShare(deep)).isGreaterThan(0.5);
-        // And 0.001 serial against 0.332, on the same keys: the tail needs the pages, the race does not.
+        // And 0.009 serial against 0.331, on the same keys: the tail needs the pages, the race does not.
         assertThat(deep.timeline().serialFraction())
                 .as("a tail is pages per range, and at a full page this fixture has a tenth of them")
                 .isLessThan(0.01);
