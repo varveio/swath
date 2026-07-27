@@ -35,13 +35,23 @@ backend per fixture, so a conformance or differential run could never compare th
 | Backend | What it is | Metadata |
 |---|---|---|
 | `ARENA` | Keys-only in-memory arena: segmented key-byte blocks plus long offsets, built once from any other `ListingStore` and then answered entirely from memory. | **Stubbed** (sim-mode projection, below) |
+| `WINDOWED` | The replay module's sequential-window prefetch decorator (`WindowedListingStore`) wrapping its sorted-Parquet store, in process. For a fixture too large for the arena but still sorted-eligible. | Full |
 | `PARQUET` | The replay module's Parquet-backed store, unchanged. The differential reference. | Full |
-| `AUTO` | `ARENA` when the fixture's encoded key bytes fit the configured budget, otherwise `PARQUET`. | Depends on the resolution |
+| `AUTO` | `ARENA` when the fixture's encoded key bytes fit the configured budget; else `WINDOWED` when the fixture is sorted-eligible; else `PARQUET`. | Depends on the resolution |
 
 Which backend actually served a fixture is recorded, not just returned: every resolution bumps
-`swath.sim.store.backend{backend}`, and an `AUTO` resolution that declines the arena bumps
-`swath.sim.store.arena.decline{reason}` and logs why. A sweep's results therefore carry a record
-of what produced them, so a threshold regression cannot masquerade as a throughput regression.
+`swath.sim.store.backend{backend}`, an `AUTO` resolution that declines the arena bumps
+`swath.sim.store.arena.decline{reason}`, and one that goes on to decline the windowed tier bumps
+`swath.sim.store.windowed.decline{reason}` — each logs why. A sweep's results therefore carry a
+record of what produced them, so a threshold regression cannot masquerade as a throughput
+regression.
+
+`WINDOWED` requires a **sorted-eligible** fixture: a stamped, `mode=objects`, strictly-sorted,
+pure-`OBJECT` capture, the same eligibility the replay server's own `--serving-mode sorted` checks
+(`SortedEligibility`, shared code). A fixture that is not sorted-eligible fails fast under a
+forced `WINDOWED` request, and falls back to `PARQUET` under `AUTO`. The decorator's own
+`window-rows`/`max-windows` come from the replay server's `swath.replay.prefetch.*` system
+properties — one tuning surface for both callers, not a second sim-only knob for the same thing.
 
 ### The sim-mode projection
 

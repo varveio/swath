@@ -16,11 +16,16 @@ package io.varve.swath.sim.store;
  */
 public enum SimStoreBackend {
 
-    /** Arena within {@code arena-max-encoded-bytes}, otherwise {@link #PARQUET}. */
+    /** Arena within {@code arena-max-encoded-bytes}; else {@link #WINDOWED} when sorted-eligible;
+     *  else {@link #PARQUET}. */
     AUTO,
 
     /** Force the keys-only in-memory arena; fail fast when the fixture does not fit its budget. */
     ARENA,
+
+    /** Force the windowed row-group prefetch over the replay module's sorted-Parquet store; fail
+     *  fast when the fixture is not sorted-eligible (§ {@link io.varve.swath.replay.fixture.SortedEligibility}). */
+    WINDOWED,
 
     /** Force the replay module's Parquet-backed store — full metadata, the differential reference. */
     PARQUET

@@ -11,10 +11,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.store.Projection;
+import io.varve.swath.replay.store.WindowedListingStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
+import io.varve.swath.sort.CaptureSorter;
+import io.varve.swath.sort.SortConfigs;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -61,6 +65,45 @@ class SimStoreFactoryTest {
         assertThatThrownBy(() -> SimStoreFactory.open(fixture, SimStoreBackend.ARENA, TINY))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(SimStoreConfig.ARENA_MAX_ENCODED_BYTES_PROPERTY);
+    }
+
+    @Test
+    void forcedWindowedServesFullMetadataAndRecordsTheBackend(@TempDir Path dir) throws IOException {
+        SimStoreFactory.Result result = SimStoreFactory.open(sortedFixture(dir), SimStoreBackend.WINDOWED, GENEROUS);
+
+        try (var store = result.store()) {
+            assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.WINDOWED);
+            assertThat(store).isInstanceOf(WindowedListingStore.class);
+            assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
+            assertThat(store.rows(null, true, null, 1, Projection.WITH_OWNER).getFirst().etag())
+                    .isEqualTo("etag-alpha");
+        }
+        assertThat(backendCount(result, SimStoreBackend.WINDOWED)).isEqualTo(1);
+    }
+
+    @Test
+    void forcedWindowedFailsFastWhenTheFixtureIsNotSortedEligible(@TempDir Path dir) throws IOException {
+        Path fixture = fixture(dir);   // unsorted, unstamped
+
+        assertThatThrownBy(() -> SimStoreFactory.open(fixture, SimStoreBackend.WINDOWED, GENEROUS))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sorted-eligible");
+    }
+
+    @Test
+    void autoResolvesToWindowedWhenTheArenaDeclinesAndTheFixtureIsSortedEligible(@TempDir Path dir)
+            throws IOException {
+        SimStoreFactory.Result result = SimStoreFactory.open(sortedFixture(dir), SimStoreBackend.AUTO, TINY);
+
+        try (var store = result.store()) {
+            assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.WINDOWED);
+            assertThat(store).isInstanceOf(WindowedListingStore.class);
+            assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
+        }
+        assertThat(backendCount(result, SimStoreBackend.WINDOWED)).isEqualTo(1);
+        assertThat(registry(result).find(SimStoreMetrics.ARENA_DECLINE_METRIC)
+                .tag("reason", SimStoreMetrics.DECLINE_OVER_BUDGET).counter().count()).isEqualTo(1);
+        assertThat(registry(result).find(SimStoreMetrics.WINDOWED_DECLINE_METRIC).counter()).isNull();
     }
 
     @Test
@@ -122,6 +165,20 @@ class SimStoreFactoryTest {
             }
         }
         return capture;
+    }
+
+    /** As {@link #fixture}, but run through the production sorter so the output is sorted-eligible
+     *  (a stamped, single-row-group, {@code mode=objects} directory the windowed tier can serve). */
+    private static Path sortedFixture(Path dir) throws IOException {
+        Path capture = Files.createDirectory(dir.resolve("cap"));
+        try (var writer = ParquetFixtures.open(capture.resolve("part-0.parquet"))) {
+            for (String key : KEYS) {
+                writer.write(ObjectEntries.withOwner(key, "etag-" + key));
+            }
+        }
+        Path out = Files.createDirectory(dir.resolve("out"));
+        new CaptureSorter(SortConfigs.base()).sort(capture, out);
+        return out;
     }
 
     private static MeterRegistry registry(SimStoreFactory.Result result) {

@@ -33,6 +33,10 @@ dependencies {
     // through the replay module's shared testkit builders (ObjectEntries/ParquetFixtures).
     testImplementation(testFixtures(project(":swath-replay-server")))
     testImplementation(project(":swath-core"))
+    // SortConfigs (manySmallRowGroups(), etc.), the production CaptureSorter's test-side config
+    // presets — the windowed tier's differential fixtures need a real sorted, multi-row-group
+    // output, built the same way SortedParquetStoreTest builds its own.
+    testImplementation(testFixtures(project(":swath-core")))
     testImplementation(project(":swath-model"))
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

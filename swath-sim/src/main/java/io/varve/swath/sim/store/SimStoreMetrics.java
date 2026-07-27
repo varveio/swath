@@ -27,6 +27,11 @@ public final class SimStoreMetrics {
     /** {@link #ARENA_DECLINE_METRIC} reason: the fixture's keys exceed the configured byte budget. */
     public static final String DECLINE_OVER_BUDGET = "over-budget";
 
+    /** Bumped when an {@link SimStoreBackend#AUTO} resolution declines the windowed tier (the fixture
+     *  is not sorted-eligible), tagged with the {@code io.varve.swath.replay.fixture.SortedFixtures}
+     *  eligibility reason that fired. */
+    public static final String WINDOWED_DECLINE_METRIC = "swath.sim.store.windowed.decline";
+
     private static final String BACKEND_TAG = "backend";
     private static final String REASON_TAG = "reason";
 
@@ -42,6 +47,10 @@ public final class SimStoreMetrics {
 
     public void recordArenaDecline(String reason) {
         Counter.builder(ARENA_DECLINE_METRIC).tag(REASON_TAG, reason).register(registry).increment();
+    }
+
+    public void recordWindowedDecline(String reason) {
+        Counter.builder(WINDOWED_DECLINE_METRIC).tag(REASON_TAG, reason).register(registry).increment();
     }
 
     /** The lowercase spelling of a backend, matching how the replay server tags its serving path. */

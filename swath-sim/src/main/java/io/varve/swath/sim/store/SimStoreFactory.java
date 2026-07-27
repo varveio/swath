@@ -7,10 +7,19 @@ package io.varve.swath.sim.store;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.varve.swath.replay.fixture.FixtureMetrics;
+import io.varve.swath.replay.fixture.SortedEligibility;
+import io.varve.swath.replay.fixture.SortedFixtures;
+import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.DuckDbListingStore;
 import io.varve.swath.replay.store.ListingStore;
+import io.varve.swath.replay.store.SortedParquetStore;
+import io.varve.swath.replay.store.WindowedListingStore;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,8 +36,13 @@ import org.slf4j.LoggerFactory;
  *       full metadata, and the reference the arena is differentially tested against.</li>
  *   <li>{@link SimStoreBackend#ARENA} — require the keys-only arena; a fixture whose keys exceed
  *       the configured budget fails fast rather than silently serving a slower tier.</li>
- *   <li>{@link SimStoreBackend#AUTO} — arena when it fits, else the Parquet store, recording
- *       {@code swath.sim.store.arena.decline\{reason\}} and logging why.</li>
+ *   <li>{@link SimStoreBackend#WINDOWED} — require the windowed row-group prefetch over the
+ *       replay module's sorted-Parquet store; a fixture that is not sorted-eligible ({@link
+ *       SortedEligibility}) fails fast rather than silently serving a slower tier.</li>
+ *   <li>{@link SimStoreBackend#AUTO} — arena when it fits, else windowed when the fixture is
+ *       sorted-eligible, else the Parquet store, recording
+ *       {@code swath.sim.store.arena.decline\{reason\}} / {@code swath.sim.store.windowed.decline\{reason\}}
+ *       and logging why.</li>
  * </ul>
  *
  * <p><b>Fixtures are local paths.</b> {@code fixturePath} is a swath Parquet capture file or a
@@ -60,11 +74,16 @@ public final class SimStoreFactory {
      * Opens {@code fixturePath} under the requested {@code backend} and an explicit {@code config}.
      *
      * @throws IllegalArgumentException under {@link SimStoreBackend#ARENA} when the fixture's keys
-     *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}
+     *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}, or
+     *                                  under {@link SimStoreBackend#WINDOWED} when the fixture is
+     *                                  not sorted-eligible
      */
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
         SimStoreMetrics simMetrics = new SimStoreMetrics(registry);
+        // The same registry the sorted-eligibility derive pass records into (swath.replay.index.*)
+        // -- one shared registry describes the whole resolution, exactly as ReplayMetrics does below.
+        FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
         // SERVING_MODE_DUCKDB even under ARENA, and that is not a mislabel: every backend here
         // reads the fixture through the DuckDB-over-Parquet store -- ARENA and AUTO open it to
         // stream the keys out, and only then decide whether to keep it -- so the replay-side
@@ -87,6 +106,20 @@ public final class SimStoreFactory {
                 }
                 yield resolved(arena, SimStoreBackend.ARENA, metrics, simMetrics);
             }
+            case WINDOWED -> {
+                List<Path> files = resolveFiles(fixturePath);
+                // recordFallbackOnFailure=false: a forced backend that declines hard-fails, so this
+                // is not a "fallback" any more than ARENA's own forced decline above is.
+                SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, false);
+                if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
+                    yield resolved(windowedStore(files, eligible.index(), metrics), SimStoreBackend.WINDOWED,
+                            metrics, simMetrics);
+                }
+                String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
+                throw new IllegalArgumentException(
+                        "backend " + SimStoreBackend.WINDOWED + " requires a sorted-eligible fixture ("
+                                + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + fixturePath);
+            }
             case AUTO -> {
                 ListingStore source = parquetStore(fixturePath, metrics);
                 Optional<ArenaListingStore> arena;
@@ -102,8 +135,19 @@ public final class SimStoreFactory {
                 }
                 simMetrics.recordArenaDecline(SimStoreMetrics.DECLINE_OVER_BUDGET);
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
-                        + "— falling back to {} for {}", config.arenaMaxEncodedBytes(),
-                        SimStoreBackend.PARQUET, fixturePath);
+                        + "— trying the windowed tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
+
+                List<Path> files = resolveFiles(fixturePath);
+                SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, true);
+                if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
+                    source.close();
+                    yield resolved(windowedStore(files, eligible.index(), metrics), SimStoreBackend.WINDOWED,
+                            metrics, simMetrics);
+                }
+                String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
+                simMetrics.recordWindowedDecline(reason);
+                log.info("sim_store auto declined the windowed tier (reason={}) — falling back to {} for {}",
+                        reason, SimStoreBackend.PARQUET, fixturePath);
                 yield resolved(source, SimStoreBackend.PARQUET, metrics, simMetrics);
             }
         };
@@ -121,5 +165,29 @@ public final class SimStoreFactory {
 
     private static ListingStore parquetStore(Path fixturePath, ReplayMetrics metrics) {
         return new DuckDbListingStore(fixturePath, metrics, DuckDbListingStore.defaultConnectionCount());
+    }
+
+    /**
+     * The windowed tier: {@link WindowedListingStore} wrapping the replay module's sorted-Parquet
+     * store as-is, in process — no JDBC/HTTP round trip, just the decorator's sequential-window
+     * prefetch over an already-local reader. {@code window-rows}/{@code max-windows} come from the
+     * same {@code swath.replay.prefetch.*} properties the replay server's sorted-serving path reads,
+     * rather than a second sim-only knob for the same tuning.
+     */
+    private static ListingStore windowedStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
+        // recordPageReadLatency=false: the wrapper owns the outer per-page timer, same reasoning as
+        // the replay server's own sorted-serving wiring (SortedParquetStore's javadoc).
+        SortedParquetStore backing = new SortedParquetStore(files, index, metrics,
+                SortedParquetStore.defaultConnectionCount(), false);
+        WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
+        return new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
+    }
+
+    private static List<Path> resolveFiles(Path fixturePath) {
+        try {
+            return SortedFixtures.resolveFiles(fixturePath);
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to resolve fixture files for " + fixturePath, e);
+        }
     }
 }
