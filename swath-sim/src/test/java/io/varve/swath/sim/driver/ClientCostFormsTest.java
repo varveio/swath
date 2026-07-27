@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimRunResult;
 import io.varve.swath.sim.kernel.SimStopReason;
 import io.varve.swath.sim.model.ClientCostModel;
@@ -139,15 +140,15 @@ class ClientCostFormsTest {
                 false,
                 maxEvents);
         return SequentialListingDriver.run(scenario,
-                KeyListStore.ofGeneratedKeys(RANGE_COUNT * KEYS_PER_RANGE));
+                ListingFixtureStore.ofGeneratedKeys(RANGE_COUNT * KEYS_PER_RANGE));
     }
 
     private static List<KeyRange> ranges() {
         List<KeyRange> ranges = new ArrayList<>();
         for (int r = 0; r < RANGE_COUNT; r++) {
-            ByteKey from = r == 0 ? null : ByteKey.copyOf(KeyListStore.key(r * KEYS_PER_RANGE));
+            ByteKey from = r == 0 ? null : ByteKey.copyOf(ListingFixtureStore.key(r * KEYS_PER_RANGE));
             ByteKey to = r == RANGE_COUNT - 1 ? null
-                    : ByteKey.copyOf(KeyListStore.key((r + 1) * KEYS_PER_RANGE));
+                    : ByteKey.copyOf(ListingFixtureStore.key((r + 1) * KEYS_PER_RANGE));
             ranges.add(new KeyRange(from, to));
         }
         return ranges;

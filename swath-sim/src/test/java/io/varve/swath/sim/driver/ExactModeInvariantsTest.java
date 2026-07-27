@@ -8,6 +8,7 @@ package io.varve.swath.sim.driver;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimRunResult;
 import io.varve.swath.sim.kernel.SimStopReason;
 import io.varve.swath.sim.model.ClientCostTerm;
@@ -75,7 +76,7 @@ class ExactModeInvariantsTest {
 
     @Test
     void zeroLatencyCostsNoVirtualTimeAndStillMakesEveryCall() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS);
 
         SimRunResult result = SequentialListingDriver.run(scenario(4, 0L), store);
 
@@ -87,7 +88,7 @@ class ExactModeInvariantsTest {
 
     @Test
     void oneWorkerCostsTheSumOfEveryCallsLatency() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS);
 
         SimRunResult result = SequentialListingDriver.run(scenario(1, LATENCY_NANOS), store);
 
@@ -98,7 +99,7 @@ class ExactModeInvariantsTest {
 
     @Test
     void aWorkerPerRangeCostsTheSlowestRangeAndNoMore() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS);
 
         SimRunResult atCapacity = SequentialListingDriver.run(scenario(RANGE_COUNT, LATENCY_NANOS), store);
         SimRunResult oversubscribed =
@@ -116,7 +117,7 @@ class ExactModeInvariantsTest {
      */
     @Test
     void theCallCountDoesNotDependOnTheWorkerCount() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS);
 
         for (int workers : List.of(1, 2, 3, 5, 8, 17)) {
             SimRunResult result = SequentialListingDriver.run(scenario(workers, LATENCY_NANOS), store);
@@ -142,7 +143,7 @@ class ExactModeInvariantsTest {
      */
     @Test
     void aZeroCostChargeStillCostsOneEventSoTheInterleavingsDoNotChange() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(TOTAL_KEYS);
         int workers = 4;
 
         SimRunResult result = SequentialListingDriver.run(scenario(workers, 0L), store);
@@ -161,10 +162,10 @@ class ExactModeInvariantsTest {
      */
     @Test
     void aFullFinalPageAndAnEmptyRangeEachStillCostOneShortCall() {
-        KeyListStore store = KeyListStore.ofGeneratedKeys(PAGE_SIZE);
+        ListingFixtureStore store = ListingFixtureStore.ofGeneratedKeys(PAGE_SIZE);
         List<KeyRange> exactlyOnePageThenNothing = List.of(
-                new KeyRange(null, ByteKey.copyOf(KeyListStore.key(PAGE_SIZE))),
-                new KeyRange(ByteKey.copyOf(KeyListStore.key(PAGE_SIZE)), null));
+                new KeyRange(null, ByteKey.copyOf(ListingFixtureStore.key(PAGE_SIZE))),
+                new KeyRange(ByteKey.copyOf(ListingFixtureStore.key(PAGE_SIZE)), null));
 
         SimRunResult result = SequentialListingDriver.run(
                 scenario(1, LATENCY_NANOS, exactlyOnePageThenNothing), store);
@@ -196,8 +197,8 @@ class ExactModeInvariantsTest {
     private static List<KeyRange> evenRanges() {
         List<KeyRange> ranges = new ArrayList<>();
         for (int r = 0; r < RANGE_COUNT; r++) {
-            ByteKey from = r == 0 ? null : ByteKey.copyOf(KeyListStore.key(r * KEYS_PER_RANGE));
-            ByteKey to = r == RANGE_COUNT - 1 ? null : ByteKey.copyOf(KeyListStore.key((r + 1) * KEYS_PER_RANGE));
+            ByteKey from = r == 0 ? null : ByteKey.copyOf(ListingFixtureStore.key(r * KEYS_PER_RANGE));
+            ByteKey to = r == RANGE_COUNT - 1 ? null : ByteKey.copyOf(ListingFixtureStore.key((r + 1) * KEYS_PER_RANGE));
             ranges.add(new KeyRange(from, to));
         }
         return ranges;

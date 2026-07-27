@@ -32,21 +32,94 @@ import java.util.concurrent.TimeUnit;
  * @param seedProbeBudget            probes the seed descent may spend, in calls
  * @param probeAttemptTimeoutNanos   per-attempt timeout for a pivot/structure probe
  * @param workerAttemptTimeoutNanos  per-attempt timeout for a worker page fetch
+ * @param workerAttemptRetryCap      transient retries a worker page fetch may spend before the run is
+ *                                   declared stuck (the engine's bounded transient-retry policy)
+ * @param probeAttemptRetryCap       transient retries a thief probe may spend before the whole steal
+ *                                   attempt fails fast — deliberately far smaller than the worker cap
+ * @param transientRetryBackoffNanos the delay charged between transient retries. The engine draws a
+ *                                   full-jitter exponential backoff here; a scenario declares one flat
+ *                                   interval instead, because jitter's live purpose is desynchronising
+ *                                   a fleet of separate processes, which a single-threaded kernel has
+ *                                   no analogue of — what the model needs is the ratio of the backoff
+ *                                   to the latencies around it, and that is exactly what this states
  * @param idleStealBaseParkNanos     the idle thief's shortest park, and its backoff's base step
  * @param idleStealBackoffCapNanos   the cap the idle-steal backoff grows to
  * @param idleStealAttemptParkNanos  the park of a worker denied the fleet-wide steal-attempt slot
  * @param concurrencyCleanWindowNanos the clean window an additive concurrency increase must observe
+ * @param aimd                       the adaptive-concurrency controller's own windows
  * @param maxDurationNanos           the whole run's ceiling; {@code 0} means unbounded
  */
 public record EngineTimeBudgets(
         int seedProbeBudget,
         long probeAttemptTimeoutNanos,
         long workerAttemptTimeoutNanos,
+        int workerAttemptRetryCap,
+        int probeAttemptRetryCap,
+        long transientRetryBackoffNanos,
         long idleStealBaseParkNanos,
         long idleStealBackoffCapNanos,
         long idleStealAttemptParkNanos,
         long concurrencyCleanWindowNanos,
+        AimdBudgets aimd,
         long maxDurationNanos) {
+
+    /**
+     * The adaptive-concurrency controller's own time windows, grouped so the surrounding record stays
+     * readable: they are one mechanism's parameters, they are varied together, and every one of them is
+     * meaningless except relative to the others.
+     *
+     * @param growthPaceNanos          minimum interval between successive additive {@code +1} steps
+     * @param transientTimeoutWindowNanos trailing window over which worker timeouts are counted for the
+     *                                 growth freeze
+     * @param shedWindowMinNanos       shortest jittered sustained-timeout shed window
+     * @param shedWindowMaxNanos       longest jittered sustained-timeout shed window (inclusive)
+     * @param latencyBaselineDecayNanos how long the latency-freeze rung's rolling-minimum baseline is
+     *                                 held before it is re-floored to the elapsed window's minimum
+     * @param valvePaceNanos           minimum interval between valve-admitted {@code +1} steps while
+     *                                 latency-frozen
+     */
+    public record AimdBudgets(
+            long growthPaceNanos,
+            long transientTimeoutWindowNanos,
+            long shedWindowMinNanos,
+            long shedWindowMaxNanos,
+            long latencyBaselineDecayNanos,
+            long valvePaceNanos) {
+
+        public AimdBudgets {
+            requirePositive("growthPaceNanos", growthPaceNanos);
+            requirePositive("transientTimeoutWindowNanos", transientTimeoutWindowNanos);
+            requirePositive("shedWindowMinNanos", shedWindowMinNanos);
+            requirePositive("shedWindowMaxNanos", shedWindowMaxNanos);
+            requirePositive("latencyBaselineDecayNanos", latencyBaselineDecayNanos);
+            requirePositive("valvePaceNanos", valvePaceNanos);
+            if (shedWindowMaxNanos < shedWindowMinNanos) {
+                throw new IllegalArgumentException("shedWindowMaxNanos (" + shedWindowMaxNanos + ") must "
+                        + "be >= shedWindowMinNanos (" + shedWindowMinNanos + ")");
+            }
+        }
+
+        /**
+         * The windows the shipped controller uses today: a 1 s growth pace, a 10 s transient-timeout
+         * window, a shed window jittered in [25 s, 40 s], a 60 s latency-baseline decay, and a valve
+         * paced at the shed window's 30 s nominal length.
+         */
+        public static AimdBudgets engineDefaults() {
+            return new AimdBudgets(
+                    TimeUnit.SECONDS.toNanos(1),
+                    TimeUnit.SECONDS.toNanos(10),
+                    TimeUnit.SECONDS.toNanos(25),
+                    TimeUnit.SECONDS.toNanos(40),
+                    TimeUnit.SECONDS.toNanos(60),
+                    TimeUnit.SECONDS.toNanos(30));
+        }
+
+        /** These windows with both shed-window bounds pinned to {@code nanos} — a jitter-free run. */
+        public AimdBudgets withFixedShedWindow(long nanos) {
+            return new AimdBudgets(growthPaceNanos, transientTimeoutWindowNanos, nanos, nanos,
+                    latencyBaselineDecayNanos, valvePaceNanos);
+        }
+    }
 
     /** {@link #maxDurationNanos()} for a run with no ceiling — the engine's own default. */
     public static final long UNBOUNDED_DURATION = 0L;
@@ -54,10 +127,23 @@ public record EngineTimeBudgets(
     /** The seed descent's probe budget at the engine's default concurrency ceiling (see below). */
     private static final int DEFAULT_SEED_PROBE_BUDGET = 256;
 
+    /** The engine's bounded transient-retry ceiling for a slot-gated worker page fetch. */
+    private static final int DEFAULT_WORKER_ATTEMPT_RETRY_CAP = 8;
+
+    /** The engine's probe fail-fast ceiling: a probe rides out nothing. */
+    private static final int DEFAULT_PROBE_ATTEMPT_RETRY_CAP = 1;
+
     public EngineTimeBudgets {
         requirePositive("seedProbeBudget", seedProbeBudget);
         requirePositive("probeAttemptTimeoutNanos", probeAttemptTimeoutNanos);
         requirePositive("workerAttemptTimeoutNanos", workerAttemptTimeoutNanos);
+        requirePositive("workerAttemptRetryCap", workerAttemptRetryCap);
+        requirePositive("probeAttemptRetryCap", probeAttemptRetryCap);
+        requirePositive("transientRetryBackoffNanos", transientRetryBackoffNanos);
+        if (aimd == null) {
+            throw new MissingSimDependencyException("adaptive-concurrency time windows (growth pace, "
+                    + "timeout windows, shed window, latency-baseline decay, valve pace)");
+        }
         requirePositive("idleStealBaseParkNanos", idleStealBaseParkNanos);
         requirePositive("idleStealBackoffCapNanos", idleStealBackoffCapNanos);
         requirePositive("idleStealAttemptParkNanos", idleStealAttemptParkNanos);
@@ -83,6 +169,12 @@ public record EngineTimeBudgets(
      *   <li><b>probe attempt timeout 3 s</b> — the pivot/structure-probe attempt override.</li>
      *   <li><b>worker attempt timeout 10 s</b> — the client-level per-attempt default worker pages
      *       keep.</li>
+     *   <li><b>worker retry cap 8 / probe retry cap 1</b> — the transient-retry ceilings the engine's
+     *       bounded retry policy and its probe fail-fast apply. A probe that keeps timing out costs the
+     *       whole steal attempt rather than riding out a storm; a worker page that exhausts its cap
+     *       ends the run as stuck.</li>
+     *   <li><b>transient retry backoff 100 ms</b> — one flat interval standing in for the engine's
+     *       full-jitter exponential schedule (see the component's own note).</li>
      *   <li><b>idle-steal base park 5 ms / backoff cap 50 ms / attempt park 1 s</b> — the fleet-wide
      *       idle-steal pacing windows.</li>
      *   <li><b>clean window 10 s</b> — the interval of clean responses an additive concurrency
@@ -95,18 +187,43 @@ public record EngineTimeBudgets(
                 DEFAULT_SEED_PROBE_BUDGET,
                 TimeUnit.SECONDS.toNanos(3),
                 TimeUnit.SECONDS.toNanos(10),
+                DEFAULT_WORKER_ATTEMPT_RETRY_CAP,
+                DEFAULT_PROBE_ATTEMPT_RETRY_CAP,
+                TimeUnit.MILLISECONDS.toNanos(100),
                 TimeUnit.MILLISECONDS.toNanos(5),
                 TimeUnit.MILLISECONDS.toNanos(50),
                 TimeUnit.SECONDS.toNanos(1),
                 TimeUnit.SECONDS.toNanos(10),
+                AimdBudgets.engineDefaults(),
                 UNBOUNDED_DURATION);
     }
 
     /** This budget set with {@code maxDurationNanos} replaced — the knob a liveness scenario varies. */
     public EngineTimeBudgets withMaxDuration(long newMaxDurationNanos) {
         return new EngineTimeBudgets(seedProbeBudget, probeAttemptTimeoutNanos, workerAttemptTimeoutNanos,
+                workerAttemptRetryCap, probeAttemptRetryCap, transientRetryBackoffNanos,
                 idleStealBaseParkNanos, idleStealBackoffCapNanos, idleStealAttemptParkNanos,
-                concurrencyCleanWindowNanos, newMaxDurationNanos);
+                concurrencyCleanWindowNanos, aimd, newMaxDurationNanos);
+    }
+
+    /** This budget set with {@code aimd} replaced — the knob an AIMD-shape scenario varies. */
+    public EngineTimeBudgets withAimd(AimdBudgets newAimd) {
+        return new EngineTimeBudgets(seedProbeBudget, probeAttemptTimeoutNanos, workerAttemptTimeoutNanos,
+                workerAttemptRetryCap, probeAttemptRetryCap, transientRetryBackoffNanos,
+                idleStealBaseParkNanos, idleStealBackoffCapNanos, idleStealAttemptParkNanos,
+                concurrencyCleanWindowNanos, newAimd, maxDurationNanos);
+    }
+
+    /**
+     * This budget set with both per-attempt timeouts replaced — the ratio a timeout-pathology scenario
+     * varies against a fixed latency model (C0's lesson: a budget only means something relative to the
+     * latencies it bounds).
+     */
+    public EngineTimeBudgets withAttemptTimeouts(long newProbeTimeoutNanos, long newWorkerTimeoutNanos) {
+        return new EngineTimeBudgets(seedProbeBudget, newProbeTimeoutNanos, newWorkerTimeoutNanos,
+                workerAttemptRetryCap, probeAttemptRetryCap, transientRetryBackoffNanos,
+                idleStealBaseParkNanos, idleStealBackoffCapNanos, idleStealAttemptParkNanos,
+                concurrencyCleanWindowNanos, aimd, maxDurationNanos);
     }
 
     private static void requirePositive(String name, long value) {

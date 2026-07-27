@@ -33,6 +33,15 @@ Virtual time buys two things beyond speed.
   runs of one scenario at one seed therefore produce byte-identical event logs — and a policy change
   shows up as a difference in the log rather than as noise. (This is determinism *inside the
   simulator*; a real multi-worker run's thread scheduling stays outside anyone's control.)
+
+  The **byte-identity check** is stated on traces that fit in memory: the log accumulates entries on
+  the heap and serialises the whole trace to compare it, so it is enabled for invariant and
+  determinism runs and disabled for sweeps, where it would dominate the cost. A rolling digest would
+  lift that ceiling and is deliberately **not** built yet: the measured event volume of a run at
+  realistic scale (a few million events for a very large bucket, see below) is well inside what the
+  in-memory log handles, so the ceiling is not currently reached. The claim is therefore "identical
+  traces, on fixtures whose traces fit" — and a fixture large enough to need the digest needs it
+  built first, rather than needing this sentence reinterpreted.
 - **Inputs you state rather than inherit.** Request latencies, the client-side cost of processing a
   page, and the engine's own time budgets (probe timeouts, pacing windows, run duration ceiling) are
   all **declared parameters** of a scenario, not properties of the machine the simulation runs on.
@@ -200,13 +209,108 @@ Three packages, in dependency order:
 | Package | Holds |
 |---|---|
 | `sim.kernel` | The clock, the event queue, the scheduler, the per-actor SplitMix64 draw streams, the event log, and a FIFO server for modelling a shared resource. A few hundred lines, deliberately: a general-purpose simulation framework would bring its own clock and its own randomness, which is precisely what the closed-form invariants below need to own. |
-| `sim.model` | The physics, all of it pluggable: `LatencyModel` (constant, or a fitted shifted-exponential per call class), `ClientCostModel` (independent per page, or contended through a shared server), and `EngineTimeBudgets`. |
+| `sim.model` | The physics, all of it pluggable: `LatencyModel` (constant, fitted per call class, or scaled by how many calls are in flight), `ClientCostModel` (independent per page, contended through a shared server, or the measured composite of both), and `EngineTimeBudgets`. |
 | `sim.driver` | A scenario, and a trivial "list every range with T workers" driver that exercises the whole stack against a real store. The real split/steal policies are not wired up here. |
+| `sim.executor` | The real policies, wired: the seed planner, the owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing, and the simulator's own adaptive-concurrency controller. |
+
+### What a page costs the client, and why it is three things
+
+Charging a page one number is the mistake this model exists to avoid. Direct measurement of a real
+client found the per-page cost split across stages that behave differently under load: the fetch
+worker's own conversion work is independent per page and parallel across workers; the durability
+commit is a single serial writer every page waits on before it may emit; the output sink is another
+serial stage whose service rate is a real ceiling on how fast pages can leave. A columnar sink adds a
+fourth, measured to run on its own threads and off the page's critical path.
+
+`CompositeClientCost` charges the first three in series on the page's own timeline and the fourth in
+parallel, because that is the order the engine does them in — and getting it wrong in the other
+direction would let a simulated fleet emit pages faster than any real client could absorb, which is
+exactly the impossible strategy a client-cost term exists to prevent the simulator from "discovering".
+Two of the stages have a mean several times their median, so those are **sampled** from their measured
+quantiles rather than averaged: a policy that bursts should pay for its bursts, not pay the average
+twice.
+
+Every term carries where it came from and how far it can be trusted. A term is never defaulted and
+never silently zero; zeroing one is legal only through the constructor that records the zero as a
+deliberate choice, which marks the run as an arithmetic check rather than a prediction.
+
+### The timeouts are inputs, not constants
+
+A timeout only means something relative to the latencies it bounds. Under a scaled-down real-time
+experiment those ratios move, which is how a timeout pathology disappears from a reproduction — the
+budget stayed at three seconds while the call it bounds got ten times faster. Virtual time can state
+the ratio exactly, so every one of them is a declared input: probe and worker attempt timeouts, the
+transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Defaults
+restate what the shipped engine uses, so a scenario that wants "today's engine" says so, and a
+scenario that wants a different ratio states the difference against a written reference.
 
 An action body runs atomically in virtual time — the clock does not move and no other actor runs
 inside it — which is how a lock hold is expressed without a lock. State read in one event and used
 in a later one is correspondingly exposed to whatever other actors do in between, which is how a
 widened read window, and the race it permits, is expressed without a thread.
+
+## Running the real policies
+
+The point of the module. `SimExecutor` runs swath's **actual** decision code — the seed planner, the
+owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing —
+against a fixture, in virtual time. Nothing is reimplemented: those modules are consumed exactly as the
+engine consumes them, as decisions over views that return actions and mutations. What the simulator
+supplies is the other half of that seam: it builds the views, issues what the decisions ask for,
+applies the mutations they return, and owns everything the policies deliberately never see — the clock,
+the concurrency target, the ranges' bookkeeping, and the check that decides whether a proposed split
+survives.
+
+One mechanism is a **port** rather than the real thing: the adaptive-concurrency controller. It is the
+most timing-coupled code in the engine — jittered windows, paced valves, a decaying latency baseline,
+all racing under compare-and-set — and carving it out from under its concurrent callers would have been
+a far larger risk than writing a faithful equivalent whose every signal carries its own timestamp. That
+is a reimplementation, and it is treated as one: it is reviewed against the controller's own documented
+guarantees, a change to one is a change that has to be made to both, and no test here can prove they
+agree.
+
+**A simulated split can fail, and that is the point.** A thief reads its victim's cursor, spends probes
+placing a pivot, and by the time it proposes the split the victim may have drained past it. The
+proposal is then refused — exactly as in a real run, and for exactly the same reason. A simulator that
+let it through would report splits a real fleet never gets, on precisely the workloads where stealing
+is hardest. The full ordering contract, including the two disclosed timing widenings the executor
+models and what a cancelled timer costs a run's event budget, is in
+[`docs/executor-ordering.md`](docs/executor-ordering.md).
+
+**What a run reports.** A duration on its own is not a result: the same fixture yields a different one
+under a different store backend, a different client-cost term, or different declared budgets, and all
+three are choices. So a run record carries them — which store served it, which cost term it was charged
+against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
+the counters every policy path engaged, and how many events the kernel dispatched to produce it.
+
+### What a run costs to produce
+
+Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
+duration** is the modelled system's answer. Its **wall time** is what this machine spent computing that
+answer, and the only thing it says about swath is whether sweeping over many runs is affordable.
+
+Measured on one 8-core arm64 development box, the same keyspace shape at two sizes, 32 workers,
+1000-key pages, no seed:
+
+| | 500K keys | 2M keys |
+|---|---|---|
+| modelled store calls | 1,001 | 2,813 |
+| events dispatched | 30,345 | 46,936 |
+| of those, retired park timers | 13,195 (43%) | 18,056 (38%) |
+| **events per modelled call** | **30.3** | **16.7** |
+| wall time | 0.22 s (216 µs/call) | 0.14 s (49 µs/call) |
+| virtual duration | 3.6 s | 5.9 s |
+
+**Events per call is not a constant, and the second size point is what shows it.** A large share of a
+run's events are park timers — an idle worker waiting to be woken — and their number is driven by how
+long the run lasts and how many workers are idle in it, not by how many calls it makes. So the figure
+*falls* as a fixture grows and calls come to dominate: the small-fixture number is an upper bound, not
+the rate. Extrapolating the larger point, a 150,000-call run is on the order of 2.5M events and single-
+digit seconds of compute here, which is comfortably inside what sweeping requires; extrapolating the
+smaller one would have overstated it by nearly twice, which is exactly why a single point was not left
+to stand. Two further caveats: these read pages from an in-memory fixture, where a real large-fixture
+backend serves a call in ~175 µs and would dominate the total; and the two runs above are in one JVM, so
+the first pays warmup the second does not. The bench is `PolicyRunBudgetBenchTest` (`@Tag("perf")`,
+opt-in).
 
 ### Why the kernel's own tests assert equalities
 
@@ -224,6 +328,22 @@ A fixture is a **local path** — a swath Parquet capture file, or a directory o
 by the caller (config or CLI argument). Nothing in this module hardcodes, or is allowed to
 hardcode, a remote object-store location; fetching a fixture to local disk is the caller's job,
 outside this module.
+
+### Keyspace shapes, generated
+
+A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
+sits in a few of them or spreads evenly, whether a split can find a populated pivot — so the tests also
+generate small keyspaces shaped like real buckets: a deep date-partitioned observation archive, a
+hash-fanned content-addressed corpus, a tree with one object per directory, and a single dense flat
+leaf. Each runs in milliseconds and each provokes different policy paths, which a fixture of uniformly
+named keys does not.
+
+One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
+number of calls in flight: the fleet's own success makes every call slower. It exists because one
+control rung — the adaptive controller's latency freeze — reacts to nothing else, so a store that
+degrades under load is the only thing that can exercise it. Staging that against a real store is not
+something anyone can do deliberately; here it is a constructor argument, and the fleet's reaction is
+observable event by event.
 
 ## Building and testing
 

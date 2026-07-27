@@ -153,6 +153,45 @@ class SimAmbientSourceGuardTest {
     }
 
     /**
+     * The same rule, applied to the <b>engine classes a simulated run actually executes</b>.
+     *
+     * <p>The scan above covers this module's own sources, which is not where the risk ends: a policy
+     * run drives swath's real decision code inside the timeline, and an ambient clock read or a
+     * host-variable transcendental in <em>those</em> classes would break the determinism claim exactly
+     * as one here would — while being invisible to a check that only looks at this module. The
+     * decision-path classes are clean today, so extending the scan to them costs nothing now and
+     * catches the call that has not been written yet.
+     *
+     * <p>One read is allowed, named rather than hidden: a worker's range records its own creation
+     * instant for a drain-rate estimate in the diagnostic range dump. No decision reads it, and the
+     * simulator never reads it at all. The allowance is exact — one occurrence, in one file — so a
+     * second ambient read anywhere in the reachable set fails this test.
+     */
+    @Test
+    void noEngineClassTheSimulatorDrivesReadsAnAmbientClockOrRandomSource() throws Exception {
+        List<Path> sources = drivenEngineSources();
+        assertThat(sources).as("must resolve the real engine sources, or this test checks nothing")
+                .hasSizeGreaterThan(30);
+        assertThat(sources).anyMatch(p -> p.endsWith("ThiefPolicy.java"));
+        assertThat(sources).anyMatch(p -> p.endsWith("StealMath.java"));
+
+        List<String> violations = new ArrayList<>();
+        for (Path source : sources) {
+            String stripped = stripCommentsAndLiterals(Files.readString(source));
+            for (AmbientShape shape : FORBIDDEN) {
+                if (shape.pattern().matcher(stripped).find()) {
+                    violations.add(source.getFileName() + " uses `" + shape.label() + "`");
+                }
+            }
+        }
+
+        assertThat(violations)
+                .as("a decision the simulator reproduces must be a function of its inputs, not of the "
+                        + "machine the run happens to be on")
+                .containsExactly("WorkerState.java uses `System.nanoTime(`");
+    }
+
+    /**
      * The scan must be able to fail. A source containing a forbidden shape is synthesised in memory
      * and put through the same stripping and matching, so a green run above means the shapes were
      * absent rather than that the matcher never matches anything.
@@ -206,6 +245,34 @@ class SimAmbientSourceGuardTest {
             }
         }
         return found;
+    }
+
+    /**
+     * The engine sources a policy run reaches: the whole policy package, the split/steal arithmetic and
+     * the pure collaborators its decisions read, and the worker state the executor keeps for them. Named
+     * explicitly rather than derived, so adding a class to the timeline is a deliberate act that shows
+     * up in this list.
+     *
+     * <p>Located by walking out of this module's own source root rather than off the classpath: those
+     * classes arrive as a jar, which has no sources to scan.
+     */
+    private static List<Path> drivenEngineSources() throws IOException, URISyntaxException {
+        Path repository = mainSourceRoot().getParent().getParent().getParent().getParent();
+        Path engine = repository.resolve("swath-core/src/main/java/io/varve/swath/engine");
+        Path model = repository.resolve("swath-model/src/main/java/io/varve/swath/model");
+        assertThat(engine).as("the engine sources must resolve, or this test checks nothing").isDirectory();
+        List<Path> sources = new ArrayList<>();
+        try (Stream<Path> policySources = Files.walk(engine.resolve("policy"))) {
+            sources.addAll(policySources.filter(p -> p.toString().endsWith(".java")).toList());
+        }
+        for (String name : List.of("StealMath.java", "AlphabetDigest.java", "ConfettiFeedbackGate.java",
+                "EngineToggles.java", "WorkerState.java")) {
+            sources.add(engine.resolve(name));
+        }
+        for (String name : List.of("ByteMidpoint.java", "KeyBytes.java")) {
+            sources.add(model.resolve(name));
+        }
+        return List.copyOf(new TreeSet<>(sources));
     }
 
     /** Every {@code .java} file under this module's {@code src/main/java}, in a stable order. */

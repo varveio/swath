@@ -53,11 +53,41 @@ class EngineTimeBudgetsTest {
 
         assertThatThrownBy(() -> defaults.withMaxDuration(-1))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxDurationNanos");
-        assertThatThrownBy(() -> new EngineTimeBudgets(0, 1, 1, 1, 1, 1, 1, 0))
+        EngineTimeBudgets.AimdBudgets aimd = EngineTimeBudgets.AimdBudgets.engineDefaults();
+        assertThatThrownBy(() -> new EngineTimeBudgets(0, 1, 1, 1, 1, 1, 1, 1, 1, 1, aimd, 0))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("seedProbeBudget");
-        assertThatThrownBy(() -> new EngineTimeBudgets(1, 1, 1, 100, 50, 1, 1, 0))
+        assertThatThrownBy(() -> new EngineTimeBudgets(1, 1, 1, 1, 1, 1, 100, 50, 1, 1, aimd, 0))
                 .as("a backoff cap below its own base step is a typo, not a configuration")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("idleStealBackoffCapNanos");
+        assertThatThrownBy(() -> new EngineTimeBudgets(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, null, 0))
+                .as("the adaptive-concurrency windows are an input, not a default")
+                .isInstanceOf(MissingSimDependencyException.class)
+                .hasMessageContaining("adaptive-concurrency");
+    }
+
+    @Test
+    void theAdaptiveConcurrencyWindowsRestateTheControllersOwnValues() {
+        EngineTimeBudgets.AimdBudgets aimd = EngineTimeBudgets.engineDefaults().aimd();
+
+        assertThat(aimd.growthPaceNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(1));
+        assertThat(aimd.transientTimeoutWindowNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(10));
+        assertThat(aimd.shedWindowMinNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(25));
+        assertThat(aimd.shedWindowMaxNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(40));
+        assertThat(aimd.latencyBaselineDecayNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(60));
+        assertThat(aimd.valvePaceNanos())
+                .as("paced at the shed window's own nominal length").isEqualTo(TimeUnit.SECONDS.toNanos(30));
+        assertThat(aimd.withFixedShedWindow(TimeUnit.SECONDS.toNanos(30)).shedWindowMinNanos())
+                .isEqualTo(aimd.withFixedShedWindow(TimeUnit.SECONDS.toNanos(30)).shedWindowMaxNanos());
+    }
+
+    @Test
+    void theTransientRetryCapsAndBackoffAreDeclaredInputs() {
+        EngineTimeBudgets defaults = EngineTimeBudgets.engineDefaults();
+
+        assertThat(defaults.workerAttemptRetryCap()).isEqualTo(8);
+        assertThat(defaults.probeAttemptRetryCap())
+                .as("a probe fails fast rather than riding out a storm").isEqualTo(1);
+        assertThat(defaults.transientRetryBackoffNanos()).isEqualTo(TimeUnit.MILLISECONDS.toNanos(100));
     }
 }

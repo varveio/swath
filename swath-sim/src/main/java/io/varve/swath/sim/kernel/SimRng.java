@@ -25,13 +25,21 @@ package io.varve.swath.sim.kernel;
  * reproduces itself", never as "a draw is pinned to a decision". Reading it more strongly than that
  * would make an ordinary policy change look like a defect.
  *
- * <p><b>Parity contract with the live engine.</b> This derivation deliberately mirrors
- * {@code io.varve.swath.engine.SeededDecisionRng#deriveWorkerSeed} in swath-core: the same SplitMix64
- * mixing constants, the same golden-ratio offset per identity, and the same refusal to read the
- * worker/actor <em>count</em>. The two are separate implementations on purpose — the sim must not
- * depend on an engine-internal class, and the engine's own seeding must stay opt-in and unchanged —
- * so the parity is a convention, and each side's javadoc names the other so that a change to one is
- * visibly a change that has to be made to both.
+ * <p><b>Parity contract with the live engine: the same derivation shape, not the same tape.</b> This
+ * derivation deliberately mirrors {@code io.varve.swath.engine.SeededDecisionRng#deriveWorkerSeed} in
+ * swath-core: the same SplitMix64 mixing constants, the same golden-ratio offset per identity, and the
+ * same refusal to read the worker/actor <em>count</em>. The two are separate implementations on
+ * purpose — the sim must not depend on an engine-internal class, and the engine's own seeding must
+ * stay opt-in and unchanged — so the parity is a convention, and each side's javadoc names the other
+ * so that a change to one is visibly a change that has to be made to both.
+ *
+ * <p>What that parity does <b>not</b> claim is that the two sides hand out the same values to the same
+ * decisions. It never could: the engine's worker makes a different sequence of calls than a simulated
+ * actor does, so the {@code n}-th draw is not the {@code n}-th decision on both sides. The simulator
+ * additionally splits its decision draws per mechanism ({@link SimRngStream}), so even the stream key
+ * differs from the engine's single per-worker generator. Read the parity as "an actor id is turned
+ * into a seed the same way on both sides"; any cross-instrument comparison compares call sequences and
+ * pages, never draw values.
  *
  * <p><b>Why a mixed derivation rather than {@code baseSeed + actorId}.</b> {@link #forStream} runs
  * SplitMix64's mixing/finalizer step over the base seed offset by the actor id and again over the
