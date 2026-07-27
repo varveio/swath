@@ -55,7 +55,7 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
             "cpuSeconds", "cpuEfficiency", "overfetchRatio", "pageFillRatio", "emptySplitRatio",
             "wastedProbeRatio", "stealSuccessRate", "compressionRatio", "seed", "shape",
-            "trajectory", "slowRanges", "callClassLatency", "demandGate");
+            "trajectory", "slowRanges", "callClassLatency", "clientCost", "demandGate");
 
     /** {@link RunMetrics.RunDiagnostics}'s record components, in declaration order. FROZEN. */
     private static final List<String> EXPECTED_DIAGNOSTICS_FIELDS = List.of(
@@ -159,7 +159,8 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(s.demandGate().minT()).isEqualTo(4);
         assertThat(s.demandGate().tMax()).isEqualTo(16);
         assertThat(s.slowRanges()).hasSize(1);
-        assertThat(s.callClassLatency()).hasSize(9);
+        assertThat(s.callClassLatency()).hasSize(12);
+        assertThat(s.clientCost()).hasSize(5);
     }
 
     @Test
@@ -197,9 +198,10 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(s.trajectory()).isNull();
         assertThat(s.seed()).isNull();          // never seeded
         assertThat(s.demandGate()).isNull();    // the demand gate never fired
-        // The two LIST blocks are empty, never null.
+        // The three LIST blocks are empty, never null.
         assertThat(s.slowRanges()).isEmpty();
         assertThat(s.callClassLatency()).isEmpty();
+        assertThat(s.clientCost()).isEmpty();
         // A null strategy is passed straight through to the record (the normalize-to-"unknown"
         // pass applies to the TAG, not to this field).
         assertThat(s.strategy()).isNull();

@@ -58,8 +58,12 @@ public final class SortOutputStage implements Pipeline.Consumer<PageBatch> {
             Msg<PageBatch> msg = in.receive();
             switch (msg) {
                 case Item<PageBatch> item -> {
+                    // The per-page emit span (client service cost) -- one nanoTime pair per page
+                    // around this stage's whole admission, the same seam OutputStage times.
+                    long startedNs = System.nanoTime();
                     admit(item.value());
                     count(ctx, item.value());
+                    ctx.metrics().recordEmit(System.nanoTime() - startedNs);
                 }
                 case End<PageBatch> ignored -> {
                     return;

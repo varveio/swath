@@ -57,8 +57,12 @@ public final class ParquetOutputStage implements Pipeline.Consumer<PageBatch> {
             Msg<PageBatch> msg = in.receive();
             switch (msg) {
                 case Item<PageBatch> item -> {
+                    // The per-page emit span (client service cost) -- one nanoTime pair per page
+                    // around this stage's whole dispatch, the same seam OutputStage times.
+                    long startedNs = System.nanoTime();
                     pool.submit(item.value());
                     count(ctx, item.value());
+                    ctx.metrics().recordEmit(System.nanoTime() - startedNs);
                 }
                 case End<PageBatch> ignored -> {
                     return;

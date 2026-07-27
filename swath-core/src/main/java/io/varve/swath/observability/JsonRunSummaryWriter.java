@@ -499,6 +499,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // (same reason shape.regime.api_latency_p50_ms/_p99_ms needed one).
         writeProbeLatency(root.putArray("probe_latency"), summary.callClassLatency());
 
+        // Per-page client-service-cost spans. Always present as an array (possibly empty, never
+        // omitted), same idiom and same dedicated-percentile-readback reason as probe_latency above.
+        writeClientCost(root.putArray("client_cost"), summary.clientCost());
+
         // OWNER_SPLIT.demand_gated T-vs-Tmax visibility. Omitted entirely (not a null-valued
         // block) when the demand gate never fired this run -- same idiom as seed/shape/trajectory.
         if (summary.demandGate() != null) {
@@ -764,6 +768,20 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             putDoubleOrNullBoxed(cn, "p90_ms", c.p90Ms());
             putDoubleOrNullBoxed(cn, "p99_ms", c.p99Ms());
             cn.put("max_ms", c.maxMs());
+        }
+    }
+
+    /** Per-page client-service-cost span percentiles -- always present as an array (possibly empty,
+     * never omitted); the dedicated percentile readback, for the same reason writeProbeLatency is one. */
+    private void writeClientCost(ArrayNode clientCostNode, List<RunSummary.ClientCostSpan> clientCost) {
+        for (RunSummary.ClientCostSpan s : clientCost) {
+            ObjectNode sn = clientCostNode.addObject();
+            sn.put("span", s.span());
+            sn.put("count", s.count());
+            putDoubleOrNullBoxed(sn, "p50_ms", s.p50Ms());
+            putDoubleOrNullBoxed(sn, "p90_ms", s.p90Ms());
+            putDoubleOrNullBoxed(sn, "p99_ms", s.p99Ms());
+            sn.put("max_ms", s.maxMs());
         }
     }
 

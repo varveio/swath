@@ -96,6 +96,10 @@ public final class OutputStage implements Pipeline.Consumer<PageBatch> {
 
     private void writeBatch(RunContext ctx, PageBatch batch) throws IOException {
         long entriesWritten = 0L;
+        // The per-page emit span (client service cost) -- one nanoTime pair per page around this
+        // stage's whole write, recorded only when the page went out intact (a broken pipe truncates
+        // it mid-write and is not a representative sample).
+        long startedNs = System.nanoTime();
         try {
             for (ListEntry e : batch.entries()) {
                 formatter.write(e);
@@ -105,6 +109,7 @@ public final class OutputStage implements Pipeline.Consumer<PageBatch> {
         } finally {
             ctx.metrics().recordEntriesEmitted(entriesWritten);
         }
+        ctx.metrics().recordEmit(System.nanoTime() - startedNs);
     }
 
     public ListingStatistics statistics(long apiCalls, Duration elapsed) {

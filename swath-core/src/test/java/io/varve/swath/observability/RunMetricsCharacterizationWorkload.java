@@ -173,6 +173,10 @@ final class RunMetricsCharacterizationWorkload {
         // Checkpoint/resume.
         m.recordCheckpointCommit(m.startCheckpointCommitTimer(), 64);
         m.recordCheckpointQueueWait(1_000L);
+        m.recordCheckpointCommitWait(3_000L);
+
+        // Per-page emit span.
+        m.recordEmit(2_000L);
 
         // Parquet writer pool — every rotation trigger and part outcome.
         m.recordParquetRotation("size");
@@ -208,12 +212,12 @@ final class RunMetricsCharacterizationWorkload {
         m.recordConnectionHandshake();
         m.recordSocketClosureRecovered();
 
-        // Per-call-class latency phases — all 3 x 3 series (a negative sample is the
+        // Per-call-class latency phases — all 3 x 4 series (a negative sample is the
         // SDK-didn't-report sentinel and must NOT register a series).
         for (String callClass : List.of(RunMetrics.CALL_CLASS_WORKER_PAGE, RunMetrics.CALL_CLASS_PIVOT_PROBE,
                 RunMetrics.CALL_CLASS_STRUCTURE_PROBE)) {
             for (String phase : List.of(RunMetrics.LATENCY_PHASE_CONNECT_ACQUIRE, RunMetrics.LATENCY_PHASE_TTFB,
-                    RunMetrics.LATENCY_PHASE_TOTAL)) {
+                    RunMetrics.LATENCY_PHASE_TOTAL, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE)) {
                 m.recordCallClassLatency(callClass, phase, 1_500_000L);
             }
         }
