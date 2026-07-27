@@ -325,33 +325,11 @@ jobs:
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
           duckdb --version
 
-      # Deep runtime smoke: exercise the shaded uber-jar's real paths that --help
-      # can't reach -- ServiceLoader/FileSystem service files, sqlite native-lib
-      # load, the Parquet write path, and managed resume. Runs only here (non-PR), so a network
-      # hiccup never blocks a PR. The container runs as uid 10001, so the mounted
-      # output dir is made world-writable. Gates the push below.
+      # Deep runtime smoke (shared with release.yml — see the script header). Runs
+      # only here on non-PR events, so a network hiccup never blocks a PR. Gates the
+      # push below: a shading/exclude/runtime regression can never reach the GHCR tags.
       - name: Smoke — container Parquet write + read + resume (public bucket)
-        run: |
-          set -euo pipefail
-          mkdir -p dockersmoke && chmod 777 dockersmoke
-          # A small, stable public AWS Open Data prefix (CMAS air-quality sample,
-          # us-east-1, anonymous / not requester-pays) — just a convenient tiny
-          # listing target for the smoke, nothing swath-specific about it.
-          BUCKET='s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/'
-          docker run --rm -v "$PWD/dockersmoke:/out" swath:ci \
-            list "$BUCKET" --no-sign-request --region us-east-1 \
-            --format parquet -o /out/data
-          N=$(duckdb -noheader -list -c "select count(*) from '$PWD/dockersmoke/data/**/*.parquet'")
-          echo "objects read back from Parquet: $N"
-          test "$N" -ge 1
-          # The supported resume command takes the managed output-directory run
-          # handle. Against a completed dataset it must be a clean no-op — the
-          # object count must be unchanged, not just exit 0.
-          docker run --rm -v "$PWD/dockersmoke:/out" swath:ci \
-            resume /out/data
-          N2=$(duckdb -noheader -list -c "select count(*) from '$PWD/dockersmoke/data/**/*.parquet'")
-          echo "objects after resume: $N2"
-          test "$N2" -eq "$N"
+        run: ./scripts/ci/smoke-container.sh swath:ci dockersmoke
 
       # Only now — after the smoke passed — log in and push the multi-arch
       # manifest to this repository's GHCR namespace.

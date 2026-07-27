@@ -176,27 +176,14 @@ jobs:
           unzip -o /tmp/duckdb.zip -d /tmp/duckdb
           sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
 
-      # The release image gets the SAME deep smoke the dev images get in ci.yml — and
-      # it runs against the pushed digest, so what is verified is exactly what the tags
-      # will name. Without this the release was the least-verified image we publish:
-      # `sha-` dev tags were smoked, `latest` was not.
+      # The release image gets the SAME deep smoke the dev images get — literally the
+      # same script — and it runs against the pushed digest, so what is verified is
+      # exactly what the tags will name. Without this the release was the
+      # least-verified image published: `sha-` dev tags were smoked, `latest` was not.
       - name: Smoke — Parquet write + read + resume against the pushed digest
+        run: ./scripts/ci/smoke-container.sh "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" releasesmoke
         env:
-          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          mkdir -p releasesmoke && chmod 777 releasesmoke
-          BUCKET='s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/'
-          docker run --rm -v "$PWD/releasesmoke:/out" "$IMAGE" \
-            list "$BUCKET" --no-sign-request --region us-east-1 \
-            --format parquet -o /out/data
-          N=$(duckdb -noheader -list -c "select count(*) from '$PWD/releasesmoke/data/**/*.parquet'")
-          echo "objects read back from Parquet: $N"
-          test "$N" -ge 1
-          docker run --rm -v "$PWD/releasesmoke:/out" "$IMAGE" resume /out/data
-          N2=$(duckdb -noheader -list -c "select count(*) from '$PWD/releasesmoke/data/**/*.parquet'")
-          echo "objects after resume no-op: $N2"
-          test "$N2" = "$N"
+          DIGEST: ${{ steps.image.outputs.digest }}
 
       # Only now do the tags exist. imagetools create copies no bytes: it points new
       # tags at the digest that was just smoked.
