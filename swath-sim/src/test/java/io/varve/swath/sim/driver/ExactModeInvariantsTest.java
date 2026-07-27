@@ -128,6 +128,33 @@ class ExactModeInvariantsTest {
     }
 
     /**
+     * <b>A zero-cost client-cost charge still costs one event, and that is load-bearing.</b> The
+     * charge is paid through the schedule even when the term is zero, so the continuation runs in a
+     * fresh event rather than inside the caller's. That is not a formality: an event body is atomic in
+     * virtual time, so short-circuiting a zero charge would fuse the page's handling with whatever
+     * follows it and remove interleavings another actor can currently land in — silently changing
+     * which of two racing actors wins, with every wall-time and call-count assertion still green.
+     * Pinning the event count is what makes such a "harmless optimisation" fail a test.
+     *
+     * <p>Per page there are exactly two events: the response arriving, and the client-cost charge
+     * completing. Every worker additionally costs its own bootstrap event, whether or not it ever
+     * claims a range. So {@code events = T + 2P}.
+     */
+    @Test
+    void aZeroCostChargeStillCostsOneEventSoTheInterleavingsDoNotChange() {
+        KeyListStore store = KeyListStore.ofGeneratedKeys(TOTAL_KEYS);
+        int workers = 4;
+
+        SimRunResult result = SequentialListingDriver.run(scenario(workers, 0L), store);
+
+        assertThat(result.eventsProcessed()).as("events = T + 2P = %d + 2 x %d", workers, TOTAL_CALLS)
+                .isEqualTo(workers + 2 * TOTAL_CALLS);
+        assertThat(result.counter("client_cost.charges"))
+                .as("one charge per page, zero-valued but still scheduled").isEqualTo(TOTAL_CALLS);
+        assertThat(result.counter("client_cost.nanos")).isZero();
+    }
+
+    /**
      * The {@code +1} in {@code c_r} is a claim about the protocol, so it is asserted directly at the
      * two boundaries where getting it wrong is invisible in the bulk case: a range whose size is an
      * exact multiple of the page size, and a range with nothing in it.
