@@ -282,6 +282,28 @@ three are choices. So a run record carries them — which store served it, which
 against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
 the counters every policy path engaged, and how many events the kernel dispatched to produce it.
 
+Two parts of that record are worth naming, because a counter total cannot express either.
+
+- **The phase timeline.** Three instants — the seed's end, the last split of any kind, the run's own
+  end — plus what happened between the last two: the keys emitted in that tail, and the *occupancy*,
+  meaning how many ranges were actually being drained while they were. A run that divides its keyspace
+  and one that gives up early can have identical split counts and completely different shapes, and the
+  difference is the whole subject. The run's end here is **quiescence**, not the kernel's last event.
+  The kernel cannot cancel a timer, so a park that has already been retired still costs a dispatch when
+  it fires, and a dispatch moves the clock. The longest of them is the steal-attempt-slot backstop —
+  one second under the engine's own defaults, the park of a worker that found the fleet's single steal
+  slot busy — so the clock keeps advancing for up to that second after the last worker has retired.
+  Traced after quiescence, the residue is *only* retired parks: no call timeout, no retry, no key.
+  Both instants are reported, and the gap between them (0.75–1.0 s on the in-repo fixtures) is an
+  artifact of the kernel rather than a property of the modelled fleet — **so a comparison between runs
+  belongs on the timeline's end, not on the kernel's.**
+- **Position-sensor readings.** Whether the arithmetic the policies steer on can see a given keyspace
+  at all: how many page commits moved the cursor without moving `fracIn`, and how many scanned victims
+  had a consumed span of zero, which is the case where `estRemaining` discards the emitted keys it was
+  given. These are computed by the executor from the same public `StealMath` the decisions call —
+  nothing in swath-core changes to produce them — because whether a sensor works is a property of the
+  keys, and a fixture that defeats it needs to be able to say so in numbers.
+
 ### What a run costs to produce
 
 Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
@@ -334,9 +356,46 @@ outside this module.
 A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
 sits in a few of them or spreads evenly, whether a split can find a populated pivot — so the tests also
 generate small keyspaces shaped like real buckets: a deep date-partitioned observation archive, a
-hash-fanned content-addressed corpus, a tree with one object per directory, and a single dense flat
-leaf. Each runs in milliseconds and each provokes different policy paths, which a fixture of uniformly
-named keys does not.
+hash-fanned content-addressed corpus, a tree with one object per directory, a single dense flat leaf,
+and a deep-nested shared prefix. Each runs in milliseconds and each provokes different policy paths,
+which a fixture of uniformly named keys does not.
+
+**The deep-nested shared prefix is the one aimed at a specific mechanism.** It is taxonomy-shaped —
+`species/<Genus_epithet>/<accession>/<dataset>/<stage>/<file>` — and its numbers are the point: sibling
+species directories diverge ten bytes in, while everything inside either of them varies only from byte
+39 on. Position is measured by `StealMath.fracIn` over the twelve bytes *after* the longest common
+prefix of a range's own bounds, so on a range spanning sibling subtrees the measured window is bytes
+10–22 and a cursor draining a subtree changes nothing inside it. Ninety-odd per cent of that fixture's
+page commits therefore advance the cursor without moving the fraction at all, the consumed span reads
+zero, and `estRemaining` falls back to a raw width with the range's emitted keys discarded — which is
+what every layer downstream (victim choice, pivot mass floors, the owner's self-split, the density
+feedback) is then steering on.
+
+**A high invisible-advance share on its own is not diagnostic of any of that**, and the measurements
+say so: the flat hex-named control reproduces it too (95.0% at scale, against this fixture's 94.1%).
+Twelve bytes is simply narrower than the ground a hundred-page range covers, whatever its keys are
+named, so once ranges are that wide the counter is reporting range width rather than taxonomy depth.
+What separates the two shapes is the **consumed span** — whether the window can see the cursor move
+*away from its own `lo`*, which is what decides if the estimate keeps the range's emitted keys or
+throws them away. That is where the fixtures diverge by a factor of two to eleven
+(`est_ignores_keys`, `est_zero`), and it is the reading a cure has to move.
+
+How much each subtree holds is a separate parameter, because the
+geometry decides what can be *measured* and the mass distribution decides whether being unable to
+measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed law a real archive
+follows is what makes the second visible.
+
+Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
+to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
+against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
+what separates the two claims: the same geometry is just as blind (94% of commits invisible) and costs
+nothing at all, because equal subtrees leave the seed's own division balanced and the fleet is never
+left having to divide anything. `PositionSensorAtScaleTest` (`@Tag("perf")`) runs the heavy-tailed pair
+ten times further up, where the difference reaches the run: 8.4% of it after the last split at a mean of
+1.6 ranges in flight, against 0.8%. Note what that second test does *not* show — the deep-nested run
+publishes 205 split children there against the control's 64. The division is not missing; it is late,
+driven by thieves that spend 691 attempts to place 118 of them, and refused four thousand times over by
+the owner's own estimate.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

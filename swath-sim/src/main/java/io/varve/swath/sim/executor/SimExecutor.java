@@ -7,6 +7,7 @@ package io.varve.swath.sim.executor;
 
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.Commit;
@@ -121,6 +122,15 @@ import java.util.Set;
  * the seam unchanged, still consulted under the same monitor, so this executor's single check-then-act
  * at the top of an attempt is the engine's own shape rather than a widening of it.
  *
+ * <h2>Instrumenting the position sensor</h2>
+ * Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
+ * quantity: {@link StealMath#estRemaining}, a local density times a remaining span, both measured in
+ * the window-relative fraction {@link StealMath#fracIn} defines. Whether that sensor can actually see a
+ * given keyspace is a property of the keys, not of the policies, so the executor measures it where the
+ * policies read it — at every bounded page commit, and at every victim scanned — using the same public
+ * arithmetic the decisions use. Nothing in swath-core changes to produce these counters; they are a
+ * second reader of a function the engine already exports.
+ *
  * <h2>Determinism</h2>
  * One scenario at one seed against one store reproduces itself exactly, including its event trace. That
  * is a claim about the simulator only. It is not a claim that a seeded live run would produce the same
@@ -160,6 +170,45 @@ public final class SimExecutor {
     public static final String OWNER_SPLIT_COUNTER = "owner_split.published";
     /** Children published by a thief's steal. */
     public static final String THIEF_SPLIT_COUNTER = "steal.children";
+    /**
+     * Page commits on a bounded range that emitted at least one key — a commit that emitted none moved
+     * no cursor, so it is neither visible nor invisible and is not counted either way. The denominator
+     * {@link #SENSOR_INVISIBLE_ADVANCE_COUNTER} reads against.
+     */
+    public static final String SENSOR_BOUNDED_COMMITS_COUNTER = "sensor.bounded_page_commits";
+    /**
+     * Bounded page commits whose cursor advance did not move {@link StealMath#fracIn} at all: real keys
+     * came out and the position the policies measure stayed where it was.
+     */
+    public static final String SENSOR_INVISIBLE_ADVANCE_COUNTER = "sensor.cursor_advance_invisible";
+    /**
+     * Victims whose {@code estRemaining} victim selection actually evaluated, summed over attempts:
+     * the eligible pool minus the candidates the policy skips <em>before</em> scoring them — the
+     * unsplittable ones and the ones holding a futility-pacing skip. Open frontiers are included, as
+     * selection includes them (it scores them {@code +∞}).
+     */
+    public static final String SENSOR_VICTIMS_SCANNED_COUNTER = "sensor.victims_scanned";
+    /**
+     * Of {@link #SENSOR_VICTIMS_SCANNED_COUNTER}, those carrying a bound — the denominator of the two
+     * degeneracy counters below, since an open frontier's estimate is {@code +∞} by contract and its
+     * consumed span is not defined.
+     */
+    public static final String SENSOR_VICTIMS_BOUNDED_COUNTER = "sensor.victims_scanned_bounded";
+    /**
+     * Scored bounded victims whose {@code estRemaining} read zero, so selection passed over them as
+     * having no remaining span. An attempt in which <em>every</em> scored candidate reads this way is
+     * what a {@code NO_VICTIM.all_no_remaining_span} is made of; this counter is the per-candidate
+     * reading, not that verdict.
+     */
+    public static final String SENSOR_EST_ZERO_COUNTER = "sensor.victim_est_zero";
+    /**
+     * Scored bounded victims whose consumed span read zero, so {@code estRemaining} returned the raw
+     * remaining span and <b>ignored {@code keysEmitted}</b>: a worker that has emitted a million keys
+     * scores identically to one that has emitted none. These are victims that have <em>certainly</em>
+     * emitted keys — a candidate only becomes steal-eligible after emitting some — which is what makes
+     * a zero consumed span a defect in the measurement rather than a fact about the worker.
+     */
+    public static final String SENSOR_EST_IGNORES_KEYS_COUNTER = "sensor.victim_est_ignores_keys";
 
     private static final HexFormat HEX = HexFormat.of();
 
@@ -170,6 +219,7 @@ public final class SimExecutor {
     private final Map<Long, WorkerState> livePool = new LinkedHashMap<>();
     private final Set<Long> ownerSplitTaggedChildren = new HashSet<>();
     private final ConfettiFeedbackGate confettiFeedback = new ConfettiFeedbackGate();
+    private final PolicyRunTimeline.Recorder timeline = new PolicyRunTimeline.Recorder();
     private final OwnerSplitPolicy governor;
     private final SeedPlanner seedPlanner;
     private final SimConcurrencyPolicy gauge;
@@ -238,7 +288,8 @@ public final class SimExecutor {
         kernel.scheduleBootstrap(0, 0, "seed.start", this::startSeedPhase);
         SimRunResult result = kernel.run();
         return PolicyRunResult.of(result, scenario, storeLabel, gauge.counters(), gauge.effectiveT(),
-                ledger.nodesCreated(), ledger.splitsAborted(), view.storeReads(), runStuck);
+                ledger.nodesCreated(), ledger.splitsAborted(), view.storeReads(), runStuck,
+                timeline.finish(result.wallNanos()));
     }
 
     // ---- seed phase ---------------------------------------------------------------------
@@ -312,6 +363,7 @@ public final class SimExecutor {
         }
         ledger.addSeed(lo, null);
         ctx.count("seed.ranges", cuts.size() + 1);
+        timeline.seedCompleted(ctx.nowNanos());
         for (Worker worker : workers) {
             ctx.scheduleFor(worker.id, 0, "worker.start", worker::idle);
         }
@@ -393,6 +445,7 @@ public final class SimExecutor {
             // Seeded so the first qualifying page may carve immediately, then rate-limited.
             lastSelfSplitPage = -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN;
             livePool.put(nodeId, state);
+            timeline.occupancyChanged(ctx.nowNanos(), livePool.size());
             ctx.count(RANGES_CLAIMED_COUNTER, 1);
             ctx.record("range.claim", "node=" + nodeId);
             requestPage(0);
@@ -463,7 +516,8 @@ public final class SimExecutor {
          * runs against a view of all of it, before any other actor can observe a half-finished commit.
          */
         private void onPage(SimContext arrived) {
-            SimListingView.Page page = view.page(state.cursor(), scenario.pageSize());
+            byte[] cursorFrom = state.cursor();
+            SimListingView.Page page = view.page(cursorFrom, scenario.pageSize());
             arrived.count(KEYS_LISTED_COUNTER, page.keys().size());
             byte[] hi = state.hi();
             List<byte[]> inRange = new ArrayList<>(page.keys().size());
@@ -484,6 +538,8 @@ public final class SimExecutor {
             ledger.commitPage(nodeId, cursorTo, completed);
             arrived.count(PAGES_COUNTER, 1);
             arrived.count(KEYS_EMITTED_COUNTER, inRange.size());
+            timeline.keysCommitted(inRange.size());
+            recordSensorReading(arrived, state.lo(), cursorFrom, cursorTo, hi);
             if (log.isRecording()) {
                 // The page's own emitted interval goes into the trace, not just its size: a total tells a
                 // reader that the right NUMBER of keys came out, which a gap and an overlap of equal size
@@ -518,6 +574,7 @@ public final class SimExecutor {
 
         private void completeClaim(SimContext at) {
             livePool.remove(nodeId);
+            timeline.occupancyChanged(at.nowNanos(), livePool.size());
             classifyOwnerSplitChild(at);
             at.count(RANGES_COMPLETED_COUNTER, 1);
             at.record("range.complete", "node=" + nodeId + "|keys=" + state.keysEmitted());
@@ -528,6 +585,7 @@ public final class SimExecutor {
             // worker so none of them sits out the end of the run on a stale park timer.
             wakeParked(at);
             if (remaining == 0L) {
+                timeline.quiesced(at.nowNanos());
                 at.record("run.quiescent", "");
             }
             idle(at);
@@ -587,6 +645,7 @@ public final class SimExecutor {
             ledger.enqueueChild(childId, pivot, hi);
             state.markStolen();
             lastSelfSplitPage = committed;
+            timeline.splitPublished(at.nowNanos());
             at.count(OWNER_SPLIT_COUNTER, 1);
             at.count("OWNER_SPLIT.self_published", 1);
             at.record("owner_split", "node=" + nodeId + "|child=" + childId);
@@ -645,6 +704,7 @@ public final class SimExecutor {
                             candidate.pacingSkipAvailable()));
                 }
             }
+            recordVictimSensorReadings(ctx, pool);
             Selection selection = thief.selectVictim(pool);
             recordEngagements(ctx, selection.engagements());
             applyVictimMutations(selection.mutations(), null);
@@ -790,6 +850,7 @@ public final class SimExecutor {
             }
             ledger.enqueueChild(childId, pivot, snapshotHi);
             victim.markStolen();
+            timeline.splitPublished(ctx.nowNanos());
             ctx.count(THIEF_SPLIT_COUNTER, 1);
             ctx.count("PIVOT." + commit.mechanism().code(), 1);
             ctx.record("steal.split", "victim=" + victim.nodeId() + "|child=" + childId
@@ -986,6 +1047,61 @@ public final class SimExecutor {
     private void signalStealableProgress(SimContext ctx) {
         pacingState = idlePacing.onReset();
         wakeParked(ctx);
+    }
+
+    /**
+     * Reads the position sensor across one page commit: did the keys that just came out move the range's
+     * cursor <em>in the fraction the policies measure</em>?
+     *
+     * <p>Only bounded ranges are read. An open frontier has no {@code hi} to define a window and always
+     * scores {@code +∞} in selection, so a fraction over it would be measuring nothing.
+     */
+    private static void recordSensorReading(SimContext ctx, byte[] lo, byte[] cursorFrom, byte[] cursorTo,
+                                            byte[] hi) {
+        if (hi == null || cursorTo == null) {
+            return;
+        }
+        ctx.count(SENSOR_BOUNDED_COMMITS_COUNTER, 1);
+        if (StealMath.fracIn(cursorTo, lo, hi) - StealMath.fracIn(cursorFrom, lo, hi) <= 0.0) {
+            ctx.count(SENSOR_INVISIBLE_ADVANCE_COUNTER, 1);
+        }
+    }
+
+    /**
+     * Reads {@code estRemaining} over the pool victim selection is about to rank, recording the two ways
+     * it degenerates: a zero score, which takes a candidate out of the running entirely, and a zero
+     * consumed span, which leaves the score a raw width with the candidate's emitted keys discarded.
+     *
+     * <p><b>The skip order mirrors the policy's.</b> {@link ThiefPolicy#selectVictim} passes over an
+     * unsplittable candidate, and over one holding a futility-pacing skip, <em>before</em> it computes
+     * any estimate — so scoring those here would report readings selection never took. The mirror is
+     * read-only: a pacing skip is observed, never consumed, because consuming it is the policy's
+     * mutation to return and the executor applies exactly the ones it does.
+     *
+     * <p>This duplicates the arithmetic the policy is about to do rather than asking it what it saw:
+     * the policy's contract is a {@link Selection}, and widening it to report its own intermediate
+     * readings would put a diagnostic in the engine's decision seam. The inputs are the same view the
+     * policy gets and the function is the same public one it calls.
+     */
+    private static void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
+        for (VictimView candidate : pool) {
+            if (candidate.unsplittable() || candidate.pacingSkipAvailable()) {
+                continue;
+            }
+            ctx.count(SENSOR_VICTIMS_SCANNED_COUNTER, 1);
+            if (candidate.hi() == null) {
+                continue;
+            }
+            ctx.count(SENSOR_VICTIMS_BOUNDED_COUNTER, 1);
+            if (StealMath.estRemaining(candidate.cursor(), candidate.lo(), candidate.hi(),
+                    candidate.keysEmitted()) <= 0.0) {
+                ctx.count(SENSOR_EST_ZERO_COUNTER, 1);
+            }
+            if (StealMath.spanIn(candidate.lo(), candidate.cursor(), candidate.lo(), candidate.hi())
+                    <= 0.0) {
+                ctx.count(SENSOR_EST_IGNORES_KEYS_COUNTER, 1);
+            }
+        }
     }
 
     /** Records every engagement a policy fired, under the same category and reason the engine uses. */
