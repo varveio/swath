@@ -51,12 +51,12 @@ class RunMetricsClientCostSpanTest {
         Map<String, RunSummary.ClientCostSpan> spans = spansOf(metrics);
 
         assertThat(spans).containsOnlyKeys(
-                RunMetrics.CLIENT_COST_SPAN_COMMIT_WAIT,
+                RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT,
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT,
                 RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT,
                 RunMetrics.CLIENT_COST_SPAN_EMIT,
                 RunMetrics.CLIENT_COST_SPAN_WRITER_BACKPRESSURE);
-        assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_COMMIT_WAIT).count())
+        assertThat(spans.get(RunMetrics.CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT).count())
                 .as("one observation per committed page, not per batch")
                 .isEqualTo(2L);
         assertThat(spans.values()).allSatisfy(s -> assertThat(s.count()).isPositive());

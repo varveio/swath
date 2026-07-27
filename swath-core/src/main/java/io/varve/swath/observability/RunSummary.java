@@ -103,7 +103,7 @@ public record RunSummary(
     /**
      * One client-service-cost span's percentile summary — the per-page cost of servicing a page
      * once the store has answered, decomposed into the parts that can contend independently.
-     * {@code span} is one of {@code commit_wait}/{@code checkpoint_queue_wait}/{@code
+     * {@code span} is one of {@code checkpoint_commit_wait}/{@code checkpoint_queue_wait}/{@code
      * checkpoint_commit}/{@code emit}/{@code writer_backpressure} ({@code
      * RunMetrics.CLIENT_COST_SPAN_*}); the remaining part of the decomposition, response parse, is
      * per-call-class and is carried by {@link CallClassLatencySummary} instead. Percentile/max/count

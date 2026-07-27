@@ -2214,7 +2214,7 @@ public final class RunMetrics {
     }
 
     /** {@code span} name: the fetch worker's blocking wait for its page commit to become durable. */
-    public static final String CLIENT_COST_SPAN_COMMIT_WAIT = "commit_wait";
+    public static final String CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT = "checkpoint_commit_wait";
     /** {@code span} name: a checkpoint task's wait on the single-writer queue before its batch drained. */
     public static final String CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT = "checkpoint_queue_wait";
     /** {@code span} name: the checkpoint writer thread's own batch op-execution + {@code conn.commit()}. */
@@ -2241,7 +2241,7 @@ public final class RunMetrics {
      */
     private List<RunSummary.ClientCostSpan> buildClientCostSummary() {
         List<RunSummary.ClientCostSpan> out = new ArrayList<>();
-        addClientCostSpan(out, CLIENT_COST_SPAN_COMMIT_WAIT, checkpointCommitWait);
+        addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT_WAIT, checkpointCommitWait);
         addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_QUEUE_WAIT, checkpointQueueWait);
         addClientCostSpan(out, CLIENT_COST_SPAN_CHECKPOINT_COMMIT, checkpointCommitLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_EMIT, emitLatency);
