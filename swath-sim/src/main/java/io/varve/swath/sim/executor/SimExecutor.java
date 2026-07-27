@@ -898,6 +898,13 @@ public final class SimExecutor {
             if (childId == SimNodeLedger.SPLIT_ABORTED) {
                 // The durable guard rejected what the in-memory checks above allowed: restore the bound
                 // this attempt validated and re-steal later.
+                //
+                // The futility record is a deliberate, disclosed divergence: Thief#commit restores the
+                // bound here and leaves the victim's tally alone, tallying only the two earlier losers.
+                // It has never mattered -- this branch is reachable at most once per run and has not
+                // been reached at all in any in-repo fixture -- and it is listed in
+                // docs/executor-ordering.md rather than fixed, because changing it would be this
+                // executor departing from the engine in the other direction.
                 victim.restoreHi(snapshotHi);
                 victim.recordFutileSteal();
                 finishSteal("RETRY", "split_aborted", false);

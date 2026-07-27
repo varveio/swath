@@ -12,7 +12,10 @@ import io.varve.swath.engine.StealMath;
 import io.varve.swath.sim.fixture.KeyspaceFixtures.SubtreeMass;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -162,6 +165,37 @@ class KeyspaceFixturesTest {
         // And it is one directory deep rather than four wide.
         assertThat(largestLeafDirectory(concentrated)).isEqualTo(4 * 840);
         assertThat(largestLeafDirectory(spread)).isEqualTo(840);
+    }
+
+    /**
+     * How concentrated the eight-species deal actually is, pinned against what a real bucket measured.
+     *
+     * <p>The at-scale runs rest on this: the rank law is Zipf, so matching a measured concentration is
+     * a choice of how many subtrees to deal it over, and that choice belongs in a test rather than in a
+     * comment somebody has to recompute. Dealt over eight, the largest subtree holds <b>36.8%</b> of
+     * the keyspace against a measured 32.6%, and the largest five hold <b>84.0%</b> against a measured
+     * 90.7% — a good match at the head and a loose one across it, in the direction of a fixture whose
+     * middle ranks are heavier than the real bucket's. The shares are a property of the ranks alone, so
+     * they are asserted at a size that runs in milliseconds and hold to a tenth of a point at the size
+     * the policy runs use.
+     */
+    @Test
+    void theEightSpeciesDealPutsAThirdOfTheKeyspaceInOneSubtree() {
+        List<byte[]> keys = KeyspaceFixtures.deepNestedSharedPrefix(2, 4, 1, 8_400,
+                SubtreeMass.LEAF_CONCENTRATED);
+
+        assertThat(subtreeShare(keys, 1)).isBetween(0.365, 0.370);
+        assertThat(subtreeShare(keys, 5)).isBetween(0.838, 0.842);
+    }
+
+    /** The share of the keyspace held by the {@code n} busiest {@code species/<name>/} subtrees. */
+    private static double subtreeShare(List<byte[]> keys, int n) {
+        Map<String, Integer> bySubtree = new TreeMap<>();
+        for (byte[] key : keys) {
+            bySubtree.merge(new String(Arrays.copyOf(key, 30), StandardCharsets.UTF_8), 1, Integer::sum);
+        }
+        return bySubtree.values().stream().sorted(Comparator.reverseOrder()).limit(n)
+                .mapToInt(Integer::intValue).sum() / (double) keys.size();
     }
 
     /** Keys under the busiest deepest {@code .../<dir>/} directory. */

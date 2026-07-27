@@ -70,9 +70,12 @@ client-side cost is charged before the range is released). For the earlier check
 victim's final cursor has to still be *below* the pivot — so the pivot has to sit above the last key in
 the range, which the cascade only produces where it commits a pivot it never probed: a structure
 boundary, or the flat-leaf reflection, landing in the empty span between a directory's last key and a
-bound synthesised above it. That combination was observed once in a million-key run of the
-concentrated deep-nested shape and in none of fifty-four flat-leaf configurations swept across worker
-count, probe latency and the width of the client-cost window. So `splits_rejected` reads zero on runs
+bound synthesised above it. That combination was observed exactly once, in a sweep configuration that
+is not in the repository: the concentrated deep-nested shape at `(8, 8, 1, 160_000)` — 759,188 keys —
+under eight workers, a 1,000-key page at 110 ms with 35 ms probes, the measured client cost and seed
+`20260727`, which rejected one durable split. Fifty-four flat-leaf configurations swept across worker
+count, probe latency and the width of the client-cost window rejected none. The in-repo run of the
+concentrated shape pins `splits_rejected == 0`, which is the ordinary case. So `splits_rejected` reads zero on runs
 losing most of their steals, and it is not the number to read when asking how often a fleet loses this
 race.
 
@@ -145,6 +148,27 @@ engine that ships:
 The **fleet-wide idle-steal pacing window is not one of them.** Its arithmetic moved behind the seam
 unchanged and is still consulted under the same monitor, so this executor's single check-then-act at the
 top of an attempt is the engine's own shape rather than a widening of it.
+
+## Divergences from the engine, deliberately not modelled
+
+Distinct from the widenings above, which are the engine's current behaviour reproduced. These are
+places where the executor knowingly does something the engine does not, and the entry exists so a
+result that turns on one is recognisable as such rather than surprising.
+
+- **A retried attempt keeps the base timeout; the engine escalates it.** `GaugedFetcher` raises a
+  fetch's per-attempt budget on consecutive attempt timeouts (base → 20 s → 40 s, via
+  `TransientRetryFetcher.escalationLevel`), so a real retry gets longer to answer than the attempt it
+  is retrying. Here every attempt in a chain is bounded by the same declared
+  `probeAttemptTimeoutNanos` / `workerAttemptTimeoutNanos`. The effect is confined to the storm
+  regime — where the engine would ride out a slow store that this executor gives up on, so a modelled
+  run in that regime **under**-states how much a real fleet recovers. The retry *count* is faithful:
+  the declared cap is spent in full on both the first attempt's timeout and every retried one.
+- **A rejected durable split records futility against its victim; the engine does not.** The
+  `split_aborted` branch here calls `recordFutileSteal`, where `Thief.commit` restores the bound and
+  leaves the victim's futility tally alone (only the two earlier losers record it). Reachable at most
+  once in the runs measured so far — see the guard note above — so it has never moved a pacing
+  decision, and it is written down rather than quietly fixed because the fix is a behaviour change to
+  an executor whose whole claim is that it does what the engine does.
 
 ## What is deliberately not modelled
 

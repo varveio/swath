@@ -30,13 +30,29 @@ import org.junit.jupiter.api.Test;
  * heaviest leaf holds 20,000 never asks the runtime the question the tail is made of, because the seed's
  * own cut set is enough.
  *
- * <p>Both fixtures here hold 1.09 million keys and give every species subtree the <b>identical</b> mass;
- * the single thing that differs is whether that mass is spread across an accession's four data
- * directories or concentrated in one, which is what makes this a controlled comparison rather than a
- * second experiment. Eight species, not sixty-four, because the rank law is Zipf and matching the
- * measured concentration — a third of the keyspace in the largest subtree, 90% in the largest five —
- * needs either a steeper law or fewer subtrees, and the subtree count is a parameter this generator
- * already has. The result is 37% of the keyspace in one subtree and 87% in five.
+ * <p>Both fixtures here hold 1.09 million keys and give every species subtree the same mass to within
+ * the rank law's integer division — at most two keys per species, plus the three token files the
+ * concentrated law leaves in an accession's other directories (1,087,165 keys against 1,087,136). The
+ * single thing that differs is whether that mass is spread across an accession's four data directories
+ * or concentrated in one, which is what makes this a controlled comparison rather than a second
+ * experiment. Eight species, not sixty-four, because the rank law is Zipf and matching the measured
+ * concentration needs either a steeper law or fewer subtrees, and the subtree count is a parameter this
+ * generator already has. The match is good at the head and loose in the middle: <b>36.8% of the
+ * keyspace in the largest subtree against a measured 32.6%, and 84.0% in the largest five against a
+ * measured 90.7%</b> — so this fixture concentrates slightly harder than the real one at rank 1 and
+ * distinctly less hard across the head. Both shares are pinned in {@code KeyspaceFixturesTest}.
+ *
+ * <p><b>The page size is a stand-in for bucket size, and the tail below does not survive without it.</b>
+ * What a fleet has to serialise is not keys but round trips, so the scaling variable is <em>pages per
+ * range</em>: this fixture's heavy directory is 400,000 keys, which is 4,000 pages at the 100-key page
+ * used here and 400 at a real 1,000-key page, against roughly 1,800 for the 1.8-million-object
+ * directory measured on a real bucket. At 100 keys a page this run is therefore page-faithful and
+ * mass-short — its biggest range is 4,000 of the run's 11,019 pages, where the real one was ~1,800 of
+ * ~8,800 — and the same fixture at the measured 1,000-key page is mass-faithful and page-short, with a
+ * biggest range of 400 pages out of 1,179 and a serial fraction of 0.001. Both are asserted below,
+ * because quoting either alone would be quoting a choice of page size as a property of the keyspace.
+ * The honest statement of what the tail measurement needs is a bucket about ten times this one's size;
+ * the small page buys that at a tenth of the memory, and buys nothing else.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory: a million-key fixture is a large share of a default test
  * worker's heap. The fixtures are generated one at a time, and the results compared, so only one is ever
@@ -101,6 +117,13 @@ class MassConcentrationAtScaleTest {
      * real deep-nested bucket, and the reason a serial tail is not merely "the fleet declining to
      * split".
      *
+     * <p><b>Both sides of that comparison have to be read on one denominator.</b> The share below is
+     * proposals lost over proposals that reached the re-validation at all — 195 of 242. The live
+     * measurements are usually quoted per steal <em>attempt</em> (85% and 93%), which counts attempts
+     * that never got that far; on this denominator the same live runs read 96% and 90%. Either way the
+     * bench loses fewer races than the deployment does, which is the conservative direction for a bench
+     * whose purpose is to make a cure prove itself.
+     *
      * <p>The durable guard, meanwhile, rejects nothing, and that is correct rather than a defect: it
      * only sees proposals the re-validation above has already passed, so rejecting one needs a change
      * between the two checks — a second in-flight proposer, which the fleet's one-attempt-at-a-time rule
@@ -113,7 +136,8 @@ class MassConcentrationAtScaleTest {
                 "in-memory deep-nested, mass in one leaf directory");
 
         assertThat(deep.completed()).as(deep::describe).isTrue();
-        // 195 of 242 proposals lost (80.6%), against 128 of 246 (52.0%) at a twentieth of the mass.
+        // 195 of 242 proposals lost (80.6%), against 128 of 246 (52.0%) at a twentieth of the mass; the
+        // same denominator reads 90-96% on the deployment's own runs.
         assertThat(revalidationLossShare(deep))
                 .as("the thief is not refusing to split; it is trying and losing").isGreaterThan(0.7);
         assertThat(deep.splitsRejected())
@@ -124,14 +148,19 @@ class MassConcentrationAtScaleTest {
      * The same race under the page regime it was measured in — a 1,000-key page answered in 110 ms and a
      * 35 ms probe, against this test's own 100-key page in 30 ms and 8 ms probe.
      *
-     * <p>It survives the move, which is the point: both the distance a pivot is placed ahead of the
-     * cursor and the keys a victim drains while the probes are in flight scale with the page, so the
-     * loss share is a property of the keyspace and the pivot cascade rather than of the timings chosen
-     * for a run. The window itself is generous either way — a cascade of six to seven probes costs 1.7
-     * page cycles of draining at this test's own regime and 1.9 at the measured one, against the 0.3 a
-     * 35 ms probe buys against a 110 ms page on the deployment those numbers came from. A bench that
-     * loses fewer races than a real deployment is therefore telling you about its keyspace, not about
-     * its clock.
+     * <p><b>The loss share survives the move; the serial tail does not, and both halves are asserted
+     * here.</b> Where a pivot lands relative to the cursor and how far the cursor travels while the
+     * probes are in flight both scale with the page, so the race is decided by the keyspace and the
+     * pivot cascade rather than by the timings a scenario declares. The window is generous either way —
+     * a cascade of six to seven probes costs 1.7 page cycles of draining at the other regime and 1.9
+     * here, against the 0.3 a 35 ms probe buys against a 110 ms page on the deployment those numbers
+     * came from — so a bench that loses fewer races than a real deployment is telling you about its
+     * keyspace, not about its clock.
+     *
+     * <p>What does <em>not</em> survive is the tail: at a full page this fixture's biggest range is 400
+     * pages of the run's 1,179, the fleet absorbs it, and the serial fraction reads 0.001 against the
+     * other regime's 0.332. That is the pages-per-range arithmetic in the class note, stated as a
+     * measurement so the tail magnitude cannot be quoted without the page size it was taken at.
      */
     @Test
     void theRaceIsLostAtTheMeasuredPageRegimeToo() {
@@ -142,6 +171,10 @@ class MassConcentrationAtScaleTest {
         assertThat(deep.completed()).as(deep::describe).isTrue();
         // 39 of 59 proposals lost (66.1%) at a tenth of the page count.
         assertThat(revalidationLossShare(deep)).isGreaterThan(0.5);
+        // And 0.001 serial against 0.332, on the same keys: the tail needs the pages, the race does not.
+        assertThat(deep.timeline().serialFraction())
+                .as("a tail is pages per range, and at a full page this fixture has a tenth of them")
+                .isLessThan(0.01);
     }
 
     /** Thief children whose pivot came from a structure probe rather than from arithmetic over keys. */

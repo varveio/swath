@@ -286,13 +286,21 @@ proposer, and the fleet admits one steal attempt at a time. So `splits_rejected`
 that are losing four proposals in five, and that zero is a fact about the ordering rather than a
 simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
 
-How often the race is lost is a property of the *keyspace*, not of the timings a scenario declares.
-Where a pivot lands relative to the cursor and how far the cursor travels while the probes are in
-flight both scale with the page, so moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms
-a real deployment was measured at leaves the loss share in the same place (81% and 66% on the same
-fixture). What moves it is mass: the same geometry with a twentieth of the keys per directory loses
-52%. The measured page/probe regime is available as a named pair of inputs so that claim can be
-re-checked rather than believed.
+How often **that race** is lost is a property of the *keyspace*, not of the timings a scenario declares
+— a claim about the loss share specifically, and not about the serial tail it contributes to, which
+depends on the page regime and is discussed under the fixtures below. Where a pivot lands relative to
+the cursor and how far the cursor travels while the probes are in flight both scale with the page, so
+moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms a real deployment was measured at
+leaves the loss share in the same place (81% and 66% on the same fixture). What moves it is mass: the
+same geometry with a twentieth of the keys per directory loses 52%. The measured page/probe regime is
+available as a named pair of inputs so that claim can be re-checked rather than believed.
+
+Two denominators are in circulation and they are not interchangeable. The shares above are proposals
+lost over proposals that reached the re-validation; a deployment's own numbers are usually quoted per
+steal *attempt*, counting attempts that never got that far. The measured runs read 85% and 93% per
+attempt, which is 96% and 90% per proposal. On either, this bench loses fewer races than the
+deployment does — the conservative direction for an instrument whose job is to make a proposed cure
+prove itself.
 
 **What a run reports.** A duration on its own is not a result: the same fixture yields a different one
 under a different store backend, a different client-cost term, or different declared budgets, and all
@@ -441,8 +449,22 @@ post-seed run with at most one range in flight, a third of it after the last spl
 make, and four split proposals in five lost to the victim's own cursor. That is within a factor of two
 of the 60% of a run a real deep-nested bucket spends serial, against the 3.5% the same shape produces
 with its mass spread over 20,000-key leaves. Its control differs in one property only — the same eight
-subtrees holding the same number of keys each, spread across an accession instead of concentrated in
-one directory — which is what makes the pair a comparison rather than two experiments.
+subtrees holding the same number of keys each (to within the rank law's integer division), spread
+across an accession instead of concentrated in one directory — which is what makes the pair a
+comparison rather than two experiments.
+
+**That tail number is quoted at a 100-key page, and the page size is doing work.** What a fleet has to
+serialise is round trips, not keys, so the scaling variable is *pages per range*. This fixture's heavy
+directory holds 400,000 keys: 4,000 pages at 100 keys a page, 400 at a real 1,000-key page, against
+roughly 1,800 pages for the 1.8-million-object directory measured on a real bucket. The 100-key run is
+therefore page-faithful and mass-short — its biggest range is 4,000 of the run's 11,019 pages, where
+the real one was ~1,800 of ~8,800 — and the same keys at the measured 1,000-key page are mass-faithful
+and page-short, with a biggest range of 400 pages out of 1,179 and a serial fraction of **0.001**
+rather than 0.332. Both are asserted, in the same test class, for the same reason the spread control
+is: the honest statement is that reproducing this tail needs a bucket about ten times this fixture's
+size, and the small page buys that at a tenth of the memory while buying nothing else. The 36.8% /
+84.0% concentration shares it deals (against a measured 32.6% / 90.7%) are pinned in
+`KeyspaceFixturesTest`.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

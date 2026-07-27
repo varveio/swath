@@ -33,9 +33,10 @@ import org.junit.jupiter.api.Test;
  * 31.6 ms with 200 µs pages. The per-commit reset governs how high the ladder climbs, not whether it is
  * consulted; only the second of those runs is a fleet whose parks are constantly cut short.
  *
- * <p>This test pins the reachability, which nothing else in the module did: no other test refers to
- * {@code IDLE_SLOT.paced}, so a reset that fired often enough to disable the rung entirely would have
- * gone unnoticed.
+ * <p>Both regimes are asserted, not just the slow one, because the surprising half is the fast one: a
+ * reader told that every commit resets the ladder will predict a steadily-committing fleet is never
+ * paced, and it is paced 578 times. Pinning only the regime that agrees with the intuition would leave
+ * that correction as prose.
  */
 class IdleStealPacingReachabilityTest {
 
@@ -46,20 +47,47 @@ class IdleStealPacingReachabilityTest {
     private static final LatencyModel SLOW_PAGES = PolicyRunFixtures.perClass(
             TimeUnit.MILLISECONDS.toNanos(30), TimeUnit.MILLISECONDS.toNanos(1));
 
+    /** Pages far faster than it: a commit, and its reset, lands before any park could have expired. */
+    private static final LatencyModel FAST_PAGES = PolicyRunFixtures.perClass(
+            TimeUnit.MICROSECONDS.toNanos(200), TimeUnit.MICROSECONDS.toNanos(200));
+
     @Test
     void theIdleStealPacingRungIsReachedAndSuppressesMoreAttemptsThanItAdmits() {
-        ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(20_000));
-        PolicyScenario scenario = PolicyRunFixtures.unseededScenario(WORKERS, PAGE_SIZE, SLOW_PAGES,
-                PolicyRunFixtures.zeroedCost("pacing is about when attempts happen, not what they cost"));
+        PolicyRunResult result = run(SLOW_PAGES);
 
-        PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
-
-        assertThat(result.completed()).as(result::describe).isTrue();
         assertThat(result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER))
                 .as("seven idle workers against one drainer: the thief path is reached").isPositive();
-        // 640 refusals against 176 attempts admitted.
+        // 640 refusals against 176 attempts admitted, over 1.73 s of modelled time.
         assertThat(result.counter("IDLE_SLOT.paced"))
                 .as("the pacing rung is reachable — a control the module otherwise never observes")
                 .isGreaterThan(result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER));
+    }
+
+    /**
+     * The same fleet with commits arriving faster than the shortest park it could take — where the
+     * per-commit reset should, on the obvious reading, hold the rung at zero. It does not: a thief whose
+     * attempt has just come back non-productive re-enters the idle path in the <em>same instant</em> and
+     * is turned away by the backoff it re-armed itself, with no commit in between to clear it. What the
+     * reset governs is how high the ladder climbs, not whether it is consulted.
+     */
+    @Test
+    void aFleetWhoseCommitsOutpaceItsBaseParkIsPacedAllTheSame() {
+        PolicyRunResult result = run(FAST_PAGES);
+
+        assertThat(result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)).isPositive();
+        // 578 refusals against 118 attempts admitted, over 31.6 ms — the same rung, a fiftieth of the
+        // modelled time, and every park cut short by a commit rather than expiring.
+        assertThat(result.counter("IDLE_SLOT.paced"))
+                .as("a commit resets the ladder's level; it does not stop the rung being consulted")
+                .isGreaterThan(result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER));
+    }
+
+    private static PolicyRunResult run(LatencyModel latency) {
+        ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(20_000));
+        PolicyScenario scenario = PolicyRunFixtures.unseededScenario(WORKERS, PAGE_SIZE, latency,
+                PolicyRunFixtures.zeroedCost("pacing is about when attempts happen, not what they cost"));
+        PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
+        assertThat(result.completed()).as(result::describe).isTrue();
+        return result;
     }
 }
