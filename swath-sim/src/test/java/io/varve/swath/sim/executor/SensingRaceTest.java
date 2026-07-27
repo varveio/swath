@@ -69,10 +69,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>E1 alone also damages a healthy keyspace — at one of the four seeds.</b> All three candidates
  * are read here on <b>one</b> yardstick, the hash-fanned control's own serial fraction <em>at the same
- * seed</em>: that control moves 25-fold across the four seeds (0.0004, 0.0049, 0.0093, 0.0037), so a
- * fixed line lets the same reading be called a regression for one candidate and a hold for another. On
- * that yardstick E1 reaches <b>0.1198 at seed 20260727 — 300× the control at that seed, and 15× what
- * E1+E2 does at it</b> — with mean occupancy falling below 7 of 8 workers, the NO_VICTIM share at 0.80
+ * seed</em>: that control moves more than twentyfold across the four seeds (0.0004, 0.0049, 0.0093,
+ * 0.0037), so a fixed line lets the same reading be called a regression for one candidate and a hold
+ * for another. On that yardstick E1 reaches <b>0.1198 at seed 20260727 — two orders of magnitude past
+ * the control at that seed, and about fifteen times what E1+E2 does at it (0.0080)</b> — with mean
+ * occupancy falling below 7 of 8 workers, the NO_VICTIM share at 0.80
  * against the control's 0.012, and {@code NO_VICTIM.all_futility_paced} at 381 against the control's 1.
  * At 987654321 it is elevated at 0.0301, 8× the control — but E1+E2 reads 0.0293 there, 8× the control
  * too, so <b>that seed does not separate the candidates and is not counted against E1</b>. At the
