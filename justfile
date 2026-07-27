@@ -85,10 +85,13 @@ ci-drift:
     ./scripts/ci/check-instrumentation-drift.sh
 
 # Prepare a release: set the canonical version, commit, and create the vX.Y.Z tag.
-# Stable SemVer only (pre-release/build metadata are rejected, matching the release build).
+# Accepts X.Y.Z or a X.Y.Z-rc.N release candidate; no other pre-release identifiers and
+# no build metadata, matching what the release build enforces.
 # Does NOT push — review, then `git push origin main vX.Y.Z` to trigger release.yml.
-# After it publishes, bump gradle.properties to the next -SNAPSHOT. See RELEASING.md.
-# Usage: just release 0.2.0
+# After a stable release publishes, bump gradle.properties to the next -SNAPSHOT.
+# An -rc.N tag publishes only its own container tag and a GitHub pre-release, and is NOT
+# promoted — the final tag is a fresh build. See RELEASING.md.
+# Usage: just release 0.2.0   |   just release 0.2.0-rc.1
 release VERSION:
     #!/usr/bin/env bash
     set -euo pipefail

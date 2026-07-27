@@ -101,7 +101,7 @@ before un-drafting. `IDENTITY` is the workflow that produced the release — ren
 `release.yml` would change it and invalidate every published instruction, which is why the
 filename is frozen.
 
-```
+```sh
 TAG=v0.1.0
 IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
 ISSUER=https://token.actions.githubusercontent.com

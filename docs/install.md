@@ -92,14 +92,16 @@ default at a glance.
 
 ## Verifying a download
 
-Every release asset is signed with keyless [Sigstore](https://www.sigstore.dev/) and carries
-a SLSA build-provenance attestation. The same commands below run inside the release pipeline
-before it publishes, so a release that cannot be verified never goes out.
+Every release asset is signed with keyless [Sigstore](https://www.sigstore.dev/). The jar,
+the archives and `SHA256SUMS` additionally carry a SLSA build-provenance attestation, as does
+the container image; the SBOM is signed but not separately attested, since `SHA256SUMS`
+already covers it. The same commands below run inside the release pipeline against the
+uploaded assets before it publishes, so a release that cannot be verified never goes out.
 
 `IDENTITY` names the workflow that built the release — substituting a different tag or repo
 is the point of the check, so paste it exactly.
 
-```
+```sh
 TAG=v0.1.0
 IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
 ISSUER=https://token.actions.githubusercontent.com
@@ -116,7 +118,7 @@ Checking `SHA256SUMS` is enough for the whole release: its signature makes the f
 trustworthy, and the file covers every other asset. For the container image, verify the
 immutable digest rather than a tag:
 
-```
+```sh
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
   ghcr.io/varveio/swath@sha256:<digest>
 
@@ -130,7 +132,7 @@ directory you own is *not* writable by it — the run fails with
 `AccessDeniedException`. Rather than loosening permissions with `chmod 777`, run the
 container as yourself, which also leaves the output owned by you:
 
-```
+```sh
 mkdir -p /tmp/swath-out
 docker run --rm --user "$(id -u):$(id -g)" -v /tmp/swath-out:/out \
   ghcr.io/varveio/swath:latest \
