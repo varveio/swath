@@ -58,7 +58,8 @@ human side of it.
 
 For each `vX.Y.Z` tag, once the environment is approved:
 
-- the exact tested fat jar, `.zip`/`.tar` distributions, and an SPDX SBOM;
+- the exact tested fat jar as `swath-X.Y.Z.jar`, `.zip`/`.tar.gz` distributions, and an
+  SPDX SBOM;
 - a `SHA256SUMS` file plus a per-asset keyless (cosign) signature bundle;
 - a multi-arch (`linux/amd64,linux/arm64`) container image built from the exact tested
   jar, signed and attested;

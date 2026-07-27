@@ -98,7 +98,7 @@ launcher script and a `lib/` directory of dependency jars. The launcher is a
 standard Gradle `application`-plugin script; it honors `JAVA_OPTS` and
 `SWATH_OPTS` environment variables for
 passing extra JVM flags without editing the script. `distZip`/`distTar`
-(and their `assembleDist` aggregate) package the same tree as a `.zip`/`.tar`
+(and their `assembleDist` aggregate) package the same tree as a `.zip`/`.tar.gz`
 for distribution without a JDK-execute step.
 
 ### Dependency slimming
@@ -233,7 +233,9 @@ Each release image carries these tags:
 | `<version>` (e.g. `0.1.0`) | The release tag's canonical Gradle version | Intended immutable |
 | `latest` | Most recently published release | Moves |
 
-The uber-jar ships as `swath.jar`; release tags must exactly match the canonical
+The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
+output keeps the fixed `swath.jar` name — the image promotion depends on it).
+Release tags must exactly match the canonical
 Gradle version (`v0.1.0` ↔ `0.1.0`). **For anything that must not shift under
 it — for example a downstream image built `FROM` this one — pin the digest, not
 `latest`/`<version>`.**
