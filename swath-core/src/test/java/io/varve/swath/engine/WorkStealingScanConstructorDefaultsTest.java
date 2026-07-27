@@ -217,6 +217,41 @@ final class WorkStealingScanConstructorDefaultsTest {
                 .isNotInstanceOf(SeededDecisionRng.class);
     }
 
+    /**
+     * The construction branch above is also a router branch, so it carries an engagement mark:
+     * {@code TOGGLE.decision_rng_seeded}, fired once when — and only when — the seeded stream is
+     * selected. It is the only thing that distinguishes the two modes after the fact. Both branches
+     * make the SAME draws at the same decision points and emit identical decision bytes (that
+     * byte-identity is the seam's whole promise), so without the mark a summary or golden could not
+     * tell a replay-reproducible run from an ambient one.
+     */
+    @Test
+    void aSeededDecisionRngMarksItsEngagementExactlyOnce(@TempDir Path dir) throws Exception {
+        ScanResult seeded = run(dir, "seeded-rng-mark", denseFlat(200),
+                (f, s, id, p, m, seeds, metrics) -> new WorkStealingScan(
+                        new EngineContext(id, p, m, metrics, null, null, null).withDecisionRngSeed(42L),
+                        f, s, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY));
+
+        assertThat(seeded.stealReasons().getOrDefault("TOGGLE.decision_rng_seeded", 0L))
+                .as("a seeded run marks the opt-in branch exactly once, at engine construction")
+                .isEqualTo(1L);
+    }
+
+    /**
+     * The complementary polarity: the ambient default stays unmarked. Marking it would put a counter
+     * on every run that has ever existed — including the pre-seam baselines this seam promises to
+     * leave byte-identical — which is the same reason {@code readahead_on} only marks its opt-in side.
+     */
+    @Test
+    void theAmbientDecisionRngIsNotMarked(@TempDir Path dir) throws Exception {
+        ScanResult ambient = run(dir, "unseeded-rng-mark", denseFlat(200),
+                (f, s, id, p, m, seeds, metrics) -> new WorkStealingScan(
+                        new EngineContext(id, p, m, metrics, null, null, null),
+                        f, s, WORKERS, MAX_KEYS, seeds, FilterChain.EMPTY));
+
+        assertThat(ambient.stealReasons()).doesNotContainKey("TOGGLE.decision_rng_seeded");
+    }
+
     /** Drills {@code engine.thief.policy.rng} via reflection — the one field a {@link Thief}
      *  constructor-overload choice actually changes. */
     private static Object thiefPolicyRng(WorkStealingScan engine) throws Exception {

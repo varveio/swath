@@ -257,6 +257,15 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         Long decisionRngSeed = context.decisionRngSeed();
         PageFetcher thiefFetcher = new GaugedFetcher(fetcher, gauge, false, false, this.metrics,
                 () -> cancellation, this.retryConfig.sleeper(), this.retryConfig.policy());
+        // Engagement mark, same polarity as TOGGLE.readahead_on just below: fired once, only for the
+        // opt-in branch, so a summary/golden reads WHICH DecisionRng a run drew from instead of
+        // inferring it from decision bytes that are identical either way (a seeded run and an ambient
+        // one differ only in the stream behind the same draws). The ambient default stays unmarked —
+        // marking it would add a counter to every run that has ever existed, including the baselines
+        // this seam promises to leave byte-identical.
+        if (decisionRngSeed != null) {
+            this.metrics.recordStealReason("TOGGLE", "decision_rng_seeded");
+        }
         this.thief = decisionRngSeed == null
                 ? new Thief(store, thiefFetcher, this.runId, this.prefix, this.mode, this::enqueueChild,
                         this.metrics, this.toggles, this.trace)
