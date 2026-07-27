@@ -16,15 +16,28 @@ package io.varve.swath.sim.store;
  */
 public enum SimStoreBackend {
 
-    /** Arena within {@code arena-max-encoded-bytes}; else {@link #WINDOWED} when sorted-eligible;
-     *  else {@link #PARQUET}. */
+    /** Arena within {@code arena-max-encoded-bytes}; else {@link #STREAMING} when sorted-eligible;
+     *  else {@link #PARQUET}. {@link #WINDOWED} is never resolved automatically — see its own note. */
     AUTO,
 
     /** Force the keys-only in-memory arena; fail fast when the fixture does not fit its budget. */
     ARENA,
 
-    /** Force the windowed row-group prefetch over the replay module's sorted-Parquet store; fail
-     *  fast when the fixture is not sorted-eligible (§ {@link io.varve.swath.replay.fixture.SortedEligibility}). */
+    /** Force the keys-only decode-once streaming tier over a sorted fixture's row groups; fail fast
+     *  when the fixture is not sorted-eligible (§ {@link io.varve.swath.replay.fixture.SortedEligibility}). */
+    STREAMING,
+
+    /**
+     * Force the windowed row-group prefetch over the replay module's sorted-Parquet store; fail fast
+     * when the fixture is not sorted-eligible.
+     *
+     * <p><b>Forced-only.</b> {@link #AUTO} never resolves here: this tier decodes Parquet inside the
+     * serving loop, one range query per window fill, and a {@code BLOB} key column has no usable
+     * zonemaps, so each fill scans the whole key column and the per-call cost scales with the
+     * fixture rather than the window. It stays as the memory-bounded path that carries <b>full
+     * metadata</b> (the keys-only tiers do not) and as the conformance comparison for
+     * {@link #STREAMING} — chosen deliberately, never by default.
+     */
     WINDOWED,
 
     /** Force the replay module's Parquet-backed store — full metadata, the differential reference. */

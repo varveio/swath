@@ -36,12 +36,15 @@ import org.slf4j.LoggerFactory;
  *       full metadata, and the reference the arena is differentially tested against.</li>
  *   <li>{@link SimStoreBackend#ARENA} — require the keys-only arena; a fixture whose keys exceed
  *       the configured budget fails fast rather than silently serving a slower tier.</li>
+ *   <li>{@link SimStoreBackend#STREAMING} — require the keys-only decode-once streaming tier; a
+ *       fixture that is not sorted-eligible ({@link SortedEligibility}) fails fast rather than
+ *       silently serving a slower tier.</li>
  *   <li>{@link SimStoreBackend#WINDOWED} — require the windowed row-group prefetch over the
- *       replay module's sorted-Parquet store; a fixture that is not sorted-eligible ({@link
- *       SortedEligibility}) fails fast rather than silently serving a slower tier.</li>
- *   <li>{@link SimStoreBackend#AUTO} — arena when it fits, else windowed when the fixture is
+ *       replay module's sorted-Parquet store; same eligibility, same hard failure. Forced-only:
+ *       {@link SimStoreBackend#AUTO} never resolves here (see the constant's own note).</li>
+ *   <li>{@link SimStoreBackend#AUTO} — arena when it fits, else streaming when the fixture is
  *       sorted-eligible, else the Parquet store, recording
- *       {@code swath.sim.store.arena.decline\{reason\}} / {@code swath.sim.store.windowed.decline\{reason\}}
+ *       {@code swath.sim.store.arena.decline\{reason\}} / {@code swath.sim.store.streaming.decline\{reason\}}
  *       and logging why.</li>
  * </ul>
  *
@@ -75,8 +78,9 @@ public final class SimStoreFactory {
      *
      * @throws IllegalArgumentException under {@link SimStoreBackend#ARENA} when the fixture's keys
      *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}, or
-     *                                  under {@link SimStoreBackend#WINDOWED} when the fixture is
-     *                                  not sorted-eligible
+     *                                  under {@link SimStoreBackend#STREAMING} /
+     *                                  {@link SimStoreBackend#WINDOWED} when the fixture is not
+     *                                  sorted-eligible
      */
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
@@ -106,20 +110,21 @@ public final class SimStoreFactory {
                 }
                 yield resolved(arena, SimStoreBackend.ARENA, metrics, simMetrics);
             }
+            case STREAMING -> {
+                // SERVING_MODE_SORTED: like the windowed tier below, this one reads the fixture's own
+                // sorted layout natively (row group by row group), never a materialized DuckDB table.
+                ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
+                List<Path> files = resolveFiles(fixturePath);
+                List<IndexEntry> index = requireSortedIndex(files, fixtureMetrics, SimStoreBackend.STREAMING);
+                yield resolved(new StreamingListingStore(index, simMetrics, config.streamingMaxResidentBytes()),
+                        SimStoreBackend.STREAMING, metrics, simMetrics);
+            }
             case WINDOWED -> {
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
                 List<Path> files = resolveFiles(fixturePath);
-                // recordFallbackOnFailure=false: a forced backend that declines hard-fails, so this
-                // is not a "fallback" any more than ARENA's own forced decline above is.
-                SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, false);
-                if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
-                    yield resolved(windowedStore(files, eligible.index(), metrics), SimStoreBackend.WINDOWED,
-                            metrics, simMetrics);
-                }
-                String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
-                throw new IllegalArgumentException(
-                        "backend " + SimStoreBackend.WINDOWED + " requires a sorted-eligible fixture ("
-                                + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + fixturePath);
+                List<IndexEntry> index = requireSortedIndex(files, fixtureMetrics, SimStoreBackend.WINDOWED);
+                yield resolved(windowedStore(files, index, metrics), SimStoreBackend.WINDOWED,
+                        metrics, simMetrics);
             }
             case AUTO -> {
                 ReplayMetrics duckdbMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
@@ -137,16 +142,14 @@ public final class SimStoreFactory {
                 }
                 simMetrics.recordArenaDecline(SimStoreMetrics.DECLINE_OVER_BUDGET);
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
-                        + "— trying the windowed tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
+                        + "— trying the streaming tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
 
                 // source is still open here (the abandoned DuckDB pool, kept as the PARQUET fallback
-                // in case windowed also declines) -- a resolveFiles/decide failure must close it too,
+                // in case streaming also declines) -- a resolveFiles/decide failure must close it too,
                 // exactly like the arena step just above, or it leaks.
-                List<Path> files;
                 SortedEligibility.Result eligibility;
                 try {
-                    files = resolveFiles(fixturePath);
-                    eligibility = SortedEligibility.decide(files, fixtureMetrics, true);
+                    eligibility = SortedEligibility.decide(resolveFiles(fixturePath), fixtureMetrics, true);
                 } catch (RuntimeException e) {
                     source.close();
                     throw e;
@@ -154,12 +157,13 @@ public final class SimStoreFactory {
                 if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
                     source.close();
                     ReplayMetrics sortedMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
-                    yield resolved(windowedStore(files, eligible.index(), sortedMetrics), SimStoreBackend.WINDOWED,
-                            sortedMetrics, simMetrics);
+                    yield resolved(
+                            new StreamingListingStore(eligible.index(), simMetrics, config.streamingMaxResidentBytes()),
+                            SimStoreBackend.STREAMING, sortedMetrics, simMetrics);
                 }
                 String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
-                simMetrics.recordWindowedDecline(reason);
-                log.info("sim_store auto declined the windowed tier (reason={}) — falling back to {} for {}",
+                simMetrics.recordStreamingDecline(reason);
+                log.info("sim_store auto declined the streaming tier (reason={}) — falling back to {} for {}",
                         reason, SimStoreBackend.PARQUET, fixturePath);
                 yield resolved(source, SimStoreBackend.PARQUET, duckdbMetrics, simMetrics);
             }
@@ -178,6 +182,22 @@ public final class SimStoreFactory {
 
     private static ListingStore parquetStore(Path fixturePath, ReplayMetrics metrics) {
         return new DuckDbListingStore(fixturePath, metrics, DuckDbListingStore.defaultConnectionCount());
+    }
+
+    /**
+     * The derived routing index of a sorted-eligible {@code files}, for the two forced backends that
+     * require one. {@code recordFallbackOnFailure=false}: a forced backend that declines hard-fails,
+     * so this is not a "fallback" any more than {@link SimStoreBackend#ARENA}'s forced decline is.
+     */
+    private static List<IndexEntry> requireSortedIndex(List<Path> files, FixtureMetrics fixtureMetrics,
+                                                       SimStoreBackend backend) {
+        SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, false);
+        if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
+            return eligible.index();
+        }
+        String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
+        throw new IllegalArgumentException("backend " + backend + " requires a sorted-eligible fixture ("
+                + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + files);
     }
 
     /**

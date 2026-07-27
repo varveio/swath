@@ -30,10 +30,10 @@ class SimStoreFactoryTest {
 
     private static final List<String> KEYS = List.of("alpha", "beta", "gamma");
 
-    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20);
+    private static final SimStoreConfig GENEROUS = new SimStoreConfig(1L << 20, 1L << 20);
 
-    /** Room for two 8-byte keys — far less than the fixture below needs. */
-    private static final SimStoreConfig TINY = new SimStoreConfig(KeyArena.encodedBytes(16, 2));
+    /** Room in the ARENA budget for two 8-byte keys — far less than the fixture below needs. */
+    private static final SimStoreConfig TINY = new SimStoreConfig(KeyArena.encodedBytes(16, 2), 1L << 20);
 
     /** Mirrors {@code WindowedListingStore}'s own (package-private) property name. */
     private static final String PREFETCH_ENABLED_PROPERTY = "swath.replay.prefetch.enabled";
@@ -87,6 +87,29 @@ class SimStoreFactoryTest {
     }
 
     @Test
+    void forcedStreamingServesStubbedMetadataAndRecordsTheBackend(@TempDir Path dir) throws IOException {
+        SimStoreFactory.Result result = SimStoreFactory.open(sortedFixture(dir), SimStoreBackend.STREAMING, GENEROUS);
+
+        try (var store = result.store()) {
+            assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.STREAMING);
+            assertThat(store).isInstanceOf(StreamingListingStore.class);
+            assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
+            // The sim-mode projection, same as the arena tier: keys are ground truth, metadata is not.
+            assertThat(store.rows(null, true, null, 1, Projection.WITH_OWNER).getFirst().etag()).isNull();
+        }
+        assertThat(backendCount(result, SimStoreBackend.STREAMING)).isEqualTo(1);
+    }
+
+    @Test
+    void forcedStreamingFailsFastWhenTheFixtureIsNotSortedEligible(@TempDir Path dir) throws IOException {
+        Path fixture = fixture(dir);   // unsorted, unstamped
+
+        assertThatThrownBy(() -> SimStoreFactory.open(fixture, SimStoreBackend.STREAMING, GENEROUS))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sorted-eligible");
+    }
+
+    @Test
     void forcedWindowedFailsFastWhenTheFixtureIsNotSortedEligible(@TempDir Path dir) throws IOException {
         Path fixture = fixture(dir);   // unsorted, unstamped
 
@@ -96,19 +119,36 @@ class SimStoreFactoryTest {
     }
 
     @Test
-    void autoResolvesToWindowedWhenTheArenaDeclinesAndTheFixtureIsSortedEligible(@TempDir Path dir)
+    void autoResolvesToStreamingWhenTheArenaDeclinesAndTheFixtureIsSortedEligible(@TempDir Path dir)
             throws IOException {
         SimStoreFactory.Result result = SimStoreFactory.open(sortedFixture(dir), SimStoreBackend.AUTO, TINY);
 
         try (var store = result.store()) {
-            assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.WINDOWED);
-            assertThat(store).isInstanceOf(WindowedListingStore.class);
+            assertThat(result.resolvedBackend()).isEqualTo(SimStoreBackend.STREAMING);
+            assertThat(store).isInstanceOf(StreamingListingStore.class);
             assertThat(keys(store.rows(null, true, null, 10, Projection.WITH_OWNER))).isEqualTo(KEYS);
         }
-        assertThat(backendCount(result, SimStoreBackend.WINDOWED)).isEqualTo(1);
+        assertThat(backendCount(result, SimStoreBackend.STREAMING)).isEqualTo(1);
         assertThat(registry(result).find(SimStoreMetrics.ARENA_DECLINE_METRIC)
                 .tag("reason", SimStoreMetrics.DECLINE_OVER_BUDGET).counter().count()).isEqualTo(1);
-        assertThat(registry(result).find(SimStoreMetrics.WINDOWED_DECLINE_METRIC).counter()).isNull();
+        assertThat(registry(result).find(SimStoreMetrics.STREAMING_DECLINE_METRIC).counter()).isNull();
+    }
+
+    /**
+     * The windowed tier is forced-only (see {@link SimStoreBackend#WINDOWED}): the automatic ladder
+     * runs arena → streaming → Parquet and must never land on it, on any fixture — including the
+     * sorted-eligible one where it would previously have been chosen.
+     */
+    @Test
+    void autoNeverResolvesToTheWindowedTier(@TempDir Path dir) throws IOException {
+        for (Path fixture : List.of(fixture(mkdir(dir, "unsorted")), sortedFixture(mkdir(dir, "sorted")))) {
+            for (SimStoreConfig config : List.of(GENEROUS, TINY)) {
+                SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.AUTO, config);
+                try (var ignored = result.store()) {
+                    assertThat(result.resolvedBackend()).isNotEqualTo(SimStoreBackend.WINDOWED);
+                }
+            }
+        }
     }
 
     @Test
@@ -139,10 +179,12 @@ class SimStoreFactoryTest {
 
     /**
      * Each store here reuses a replay-side {@link ReplayMetrics}, and the {@code serving_mode} tag
-     * it carries must name the store that ACTUALLY reads the fixture -- {@code sorted} for windowed
-     * (it wraps {@link SortedParquetStore}, never {@link io.varve.swath.replay.store.DuckDbListingStore}),
-     * {@code duckdb} for arena/parquet/the two AUTO cases that don't resolve to windowed -- not a
-     * single tag copied across every backend regardless of what actually served.
+     * it carries must name the store that ACTUALLY reads the fixture -- {@code sorted} for the two
+     * tiers that read the fixture's own sorted layout (windowed wraps {@link SortedParquetStore},
+     * streaming decodes its row groups directly; neither goes through
+     * {@link io.varve.swath.replay.store.DuckDbListingStore}), {@code duckdb} for
+     * arena/parquet/the AUTO cases that don't resolve to one of those -- not a single tag copied
+     * across every backend regardless of what actually served.
      */
     @Test
     void eachBackendTagsItsMetricsWithTheStoreThatActuallyServes(@TempDir Path dir) throws IOException {
@@ -152,9 +194,11 @@ class SimStoreFactoryTest {
                 ReplayMetrics.SERVING_MODE_DUCKDB);
         assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "windowed")), SimStoreBackend.WINDOWED, GENEROUS),
                 ReplayMetrics.SERVING_MODE_SORTED);
+        assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "streaming")), SimStoreBackend.STREAMING, GENEROUS),
+                ReplayMetrics.SERVING_MODE_SORTED);
         assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "auto-arena")), SimStoreBackend.AUTO, GENEROUS),
                 ReplayMetrics.SERVING_MODE_DUCKDB);
-        assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "auto-windowed")), SimStoreBackend.AUTO, TINY),
+        assertServingMode(SimStoreFactory.open(sortedFixture(mkdir(dir, "auto-streaming")), SimStoreBackend.AUTO, TINY),
                 ReplayMetrics.SERVING_MODE_SORTED);
         assertServingMode(SimStoreFactory.open(fixture(mkdir(dir, "auto-parquet")), SimStoreBackend.AUTO, TINY),
                 ReplayMetrics.SERVING_MODE_DUCKDB);
@@ -200,6 +244,28 @@ class SimStoreFactoryTest {
         try (var store = withDefaults.store()) {
             assertThat(withDefaults.resolvedBackend()).isEqualTo(SimStoreBackend.ARENA);
             assertThat(store).isInstanceOf(ArenaListingStore.class);
+        }
+    }
+
+    /**
+     * The streaming tier's residency budget is the other half of the config-less entry point, and its
+     * own over-budget failure tells an operator to raise this property — so the property has to
+     * actually reach the store rather than being a dead accessor. One byte cannot hold a row group.
+     */
+    @Test
+    void theConfiglessEntryPointReadsTheStreamingResidencyBudgetFromItsSystemProperty(@TempDir Path dir)
+            throws IOException {
+        Path fixture = sortedFixture(dir);
+        System.setProperty(SimStoreConfig.STREAMING_MAX_RESIDENT_BYTES_PROPERTY, "1");
+        try {
+            SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.STREAMING);
+            try (var store = result.store()) {
+                assertThatThrownBy(() -> store.rows(null, true, null, 1, Projection.KEYS_ONLY))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining(SimStoreConfig.STREAMING_MAX_RESIDENT_BYTES_PROPERTY);
+            }
+        } finally {
+            System.clearProperty(SimStoreConfig.STREAMING_MAX_RESIDENT_BYTES_PROPERTY);
         }
     }
 
