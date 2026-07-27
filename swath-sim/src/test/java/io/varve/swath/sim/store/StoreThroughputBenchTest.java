@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test;
  * operational judgement call informed by this report, not asserted by it.
  *
  * <p>Opt-in only ({@code @Tag("perf")} — excluded from the ordinary {@code test} task, included
- * only under {@code -Ponly Perf}/{@code -Pperf}) and further gated on a real fixture actually being
+ * only under {@code -PonlyPerf}/{@code -Pperf}) and further gated on a real fixture actually being
  * present locally: this module never bundles or downloads a corpus fixture (see the README's
  * "Fixtures" section), so a run with neither property set below is skipped, not failed. Point
  * {@link #FIXTURE_PROPERTY} at a multi-million-key sorted, stamped fixture and (optionally)
@@ -53,8 +53,14 @@ class StoreThroughputBenchTest {
     private static final Duration WARMUP_DURATION = Duration.ofSeconds(1);
     private static final Duration MEASURED_DURATION = Duration.ofSeconds(5);
 
-    /** Comfortably covers a multi-million-key fixture's encoded keys without sizing to the giant. */
-    private static final SimStoreConfig BENCH_CONFIG = new SimStoreConfig(2L << 30);
+    /**
+     * A third of the perf tier's heap ({@code maxHeapSize = "2g"} whenever {@code @Tag("perf")}
+     * actually runs — see {@code swath.java-conventions}), not a fixed 2 GiB: budgeting the WHOLE
+     * heap to the arena would leave too little JVM/JDBC headroom for the arena to OOM before its
+     * own budget check gets the chance to decline gracefully. Still comfortably covers a
+     * multi-million-key fixture's encoded keys without sizing to the giant.
+     */
+    private static final SimStoreConfig BENCH_CONFIG = new SimStoreConfig(Runtime.getRuntime().maxMemory() / 3);
 
     @Test
     void reportsSustainedThroughputForEachConfiguredFixture() {
