@@ -170,24 +170,43 @@ public final class SimExecutor {
     public static final String OWNER_SPLIT_COUNTER = "owner_split.published";
     /** Children published by a thief's steal. */
     public static final String THIEF_SPLIT_COUNTER = "steal.children";
-    /** Page commits on a bounded range — the denominator the two position-sensor counters below read against. */
+    /**
+     * Page commits on a bounded range that emitted at least one key — a commit that emitted none moved
+     * no cursor, so it is neither visible nor invisible and is not counted either way. The denominator
+     * {@link #SENSOR_INVISIBLE_ADVANCE_COUNTER} reads against.
+     */
     public static final String SENSOR_BOUNDED_COMMITS_COUNTER = "sensor.bounded_page_commits";
     /**
-     * Bounded page commits whose cursor advance did not move {@link io.varve.swath.engine.StealMath#fracIn}
-     * at all: real keys came out and the position the policies measure stayed where it was.
+     * Bounded page commits whose cursor advance did not move {@link StealMath#fracIn} at all: real keys
+     * came out and the position the policies measure stayed where it was.
      */
     public static final String SENSOR_INVISIBLE_ADVANCE_COUNTER = "sensor.cursor_advance_invisible";
-    /** Victims scanned by victim selection, summed over attempts — the denominator of the two below. */
+    /**
+     * Victims whose {@code estRemaining} victim selection actually evaluated, summed over attempts:
+     * the eligible pool minus the candidates the policy skips <em>before</em> scoring them — the
+     * unsplittable ones and the ones holding a futility-pacing skip. Open frontiers are included, as
+     * selection includes them (it scores them {@code +∞}).
+     */
     public static final String SENSOR_VICTIMS_SCANNED_COUNTER = "sensor.victims_scanned";
     /**
-     * Scanned victims whose {@code estRemaining} read zero, so selection skipped them as having no
-     * remaining span — the reading behind a {@code NO_VICTIM.all_no_remaining_span}.
+     * Of {@link #SENSOR_VICTIMS_SCANNED_COUNTER}, those carrying a bound — the denominator of the two
+     * degeneracy counters below, since an open frontier's estimate is {@code +∞} by contract and its
+     * consumed span is not defined.
+     */
+    public static final String SENSOR_VICTIMS_BOUNDED_COUNTER = "sensor.victims_scanned_bounded";
+    /**
+     * Scored bounded victims whose {@code estRemaining} read zero, so selection passed over them as
+     * having no remaining span. An attempt in which <em>every</em> scored candidate reads this way is
+     * what a {@code NO_VICTIM.all_no_remaining_span} is made of; this counter is the per-candidate
+     * reading, not that verdict.
      */
     public static final String SENSOR_EST_ZERO_COUNTER = "sensor.victim_est_zero";
     /**
-     * Scanned victims whose consumed span read zero, so {@code estRemaining} returned the raw remaining
-     * span and <b>ignored {@code keysEmitted}</b>: a worker that has emitted a million keys scores
-     * identically to one that has emitted none.
+     * Scored bounded victims whose consumed span read zero, so {@code estRemaining} returned the raw
+     * remaining span and <b>ignored {@code keysEmitted}</b>: a worker that has emitted a million keys
+     * scores identically to one that has emitted none. These are victims that have <em>certainly</em>
+     * emitted keys — a candidate only becomes steal-eligible after emitting some — which is what makes
+     * a zero consumed span a defect in the measurement rather than a fact about the worker.
      */
     public static final String SENSOR_EST_IGNORES_KEYS_COUNTER = "sensor.victim_est_ignores_keys";
 
@@ -1053,6 +1072,12 @@ public final class SimExecutor {
      * it degenerates: a zero score, which takes a candidate out of the running entirely, and a zero
      * consumed span, which leaves the score a raw width with the candidate's emitted keys discarded.
      *
+     * <p><b>The skip order mirrors the policy's.</b> {@link ThiefPolicy#selectVictim} passes over an
+     * unsplittable candidate, and over one holding a futility-pacing skip, <em>before</em> it computes
+     * any estimate — so scoring those here would report readings selection never took. The mirror is
+     * read-only: a pacing skip is observed, never consumed, because consuming it is the policy's
+     * mutation to return and the executor applies exactly the ones it does.
+     *
      * <p>This duplicates the arithmetic the policy is about to do rather than asking it what it saw:
      * the policy's contract is a {@link Selection}, and widening it to report its own intermediate
      * readings would put a diagnostic in the engine's decision seam. The inputs are the same view the
@@ -1060,10 +1085,14 @@ public final class SimExecutor {
      */
     private static void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
         for (VictimView candidate : pool) {
-            if (candidate.hi() == null) {
+            if (candidate.unsplittable() || candidate.pacingSkipAvailable()) {
                 continue;
             }
             ctx.count(SENSOR_VICTIMS_SCANNED_COUNTER, 1);
+            if (candidate.hi() == null) {
+                continue;
+            }
+            ctx.count(SENSOR_VICTIMS_BOUNDED_COUNTER, 1);
             if (StealMath.estRemaining(candidate.cursor(), candidate.lo(), candidate.hi(),
                     candidate.keysEmitted()) <= 0.0) {
                 ctx.count(SENSOR_EST_ZERO_COUNTER, 1);

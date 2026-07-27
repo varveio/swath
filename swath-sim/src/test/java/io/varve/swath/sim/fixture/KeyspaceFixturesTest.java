@@ -6,6 +6,7 @@
 package io.varve.swath.sim.fixture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.sim.fixture.KeyspaceFixtures.SubtreeMass;
@@ -41,9 +42,19 @@ class KeyspaceFixturesTest {
                         KeyspaceFixtures.deepNestedSharedPrefix(4, 4, 2, 40, SubtreeMass.HEAVY_TAILED));
     }
 
+    /**
+     * The class's own claim, checked against every generator it has: keys come out in ascending
+     * unsigned byte order, which is what lets a fixture store take them without a sort. One generator
+     * quietly violating it would be found by a store's precondition, but only in whichever test
+     * happened to use that shape.
+     */
     @Test
     void everyGeneratedKeyAscendsInUnsignedByteOrder() {
         for (List<byte[]> keys : List.of(
+                KeyspaceFixtures.observationArchive(3, 4, 5, 6),
+                KeyspaceFixtures.hashFannedCorpus(4, 4, 30),
+                KeyspaceFixtures.oneObjectPerDirectory(500),
+                KeyspaceFixtures.denseFlatLeaf(500),
                 KeyspaceFixtures.deepNestedSharedPrefix(8, 8, 2, 3, SubtreeMass.UNIFORM),
                 KeyspaceFixtures.deepNestedSharedPrefix(8, 8, 9, 64, SubtreeMass.HEAVY_TAILED))) {
             for (int i = 1; i < keys.size(); i++) {
@@ -51,6 +62,17 @@ class KeyspaceFixturesTest {
                         .as("entry %d must be strictly greater than its predecessor", i).isNegative();
             }
         }
+    }
+
+    @Test
+    void aFileCountTheNameFieldCannotHoldIsRefused() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> KeyspaceFixtures.deepNestedSharedPrefix(1, 1, 1, 1_000_000,
+                        SubtreeMass.UNIFORM))
+                .withMessageContaining("filesPerLeafDir");
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> KeyspaceFixtures.deepNestedSharedPrefix(1, 1, 1, 0,
+                        SubtreeMass.HEAVY_TAILED));
     }
 
     /**
@@ -109,9 +131,18 @@ class KeyspaceFixturesTest {
             expected += 4 * (64 / rank);
         }
         assertThat(heavy).hasSize(expected);
-        assertThat(largestSubtree(heavy))
-                .as("the largest species holds a fifth of a heavy-tailed keyspace")
-                .isGreaterThan(heavy.size() / 5);
+        // Rank 1 of eight: 64 files per leaf directory where rank 8 has 8, which over the harmonic
+        // series is a little over a third of the whole keyspace.
+        assertThat(largestSubtree(heavy)).isBetween(heavy.size() / 3, heavy.size() / 2);
+        assertThat(firstSubtree(heavy))
+                .as("the deal starts half way along, so the heaviest species is not the first")
+                .isLessThan(largestSubtree(heavy));
+    }
+
+    /** Keys under the first {@code species/<name>/} directory. */
+    private static int firstSubtree(List<byte[]> keys) {
+        byte[] first = Arrays.copyOf(keys.getFirst(), 30);
+        return (int) keys.stream().filter(k -> Arrays.equals(Arrays.copyOf(k, 30), first)).count();
     }
 
     /** Keys under the busiest {@code species/<name>/} directory. */

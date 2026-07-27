@@ -28,12 +28,20 @@ import java.util.Locale;
  * running totals at every split and keeps only the latest snapshot. A run therefore pays no memory
  * for this, which is what lets it stay on during a sweep, where the event trace is off.
  *
- * <p><b>The end of the run is quiescence, not the kernel's last event.</b> Workers park with a backoff
- * of their own, and a park timer that was already retired still costs a dispatch when it fires: the
- * kernel's clock therefore keeps moving after the last range completed and every worker has gone home,
- * by up to one park window. Nothing happened in that interval — no key, no call, no decision — so a
- * phase record measured against it would credit the tail with dead time no worker spent. Both instants
- * are carried, and their difference is the artifact rather than a result.
+ * <p><b>The end of the run is quiescence, not the kernel's last event.</b> The kernel has no
+ * cancellation, so a park timer that has already been retired still costs a dispatch when it fires —
+ * and a dispatch moves the clock. The longest such timer is the <b>steal-attempt-slot backstop</b>
+ * ({@code idleStealAttemptParkNanos}, one second under the engine's own defaults): the park of a worker
+ * that found the fleet's single steal-attempt slot busy. It is armed hundreds of times in a run that
+ * steals at all, so after the last range completes and every worker has retired, the clock keeps
+ * advancing for as long as the newest of those timers has left to run — measured at 0.75–1.0 s on these
+ * fixtures, and bounded by that one second rather than by the 5–50 ms idle backoff ladder. Traced after
+ * quiescence, the residue is <em>only</em> retired parks: no call timeout, no retry, no decision, no
+ * key. A phase record measured against the kernel's last event would therefore credit the tail with
+ * dead time no worker spent, so both instants are carried and their difference is named as an artifact
+ * of the kernel rather than a result. <b>A comparison between runs — a sweep's ranking, a variant's
+ * verdict — belongs on {@link #endNanos}</b>; the kernel's own duration carries a per-run constant that
+ * has nothing to do with the policies being compared.
  *
  * @param seedCompletedNanos      the instant the seed phase handed its ranges to the fleet
  * @param lastSplitNanos          the instant of the last published split child, owner-side or thief;
@@ -172,6 +180,16 @@ public record PolicyRunTimeline(
             quiescedNanos = nowNanos;
         }
 
+        /**
+         * Closes the timeline at the kernel's last event.
+         *
+         * <p>A run that never went quiescent — one that ended stuck on a retry ceiling, or was cut off
+         * by the event cap — has no completion instant to measure against, so its phase end falls back
+         * to the kernel's. That makes {@code endNanos == kernelEndNanos} the signature of a run that
+         * did not finish, and it is exactly the case where the record's own {@code completed()} is
+         * false: the fallback is a stated definition for an unfinished run, not a second meaning for a
+         * finished one.
+         */
         PolicyRunTimeline finish(long kernelEndNanos) {
             long endNanos = quiescedNanos < 0L ? kernelEndNanos : quiescedNanos;
             return new PolicyRunTimeline(seedCompletedNanos, lastSplitNanos, endNanos, kernelEndNanos,

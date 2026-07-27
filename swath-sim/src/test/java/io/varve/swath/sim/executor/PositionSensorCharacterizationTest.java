@@ -8,6 +8,7 @@ package io.varve.swath.sim.executor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.sim.fixture.KeyspaceFixtures;
+import io.varve.swath.sim.fixture.KeyspaceFixtures.SubtreeMass;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import java.util.List;
 import java.util.Locale;
@@ -25,16 +26,20 @@ import org.junit.jupiter.api.Test;
  * is what it is here for. The control's numbers are pinned for the same reason in reverse: the contrast
  * is a fact about the shapes, and it belongs in the repository rather than in someone's notes.
  *
- * <p>Both runs are one scenario in everything but the keys: 8 workers, the shallow seed, the measured
+ * <p>Three runs, one scenario in everything but the keys: 8 workers, the shallow seed, the measured
  * composite client cost, the engine's own budgets, a store answering a page in 30 ms — the configuration
- * the end-to-end fixture runs use. Numbers below are from the runs themselves; the thresholds carry
- * enough margin that only a change in behaviour moves them.
+ * the end-to-end fixture runs use. The third is the same deep-nested geometry under a <b>uniform</b>
+ * mass, which is what separates the two claims being made: the geometry is what blinds the sensor, and
+ * the mass distribution is what decides whether being blind costs the run anything.
  *
- * <p><b>What is deliberately not asserted here:</b> a serial tail. At this size the fleet does not
- * develop one on either shape — the seed's own cut set is large enough relative to the fixture that the
- * runtime rarely has to divide anything, so the cost of being unable to is not yet visible. The tail,
- * the occupancy collapse and the steal machinery spinning appear an order of magnitude further up, and
- * are pinned there by {@code PositionSensorAtScaleTest}.
+ * <p><b>What is deliberately not asserted here.</b> Not a serial tail: at this size neither shape
+ * develops one, because the seed's own cut set is large relative to the fixture and a runtime that
+ * cannot divide further is rarely asked to. And not an inability to divide — the deep-nested run
+ * publishes fewer children here, but an order of magnitude further up it publishes <em>three times</em>
+ * as many as the control and still finishes less parallel. What is wrong with its division is that it
+ * is late, steal-spun and refused by its own estimate, not that it is absent; the tail, the occupancy
+ * and the steal machinery spinning are pinned at the size where they exist, in
+ * {@code PositionSensorAtScaleTest}.
  */
 class PositionSensorCharacterizationTest {
 
@@ -47,8 +52,12 @@ class PositionSensorCharacterizationTest {
      * whole shape; the size is the smallest that gives the busiest subtrees tens of pages each.
      */
     private static List<byte[]> deepNested() {
-        return KeyspaceFixtures.deepNestedSharedPrefix(8, 8, 2, 2_000,
-                KeyspaceFixtures.SubtreeMass.HEAVY_TAILED);
+        return KeyspaceFixtures.deepNestedSharedPrefix(8, 8, 2, 2_000, SubtreeMass.HEAVY_TAILED);
+    }
+
+    /** The same geometry with every subtree the same size — the control on mass rather than on shape. */
+    private static List<byte[]> deepNestedUniform() {
+        return KeyspaceFixtures.deepNestedSharedPrefix(8, 8, 2, 150, SubtreeMass.UNIFORM);
     }
 
     /** The control: a same-size keyspace whose bytes vary inside the window position is measured over. */
@@ -63,16 +72,17 @@ class PositionSensorCharacterizationTest {
         assertThat(result.completed()).as(result::describe).isTrue();
         assertThat(result.keysEmitted()).isEqualTo(deepNested().size());
 
-        // 690 of 750 bounded page commits (92%) moved the cursor without moving the fraction at all.
+        // 705 of 757 bounded page commits (93%) moved the cursor without moving the fraction at all.
         assertThat(invisibleAdvanceShare(result))
                 .as("keys come out; the position the policies measure does not move")
                 .isGreaterThan(0.85);
-        // 92 of 227 scanned victims (41%) had a consumed span of zero, so their emitted keys — 6,000 of
-        // them in some cases — were discarded and the estimate fell back to raw remaining width.
+        // 62 of 198 scored bounded victims (31%) had a consumed span of zero, so their emitted keys —
+        // and a candidate is only steal-eligible once it has emitted some — were discarded, leaving the
+        // estimate a raw remaining width.
         assertThat(estIgnoresKeysShare(result))
                 .as("the estimate throws away the one exact quantity the run has")
-                .isGreaterThan(0.30);
-        // 524 refusals over 750 bounded commits: the owner-side governor declining to carve because the
+                .isGreaterThan(0.25);
+        // 490 refusals over 757 bounded commits: the owner-side governor declining to carve because the
         // estimate says the tail it would shed is below the mass floor.
         assertThat(estFloorRefusalsPerCommit(result))
                 .as("the carve the shape most needs is the one the estimate refuses")
@@ -80,23 +90,56 @@ class PositionSensorCharacterizationTest {
     }
 
     @Test
-    void theSameSizedHashFannedCorpusKeepsItsEstimateAndDividesFurther() {
+    void theSameSizedHashFannedCorpusKeepsItsEstimateAndItsOwnerSideSplit() {
         PolicyRunResult control = run(hashFanned(), "in-memory hash-fanned corpus");
         PolicyRunResult deep = run(deepNested(), "in-memory deep-nested shared prefix");
 
         assertThat(control.completed()).as(control::describe).isTrue();
         assertThat(control.keysEmitted()).isEqualTo(hashFanned().size());
 
-        // 34 of 231 scanned victims, against the deep-nested run's 92 of 227.
+        // 34 of 209 scored bounded victims, against the deep-nested run's 62 of 198.
         assertThat(estIgnoresKeysShare(control))
                 .as("a shape whose bytes vary in the window keeps its density signal").isLessThan(0.20);
-        assertThat(estIgnoresKeysShare(deep)).isGreaterThan(2.0 * estIgnoresKeysShare(control));
-        // 137 refusals over 745 bounded commits, against 524 over 750.
+        assertThat(estIgnoresKeysShare(deep)).isGreaterThan(1.5 * estIgnoresKeysShare(control));
+        // 137 refusals over 745 bounded commits (0.18 each), against 490 over 757 (0.65).
         assertThat(estFloorRefusalsPerCommit(control)).isLessThan(0.3);
-        // 103 ranges against 57: the same key count, divided nearly twice as far.
-        assertThat(control.nodesCreated())
-                .as("the deep-nested keyspace is the one the runtime cannot cut")
-                .isGreaterThan(deep.nodesCreated());
+        assertThat(estFloorRefusalsPerCommit(deep))
+                .isGreaterThan(3.0 * estFloorRefusalsPerCommit(control));
+        // The mechanism those refusals belong to is the owner's own: 7 children published against 22.
+        // This is a statement about the owner-side split under a blind estimate, NOT about the fleet's
+        // total ability to divide — at ten times the size the deep-nested run out-publishes this
+        // control three to one and is still the less parallel of the two.
+        assertThat(deep.ownerSplitChildren())
+                .as("the owner-side carve is the mechanism the estimate gates")
+                .isLessThan(control.ownerSplitChildren());
+    }
+
+    /**
+     * The separation the other two assume: the same geometry, the same everything, and a uniform file
+     * count instead of a heavy-tailed one. The sensor is just as blind — a cursor still crosses whole
+     * subtrees without moving the fraction — and the run is nonetheless the healthiest of the three,
+     * because equal-sized subtrees make the seed's own division balanced and the fleet is never left
+     * having to divide anything at run time. Blindness is a property of the byte geometry; paying for
+     * it is a property of the mass distribution.
+     */
+    @Test
+    void theSameGeometryWithUniformMassIsJustAsBlindAndCostsNothing() {
+        PolicyRunResult result = run(deepNestedUniform(), "in-memory deep-nested shared prefix, uniform");
+
+        assertThat(result.completed()).as(result::describe).isTrue();
+        assertThat(result.keysEmitted()).isEqualTo(deepNestedUniform().size());
+
+        // 698 of 743 bounded commits (94%) invisible — the heavy-tailed run's 93%, on the same shape.
+        assertThat(invisibleAdvanceShare(result))
+                .as("the geometry alone is what blinds the sensor").isGreaterThan(0.85);
+        // And nothing to pay for it: 7.6 of 8 ranges in flight on average, 1.1% of the run serial, and
+        // not one scored victim whose estimate discarded its keys (0 of 59) — the fleet is never in the
+        // position where a blind estimate has to be acted on.
+        assertThat(result.timeline().meanOccupancy())
+                .as("balanced subtrees keep the fleet full without a single run-time division")
+                .isGreaterThan(7.0);
+        assertThat(result.timeline().serialFraction()).isLessThan(0.05);
+        assertThat(estIgnoresKeysShare(result)).isLessThan(0.05);
     }
 
     private static double invisibleAdvanceShare(PolicyRunResult result) {
@@ -106,7 +149,7 @@ class PositionSensorCharacterizationTest {
 
     private static double estIgnoresKeysShare(PolicyRunResult result) {
         return (double) result.counter(SimExecutor.SENSOR_EST_IGNORES_KEYS_COUNTER)
-                / result.counter(SimExecutor.SENSOR_VICTIMS_SCANNED_COUNTER);
+                / result.counter(SimExecutor.SENSOR_VICTIMS_BOUNDED_COUNTER);
     }
 
     private static double estFloorRefusalsPerCommit(PolicyRunResult result) {

@@ -288,10 +288,15 @@ Two parts of that record are worth naming, because a counter total cannot expres
   end — plus what happened between the last two: the keys emitted in that tail, and the *occupancy*,
   meaning how many ranges were actually being drained while they were. A run that divides its keyspace
   and one that gives up early can have identical split counts and completely different shapes, and the
-  difference is the whole subject. The run's end here is **quiescence**, not the kernel's last event:
-  a retired park timer still costs a dispatch when it fires, so the clock keeps moving for up to one
-  park window after the last worker has gone home. Both instants are reported, and the gap between them
-  is an artifact of the kernel rather than a property of the modelled fleet.
+  difference is the whole subject. The run's end here is **quiescence**, not the kernel's last event.
+  The kernel cannot cancel a timer, so a park that has already been retired still costs a dispatch when
+  it fires, and a dispatch moves the clock. The longest of them is the steal-attempt-slot backstop —
+  one second under the engine's own defaults, the park of a worker that found the fleet's single steal
+  slot busy — so the clock keeps advancing for up to that second after the last worker has retired.
+  Traced after quiescence, the residue is *only* retired parks: no call timeout, no retry, no key.
+  Both instants are reported, and the gap between them (0.75–1.0 s on the in-repo fixtures) is an
+  artifact of the kernel rather than a property of the modelled fleet — **so a comparison between runs
+  belongs on the timeline's end, not on the kernel's.**
 - **Position-sensor readings.** Whether the arithmetic the policies steer on can see a given keyspace
   at all: how many page commits moved the cursor without moving `fracIn`, and how many scanned victims
   had a consumed span of zero, which is the case where `estRemaining` discards the emitted keys it was
@@ -370,12 +375,16 @@ measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed la
 follows is what makes the second visible.
 
 Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
-to how remaining work is measured is expected to break: `PositionSensorCharacterizationTest` runs it
-against the hash-fanned corpus at the same size, and `PositionSensorAtScaleTest` (`@Tag("perf")`) runs
-the same pair ten times further up, where the fleet's inability to divide the shape turns into a
-measurably emptier tail. The second exists because the first honestly cannot show that: at the smaller
-size the seed's own cut set is large relative to the fixture, so a runtime that cannot divide further is
-never asked to.
+to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
+against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
+what separates the two claims: the same geometry is just as blind (94% of commits invisible) and costs
+nothing at all, because equal subtrees leave the seed's own division balanced and the fleet is never
+left having to divide anything. `PositionSensorAtScaleTest` (`@Tag("perf")`) runs the heavy-tailed pair
+ten times further up, where the difference reaches the run: 8.4% of it after the last split at a mean of
+1.6 ranges in flight, against 0.8%. Note what that second test does *not* show — the deep-nested run
+publishes 205 split children there against the control's 64. The division is not missing; it is late,
+driven by thieves that spend 691 attempts to place 118 of them, and refused four thousand times over by
+the owner's own estimate.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

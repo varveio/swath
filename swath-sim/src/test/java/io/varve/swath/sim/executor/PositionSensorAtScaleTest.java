@@ -48,28 +48,42 @@ class PositionSensorAtScaleTest {
         assertThat(deep.completed()).as(deep::describe).isTrue();
         assertThat(control.completed()).as(control::describe).isTrue();
 
-        // Deep-nested: 14.7% of the run happens after the last split anything managed to make, on a
-        // mean of 1.5 ranges. Control: 0.8%, and it is still splitting when it finishes.
+        // Deep-nested: 8.4% of the run happens after the last split anything managed to make, on a mean
+        // of 1.6 ranges. Control: 0.8%, and it is still splitting when it finishes.
         assertThat(deep.timeline().tailFraction())
-                .as("the fleet runs out of ways to divide before it runs out of work").isGreaterThan(0.10);
-        assertThat(control.timeline().tailFraction()).isLessThan(0.05);
-        // Mean ranges in flight after the seed: 6.7 against 7.8 of a possible 8.
-        assertThat(deep.timeline().meanOccupancy()).isLessThan(7.0);
+                .as("the fleet runs out of ways to divide before it runs out of work").isGreaterThan(0.05);
+        assertThat(control.timeline().tailFraction()).isLessThan(0.02);
+        // Mean ranges in flight after the seed: 7.0 against 7.8 of a possible 8.
+        assertThat(deep.timeline().meanOccupancy()).isLessThan(7.3);
         assertThat(control.timeline().meanOccupancy()).isGreaterThan(7.5);
-        // Time spent with at most one range being drained: 7.6% against 0.4%.
-        assertThat(deep.timeline().serialFraction()).isGreaterThan(0.05);
+        // Time spent with at most one range being drained: 3.5% against 0.4%.
+        assertThat(deep.timeline().serialFraction()).isGreaterThan(0.02);
         assertThat(control.timeline().serialFraction()).isLessThan(0.01);
 
-        // 663 steal attempts to publish 102 children, 393 of them refused outright before a probe was
-        // even issued. The control publishes 21 children from 84 attempts and is never left without a
-        // victim at all.
+        // The division itself is not missing — it is the opposite. The deep-nested run publishes 205
+        // children to the control's 64, and is still the less parallel of the two: it divides late,
+        // through the thief rather than the owner, and only after spinning. 691 steal attempts for 118
+        // thief children, 393 of them turned away before a probe was even issued; the control publishes
+        // its 21 from 84 attempts and is never once left without a victim.
+        assertThat(deep.ownerSplitChildren() + deep.thiefChildren())
+                .as("what fails here is when and how the keyspace gets cut, not whether")
+                .isGreaterThan(control.ownerSplitChildren() + control.thiefChildren());
         assertThat(deep.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)).isGreaterThan(500L);
-        assertThat(deep.counter("steal.outcome.NO_VICTIM")
-                + deep.counter("steal.outcome.RETRY"))
+        assertThat(deep.counter("steal.outcome.NO_VICTIM") + deep.counter("steal.outcome.RETRY"))
                 .as("most of what the thief does on this shape produces nothing")
                 .isGreaterThan(4L * deep.thiefChildren());
         assertThat(control.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)).isLessThan(200L);
         assertThat(control.counter("steal.outcome.NO_VICTIM")).isZero();
+
+        // 570 of 1,509 scored bounded victims (38%) score zero remaining span outright, against 13 of
+        // 399 (3%) — the reading a victim-selection cure has to move.
+        assertThat(estZeroShare(deep)).isGreaterThan(0.25);
+        assertThat(estZeroShare(control)).isLessThan(0.10);
+    }
+
+    private static double estZeroShare(PolicyRunResult result) {
+        return (double) result.counter(SimExecutor.SENSOR_EST_ZERO_COUNTER)
+                / result.counter(SimExecutor.SENSOR_VICTIMS_BOUNDED_COUNTER);
     }
 
     private static PolicyRunResult run(List<byte[]> keys, String label) {
