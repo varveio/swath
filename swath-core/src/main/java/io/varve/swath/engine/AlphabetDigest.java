@@ -8,8 +8,10 @@ package io.varve.swath.engine;
 import io.varve.swath.engine.policy.AlphabetFallback;
 import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.model.ByteMidpoint;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 
 /**
@@ -194,8 +196,19 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
      * any chosen scalar for safety and strict betweenness, so a torn word can only shift the pivot's
      * balance inside valid bounds. What the snapshot fixes is not tearing but MUTATION AFTER THE
      * FACT — the decision now sees exactly one alphabet, the one recorded in the view.
+     *
+     * <p>Its decision-facing API is still the single {@code int}-returning consult above. {@link
+     * #base()}/{@link #cleanBits()}/{@link #wordsHex()} (issue #25) are a package-private, test-only
+     * addition for {@code io.varve.swath.engine.GoldenTrace} to serialize this snapshot's full state
+     * into a decision-trace golden view, so a recorded {@code thief.steal} decision is verifiable
+     * from its recorded view alone rather than from the view plus the fixture's own setup code. No
+     * {@code decide()} path calls them, and {@code wordsHex()} hex-encodes rather than returning the
+     * backing array, so {@code DecisionPathPurityTest#viewsCarryNoLiveExecutorState}'s "no array
+     * hand-out" check still holds.
      */
     public static final class Snapshot implements ByteMidpoint.ScalarChooser {
+
+        private static final HexFormat HEX = HexFormat.of();
 
         private final int base;
         /** Flat presence masks, {@code words[2*pos]}/{@code words[2*pos+1]} — never handed out. */
@@ -222,6 +235,29 @@ public final class AlphabetDigest implements ByteMidpoint.ScalarChooser {
                     inWindow ? words[2 * pos + 1] : 0L,
                     inWindow && (cleanBits >>> pos & 1) != 0,
                     loCp, hiCp, fraction, collector);
+        }
+
+        /** Test-only (issue #25): the code-point index at which tracking begins, relative to the
+         *  range's own divergence point — needed to interpret {@link #wordsHex()}'s positions. */
+        int base() {
+            return base;
+        }
+
+        /** Test-only (issue #25): bit {@code pos} set iff tracked position {@code pos} is
+         *  alphabet-clean, the same packed form {@link AlphabetDigest#snapshot()} builds. */
+        int cleanBits() {
+            return cleanBits;
+        }
+
+        /** Test-only (issue #25): the {@value AlphabetDigest#MAX_POSITIONS}-position presence mask, hex-encoded
+         *  (never returned as an array — see this class's javadoc) with the same {@link HexFormat}
+         *  discipline the golden format already uses for byte-valued key fields. */
+        String wordsHex() {
+            ByteBuffer buf = ByteBuffer.allocate(words.length * Long.BYTES);
+            for (long w : words) {
+                buf.putLong(w);
+            }
+            return HEX.formatHex(buf.array());
         }
     }
 

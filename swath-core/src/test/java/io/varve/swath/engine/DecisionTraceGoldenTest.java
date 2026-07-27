@@ -1039,21 +1039,27 @@ final class DecisionTraceGoldenTest {
     }
 
     /**
-     * The recorded pool view: one entry per {@link WorkerState}, mirroring every field {@link
+     * The recorded pool view: one entry per {@link WorkerState}, carrying every field {@link
      * io.varve.swath.engine.policy.VictimView} itself carries ({@code node_id}/{@code lo}/{@code
-     * cursor}/{@code hi}/{@code keys_emitted}/{@code unsplittable}/{@code pacing_skip_available}) —
-     * widened from an earlier version that recorded only {@code node_id}/{@code lo}/{@code cursor}/
-     * {@code hi}/{@code unsplittable}, which an independent review found let a mutant that forces
-     * {@code pacingSkipAvailable=false} in executor view construction evade this fixture matrix
-     * entirely (the recorded event stayed byte-identical either way). This does NOT close the whole
-     * gap that review found (issue #25): {@link io.varve.swath.engine.policy.StealAttemptView}'s
-     * fields that exist only for the CHOSEN victim's per-attempt view (density fraction, alphabet
-     * digest state, the unchanged-since-non-productive-steal flag, both structure-probe streaks) are
-     * still not recorded here at all — see decision-trace-goldens.md's known-gaps list for why
-     * (AlphabetDigest exposes no accessor to any package outside {@code io.varve.swath.engine} for a
-     * stable, comparable JSON representation, and which victim even HAS a per-attempt view is decided
-     * only after {@code selectVictim} runs, so capturing it pre-call means recording it for every
-     * candidate, not just the eventual choice).
+     * cursor}/{@code hi}/{@code keys_emitted}/{@code unsplittable}/{@code pacing_skip_available})
+     * <b>plus</b>, since issue #25's resolution, every field that exists only on {@link
+     * io.varve.swath.engine.policy.StealAttemptView} — {@code density_fraction}, {@code
+     * alphabet_digest}, {@code unchanged_since_non_productive_steal}, and both structure-probe
+     * streaks — computed here for EVERY candidate the same way {@link Thief#steal} computes them for
+     * the one it goes on to choose, not just the eventual choice: which candidate {@code
+     * selectVictim} picks is itself part of the decision under test, so recording only the winner's
+     * per-attempt state would mean this view's shape depended on the decision it exists to verify.
+     * Issue #25 chose this (option 1 on the issue: record the full per-victim attempt state) over
+     * leaving the subset undocumented; recording every candidate is a superset of what any single
+     * attempt reads, so the golden's decision is now verifiable from its recorded view ALONE — no
+     * scenario-setup side channel needed to know what the chosen victim's per-attempt state was.
+     *
+     * <p>{@link io.varve.swath.engine.AlphabetDigest.Snapshot} is serialized via its package-private,
+     * test-only {@code base()}/{@code cleanBits()}/{@code wordsHex()} accessors (added for this),
+     * hex-encoding the presence-mask words rather than exposing them as an array — the same
+     * byte-exactness discipline this golden format already uses for key-valued fields, and the shape
+     * {@code DecisionPathPurityTest#viewsCarryNoLiveExecutorState} requires of anything reachable from
+     * a policy view.
      */
     private static ObjectNode poolView(List<WorkerState> pool) {
         ObjectNode view = GoldenTrace.newNode();
@@ -1067,9 +1073,23 @@ final class DecisionTraceGoldenTest {
             c.put("keys_emitted", w.keysEmitted());
             c.put("unsplittable", w.unsplittable());
             c.put("pacing_skip_available", w.pacingSkipAvailable());
+            c.put("density_fraction", w.densityFraction());
+            c.set("alphabet_digest", alphabetDigestNode(w.alphabetDigest().snapshot()));
+            c.put("unchanged_since_non_productive_steal", w.unchangedSinceNonProductiveSteal(w.snapshot()));
+            c.put("consecutive_zero_fanout_structure_probes", w.consecutiveZeroFanoutProbes());
+            c.put("consecutive_timed_out_structure_probes", w.consecutiveTimedOutStructureProbes());
             candidates.add(c);
         }
         return view;
+    }
+
+    /** Serializes an {@link AlphabetDigest.Snapshot} into the golden's {@code alphabet_digest} shape. */
+    private static ObjectNode alphabetDigestNode(AlphabetDigest.Snapshot snapshot) {
+        ObjectNode node = GoldenTrace.newNode();
+        node.put("base", snapshot.base());
+        node.put("words_hex", snapshot.wordsHex());
+        node.put("clean_bits", snapshot.cleanBits());
+        return node;
     }
 
     /**
