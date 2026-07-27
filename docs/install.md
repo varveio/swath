@@ -1,26 +1,23 @@
 # Install & quickstart
 
 `swath` ships three ways once a release exists: a Docker image, an uber-jar,
-and JDK-requiring application-distribution archives. All three are planned to be built from the
+and JDK-requiring application-distribution archives. All three are built from the
 same Gradle output and signed with [sigstore](https://www.sigstore.dev/)
 keyless signing (GitHub OIDC, no key custody).
-**None of that exists yet.** Tags in the current private repository run the
-release build and upload its artifacts, but do not publish until the Phase 10
-human acceptance gate makes the repository public and enables publication.
-Until then,
-**build from source** (below) is the only path; this page states the shape
-the other install paths will take so we don't have to change this doc again
-once they land.
+
+**No release has been cut yet.** Until the first `vX.Y.Z` tag ships,
+**build from source** (below) is the only path. This page states the shape the
+other install paths take, so it does not have to change once they land.
 
 ## Docker
 
 ```
-docker run --rm -v "$PWD/out:/out" <repo>/swath \
+docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath \
   list s3://my-bucket/prefix/ --no-sign-request \
   --format parquet -o /out/data
 ```
 
-Replace `<repo>/swath` with the published image reference once one exists.
+Images are published to `ghcr.io/varveio/swath` from the first release onward.
 Drop `--no-sign-request` and add credentials for a private bucket. See
 [`packaging-and-docker.md`](packaging-and-docker.md) for the image's signal
 handling, tag scheme, and how to pin a digest rather than a mutable tag.
@@ -40,7 +37,7 @@ jar is built and what it bundles.
 
 ## Application distribution archive
 
-After public-release activation, the tagged-release workflow attaches the
+The tagged-release workflow attaches the
 `distZip` and `distTar` application archives, a
 `SHA256SUMS` file, an SPDX SBOM, and a keyless Sigstore bundle for every shipped
 jar/archive. The archives contain Gradle application launchers and require a
