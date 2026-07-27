@@ -4,6 +4,11 @@ import org.gradle.jvm.application.tasks.CreateStartScripts
 plugins {
     id("swath.java-conventions")
     application
+    // testkit: ObjectEntries/ParquetFixtures/FakeListingStore — the fixture builders and the
+    // range-only in-memory store this module's own suites use.
+    // Published as test fixtures rather than kept in `src/test` so a sibling tool module can drive
+    // the same capture shapes instead of re-deriving them (`swath-sim`'s differential suite).
+    `java-test-fixtures`
 }
 
 val conformanceSourceSet = sourceSets.create("conformance") {
@@ -29,6 +34,14 @@ dependencies {
     runtimeOnly(libs.logback.classic)
 
     add(conformanceSourceSet.implementationConfigurationName, libs.jackson.databind)
+
+    // testkit fixtures expose swath-core/swath-model types on their own surface (ParquetFixtures
+    // returns a PartWriter, ObjectEntries an ObjectEntry), so consumers need them on the compile
+    // classpath -- hence `api`. parquet-hadoop is a direct compile-time need of ParquetFixtures
+    // (ParquetSchema.canonical() is MessageType-typed) and stays out of the MAIN compile classpath,
+    // which verifyNoParquetOrHadoopOnCompileClasspath below still guards.
+    testFixturesApi(project(":swath-core"))
+    testFixturesImplementation(libs.parquet.hadoop)
 
     // SwathRoundTripIT starts the replay server and then drives it with swath's own real
     // S3PageFetcher/S3ClientFactory/S3Config (an end-to-end round trip) -- a genuine

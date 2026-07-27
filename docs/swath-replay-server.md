@@ -528,7 +528,7 @@ documents the replay-server-specific set.
 `mixed_row_types` and `sanity_failed` are raised directly by the index-derive
 step (`io.varve.swath.replay.fixture.SortedFixtures#loadIndex`); the other four
 reasons are raised by the `--serving-mode auto` decision itself
-(`io.varve.swath.replay.server.ReplayServingFactory#decideSorted`). `--serving-mode
+(`io.varve.swath.replay.fixture.SortedEligibility#decide`). `--serving-mode
 sorted` (a hard fail, not a fallback) does not bump this counter for any of
 these reasons — it throws instead.
 

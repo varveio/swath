@@ -68,6 +68,9 @@ public final class FakeListingStore implements ListingStore {
                                    Projection projection) {
         calls.incrementAndGet();
         lastLimit = limit;
+        if (limit <= 0) {
+            return List.of();
+        }
         byte[] lower = from == null ? null : from.toByteArray();
         byte[] upper = toExclusive == null ? null : toExclusive.toByteArray();
         List<ListedObject> out = new ArrayList<>();

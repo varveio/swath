@@ -1140,6 +1140,11 @@ def parse_doc_table(doc_path: Path) -> list[DocRow]:
 # never under the root's `src/`), so excluding it here is a no-op vs. prior behavior,
 # not a new gap -- the guard's job is the LISTING engine's instrumentation, not the
 # dev-tool replay server's.
+# swath-sim is EXCLUDED on the same rule and for the same reason: it is a dev/analysis
+# tool, not the listing engine, and it emits no recordStealReason at all. Its own
+# signals (swath.sim.store.backend / .arena.decline) describe which modelled store tier
+# served a fixture, which is not an engine algo path and has no §5a registry row. A
+# future module that DOES carry engine instrumentation must be added to the tuple below.
 SCANNED_MODULES = ("swath-model", "swath-core", "swath-s3", "swath-cli")
 
 

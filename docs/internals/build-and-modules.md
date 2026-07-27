@@ -28,11 +28,11 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
              api │         │ impl
         ┌─────────┴──┐   ┌──┴──────────────────┐
         │  swath-s3  │   │ swath-replay-server │  dev/test replay server (non-published)
-        └─────▲──────┘   └─────────────────────┘
-       impl │  │ impl
-        ┌────┴──┴────┐
-        │  swath-cli │  the `swath` binary (application)
-        └────────────┘
+        └─────▲──────┘   └──────────▲──────────┘
+       impl │  │ impl               │ api
+        ┌────┴──┴────┐        ┌─────┴─────┐
+        │  swath-cli │        │ swath-sim │  policy simulator's store (non-published)
+        └────────────┘        └───────────┘
 ```
 
 All edges point one way (no cross-module cycles). The `engine`↔`runtime` package cycle is
@@ -46,13 +46,19 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 | **`swath-core`** | `java-library` | The internal core implementation: `engine`, `runtime`, `output` (incl. `output.parquet`), `sort`, `checkpoint`, `filter`, `pipeline`, `observability`, `error`, `concurrent`, and the **store abstraction** (`store/*` except `store/s3`). **No AWS SDK, no picocli.** testFixtures: `testkit` (MockPageFetcher, Keyspaces, EngineHarness…). Owns the JMH bench source set. | `api` → swath-model | internal; not published or supported |
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
-| **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. | `impl` → swath-core | ❌ (dev/test tool) |
+| **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | ❌ (dev/test tool) |
+| **`swath-sim`** | `java-library` | The policy simulator's ground-truth store (`io.varve.swath.sim`): backends that answer the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`. Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server | ❌ (dev/analysis tool) |
+
+Only `swath-cli` ships. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
+`runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped
+artifact **iff `swath-cli` depends on it**. `swath-replay-server` and `swath-sim` are not on that
+path (and `swath-sim` is a `java-library`, so it has no dist of its own either).
 
 v0.1 is CLI-only. No Java module is published to Maven Central and no Java
 package, class, interface, SPI, source shape, or binary ABI is a supported API.
 The `java-library` plugin and Gradle `api` edges below describe only this
 repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
-`swath-replay-server` is a non-release developer tool.
+`swath-replay-server` and `swath-sim` are non-release developer tools.
 
 ## Dependency rules
 
@@ -73,8 +79,15 @@ repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
   - `swath-s3 → swath-core` is **`api`** (`S3PageFetcher`'s Java-visible surface exposes core types), and
     the **AWS SDK itself is `api` on `swath-s3`** because `swath-cli`'s `ListCommand` wires
     `S3Client`/credentials/`Region` directly while depending on `swath-s3` only via `implementation`.
-  - `swath-cli → {swath-core, swath-s3}` and `swath-replay-server → swath-core` are **`implementation`**
-    (apps expose nothing).
+  - `swath-cli → {swath-core, swath-s3}` and `swath-replay-server → swath-core` are
+    **`implementation`** (apps expose nothing).
+  - **`swath-sim → swath-replay-server` is `api`** — unlike the two apps above, `swath-sim` is a
+    library whose Java-visible surface exposes the upstream module's types (`ArenaListingStore`
+    implements `ListingStore` and returns `ListedObject`; `SimStoreFactory.Result` carries a
+    `ListingStore` and a `ReplayMetrics`), so a consumer needs them on its compile classpath.
+    This edge is deliberate and stays as-is: the `ListingStore`/`ListObjectsV2Pager` seam the
+    simulator reuses lives in `swath-replay-server` today, and extracting it into a shared module
+    is a separate refactor (see the roadmap below), not a precondition for depending on it.
 - **§0.7 compile-classpath purity** — `swath-replay-server`'s *main* code must not import any
   `org.apache.parquet`/`org.apache.hadoop` type; parquet reaches it only *transitively at runtime*
   via `implementation(project(":swath-core"))`. Enforced by the module's
@@ -141,12 +154,12 @@ stdlib Python) scans every module's main source that formerly lived under root
   the reverse-DNS package root: a short, distinctive, collision-safe operator surface (the
   `spring.*`/`server.*` idiom), read through a `fromProperties(lookup)` seam so it stays library-safe
   for embedded use.
-- **Flat module layout** (no `modules/` or `java/` grouping) — the Java-OSS convention at 5 modules;
+- **Flat module layout** (no `modules/` or `java/` grouping) — the Java-OSS convention at this module count;
   keeps the Gradle root at the repo root (zero tooling friction). A `java/` language-dir was
   considered for polyglot future-proofing and rejected: a cross-language reimplementation would be a
   separate repo (gRPC/OpenTelemetry precedent), and `java/` would move the Gradle root off repo-root
   for a hypothetical. It's a cheap `git mv` later if ever genuinely needed.
-- **This 5-module split** separates the *apps* (cli, replay-server) and the *S3 backend* from the
+- **This module split** separates the *apps and tools* (cli, replay-server, sim) and the *S3 backend* from the
   internal reusable code (core + model), which is what the build/Docker pipeline needs and what enables the
   embeddable-library + `swath-server`/`swath-gcs` futures. Module names are keyed by function:
   `-core` (library), `-model` (foundation), `-s3`/`-gcs` (backend drivers), `-cli` (one-shot tool),
