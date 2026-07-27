@@ -7,6 +7,9 @@ package io.varve.swath.sim.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.replay.fixture.FixtureMetrics;
+import io.varve.swath.replay.fixture.SortedFixtures;
+import io.varve.swath.replay.fixture.SortedFixtures.IndexLoadResult;
 import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.ListedObject;
@@ -18,8 +21,11 @@ import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
+import io.varve.swath.sort.CaptureSorter;
+import io.varve.swath.sort.SortConfigs;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,25 +39,34 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * The arena tier answers the same key sequence as the Parquet-backed tier, over the same fixture,
- * the same pager, and the same request sequence — including delimiter rollups, the edge-case keys
- * of {@code docs/internals/algorithms.md} §11, and the truncation boundaries around a fixture's
- * exact key count.
+ * The arena tier and the windowed tier each answer the same key sequence as the Parquet-backed
+ * tier, over the same fixture, the same pager, and the same request sequence — including
+ * delimiter rollups, the edge-case keys of {@code docs/internals/algorithms.md} §11, and the
+ * truncation boundaries around a fixture's exact key count.
+ *
+ * <p>Every fixture here is written through the production sorter ({@link #writeCapture}), never a
+ * bare unsorted capture: the windowed tier requires a sorted-eligible fixture, and running the
+ * SAME sorted fixture through the arena and Parquet tiers too keeps all three comparisons over
+ * identical bytes on disk. {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups} pins that the
+ * largest fixture is genuinely multi-row-group, so the windowed tier's window-boundary and
+ * window-refill paths are actually exercised here, not vacuously true of a single-group file.
  *
  * <p><b>What is compared, and what deliberately is not.</b> The transcript is keys, common
  * prefixes, page boundaries, {@code IsTruncated} and the continuation token. Object <b>metadata is
- * not compared, because the arena does not load it</b>: its sim-mode projection stubs size,
- * last-modified, etag, storage class, owner and checksum on every row (see
+ * not compared for the arena, because the arena does not load it</b>: its sim-mode projection
+ * stubs size, last-modified, etag, storage class, owner and checksum on every row (see
  * {@link ArenaListingStore}). That is by design — a simulator decides splits, steals and
  * pagination from keys alone, and loading metadata for every key of every fixture would defeat the
  * tier. {@link #metadataIsStubbedOnTheArenaAndFullOnParquet} pins the difference so it stays a
- * documented contract rather than an undetected regression; full byte-for-byte comparison
- * including metadata is the replay module's own sorted-vs-DuckDB differential suite.
+ * documented contract rather than an undetected regression; the windowed tier carries full
+ * metadata, exactly like the Parquet tier it wraps. Full byte-for-byte comparison of metadata
+ * across every field is the replay module's own sorted-vs-DuckDB differential suite.
  *
- * <p>Both backends are driven through the identical {@link ListObjectsV2Pager}, so any
+ * <p>Every backend is driven through the identical {@link ListObjectsV2Pager}, so any
  * disagreement is attributable to a store by construction. Backends are selected explicitly
- * ({@link SimStoreBackend#ARENA} / {@link SimStoreBackend#PARQUET}) rather than through
- * {@link SimStoreBackend#AUTO}, which would resolve to one tier and compare it against itself.
+ * ({@link SimStoreBackend#ARENA} / {@link SimStoreBackend#WINDOWED} / {@link SimStoreBackend#PARQUET})
+ * rather than through {@link SimStoreBackend#AUTO}, which would resolve to one tier and compare it
+ * against itself.
  */
 class ArenaDifferentialTest {
 
@@ -89,7 +104,8 @@ class ArenaDifferentialTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("fixtures")
-    void arenaAndParquetAgreeOnKeysPaginationAndTruncation(String name, List<byte[]> keys) throws IOException {
+    void arenaAndWindowedAgreeWithParquetOnKeysPaginationAndTruncation(String name, List<byte[]> keys)
+            throws IOException {
         Path fixture = writeCapture(dir, keys);
         List<Scenario> scenarios = scenarios(keys.size());
 
@@ -98,12 +114,27 @@ class ArenaDifferentialTest {
         // reassembled wrongly would show up as a pager-visible disagreement, not just a unit failure.
         List<List<String>> arena = transcripts(scenarios, arenaStore(fixture));
         List<List<String>> tightlySegmented = transcripts(scenarios, tightlySegmentedArenaStore(fixture));
+        List<List<String>> windowed = transcripts(scenarios, windowedStore(fixture));
 
         for (int i = 0; i < scenarios.size(); i++) {
             assertThat(arena.get(i)).as("%s / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
             assertThat(tightlySegmented.get(i))
                     .as("%s / tight segments / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
+            assertThat(windowed.get(i)).as("%s / windowed / %s", name, scenarios.get(i)).isEqualTo(parquet.get(i));
         }
+    }
+
+    /**
+     * Windowing over a single row group would be vacuously correct — a miss always covers the
+     * whole fixture. The edge-case-inventory fixture (the largest of {@link #fixtures}) must
+     * actually split into more than one row group under the production sorter's small-row-group
+     * config, so the differential above genuinely exercises window-boundary and window-refill
+     * behaviour, not just a full-fixture single window.
+     */
+    @Test
+    void theEdgeCaseInventoryFixtureSpansMultipleRowGroups() throws IOException {
+        Path fixture = writeCapture(dir, edgeCaseKeys());
+        assertThat(rowGroupCount(fixture)).isGreaterThan(1);
     }
 
     @Test
@@ -124,12 +155,14 @@ class ArenaDifferentialTest {
     }
 
     @Test
-    void metadataIsStubbedOnTheArenaAndFullOnParquet() throws IOException {
+    void metadataIsStubbedOnTheArenaFullOnParquetAndFullOnWindowed() throws IOException {
         Path fixture = writeCapture(dir, List.of(utf8("solo")));
 
-        try (Opened arena = arenaStore(fixture); Opened parquet = parquetStore(fixture)) {
+        try (Opened arena = arenaStore(fixture); Opened parquet = parquetStore(fixture);
+             Opened windowed = windowedStore(fixture)) {
             ListedObject fromArena = arena.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
             ListedObject fromParquet = parquet.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
+            ListedObject fromWindowed = windowed.store().rows(null, true, null, 1, Projection.WITH_OWNER).getFirst();
 
             assertThat(fromArena.key()).isEqualTo(fromParquet.key());
             assertThat(fromArena.size()).isEqualTo(ArenaListingStore.STUB_SIZE);
@@ -137,6 +170,8 @@ class ArenaDifferentialTest {
             assertThat(fromArena.ownerId()).isNull();
             assertThat(fromParquet.etag()).isEqualTo("etag-solo");
             assertThat(fromParquet.ownerId()).isEqualTo("owner-id");
+            assertThat(fromWindowed.etag()).isEqualTo(fromParquet.etag());
+            assertThat(fromWindowed.ownerId()).isEqualTo(fromParquet.ownerId());
         }
     }
 
@@ -255,6 +290,10 @@ class ArenaDifferentialTest {
         return forced(fixture, SimStoreBackend.ARENA);
     }
 
+    private static Opened windowedStore(Path fixture) {
+        return forced(fixture, SimStoreBackend.WINDOWED);
+    }
+
     /**
      * The arena again, but packed into {@value #TIGHT_SEGMENT_BYTES}-byte segments. The segment size
      * is an internal encoding detail with no operator knob, so this reaches past the factory to the
@@ -329,14 +368,28 @@ class ArenaDifferentialTest {
         return keys;
     }
 
+    /**
+     * Writes {@code keys} to an unsorted capture, then runs it through the production sorter with a
+     * small final-row-group-bytes config — the same shape {@code SortedParquetStoreTest} uses — so
+     * the result is a stamped, {@code mode=objects} fixture every backend here can serve, and one
+     * large enough to span several row groups (see {@link #theEdgeCaseInventoryFixtureSpansMultipleRowGroups}).
+     */
     private static Path writeCapture(Path dir, List<byte[]> keys) throws IOException {
-        Path capture = dir.resolve("part-0.parquet");
-        try (var writer = ParquetFixtures.open(capture)) {
+        Path capture = Files.createDirectory(dir.resolve("cap"));
+        try (var writer = ParquetFixtures.open(capture.resolve("part-0.parquet"))) {
             for (byte[] key : keys) {
                 writer.write(ObjectEntries.withOwner(key, "etag-" + ByteKeys.percentEncode(key)));
             }
         }
-        return capture;
+        Path out = Files.createDirectory(dir.resolve("out"));
+        new CaptureSorter(SortConfigs.manySmallRowGroups()).sort(capture, out);
+        return out;
+    }
+
+    private static int rowGroupCount(Path fixtureDir) throws IOException {
+        List<Path> files = SortedFixtures.resolveFiles(fixtureDir);
+        IndexLoadResult result = SortedFixtures.loadIndex(files, new FixtureMetrics());
+        return ((IndexLoadResult.Loaded) result).entries().size();
     }
 
     private static void addUtf8(TreeSet<byte[]> keys, String... values) {
