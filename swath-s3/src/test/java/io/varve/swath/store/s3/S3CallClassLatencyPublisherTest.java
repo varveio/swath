@@ -107,23 +107,83 @@ class S3CallClassLatencyPublisherTest {
     }
 
     /**
-     * The window is derived PER collection, so a retried call's two stamps can never be crossed
-     * between attempts: attempt 1 reports only a first byte (it then hung), attempt 2 reports both,
-     * and the surviving window is attempt 2's own — not {@code attempt2.ttlb - attempt1.ttfb}.
+     * The window is derived PER collection, never across two — and this is the case that
+     * DISCRIMINATES that from the alternative implementation. Attempt 1 reports a first byte only;
+     * attempt 2 reports a LAST byte only. Deriving per collection yields no window at all (neither
+     * attempt has a pair). An implementation that instead subtracted the running capture's
+     * time-to-first-byte from any last byte it saw would happily report {@code 900 - 10 = 890 ms} of
+     * "unmarshalling" — a number belonging to no attempt.
+     *
+     * <p>The obvious multi-attempt case (attempt 1 first-byte-only, attempt 2 with BOTH stamps) is
+     * deliberately not the test here: both implementations return attempt 2's own 6 ms for it, so it
+     * proves nothing.
      */
     @Test
     void theWindowIsDerivedWithinOneAttemptNeverAcrossTwo() {
         S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
         try {
             MetricCollector root = MetricCollector.create("ApiCall");
-            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(900));
-            MetricCollector second = root.createChild("ApiCallAttempt");
-            second.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(40));
-            second.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(46));
+            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(10));
+            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(900));
 
             new S3CallClassLatencyPublisher().publish(root.collect());
 
-            assertThat(capture.sdkUnmarshalNanos()).isEqualTo(Duration.ofMillis(6).toNanos());
+            assertThat(capture.sdkUnmarshalNanos())
+                    .as("no single attempt reported BOTH stamps, so there is no window -- a "
+                            + "capture-carrying derivation would fabricate 890ms here")
+                    .isEqualTo(-1L);
+        } finally {
+            S3CallClassLatencyPublisher.end();
+        }
+    }
+
+    /**
+     * A LATER attempt that reported a first byte but no last byte (a read timeout part-way through
+     * the response body, after an earlier attempt had already been answered — the retried-503 shape)
+     * must CLEAR the earlier attempt's window, not leave it standing. The published {@code ttfb} and
+     * the fetcher's {@code total} both describe the failed final attempt; pairing them with a healthy
+     * earlier attempt's parse cost would attribute a cheap window to an expensive call.
+     */
+    @Test
+    void aLaterAttemptWithNoLastByteClearsAnEarlierAttemptsWindow() {
+        S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
+        try {
+            MetricCollector root = MetricCollector.create("ApiCall");
+            MetricCollector answered = root.createChild("ApiCallAttempt");
+            answered.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(10));
+            answered.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(16));
+            root.createChild("ApiCallAttempt").reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(40));
+
+            new S3CallClassLatencyPublisher().publish(root.collect());
+
+            assertThat(capture.sdkUnmarshalNanos())
+                    .as("the final attempt has no derivable window, so the earlier attempt's 6ms is "
+                            + "cleared rather than carried over")
+                    .isEqualTo(-1L);
+            assertThat(capture.timeToFirstByteNanos())
+                    .as("ttfb still tracks the final attempt, as it always has")
+                    .isEqualTo(Duration.ofMillis(40).toNanos());
+        } finally {
+            S3CallClassLatencyPublisher.end();
+        }
+    }
+
+    /**
+     * An exact-zero window is a real sample, not an absence: the subtraction is arithmetically sound
+     * and rejecting it would discard a genuine measurement. Only a NEGATIVE difference is untrusted.
+     */
+    @Test
+    void anExactZeroWindowIsAdmissibleAsARealSample() {
+        S3CallClassLatencyPublisher.PhaseCapture capture = S3CallClassLatencyPublisher.begin();
+        try {
+            MetricCollector root = MetricCollector.create("ApiCall");
+            MetricCollector attempt = root.createChild("ApiCallAttempt");
+            attempt.reportMetric(CoreMetric.TIME_TO_FIRST_BYTE, Duration.ofMillis(45));
+            attempt.reportMetric(CoreMetric.TIME_TO_LAST_BYTE, Duration.ofMillis(45));
+
+            new S3CallClassLatencyPublisher().publish(root.collect());
+
+            assertThat(capture.sdkUnmarshalNanos()).isZero();
         } finally {
             S3CallClassLatencyPublisher.end();
         }
