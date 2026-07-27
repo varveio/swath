@@ -86,6 +86,24 @@ import org.junit.jupiter.api.Test;
  * spreading the mass <em>halves</em> the serial time — the reading a single seed offered — is
  * <b>unsettled</b>, and would need a sample rather than a rerun.
  *
+ * <h2>{@code LEAF_CONCENTRATED} at a 100-key page is the bench a variant is judged on</h2>
+ * It is the only fixture in this repository whose pathology is a property of the keyspace rather than
+ * of a schedule: serial fraction 0.331 with a coefficient of variation of 0.3% across four seeds, and
+ * a post-split tail separated from its mass-matched control by roughly 150-fold. That is what makes a
+ * change to victim selection, pivot placement or the owner-side split legible — a cure has to move a
+ * number that re-seeding does not.
+ *
+ * <p>So: <b>evaluate a variant here, over at least four seeds</b>, with the healthy shapes
+ * ({@code PositionSensorAtScaleTest}'s hash-fanned control, {@code PositionSensorCharacterizationTest}'s
+ * uniform run) carried alongside as regression guards — a cure that fixes the tail by making balanced
+ * keyspaces worse is not a cure. Four is a floor rather than a target: it is what it took to show the
+ * spread fixture below was not a control at all.
+ *
+ * <p>And the spread fixture is <b>explicitly not a settled control</b>. It is the mass-matched
+ * comparison — same species, same mass apiece, differing only in whether that mass pools in one leaf —
+ * and it is genuinely useful as that. It is not a baseline anything can be measured against, because
+ * its serial fraction swings 37-fold under re-seeding. Quote it with that stated, or not at all.
+ *
  * <p>Opt-in ({@code @Tag("perf")}) for memory: a million-key fixture is a large share of a default test
  * worker's heap. The fixtures are generated one at a time, and the results compared, so only one is ever
  * live. Like its siblings these pin <b>current</b> behaviour.
