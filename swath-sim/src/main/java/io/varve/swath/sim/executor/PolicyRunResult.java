@@ -129,7 +129,8 @@ public record PolicyRunResult(
         ClientCostTerm term = scenario.clientCost().term();
         StringBuilder out = new StringBuilder();
         out.append(String.format(Locale.ROOT, "virtual_duration=%.3fs%n", virtualNanos() / 1e9));
-        out.append(String.format(Locale.ROOT, "stop_reason=%s completed=%s%n", stopReason(), completed()));
+        out.append(String.format(Locale.ROOT, "stop_reason=%s completed=%s stuck=%s fault_disposition=%s%n",
+                stopReason(), completed(), stuck, scenario.faultDisposition()));
         out.append(String.format(Locale.ROOT, "events=%d stale_events=%d%n", run.eventsProcessed(),
                 staleEvents()));
         out.append(String.format(Locale.ROOT, "workers=%d page_size=%d final_concurrency_target=%d%n",

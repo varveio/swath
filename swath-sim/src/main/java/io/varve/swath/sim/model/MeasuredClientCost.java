@@ -75,14 +75,21 @@ public final class MeasuredClientCost {
      *
      * <ul>
      *   <li><b>SDK response unmarshalling</b> — 5.2 ms/page uncontended, rising to 7.4–7.5 at ~15
-     *       concurrent. The dominant term by an order of magnitude, and the only one of the three with a
-     *       published distribution (p50 3.65–6.02, p90 8.90–14.41, p99 17.8–30.9), so it is the one the
-     *       ladder below is built from.</li>
-     *   <li><b>Response parsing into the page model</b> — measured band 0.098–0.178 ms/page; 0.1 ms is
-     *       its low end, matching the uncontended arm the rest of this term is taken from.</li>
+     *       concurrent. The <b>uncontended</b> value is taken, not the middle of that range, because
+     *       contention is what the simulator produces for itself: the fleet's own concurrency is the
+     *       model's variable, so feeding in a figure that already contains someone else's concurrency
+     *       would count it twice. The dominant term by an order of magnitude, and the only one of the
+     *       three with a published distribution (p50 3.65–6.02, p90 8.90–14.41, p99 17.8–30.9), so it is
+     *       the one the ladder below is built from.</li>
+     *   <li><b>Response parsing into the page model</b> — measured band 0.098–0.178 ms/page. The low end
+     *       for the same reason: it is the value from the uncontended arm the unmarshal figure above is
+     *       taken from, so the three spans here describe one consistent operating point rather than
+     *       three different ones.</li>
      *   <li><b>The narrowed residual</b> — what the worker's page time still holds after the two spans
      *       above and the time-to-first-byte are removed; measured band 0.487–0.617 ms/page, flat in
-     *       concurrency, published as a mean only. 0.55 ms is its midpoint.</li>
+     *       concurrency, published as a mean only. 0.55 ms is its midpoint, which is the whole of the
+     *       justification available: with no trend across arms to prefer an end, the middle is the least
+     *       committal reading of the band.</li>
      * </ul>
      *
      * <p>The two smaller spans have no ladders of their own, so they are carried as a flat shift on the
@@ -106,10 +113,12 @@ public final class MeasuredClientCost {
 
     /**
      * The serial checkpoint writer's per-batch service time at the low-concurrency end: measured
-     * 0.109 ms/batch at eight-way concurrency, rising to 0.240 at 128-way. The service time is taken here
-     * and the growth is produced structurally by the queue in front of it, which is what the measurement
-     * says is actually happening — the per-page <em>wait</em> grows several-fold across that range while
-     * the service time barely moves.
+     * 0.109 ms/batch at eight-way concurrency, rising to 0.240 at 128-way. The uncontended end again, and
+     * here the reason is structural rather than conventional: only the service time belongs in this
+     * parameter, and the growth across that range is produced by the queue in front of it, which this
+     * model builds. Taking a contended figure would charge that queueing twice. The measurement says the
+     * same thing directly — the per-page <em>wait</em> grows several-fold across the range while the
+     * service time barely moves.
      */
     public static SampledClientCostTerm checkpoint() {
         return SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 109_000L, 0L,
@@ -119,13 +128,16 @@ public final class MeasuredClientCost {
     /** The consumer stage's per-page service time for {@code sink}. */
     public static SampledClientCostTerm sink(SinkKind sink) {
         return switch (sink) {
-            // Text: measured band 0.93-1.07 ms/page at ~165 KB/page, midpoint 1.03. Its reciprocal is a
-            // real serial ceiling, independently corroborated against a measured page-rate plateau.
+            // Text: measured band 0.93-1.07 ms/page at ~165 KB/page, midpoint 1.03 -- a spread across
+            // arms with no trend in concurrency, so the midpoint is the operating point rather than
+            // either end. Its reciprocal is a real serial ceiling, independently corroborated against a
+            // measured page-rate plateau.
             case TEXT -> SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 1_030_000L, 0L,
                     SOURCE + " — text consumer stage"));
-            // Columnar: measured band 0.042-0.046 ms/page, and it is dispatch only -- the sink's real
-            // work is the pool below, off this stage entirely.
-            case COLUMNAR -> SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 46_000L, 0L,
+            // Columnar: measured band 0.042-0.046 ms/page, midpoint taken -- the band is a spread across
+            // arms rather than a trend in concurrency, so no end of it is the "right" operating point.
+            // It is dispatch only: the sink's real work is the pool below, off this stage entirely.
+            case COLUMNAR -> SampledClientCostTerm.scalar(new ClientCostTerm(Provenance.FINAL, 44_000L, 0L,
                     SOURCE + " — columnar consumer dispatch"));
         };
     }

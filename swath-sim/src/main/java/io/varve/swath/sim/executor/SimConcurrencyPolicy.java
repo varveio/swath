@@ -389,7 +389,8 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         if (sample < latencyBaselineNanos) {
             latencyBaselineNanos = sample;
         }
-        if (atNanos - latencyDecayWindowStartNanos > budgets.aimd().latencyBaselineDecayNanos()) {
+        if (latencyDecayWindowStartNanos != UNARMED
+                && atNanos - latencyDecayWindowStartNanos > budgets.aimd().latencyBaselineDecayNanos()) {
             latencyDecayWindowStartNanos = atNanos;
             latencyBaselineNanos = latencyWindowMinNanos;
             latencyWindowMinNanos = sample;

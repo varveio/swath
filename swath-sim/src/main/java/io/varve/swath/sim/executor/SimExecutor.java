@@ -179,6 +179,7 @@ public final class SimExecutor {
     private final List<Worker> slotWaiters = new ArrayList<>();
     private final List<Worker> parked = new ArrayList<>();
 
+    private SimEventLog log = SimEventLog.disabled();
     private IdleStealPacingState pacingState = IdleStealPacingState.INITIAL;
     private boolean stealAttemptInFlight;
     private int slotsHeld;
@@ -232,7 +233,7 @@ public final class SimExecutor {
     }
 
     private PolicyRunResult execute() {
-        SimEventLog log = scenario.recordEventLog() ? SimEventLog.recording() : SimEventLog.disabled();
+        log = scenario.recordEventLog() ? SimEventLog.recording() : SimEventLog.disabled();
         SimKernel kernel = new SimKernel(scenario.seed(), scenario.budgets(), log, scenario.maxEvents());
         kernel.scheduleBootstrap(0, 0, "seed.start", this::startSeedPhase);
         SimRunResult result = kernel.run();
@@ -483,13 +484,20 @@ public final class SimExecutor {
             ledger.commitPage(nodeId, cursorTo, completed);
             arrived.count(PAGES_COUNTER, 1);
             arrived.count(KEYS_EMITTED_COUNTER, inRange.size());
-            // The page's own emitted interval goes into the trace, not just its size: a total tells a
-            // reader that the right NUMBER of keys came out, which a gap and an overlap of equal size
-            // would also satisfy. The interval makes both visible.
-            arrived.record("page.commit", "node=" + nodeId + "|keys=" + inRange.size()
-                    + "|from=" + (inRange.isEmpty() ? "" : HEX.formatHex(inRange.getFirst()))
-                    + "|to=" + (cursorTo == null ? "" : HEX.formatHex(cursorTo))
-                    + (completed ? "|completed" : ""));
+            if (log.isRecording()) {
+                // The page's own emitted interval goes into the trace, not just its size: a total tells a
+                // reader that the right NUMBER of keys came out, which a gap and an overlap of equal size
+                // would also satisfy. The interval makes both visible.
+                //
+                // Guarded, unlike every other trace site here, because this is the only one that formats
+                // key bytes: a sweep leg runs with the trace off, and hex-encoding two keys per page for
+                // a string nothing retains is the one piece of trace work worth not doing. The bytes are
+                // identical when the trace is on.
+                arrived.record("page.commit", "node=" + nodeId + "|keys=" + inRange.size()
+                        + "|from=" + (inRange.isEmpty() ? "" : HEX.formatHex(inRange.getFirst()))
+                        + "|to=" + (cursorTo == null ? "" : HEX.formatHex(cursorTo))
+                        + (completed ? "|completed" : ""));
+            }
             if (scenario.toggles().ownerSplit() && !inRange.isEmpty() && !completed) {
                 maybeOwnerSelfSplit(arrived, cursorTo);
             }
@@ -616,8 +624,9 @@ public final class SimExecutor {
             }
             long now = clock(ctx).nanoTime();
             if (idlePacing.decide(pacingState, now) == IdleStealPacingDecision.PACED) {
-                // The pacing window is checked and consumed as one step here, which is the current
-                // engine's own (widened) shape since the pacing arithmetic became a policy.
+                // Checked and acted on as one step, which is the engine's own shape: this arithmetic
+                // moved behind the seam unchanged and is still consulted under one monitor there, so
+                // unlike the per-victim cooldown it is not one of the extraction's widened windows.
                 ctx.count("IDLE_SLOT.paced", 1);
                 park(idlePacing.parkNanos(pacingState, now));
                 return;
