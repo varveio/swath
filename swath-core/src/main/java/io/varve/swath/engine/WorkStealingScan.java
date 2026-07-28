@@ -125,6 +125,14 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
      * owner-less unbounded ride-out.
      */
     private final RetryConfig retryConfig;
+    /**
+     * The run's position sensor ({@link RemainingWorkEstimator}), built once here from {@link
+     * #toggles} and this run's page size and shared by every reader of the quantity: {@link #thief}'s
+     * victim selection, {@link #ownerSelfSplit}'s gate chain, and the {@code slow_ranges[]} dump
+     * below — so a run's diagnostic estimate is the one its decisions were actually taken on.
+     * Stateless and pure, so one instance serves the whole fleet.
+     */
+    private final RemainingWorkEstimator estimator;
 
     private final Thief thief;
     private final ConcurrencyGauge gauge;
@@ -233,6 +241,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         this.toggles = context.toggles();
         this.trace = context.trace();
         this.retryConfig = context.retryConfig();
+        this.estimator = this.toggles.remainingWorkEstimator(maxKeys);
         recordDisabledToggleMarks(this.toggles, this.metrics);
         this.metrics.setStrategy("WORK_STEALING");
         this.metrics.setPrefix(this.prefix);
@@ -268,9 +277,10 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         }
         this.thief = decisionRngSeed == null
                 ? new Thief(store, thiefFetcher, this.runId, this.prefix, this.mode, this::enqueueChild,
-                        this.metrics, this.toggles, this.trace)
+                        this.metrics, this.toggles, this.trace, this.estimator)
                 : new Thief(store, thiefFetcher, this.runId, this.prefix, this.mode, this::enqueueChild,
-                        this.metrics, this.toggles, this.trace, new SeededDecisionRng(decisionRngSeed));
+                        this.metrics, this.toggles, this.trace, this.estimator,
+                        new SeededDecisionRng(decisionRngSeed));
         // Speculative readahead's guess-ahead
         // fetches get their OWN off-gauge, fail-soft fetcher — the IDENTICAL construction as the
         // Thief's probe fetcher just above (slotGated=false, reportSuccess=false): a disposable guess
@@ -286,7 +296,8 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         // effective T are read at the instant a carve is considered, and the child hand-off is the
         // identical ready-queue/outstanding path a thief uses.
         this.ownerSelfSplit = new OwnerSelfSplit(this.runId, this.workerCount, this.maxKeys, this.store,
-                this.toggles, this.metrics, this.trace, worklist::outstanding, gauge::effectiveT, this::enqueueChild);
+                this.toggles, this.metrics, this.trace, this.estimator, worklist::outstanding, gauge::effectiveT,
+                this::enqueueChild);
     }
 
     /**
@@ -314,6 +325,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         if (toggles.readahead()) {
             metrics.recordStealReason("TOGGLE", "readahead_on");
         }
+        // Same polarity, same reason, for the position sensor: which estimator a run's victim choice
+        // and owner-split gates were steered by is a reading of the run rather than an inference from
+        // its argv, and the SENSING_OWNER.*/SENSING_STEAL.* classification counters below it are
+        // silent on a keyspace that never reached the sensor at all.
+        if (toggles.rateAnchoredSensing()) {
+            metrics.recordStealReason("TOGGLE", "rate_anchored_sensing_on");
+        }
     }
 
     /**
@@ -329,7 +347,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         List<RunMetrics.RangeSnapshot> out = new ArrayList<>();
         for (WorkerState ws : livePool) {
             WorkerState.Snapshot snap = ws.snapshot();
-            double est = StealMath.estRemaining(snap.cursor(), ws.lo(), snap.hi(), ws.keysEmitted());
+            double est = estimator.estRemaining(snap.cursor(), ws.lo(), snap.hi(), ws.keysEmitted());
             long elapsedNanos = Math.max(1L, nowNanos - ws.createdAtNanos());
             double drainRate = ws.keysEmitted() / (elapsedNanos / 1_000_000_000.0);
             out.add(new RunMetrics.RangeSnapshot(ws.lo(), snap.hi(), snap.cursor(), est, drainRate,

@@ -49,7 +49,7 @@ class OwnerSplitGovernorTest {
     }
 
     private static OwnerSplitGovernor governor(EngineToggles toggles, int workerCount) {
-        return new OwnerSplitGovernor(toggles, workerCount, MAX_KEYS);
+        return new OwnerSplitGovernor(toggles, workerCount, MAX_KEYS, null);
     }
 
     private static OwnerSplitGovernor governor() {

@@ -194,4 +194,72 @@ final class EngineTogglesParseTest {
         EngineToggles toggles = EngineToggles.parse(List.of("readahead=on", "readahead=on"), false);
         assertThat(toggles.readahead()).isTrue();
     }
+
+    // ---- rate_anchored_sensing: opt-in, default OFF, excluded from disabledNames() ---------------
+
+    @Test
+    void rateAnchoredSensingDefaultsOffAndIsExcludedFromNames() throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isFalse();
+        // Like readahead, an OPT-IN new mechanism rather than one of the ten ablation toggles:
+        // separately accepted, deliberately NOT in NAMES (which drives disabledNames()'s
+        // ablated-mechanism set) — nothing is turned OFF by leaving the shipped sensor installed.
+        assertThat(EngineToggles.NAMES).doesNotContain(EngineToggles.RATE_ANCHORED_SENSING_NAME);
+        assertThat(EngineToggles.parse(null, false).disabledNames()).isEmpty();
+    }
+
+    @Test
+    void rateAnchoredSensingOnParsesAndIsNotDefault() throws InvalidArgsException {
+        EngineToggles toggles = EngineToggles.parse(List.of("rate_anchored_sensing=on"), false);
+        assertThat(toggles.rateAnchoredSensing()).isTrue();
+        assertThat(toggles.isDefault()).isFalse();
+        assertThat(toggles.disabledNames()).isEmpty();
+        assertThat(toggles.readahead()).as("and it disturbs no other opt-in mechanism").isFalse();
+    }
+
+    @Test
+    void rateAnchoredSensingOffExplicitlyParsesAndStaysExcludedFromDisabledNames() throws InvalidArgsException {
+        EngineToggles toggles = EngineToggles.parse(List.of("rate_anchored_sensing=off"), false);
+        assertThat(toggles.rateAnchoredSensing()).isFalse();
+        assertThat(toggles).isEqualTo(EngineToggles.DEFAULT);
+        assertThat(toggles.disabledNames()).isEmpty();
+    }
+
+    @Test
+    void rateAnchoredSensingIsCaseInsensitiveAndComposesWithAblationToggles() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("rate_anchored_sensing=ON", "far_ahead=off"), false);
+        assertThat(toggles.rateAnchoredSensing()).isTrue();
+        assertThat(toggles.farAhead()).isFalse();
+        assertThat(toggles.disabledNames()).containsExactly("far_ahead");
+    }
+
+    @Test
+    void rateAnchoredSensingUnknownValueIsRejected() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("rate_anchored_sensing=maybe"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("on|off");
+    }
+
+    @Test
+    void rateAnchoredSensingContradictoryValuesAreRejected() {
+        assertThatThrownBy(() ->
+                EngineToggles.parse(List.of("rate_anchored_sensing=on", "rate_anchored_sensing=off"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("contradictory");
+    }
+
+    @Test
+    void rateAnchoredSensingRepeatedIdenticalValuesAreFine() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("rate_anchored_sensing=on", "rate_anchored_sensing=on"), false);
+        assertThat(toggles.rateAnchoredSensing()).isTrue();
+    }
+
+    /** A name the parser accepts must be discoverable from the error a mistyped one produces. */
+    @Test
+    void theUnknownNameErrorListsTheOptInSensorToggleToo() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("rate_anchored=on"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining(EngineToggles.RATE_ANCHORED_SENSING_NAME);
+    }
 }

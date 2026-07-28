@@ -117,20 +117,6 @@ final class CursorAnchoredEstimator implements RemainingWorkEstimator {
         return "anchored";
     }
 
-    /**
-     * The remaining-over-consumed ratio in the anchored frame — the geometric factor the estimate
-     * multiplies the observed density by. Returns 1.0 when there is no consumed evidence to anchor,
-     * so a caller that only wants the geometry gets a neutral answer rather than a degenerate one.
-     */
-    static double geometricFactor(byte[] cursor, byte[] lo, byte[] hi) {
-        byte[] cur = RemainingWorkEstimator.orBottom(cursor);
-        if (hi == null || KeyBytes.compareUnsigned(cur, RemainingWorkEstimator.orBottom(lo)) <= 0) {
-            return 1.0;
-        }
-        double consumed = consumedIn(cur, lo, hi);
-        return consumed <= 0.0 ? 1.0 : remainingIn(cur, lo, hi) / consumed;
-    }
-
     /** The window offset this range's cursor is read at: its own divergence from {@code lo}. */
     private static int anchor(byte[] cursor, byte[] lo) {
         return RemainingWorkEstimator.commonPrefixLen(RemainingWorkEstimator.orBottom(lo), cursor);

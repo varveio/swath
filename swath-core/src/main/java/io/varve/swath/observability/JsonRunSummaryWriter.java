@@ -567,6 +567,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // reproducibility signal for them. Do not omit them here — that silently breaks the signal.
         engineFlagsNode.put("readahead", toggles.readahead());
         engineFlagsNode.put("mass_aware_seed", toggles.massAwareSeed());
+        engineFlagsNode.put("rate_anchored_sensing", toggles.rateAnchoredSensing());
         if (rc.maxDurationMs() == null) {
             engineFlagsNode.putNull("max_duration_ms");
         } else {

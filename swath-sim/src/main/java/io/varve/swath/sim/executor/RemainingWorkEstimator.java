@@ -12,9 +12,13 @@ package io.varve.swath.sim.executor;
  * can be raced against the incumbent without the engine changing at all: the variants live here, in
  * the simulator, and the policies they drive are the engine's own.
  *
- * <p>Nothing in {@code swath-core} implements this. The incumbent reading is
- * {@link WindowEstimator}, which delegates to the engine's public arithmetic, so the control leg of a
- * race is the shipped algorithm rather than a re-implementation of it.
+ * <p><b>What the engine owns, this interface delegates to rather than reimplements.</b> The incumbent
+ * reading is {@link WindowEstimator}, which calls the engine's public {@code StealMath}; the promoted
+ * rate+anchored composition is {@link RateAnchoredArm}, which calls the engine's own
+ * {@code RateAnchoredEstimator} (the arm this race promoted, selectable there under
+ * {@code --engine-toggle rate_anchored_sensing=on}). So a race's control leg AND its promoted arm are
+ * both the shipped algorithm rather than a re-implementation of it that could drift; what is
+ * implemented here is what the race rejected.
  *
  * <p><b>The two degeneracy readings are part of the interface, not of the executor.</b> A run's
  * sensor counters answer "could the sensor this run steers on see this?", so they have to be asked of

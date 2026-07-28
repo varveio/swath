@@ -32,11 +32,11 @@ class ThiefPolicyCascadeTest {
     // None of this suite's fixtures ever set consecutiveZeroFanoutStructureProbes/
     // consecutiveTimedOutStructureProbes above 0, so structureProbingEnabled's escape hatch (the
     // one caller of this rng) is never reached -- this stub is never drawn from.
-    private final ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, NO_SCAN_PREFIX, bound -> 0);
+    private final ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, NO_SCAN_PREFIX, bound -> 0, null);
     private final ThiefPolicy structureOffPolicy =
-            new ThiefPolicy(EngineToggles.DEFAULT.withStructureProbes(false), NO_SCAN_PREFIX, bound -> 0);
+            new ThiefPolicy(EngineToggles.DEFAULT.withStructureProbes(false), NO_SCAN_PREFIX, bound -> 0, null);
     private final ThiefPolicy structureAndReflectOffPolicy = new ThiefPolicy(
-            EngineToggles.DEFAULT.withStructureProbes(false).withReflect(false), NO_SCAN_PREFIX, bound -> 0);
+            EngineToggles.DEFAULT.withStructureProbes(false).withReflect(false), NO_SCAN_PREFIX, bound -> 0, null);
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);

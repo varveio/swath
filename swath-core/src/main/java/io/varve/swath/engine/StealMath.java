@@ -40,6 +40,13 @@ public final class StealMath {
      */
     private static final byte[] MAX_UTF8_KEY = {(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF};
 
+    /**
+     * The ⊥ sentinel (a {@code null} lower bound or cursor) as bytes, for the comparisons that need a
+     * real array. Shared rather than freshly allocated inside {@link #anchoredGeometricFactor}, whose
+     * every root-range reading would otherwise allocate on a scan-hot, documented allocation-free path.
+     */
+    private static final byte[] EMPTY = new byte[0];
+
     private StealMath() {}
 
     // -------------------------------------------------------------------------
@@ -90,6 +97,39 @@ public final class StealMath {
         double consumed  = spanIn(lo, cursor, lo, hi);
         if (consumed <= 0.0) return remaining;
         return ((double) keysEmitted / consumed) * remaining;
+    }
+
+    /**
+     * The <b>cursor-anchored</b> geometric factor: remaining span over consumed span, both read in a
+     * window anchored at the cursor's OWN divergence from {@code lo} rather than at the divergence of
+     * {@code [lo, hi]} that {@link #fracIn} reads. The ratio {@link #estRemaining} multiplies its
+     * observed density by, measured where a deep-nested cursor actually moves.
+     *
+     * <p>Let {@code d = cpl(lo, cursor)} and {@code d0 = cpl(lo, hi)}; a cursor inside {@code (lo, hi]}
+     * always has {@code d >= d0}. Where {@code d == d0} the anchor did not move and every term is
+     * {@link #fracIn}'s own, digit for digit — the factor is exactly the shipped reading's
+     * {@code remaining / consumed}. Where {@code d > d0} the cursor has descended into a subtree it
+     * shares with {@code lo}: the window is read from byte {@code d} and its ceiling is the top of that
+     * shared prefix (the constant 1.0 in that frame), which is inside {@code [lo, hi]}, so the frame
+     * stays closed and both terms stay ordinary fractions. That deeper frame therefore reads
+     * "at the rate this range has consumed the subtree its cursor is in, how much of that subtree is
+     * left", and — its ceiling being 1.0 — drops below one only for a cursor diverging from {@code lo}
+     * on a byte at or above {@code 0x80}, which object keys do not do.
+     *
+     * <p>Returns the neutral {@code 1.0} where there is no consumed evidence to anchor (an open
+     * frontier, a cursor at or before {@code lo}, or a consumed span that underflows to zero), so a
+     * caller that wants only the geometry gets a neutral answer rather than a degenerate one.
+     */
+    public static double anchoredGeometricFactor(byte[] cursor, byte[] lo, byte[] hi) {
+        byte[] cur = (cursor == null) ? EMPTY : cursor;
+        byte[] loKey = (lo == null) ? EMPTY : lo;
+        if (hi == null || KeyBytes.compareUnsigned(cur, loKey) <= 0) return 1.0;
+        int d  = commonPrefixLen(loKey, cur);
+        int d0 = commonPrefixLen(loKey, hi);
+        double consumed = fracFromOffset(cur, d) - fracFromOffset(loKey, d);
+        if (consumed <= 0.0) return 1.0;
+        double top = (d <= d0) ? fracFromOffset(hi, d) : 1.0;
+        return Math.max(0.0, top - fracFromOffset(cur, d)) / consumed;
     }
 
     // -------------------------------------------------------------------------

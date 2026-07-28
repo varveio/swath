@@ -493,7 +493,7 @@ class SensingRaceTest {
      * E4-family readings of 0.051-0.065 against the {@code < 0.05} line — is not a quality signal at this
      * seed: the range still active when the run goes quiescent is the fixture's own open-frontier seed
      * range ({@code hi == null}, the unbounded tail {@code seedRanges} always tiles the keyspace with),
-     * and it is never split, by either side, over the whole run. {@link RateAnchoredEstimator#estRemaining}
+     * and it is never split, by either side, over the whole run. {@link RateAnchoredArm#estRemaining}
      * reads an open frontier as infinite remaining mass, which clears every floor built on that estimate
      * without exception, so the owner side refuses every carve of it with
      * {@code OwnerSplitSkipReason#OPEN_FRONTIER} — hundreds of times over a run this size — and no thief

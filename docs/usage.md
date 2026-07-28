@@ -522,8 +522,9 @@ slip — is rejected outright (exit 2) rather than silently signing with SigV4.
 **EXPERIMENTAL / DIAGNOSTIC — a measurement tool, not a supported configuration.** `--engine-toggle
 NAME=on|off` (repeatable) is a single ablation namespace so a per-mechanism A/B measurement of the
 `WorkStealingScan` engine runs from one binary instead of a bespoke flag per experiment. Every
-structure toggle defaults to `on` (`readahead` defaults to `off`; `mass_aware_seed` is default ON,
-opt-out `mass_aware_seed=off`); **the defaults are the only supported configuration** —
+structure toggle defaults to `on` (`readahead` and `rate_anchored_sensing` default to `off`;
+`mass_aware_seed` is default ON, opt-out `mass_aware_seed=off`); **the defaults are the only
+supported configuration** —
 toggling never changes correctness (I2/I3 tiling holds either way), only which optimization
 mechanisms engage. An unknown name, a malformed value (not `on`/`off`), or a contradictory combination
 (the same name repeated with both values) is a startup validation error (exit 2).
@@ -542,7 +543,8 @@ mechanisms engage. An unknown name, a malformed value (not `on`/`off`), or a con
 | `fanout_tiling` | on | `SeedStep`'s zero-probe `key=value/` partition-fanout tiling is disabled — a truncated partition fan-out is no longer tiled along its first-page child prefixes. NOTE: with `mass_aware_seed` at its ON default the un-tiled cut may instead be sample-proven heavy and BANDED; a pure fan-out-tiling ablation needs `mass_aware_seed=off` too. |
 
 (`mass_aware_seed` and `readahead` — the two toggles whose defaults have diverged over time — are
-documented in the "New-mechanism performance toggles" section below.)
+documented in the "New-mechanism performance toggles" section below, as is the opt-in
+`rate_anchored_sensing` position-sensor arm.)
 
 Each disabled toggle's effect is provable post-hoc from the metrics alone: turning a mechanism off
 silences its own §5 counters (e.g. `structure_probes=off` ⇒ `swath.probe.structure_fetches` stays
@@ -553,15 +555,16 @@ alongside `max_duration_ms`) both echo the effective state whenever any toggle i
 
 #### New-mechanism performance toggles — defaults and cost profile
 
-Unlike the ablation namespace above (default `on` = the shipped behavior), two toggles are
+Unlike the ablation namespace above (default `on` = the shipped behavior), three toggles are
 **new mechanisms outside that namespace**, and are the only knobs a perf-focused user needs
 to consider. `mass_aware_seed` is **default `on`** — opt-*out*
-(`--engine-toggle mass_aware_seed=off`), not opt-in; `readahead` remains **opt-in**,
-default `off`.
+(`--engine-toggle mass_aware_seed=off`), not opt-in; `readahead` and `rate_anchored_sensing`
+remain **opt-in**, default `off`.
 
 | Name | Default | Change from default when |
 | --- | --- | --- |
 | `mass_aware_seed` | **on** | You need the older, non-mass-aware seed exactly, for a diagnostic A/B (`--engine-toggle mass_aware_seed=off`). It is what carries the badly skewed buckets: `pdbsnapshots` only reaches completion with it on, `genome-browser` completes materially faster, and `meeo` covers far more of the keyspace under the same time cap. It is also cheaper *per object* even on the hive-partitioned buckets where it spends more absolute API calls (`blockchain`) — because it enumerates proportionally more of them. There is no ordinary reason to turn it off. |
+| `rate_anchored_sensing` | **off** | You are running the position-sensor A/B and want the arm the simulator's corpus race promoted: remaining work read as the range's own proven mass (`max(keysEmitted, page)`), which cursor-anchored geometry may lift by up to sixteen and cut by at most four. It replaces the shipped local-density-times-span reading at the two fleet-level sites that steer on it — victim choice and the owner-split gate chain (`readahead`'s own engage gate keeps the shipped reading either way: it scores one owner's local runway, not a fleet-wide ranking) — on a deep-nested keyspace where the shipped window's consumed span underflows to zero and a range's emitted keys drop out of its own estimate. **Unproven on real buckets**: it changes which range is stolen from and when an owner carves, so run it as a measured A/B against the default, never as a blind default flip. A run on this arm marks itself `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own classification counters, one namespace per site (`SENSING_OWNER.*`, `SENSING_STEAL.*` — metrics-internals.md §5a). |
 | `readahead` | **off** | You want the lowest wall-clock on a drain-heavy bucket (`encode` and `pmc` are the shapes it has been measured engaging on) and can pay for it: readahead trades materially more API calls and a materially higher peak RSS for less wall time. Leave it off when API cost or memory matters more than latency. |
 
 **When both apply to the same cut.** On a truncated cut that is BOTH a `key=value/` partition
@@ -573,11 +576,12 @@ NON-partition cut.
 Maximum-performance recipe (readahead on top of the now-default `mass_aware_seed`):
 `swath list s3://BUCKET ... --tune engine.readahead=on`
 
-Cost notes: neither toggle has an unbounded call-amplification mechanism — readahead
-speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
-and mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes).
+Cost notes: none of the three performance toggles has an unbounded direct call-amplification mechanism —
+readahead speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
+mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes), and
+rate-anchored sensing is local estimate arithmetic.
 The api multipliers only cost money on requester-pays/private buckets (public-bucket LIST
-is free); the RSS cost is real everywhere. Both announce themselves via a once-per-run
+is free); the RSS cost is real everywhere. Each of the three announces itself via a once-per-run
 `TOGGLE.<name>_on` engagement mark, so a run's summary always shows what was enabled.
 
 #### Run trace (`--trace`, V1)

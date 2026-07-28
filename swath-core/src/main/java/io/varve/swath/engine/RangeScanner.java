@@ -340,6 +340,12 @@ public final class RangeScanner {
                         // true — often null — lower bound). Never resets the streak: a short remaining
                         // tail keeps deferring every subsequent full page until the range naturally ends.
                         //
+                        // Deliberately reads StealMath directly, NOT the run's RemainingWorkEstimator
+                        // (algorithms.md §3.2): this is the only reader whose frame is the streak's own
+                        // rather than the range's, and the precision guard below is written against the
+                        // window reading's exact degenerate branch. A position sensor selected for the
+                        // fleet's victim/carve decisions has no bearing on one owner's local runway.
+                        //
                         // Precision guard: StealMath#estRemaining returns the RAW (unscaled, [0,1])
                         // remaining fraction — not a key-count estimate — when its own `consumed` (the
                         // streak's own span) rounds to <= 0.0 (its documented "no density signal yet"

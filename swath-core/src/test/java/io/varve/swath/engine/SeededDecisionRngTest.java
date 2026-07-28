@@ -161,7 +161,7 @@ final class SeededDecisionRngTest {
                 Thief thief = new Thief(StubCheckpointStore.returning(1000L + i),
                         MockPageFetcher.builder().keys(manyDirs("root", 20)).build(), RUN_ID, new byte[0],
                         ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT,
-                        TraceSink.NONE, rng);
+                        TraceSink.NONE, null, rng);
                 thief.steal(List.of(victim));
                 Map<String, Long> deltas = metrics.diagnostics(Duration.ZERO).stealReasons();
                 if (deltas.getOrDefault("STRUCTURE.suppressed_zero_fanout", 0L) > 0) {

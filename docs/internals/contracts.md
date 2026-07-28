@@ -549,14 +549,20 @@ missed two of the three leaks the campaign actually found (issues #19, #22) — 
 reachable from `decide()`/`selectVictim()`/`beginAttempt()`/`onProbeResult()` — every class in
 `io.varve.swath.engine.policy`, plus the transitive closure of every field-reachable
 `io.varve.swath.*` type (so `AlphabetDigest.Snapshot`, reached only via
-`StealAttemptView.alphabetDigest()`, is in scope despite living in `io.varve.swath.engine`) — may
+`StealAttemptView.alphabetDigest()`, and `RemainingWorkEstimator`, the injected position sensor
+`ThiefPolicy`/`OwnerSplitGovernor` hold as a field — algorithms.md §3.2 — are in scope despite living
+in `io.varve.swath.engine`) — may
 **hold** a `RunMetrics`/`TraceSink` reference as a field, or **mutate**
 `java.util.concurrent.atomic` state, or **call** an ambient clock/randomness API directly, or
 **expose** a mutator on a value a policy decides over. `DecisionPathPurityTest` (`swath-core`)
 enforces this mechanically: a field-type closure walk for the first two (the exact shape issues #19
 and #22 took), a comment-stripped source scan of the same closure for the third (issue #20's shape),
 and a record-component closure walk rejecting mutators and array-returning accessors for the fourth
-(issue #30's shape). An explicit,
+(issue #30's shape). An injected pure-function seam is likewise not ambient: `RemainingWorkEstimator` (the
+`--engine-toggle rate_anchored_sensing` position-sensor choice, resolved once per run by
+`EngineToggles#remainingWorkEstimator` and shared by both policies) carries no clock, no randomness
+and no collaborator state, and reports what it observed through the caller's own `Engagement`
+collector rather than to `RunMetrics`. An explicit,
 caller-supplied parameter is not "ambient" and stays legal either way — `EngineToggles#recordOffMarks`
 takes a `RunMetrics` parameter but is called only from executor code, never a `decide()` path, and
 every `Engagement`/`VictimMutation` collector already threaded through this interface is the same

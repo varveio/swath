@@ -51,9 +51,9 @@ class SensingVariantParityTest {
 
     @Test
     void mirroredVictimSelectionDecidesExactlyAsTheEnginesDoes() {
-        StealPolicy engine = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0);
+        StealPolicy engine = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null);
         StealPolicy mirror = new EstimatorStealPolicy(new WindowEstimator(),
-                new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0));
+                new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null));
 
         int pools = 0;
         for (List<VictimView> pool : victimPools()) {
@@ -67,7 +67,7 @@ class SensingVariantParityTest {
 
     @Test
     void theMirroredOwnerSplitGateChainDecidesExactlyAsTheEnginesDoes() {
-        OwnerSplitPolicy engine = new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE);
+        OwnerSplitPolicy engine = new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, null);
         OwnerSplitPolicy mirror = new EstimatorOwnerSplitPolicy(new WindowEstimator(),
                 EngineToggles.DEFAULT, WORKERS, PAGE);
 

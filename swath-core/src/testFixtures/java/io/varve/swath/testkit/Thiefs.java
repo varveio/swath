@@ -26,7 +26,7 @@ public final class Thiefs {
     /** A metrics-less {@link Thief} — the effective construction the deleted 6-arg overload built. */
     public static Thief of(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                            ListingMode mode, Thief.ChildSink childSink) {
-        return new Thief(store, fetcher, runId, prefix, mode, childSink, null, null, null);
+        return new Thief(store, fetcher, runId, prefix, mode, childSink, null, null, null, null);
     }
 
     /**
@@ -35,7 +35,7 @@ public final class Thiefs {
      */
     public static Thief of(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                            ListingMode mode, Thief.ChildSink childSink, RunMetrics metrics) {
-        return new Thief(store, fetcher, runId, prefix, mode, childSink, metrics, null, null);
+        return new Thief(store, fetcher, runId, prefix, mode, childSink, metrics, null, null, null);
     }
 
     /**
@@ -46,6 +46,6 @@ public final class Thiefs {
     public static Thief of(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                            ListingMode mode, Thief.ChildSink childSink, RunMetrics metrics,
                            EngineToggles toggles) {
-        return new Thief(store, fetcher, runId, prefix, mode, childSink, metrics, toggles, null);
+        return new Thief(store, fetcher, runId, prefix, mode, childSink, metrics, toggles, null, null);
     }
 }

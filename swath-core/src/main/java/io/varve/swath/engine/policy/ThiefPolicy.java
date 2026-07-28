@@ -6,6 +6,7 @@
 package io.varve.swath.engine.policy;
 
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.RemainingWorkEstimator;
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.policy.VictimMutation.Kind;
 import io.varve.swath.model.ByteMidpoint;
@@ -70,6 +71,7 @@ public final class ThiefPolicy implements StealPolicy {
     private final byte[] scanPrefix;
     private final byte[] prefixCeiling;
     private final DecisionRng rng;
+    private final RemainingWorkEstimator estimator;
 
     /**
      * @param toggles    the {@code --engine-toggle} ablation namespace this run was constructed with
@@ -79,12 +81,17 @@ public final class ThiefPolicy implements StealPolicy {
      * @param rng        the one random draw the cascade needs (the structure-probe suppression
      *                   recovery's escape hatch, issue #20) — injected so this decision is
      *                   reproducible from its inputs like every other; see {@link DecisionRng}
+     * @param estimator  the position sensor victim selection scores on; {@code null}-defaults to
+     *                   {@link RemainingWorkEstimator#WINDOW}, the shipped reading, so a caller that
+     *                   does not steer this seam gets exactly the arithmetic it always had
      */
-    public ThiefPolicy(EngineToggles toggles, byte[] scanPrefix, DecisionRng rng) {
+    public ThiefPolicy(EngineToggles toggles, byte[] scanPrefix, DecisionRng rng,
+                       RemainingWorkEstimator estimator) {
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.scanPrefix = scanPrefix;
         this.prefixCeiling = StealMath.prefixCeil(scanPrefix);
         this.rng = rng;
+        this.estimator = estimator == null ? RemainingWorkEstimator.WINDOW : estimator;
     }
 
     @Override
@@ -109,7 +116,7 @@ public final class ThiefPolicy implements StealPolicy {
                 engagements.add(new Engagement("STEAL", "futility_paced"));
                 continue;
             }
-            double est = StealMath.estRemaining(w.cursor(), w.lo(), w.hi(), w.keysEmitted());
+            double est = estimator.estRemaining(w.cursor(), w.lo(), w.hi(), w.keysEmitted());
             if (est <= 0.0) {
                 skippedNoSpan++;
                 continue;
@@ -134,6 +141,12 @@ public final class ThiefPolicy implements StealPolicy {
             }
             return new NoVictim(reason, engagements, mutations);
         }
+        // What the sensor's reading of the WINNING candidate did (§5 discipline) — once per attempt
+        // rather than once per scored candidate, so the signal costs one classification per steal
+        // instead of one per pool member. That count is a different denominator from the owner gate's
+        // per-page-commit one, so it carries its own category. Inert for the shipped reading.
+        estimator.classify("SENSING_STEAL", chosen.cursor(), chosen.lo(), chosen.hi(),
+                chosen.keysEmitted(), engagements);
         return new Selected(chosen.nodeId(), engagements, mutations);
     }
 
