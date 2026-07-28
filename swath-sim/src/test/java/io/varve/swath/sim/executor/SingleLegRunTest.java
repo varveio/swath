@@ -40,7 +40,9 @@ import org.junit.jupiter.api.Test;
  * <p>The arm must name a {@link SensingVariant}; the seed is any long (the sweep's verdict standard
  * of four seeds does not apply — this is a diagnosis instrument, and the seed worth dumping is
  * whichever one the table misbehaved at). Page regime is the measured one
- * ({@link PolicyRunFixtures#MEASURED_TAIL_PAGE_SIZE}); the run prints the same phase summary the
+ * ({@link PolicyRunFixtures#MEASURED_TAIL_PAGE_SIZE}) at the live store's own call-class latency
+ * profile ({@link PolicyRunFixtures#LIVE_S3_LATENCY}), like every other real-listing leg; the run
+ * prints the same phase summary the
  * race tables print, so its row can be read against theirs.
  */
 @Tag("perf")
@@ -73,7 +75,7 @@ class SingleLegRunTest {
             String storeLabel = "single leg (" + opened.resolvedBackend() + ")";
             PolicyScenario scenario = PolicyRunFixtures
                     .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                            PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
+                            PolicyRunFixtures.LIVE_S3_LATENCY, PolicyRunFixtures.measuredCost())
                     .withSeed(seed);
             PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, arm);
 

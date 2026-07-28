@@ -627,9 +627,9 @@ final class CorpusSweep {
     }
 
     /**
-     * Every arm at every one of {@code seeds}, against one open handle, at the measured page regime and
-     * the composite measured client cost — the configuration every other real-listing number in this
-     * campaign was taken at.
+     * Every arm at every one of {@code seeds}, against one open handle, at the measured page regime, the
+     * live store's own call-class latency profile and the composite measured client cost — the
+     * configuration every other real-listing number in this campaign was taken at.
      */
     private static List<Measured> legs(ListingStore store, String label, int workers, long[] seeds,
                                        List<SensingVariant> arms, String fixture, OptionalLong keys,
@@ -639,7 +639,7 @@ final class CorpusSweep {
             for (long seed : seeds) {
                 PolicyScenario scenario = PolicyRunFixtures
                         .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                                PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
+                                PolicyRunFixtures.LIVE_S3_LATENCY, PolicyRunFixtures.measuredCost())
                         .withSeed(seed);
                 HeapPeak.reset();
                 Instant startedAt = Instant.now();

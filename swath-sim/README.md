@@ -321,14 +321,33 @@ proposer, and the fleet admits one steal attempt at a time. So `splits_rejected`
 that are losing four proposals in five, and that zero is a fact about the ordering rather than a
 simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
 
-How often **that race** is lost is a property of the *keyspace*, not of the timings a scenario declares
-— a claim about the loss share specifically, and not about the serial tail it contributes to, which
-depends on the page regime and is discussed under the fixtures below. Where a pivot lands relative to
-the cursor and how far the cursor travels while the probes are in flight both scale with the page, so
-moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms a real deployment was measured at
-leaves the loss share in the same place (81% and 66% on the same fixture). What moves it is mass: the
-same geometry with a twentieth of the keys per directory loses 52%. The measured page/probe regime is
-available as a named pair of inputs so that claim can be re-checked rather than believed.
+**How often that race is lost turns on one ratio the scenario declares: what a probe costs relative to
+a page.** This README used to say the opposite — that the loss share is a property of the keyspace and
+not of the declared timings — on the evidence that moving from a 100-key page in 30 ms to the
+1,000-key page in 110 ms leaves it in the same place (81% and 66% on the same fixture). Both of those
+regimes price a probe at ~0.32 of a page, so what that pair of runs actually held fixed was the ratio,
+and the claim generalised from it was wrong. The live store was measured at 121 ms against 223 ms
+(0.54). A thief spends a cascade of probes placing a pivot and loses if the victim drained past it
+meanwhile, so `probes × probe/page` *is* the race window in owner pages: about two at the live ratio,
+under one at 0.32. On a wide-flat tail that difference is the whole outcome — at 0.54 the engine loses
+essentially every race on the tail range (measured on a real bucket: 460 of 461 attempts), and a
+fleet modelled at 0.32 keeps winning them and reports a bucket carved up that a real run leaves to
+drain serially.
+
+So the loss share is ratio-sensitive, and *mass* moves it too: the same geometry with a twentieth of
+the keys per directory loses 52%. The real-listing instruments (`RealListingRunTest`, the corpus
+sweep, `SingleLegRunTest`) therefore run at the live profile — `PolicyRunFixtures.LIVE_S3_LATENCY`,
+223 ms page / 121 ms pivot probe / 223 ms delimited probe, measured 2026-07-28 — and
+`ProbeToPageRatioTailTest` pins the mechanism: one fixture, one fleet, one page size, one arm, with
+only the ratio changed, and the heavy leaf goes from carved-up to a single unstealable range holding
+the fleet for half the run.
+
+**The bench tables published at the 35 ms / 110 ms regime remain valid as characterisations of that
+regime** and are still pinned there — a bench number states its regime, and re-running them at the
+live ratio would replace measurements, not correct them. What does not survive is quoting one of them
+as what a fleet would do against the live store on a race-sensitive shape; that needs a run at the
+live ratio. Every regime is a named pair of inputs so either claim can be re-checked rather than
+believed.
 
 Two denominators are in circulation and they are not interchangeable. The shares above are proposals
 lost over proposals that reached the re-validation; a deployment's own numbers are usually quoted per
@@ -525,6 +544,10 @@ listing** instead, and prints the sensing race's own table so the two read side 
 cost table (wall time, events, store calls) that is how a corpus sweep gets sized, and a "where does
 the tail live" leg that reports the longest common prefix of the keys committed after the last split.
 
+Its legs run at the **live store's call-class latency profile** (`LIVE_S3_LATENCY`), not the synthetic
+benches' — an answer quoted as "what the fleet would do on this bucket" has to be taken at the ratio
+that bucket's store actually charges, and that ratio decides the steal race (above).
+
 ```shell
 ./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=/path/to/sorted-fixture
 # a listing of tens of millions of keys wants more than the perf tier's 2 GB:
@@ -716,6 +739,15 @@ is: the honest statement is that reproducing this tail needs a bucket about ten 
 size, and the small page buys that at a tenth of the memory while buying nothing else. The 36.8% /
 84.0% concentration shares it deals (against a measured 32.6% / 90.7%) are pinned in
 `KeyspaceFixturesTest`.
+
+**And that 0.001 is quoted at a probe:page ratio too.** The same fixture, the same 1,000-key page and
+the same fleet, run at the live store's ratio instead of the bench's, does not have its heavy leaf
+absorbed at all: the leaf drains as one range that holds the fleet for **49%** of the run, 668 steal
+attempts against it produce a single child that carries no keys, and the run publishes 18 splits where
+the bench ratio publishes 39–61. `ProbeToPageRatioTailTest` (`@Tag("perf")`) pins that, and it is the
+leg to read before quoting any tail or loss number from this module as what a real fleet would do:
+the page size decides how many round trips a range is, and the probe:page ratio decides whether anyone
+can take it away.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

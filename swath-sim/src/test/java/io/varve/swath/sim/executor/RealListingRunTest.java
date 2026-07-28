@@ -60,8 +60,10 @@ import org.junit.jupiter.api.Test;
  *
  * <h2>What is measured, and how it is quoted</h2>
  * Three sensing variants — the shipped sensor and the two the race left standing — at the four seeds
- * the race is judged on, at the <b>measured</b> page regime, plus one leg at the bench's 100-key
- * regime for cross-comparison. Every serial/tail number carries the page size it was taken at
+ * the race is judged on, at the <b>measured</b> page regime and the live store's own call-class latency
+ * profile ({@link PolicyRunFixtures#LIVE_S3_LATENCY}, whose probe:page ratio is what decides a steal
+ * race), plus one leg at the bench's 100-key regime for cross-comparison. Every serial/tail number
+ * carries the page size it was taken at
  * (methodology principle 13: a bench number states its regime), and every variant runs at every seed
  * (quoting a subset is cherry-picking). Nothing here asserts a magnitude: what a real listing does is
  * the measurement, and a threshold invented here would be a threshold fitted to it. What <em>is</em>
@@ -115,12 +117,6 @@ class RealListingRunTest {
      */
     private static final List<SimStoreBackend> ORDER_MASKED_BACKENDS =
             List.of(SimStoreBackend.ARENA, SimStoreBackend.PARQUET);
-
-    /** The two trace kinds that move occupancy, and so the whole of the reconstruction's input. */
-    private static final Set<String> OCCUPANCY_KINDS = Set.of("range.claim", "range.complete");
-
-    /** The pseudo-range a serial span with nothing being drained at all is attributed to. */
-    private static final long FLEET_IDLE = -1L;
 
     /** How many serial holders one arm's decomposition names — enough to see whether it is one. */
     private static final int SERIAL_HOLDERS_REPORTED = 8;
@@ -192,7 +188,7 @@ class RealListingRunTest {
         for (SensingVariant variant : VARIANTS) {
             for (long seed : SensingRaceProtocol.SEEDS) {
                 measured.add(runLeg(variant, seed, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                        PolicyRunFixtures.MEASURED_TAIL_LATENCY, costs));
+                        PolicyRunFixtures.LIVE_S3_LATENCY, costs));
             }
         }
         List<SensingRaceProtocol.Leg> bench = List.of(runLeg(SensingVariant.CURRENT,
@@ -200,7 +196,8 @@ class RealListingRunTest {
                 PolicyRunFixtures.REMOTE_LATENCY, costs));
 
         SensingRaceProtocol.printTable("real listing — measured page regime ("
-                + PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE + "-key pages)", measured);
+                + PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE + "-key pages, live call-class latency)",
+                measured);
         SensingRaceProtocol.printTable("real listing — bench page regime ("
                 + SensingRaceProtocol.BENCH_PAGE_SIZE + "-key pages, shipped sensor only)", bench);
         printCosts(costs);
@@ -242,7 +239,7 @@ class RealListingRunTest {
     void whereTheTailLivesOnTheRealListing() {
         PolicyScenario scenario = PolicyRunFixtures
                 .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                        PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
+                        PolicyRunFixtures.LIVE_S3_LATENCY, PolicyRunFixtures.measuredCost())
                 .withSeed(traceSeed)
                 .withEventLog(true);
         PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, SensingVariant.CURRENT);
@@ -296,7 +293,7 @@ class RealListingRunTest {
         for (SensingVariant variant : VARIANTS) {
             PolicyScenario scenario = PolicyRunFixtures
                     .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                            PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
+                            PolicyRunFixtures.LIVE_S3_LATENCY, PolicyRunFixtures.measuredCost())
                     .withSeed(traceSeed)
                     .withEventLog(true);
             PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, variant);
@@ -312,7 +309,7 @@ class RealListingRunTest {
                     postSeedSeconds, timeline.rangeNanos() / 1e9, timeline.serialNanos() / 1e9,
                     timeline.meanOccupancy(), result.storeCalls(), result.pages());
 
-            Map<Long, Long> serialNanosByNode = serialNanosByNode(result);
+            Map<Long, Long> serialNanosByNode = SimTrace.serialNanosByNode(result);
             // The trace's own reconstruction has to agree with the timeline the run accumulated
             // independently, or the addresses below belong to some other run than the one measured.
             long tracedSerialNanos = serialNanosByNode.values().stream().mapToLong(Long::longValue).sum();
@@ -349,56 +346,6 @@ class RealListingRunTest {
                     });
             result.counters().forEach((name, value) -> System.out.printf(Locale.ROOT,
                     "real_listing phase=counters arm=%s %s=%d%n", arm, name, value));
-        }
-    }
-
-    /**
-     * Serial nanoseconds by the range that was holding the fleet, rebuilt from the trace's claim and
-     * complete records. A span counts when at most one range is being drained; a span at zero — every
-     * worker parked between a completion and the next claim — is attributed to {@link #FLEET_IDLE},
-     * because "nobody was working" and "one range was working alone" are different diagnoses and the
-     * timeline's own serial fraction merges them.
-     *
-     * <p>The window opens at the seed's end, and an occupancy record from before it <b>primes</b> the
-     * live set rather than being dropped: a range claimed before the window is still holding the fleet
-     * inside it, and dropping its claim would attribute its whole span to {@link #FLEET_IDLE} or to
-     * whoever claimed next. The window's start and the running cursor are separate for the same reason
-     * — one is a property of the run, the other of the walk, and sharing a variable between them makes
-     * the pre-window filter mean something different after the first entry.
-     */
-    private static Map<Long, Long> serialNanosByNode(PolicyRunResult result) {
-        Map<Long, Long> serialNanos = new LinkedHashMap<>();
-        Set<Long> live = new LinkedHashSet<>();
-        long windowStart = result.timeline().seedCompletedNanos();
-        long since = windowStart;
-        for (SimEventLog.Entry entry : result.log().entries()) {
-            if (!OCCUPANCY_KINDS.contains(entry.kind())) {
-                continue;
-            }
-            if (entry.atNanos() < windowStart) {
-                applyOccupancy(live, entry);
-                continue;
-            }
-            if (live.size() <= 1) {
-                serialNanos.merge(live.isEmpty() ? FLEET_IDLE : live.iterator().next(),
-                        entry.atNanos() - since, Long::sum);
-            }
-            applyOccupancy(live, entry);
-            since = entry.atNanos();
-        }
-        if (live.size() <= 1) {
-            serialNanos.merge(live.isEmpty() ? FLEET_IDLE : live.iterator().next(),
-                    result.timeline().endNanos() - since, Long::sum);
-        }
-        return serialNanos;
-    }
-
-    /** One occupancy record applied to the live set: a claim adds its range, a completion removes it. */
-    private static void applyOccupancy(Set<Long> live, SimEventLog.Entry entry) {
-        if ("range.claim".equals(entry.kind())) {
-            live.add(nodeOf(entry));
-        } else {
-            live.remove(nodeOf(entry));
         }
     }
 
@@ -443,50 +390,36 @@ class RealListingRunTest {
         for (SimEventLog.Entry entry : result.log().entries()) {
             switch (entry.kind()) {
                 case "page.commit" -> {
-                    TracedRange range = ranges.computeIfAbsent(nodeOf(entry), node -> new TracedRange());
-                    range.keys += Long.parseLong(field(entry, "keys="));
+                    TracedRange range = ranges.computeIfAbsent(SimTrace.nodeOf(entry),
+                            node -> new TracedRange());
+                    range.keys += Long.parseLong(SimTrace.field(entry, "keys="));
                     range.pages++;
                     range.lastPageNanos = entry.atNanos();
                     if (range.firstPageNanos < 0L) {
                         range.firstPageNanos = entry.atNanos();
-                        range.firstKey = HexFormat.of().parseHex(field(entry, "from="));
+                        range.firstKey = HexFormat.of().parseHex(SimTrace.field(entry, "from="));
                     }
                     // The page's LAST key, not its first: the row calls this the range's key extent, and
                     // a last page's from= is where that page started, which understates the extent by a
                     // page every time.
-                    range.lastKey = HexFormat.of().parseHex(field(entry, "to="));
+                    range.lastKey = HexFormat.of().parseHex(SimTrace.field(entry, "to="));
                 }
                 case "owner_split.skip" -> ranges
-                        .computeIfAbsent(nodeOf(entry), node -> new TracedRange())
-                        .carvesRefused.merge(field(entry, "reason="), 1L, Long::sum);
+                        .computeIfAbsent(SimTrace.nodeOf(entry), node -> new TracedRange())
+                        .carvesRefused.merge(SimTrace.field(entry, "reason="), 1L, Long::sum);
                 case "owner_split", "steal.split" -> {
                     TracedRange child = ranges.computeIfAbsent(
-                            Long.parseLong(field(entry, "child=")), node -> new TracedRange());
+                            Long.parseLong(SimTrace.field(entry, "child=")), node -> new TracedRange());
                     child.bornNanos = entry.atNanos();
                     child.bornBy = entry.kind();
                     child.parent = Long.parseLong(
-                            field(entry, "owner_split".equals(entry.kind()) ? "node=" : "victim="));
+                            SimTrace.field(entry, "owner_split".equals(entry.kind()) ? "node=" : "victim="));
                 }
                 default -> {
                 }
             }
         }
         return ranges;
-    }
-
-    /** The {@code node=} (or {@code victim=}) id a trace entry carries. */
-    private static long nodeOf(SimEventLog.Entry entry) {
-        return Long.parseLong(field(entry, "node="));
-    }
-
-    private static String field(SimEventLog.Entry entry, String name) {
-        for (String field : entry.detail().split("\\|")) {
-            if (field.startsWith(name)) {
-                return field.substring(name.length());
-            }
-        }
-        throw new AssertionError("trace entry " + entry.kind() + " carries no " + name + ": "
-                + entry.detail());
     }
 
     /**
