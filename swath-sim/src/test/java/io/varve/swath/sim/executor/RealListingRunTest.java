@@ -331,8 +331,17 @@ class RealListingRunTest {
                                         ? ranges.get(held.getKey()).row() : "no committed page");
                         // Its ancestry, because a straggler's birth instant is the run's finish line and
                         // "why so late" is a question about the range it was carved out of, not about it.
+                        // A parent is always an older node, so the chain is finite — but it is rebuilt
+                        // from a trace, and a trace that says otherwise must fail this leg rather than
+                        // print forever.
+                        Set<Long> walked = new LinkedHashSet<>();
                         for (long ancestor = parentOf(ranges, held.getKey()); ancestor >= 0;
                                 ancestor = parentOf(ranges, ancestor)) {
+                            assertThat(walked.add(ancestor))
+                                    .as("%s: the ancestry of %d reaches %d twice — the trace's parent "
+                                            + "chain is a cycle, so no addresses below it are readable",
+                                            arm, held.getKey(), ancestor)
+                                    .isTrue();
                             System.out.printf(Locale.ROOT,
                                     "real_listing phase=decomposition arm=%s ancestor_of=%d node=%d %s%n",
                                     arm, held.getKey(), ancestor, ranges.get(ancestor).row());
@@ -349,24 +358,32 @@ class RealListingRunTest {
      * worker parked between a completion and the next claim — is attributed to {@link #FLEET_IDLE},
      * because "nobody was working" and "one range was working alone" are different diagnoses and the
      * timeline's own serial fraction merges them.
+     *
+     * <p>The window opens at the seed's end, and an occupancy record from before it <b>primes</b> the
+     * live set rather than being dropped: a range claimed before the window is still holding the fleet
+     * inside it, and dropping its claim would attribute its whole span to {@link #FLEET_IDLE} or to
+     * whoever claimed next. The window's start and the running cursor are separate for the same reason
+     * — one is a property of the run, the other of the walk, and sharing a variable between them makes
+     * the pre-window filter mean something different after the first entry.
      */
     private static Map<Long, Long> serialNanosByNode(PolicyRunResult result) {
         Map<Long, Long> serialNanos = new LinkedHashMap<>();
         Set<Long> live = new LinkedHashSet<>();
-        long since = result.timeline().seedCompletedNanos();
+        long windowStart = result.timeline().seedCompletedNanos();
+        long since = windowStart;
         for (SimEventLog.Entry entry : result.log().entries()) {
-            if (entry.atNanos() < since || !OCCUPANCY_KINDS.contains(entry.kind())) {
+            if (!OCCUPANCY_KINDS.contains(entry.kind())) {
+                continue;
+            }
+            if (entry.atNanos() < windowStart) {
+                applyOccupancy(live, entry);
                 continue;
             }
             if (live.size() <= 1) {
                 serialNanos.merge(live.isEmpty() ? FLEET_IDLE : live.iterator().next(),
                         entry.atNanos() - since, Long::sum);
             }
-            if ("range.claim".equals(entry.kind())) {
-                live.add(nodeOf(entry));
-            } else {
-                live.remove(nodeOf(entry));
-            }
+            applyOccupancy(live, entry);
             since = entry.atNanos();
         }
         if (live.size() <= 1) {
@@ -374,6 +391,15 @@ class RealListingRunTest {
                     result.timeline().endNanos() - since, Long::sum);
         }
         return serialNanos;
+    }
+
+    /** One occupancy record applied to the live set: a claim adds its range, a completion removes it. */
+    private static void applyOccupancy(Set<Long> live, SimEventLog.Entry entry) {
+        if ("range.claim".equals(entry.kind())) {
+            live.add(nodeOf(entry));
+        } else {
+            live.remove(nodeOf(entry));
+        }
     }
 
     /**
