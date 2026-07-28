@@ -21,4 +21,11 @@ public sealed interface Selection permits Selected, NoVictim {
 
     /** Per-victim durable-state mutations to apply, against possibly several pool candidates. */
     List<VictimMutation> mutations();
+
+    /**
+     * What this pass over the pool saw (candidates seen, per-cause skips, the winning estimate), for
+     * the executor's {@code victim_scan} trace event (§7) — {@code null} for a selection built by a
+     * caller that does not populate it. See {@link VictimScan}.
+     */
+    VictimScan scan();
 }

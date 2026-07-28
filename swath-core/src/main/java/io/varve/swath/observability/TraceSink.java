@@ -12,7 +12,7 @@ import java.util.function.LongSupplier;
 /**
  * Run trace ("flight recorder") sink seam — V1 {@code --trace <file>}
  * (docs/internals/metrics-internals.md §7). One JSONL
- * event object per line describing range lifecycle, steal attempts, and splits. {@link #NONE} is the
+ * event object per line describing range lifecycle, steal attempts, gate decisions, and splits. {@link #NONE} is the
  * always-on default: every call site guards event-object allocation behind {@link #enabled()} first,
  * so a run without {@code --trace} pays zero cost beyond one interface dispatch + a boolean check per
  * would-be event — no {@code ObjectNode}, no string formatting, no I/O.
@@ -60,6 +60,33 @@ public interface TraceSink extends AutoCloseable {
 
     /** The outcome of one {@link io.varve.swath.engine.Thief#steal} attempt (piggybacks {@code recordStealReason}). */
     void stealAttempt(long workerId, String outcome, String reason);
+
+    /**
+     * One owner-split gate-chain evaluation ({@code OwnerSplitGovernor.decide}) past the
+     * open-frontier early-out — blocked OR carved — with the numeric inputs the chain read to get
+     * to {@code reason}. Per-decision attribution the aggregate {@code OWNER_SPLIT.*} counters
+     * cannot give: which RANGE was blocked, by which gate, on what readings.
+     *
+     * <p>{@code reason} is the GATE CHAIN's terminal reason (see {@code OwnerSplitGateInputs}); a
+     * carve the chain admitted can still fail to publish executor-side, which shows as the absence
+     * of a following {@link #ownerSplit} event. A double input the short-circuiting chain never
+     * computed is {@code NaN} ({@code OwnerSplitGateInputs.NOT_COMPUTED}); see
+     * docs/internals/metrics-internals.md §7 for how non-finite numbers serialize.
+     */
+    void ownerSplitDecision(long workerId, long nodeId, String reason, double est, long pagesSinceLastSelfSplit,
+                            long outstanding, int workerCount, double farAheadFraction, double densityRatio,
+                            long keysEmitted);
+
+    /**
+     * One victim-selection pass over the live pool ({@code ThiefPolicy.selectVictim}, once per steal
+     * attempt): what it saw and why it refused. {@code chosenNodeId} is {@code -1} and {@code reason}
+     * the refusal discriminator when no candidate qualified; on a hit, {@code reason} is {@code null}.
+     * Aggregate per scan — never per candidate, which would dominate the trace. Joined against
+     * {@link #claimed}/{@link #pageCommitted} (which map {@code node_id} to a range), this attributes
+     * a refusal to the ranges that were in the pool at the time.
+     */
+    void victimScan(long workerId, int seen, int skippedUnsplittable, int skippedPaced, int skippedNoSpan,
+                    long chosenNodeId, double bestEst, String reason);
 
     /** A thief split {@code parentNodeId} at {@code pivot}, handing {@code (pivot, hi]} to {@code childNodeId}. */
     void split(long workerId, long parentNodeId, long childNodeId, String mechanism, byte[] pivot, byte[] hi);

@@ -14,6 +14,7 @@ import io.varve.swath.engine.policy.StealAttempt;
 import io.varve.swath.engine.policy.StealAttemptView;
 import io.varve.swath.engine.policy.StealPolicy;
 import io.varve.swath.engine.policy.VictimMutation;
+import io.varve.swath.engine.policy.VictimScan;
 import io.varve.swath.engine.policy.VictimView;
 import java.util.ArrayList;
 import java.util.List;
@@ -79,6 +80,7 @@ final class EstimatorStealPolicy implements StealPolicy {
                 chosen = w;
             }
         }
+        VictimScan scan = new VictimScan(seen, skippedUnsplittable, skippedPaced, skippedNoSpan, best);
         if (chosen == null) {
             NoVictimReason reason;
             if (seen == 0) {
@@ -92,9 +94,9 @@ final class EstimatorStealPolicy implements StealPolicy {
             } else {
                 reason = NoVictimReason.MIXED_SKIPS;
             }
-            return new NoVictim(reason, engagements, mutations);
+            return new NoVictim(reason, engagements, mutations, scan);
         }
-        return new Selected(chosen.nodeId(), engagements, mutations);
+        return new Selected(chosen.nodeId(), engagements, mutations, scan);
     }
 
     @Override

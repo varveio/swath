@@ -102,6 +102,36 @@ final class JsonlTraceSink implements TraceSink {
     }
 
     @Override
+    public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
+            long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
+            double densityRatio, long keysEmitted) {
+        ObjectNode e = newEvent("owner_split_decision", workerId, nodeId);
+        e.put("reason", reason);
+        putNum(e, "est", est);
+        e.put("pages_since_last_self_split", pagesSinceLastSelfSplit);
+        e.put("outstanding", outstanding);
+        e.put("worker_count", workerCount);
+        putNum(e, "far_ahead_fraction", farAheadFraction);
+        putNum(e, "density_ratio", densityRatio);
+        e.put("keys_emitted", keysEmitted);
+        writeEvent(e, false);
+    }
+
+    @Override
+    public void victimScan(long workerId, int seen, int skippedUnsplittable, int skippedPaced, int skippedNoSpan,
+            long chosenNodeId, double bestEst, String reason) {
+        ObjectNode e = newEvent("victim_scan", workerId, -1L);
+        e.put("seen", seen);
+        e.put("skipped_unsplittable", skippedUnsplittable);
+        e.put("skipped_paced", skippedPaced);
+        e.put("skipped_no_span", skippedNoSpan);
+        e.put("chosen_node_id", chosenNodeId);
+        putNum(e, "best_est", bestEst);
+        e.put("reason", reason);
+        writeEvent(e, false);
+    }
+
+    @Override
     public void split(long workerId, long parentNodeId, long childNodeId, String mechanism, byte[] pivot, byte[] hi) {
         writeSplitLike("split", workerId, parentNodeId, childNodeId, mechanism, pivot, hi);
     }
@@ -154,6 +184,22 @@ final class JsonlTraceSink implements TraceSink {
             e.putNull(field);
         } else {
             e.put(field, ControlCharEscaper.escape(new String(raw, StandardCharsets.UTF_8)));
+        }
+    }
+
+    /**
+     * A numeric field, serialized as JSON <b>null</b> when non-finite — JSONL has no {@code NaN}/
+     * {@code Infinity} literal, and a trace line must stay strictly parseable. Both non-finite
+     * sources are meaningful and disambiguated by the event's {@code reason}: {@code NaN} is a
+     * gate input the short-circuiting chain never computed, {@code ±Infinity} a real reading (an
+     * open-frontier {@code estRemaining}, or the density ratio with {@code density_ewma=off}). See
+     * docs/internals/metrics-internals.md §7.
+     */
+    private static void putNum(ObjectNode e, String field, double v) {
+        if (Double.isFinite(v)) {
+            e.put(field, v);
+        } else {
+            e.putNull(field);
         }
     }
 

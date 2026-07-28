@@ -35,6 +35,17 @@ final class NoopTraceSink implements TraceSink {
     }
 
     @Override
+    public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
+            long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
+            double densityRatio, long keysEmitted) {
+    }
+
+    @Override
+    public void victimScan(long workerId, int seen, int skippedUnsplittable, int skippedPaced, int skippedNoSpan,
+            long chosenNodeId, double bestEst, String reason) {
+    }
+
+    @Override
     public void split(long workerId, long parentNodeId, long childNodeId, String mechanism, byte[] pivot, byte[] hi) {
     }
 

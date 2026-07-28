@@ -30,6 +30,7 @@ import io.varve.swath.engine.policy.StealPolicy;
 import io.varve.swath.engine.policy.StructureProbeOutcome;
 import io.varve.swath.engine.policy.ThiefPolicy;
 import io.varve.swath.engine.policy.VictimMutation;
+import io.varve.swath.engine.policy.VictimScan;
 import io.varve.swath.engine.policy.VictimView;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.error.ThrottleException;
@@ -72,6 +73,9 @@ import org.slf4j.LoggerFactory;
 public final class Thief {
 
     private static final Logger log = LoggerFactory.getLogger(Thief.class);
+
+    /** The {@code victim_scan} trace event's {@code chosen_node_id} when the scan refused (§7). */
+    private static final long NO_CHOSEN_VICTIM = -1L;
 
     /** The result of a single {@link #steal} attempt. */
     public enum Outcome {
@@ -203,6 +207,16 @@ public final class Thief {
         Selection selection = policy.selectVictim(views);
         applyEngagements(selection.engagements());
         applyMutations(byId, selection.mutations(), null);
+        // Per-scan attribution (§7): which candidates this pass saw, which cause skipped them, and
+        // the winning estimate -- the discrimination the aggregate NO_VICTIM.* counters give per RUN,
+        // recorded per ATTEMPT. Aggregate, never per candidate: this scan runs constantly.
+        if (trace.enabled()) {
+            VictimScan scan = selection.scan();
+            trace.victimScan(RunContext.workerIdOrNone(), scan.seen(), scan.skippedUnsplittable(),
+                    scan.skippedPaced(), scan.skippedNoSpan(),
+                    selection instanceof Selected chosen ? chosen.victimNodeId() : NO_CHOSEN_VICTIM,
+                    scan.bestEst(), selection instanceof NoVictim refusal ? refusal.reason().code() : null);
+        }
         if (selection instanceof NoVictim noVictim) {
             // The discriminator (exactly ONE of the five specific reasons) fires alongside the
             // aggregate `no_splittable_victim` record() below emits for every NO_VICTIM outcome, so

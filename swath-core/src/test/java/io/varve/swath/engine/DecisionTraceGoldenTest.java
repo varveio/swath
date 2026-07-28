@@ -748,10 +748,13 @@ final class DecisionTraceGoldenTest {
         long[] selfSplitNext = {0, -OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN};
         OwnerSelfSplit.OwnerSplitTrace nextResult =
                 probeGov.maybeOwnerSelfSplit(nextOverThreshold.nodeId(), nextOverThreshold, b("d/002500"), selfSplitNext);
-        assertThat(nextResult)
+        assertThat(nextResult.split())
                 .as("with the slot correctly consumed, the very next over-threshold call must land back "
                         + "on CONFETTI_SUPPRESSED, not another probe carve")
-                .isNull();
+                .isFalse();
+        assertThat(nextResult.gateInputs().reason())
+                .as("...and its gate-decision trace names that gate")
+                .isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code());
 
         GoldenTrace.writeOrVerify(fx);
     }
@@ -814,7 +817,10 @@ final class DecisionTraceGoldenTest {
             traceEvents.add(e);
         }
         ObjectNode decision = GoldenTrace.newNode();
-        if (result != null) {
+        // A non-null result no longer means "a child was published": every gate-chain evaluation past
+        // the open-frontier early-out now returns its owner_split_decision payload too (§7), so the
+        // published-carve question is result.split(), not result != null.
+        if (result != null && result.split()) {
             decision.put("split", true);
             decision.put("child_node_id", result.childId());
             GoldenTrace.putHex(decision, "pivot", result.pivot());

@@ -11,6 +11,7 @@ import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.ConfettiObservation;
 import io.varve.swath.engine.policy.Engagement;
 import io.varve.swath.engine.policy.OwnerSplitDecision;
+import io.varve.swath.engine.policy.OwnerSplitGateInputs;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.engine.policy.OwnerSplitMutation;
 import io.varve.swath.engine.policy.OwnerSplitPolicy;
@@ -173,6 +174,10 @@ final class OwnerSelfSplit {
                 ws.alphabetDigest().snapshot(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
                         confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
+        // The gate chain's own reading of this page-commit, captured for the CALLER to emit as the
+        // owner_split_decision event AFTER ws.lock is released (same lock discipline as the split
+        // event below). null ⇒ tracing off, or the open-frontier early-out, which decides nothing.
+        OwnerSplitGateInputs gateInputs = trace.enabled() ? decision.gateInputs() : null;
         // Resolve a claimed confetti probe slot FIRST, before a single engagement is recorded (issue
         // #31). The governor decides PROBE purely from the probeSeq this view was built from, so every
         // owner that snapshotted the same value decides PROBE -- and before this claim existed, all of
@@ -188,7 +193,7 @@ final class OwnerSelfSplit {
                 probeSlotClaimed = true;
             } else {
                 metrics.recordStealReason("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code());
-                return null;
+                return gateTrace(nodeId, gateInputs);
             }
         }
         applyEngagements(decision.engagements());
@@ -201,7 +206,7 @@ final class OwnerSelfSplit {
                 // history against this event's log timestamp.
                 metrics.recordDemandGatedConcurrency(effectiveT.getAsInt(), workerCount);
             }
-            return null;
+            return gateTrace(nodeId, gateInputs);
         }
         byte[] m = ((Carve) decision).pivot();
         // Publish via the UNCHANGED thief split transaction: volatile narrow, then the CAS-guarded
@@ -214,7 +219,7 @@ final class OwnerSelfSplit {
             // tiling. This mirrors the thief's late-loser restore.
             ws.restoreHi(H);
             metrics.recordStealReason("OWNER_SPLIT", "self_aborted");
-            return null;
+            return gateTrace(nodeId, gateInputs);
         }
         if (toggles.confettiFeedback()) {
             // Tag this child BEFORE enqueueChild publishes it — see ownerSplitTaggedChildren's
@@ -231,11 +236,20 @@ final class OwnerSelfSplit {
                     runId, RunContext.workerIdOrNone(), nodeId, StealMath.describe(cursorTo), StealMath.describe(m),
                     StealMath.describe(H), childId);
         }
-        // Do NOT emit trace.ownerSplit here — the caller holds ws.lock across this whole method, and a
-        // lock-holder must never wait on the trace sink's global-synchronized flush. Return the
-        // captured event so the caller emits it AFTER releasing ws.lock. null ⇒ trace disabled or
-        // no split (correctness is unchanged either way — trace is a pure side-channel).
-        return trace.enabled() ? new OwnerSplitTrace(nodeId, childId, m, H) : null;
+        // Do NOT emit trace.ownerSplit/ownerSplitDecision here — the caller holds ws.lock across this
+        // whole method, and a lock-holder must never wait on the trace sink's global-synchronized
+        // flush. Return the captured events so the caller emits them AFTER releasing ws.lock. null ⇒
+        // trace disabled (correctness is unchanged either way — trace is a pure side-channel).
+        return trace.enabled() ? new OwnerSplitTrace(nodeId, childId, m, H, gateInputs) : null;
+    }
+
+    /**
+     * The decision-only (no split) payload for the caller to emit, or {@code null} when there is
+     * nothing to emit at all (tracing off, or the open-frontier early-out).
+     */
+    private static OwnerSplitTrace gateTrace(long nodeId, OwnerSplitGateInputs gateInputs) {
+        return gateInputs == null ? null
+                : new OwnerSplitTrace(nodeId, OwnerSplitTrace.NO_SPLIT, null, null, gateInputs);
     }
 
     /** Record every {@link Engagement} the governor returned — the executor's own metrics emission (§5). */
@@ -283,12 +297,24 @@ final class OwnerSelfSplit {
     }
 
     /**
-     * The owner-split trace event captured under {@link WorkerState#lock()} in {@link #maybeOwnerSelfSplit}
+     * The owner-split trace payload captured under {@link WorkerState#lock()} in {@link #maybeOwnerSelfSplit}
      * and emitted by the caller AFTER the lock is released — a lock-holder must never wait on
-     * {@code JsonlTraceSink.writeEvent}'s global-synchronized disk flush. {@code null} return ⇒ no
-     * split (or trace disabled); a pure side-channel, so it never affects split correctness or quiescence.
+     * {@code JsonlTraceSink.writeEvent}'s global-synchronized disk flush. Carries BOTH events this
+     * page-commit can produce: the gate chain's own decision ({@link #gateInputs}, always present —
+     * the {@code owner_split_decision} event) and, when {@link #split()} is true, the published
+     * carve (the {@code owner_split} event). A {@code null} return ⇒ nothing to emit at all: trace
+     * disabled, or the open-frontier early-out. A pure side-channel, so none of this affects split
+     * correctness or quiescence.
      */
-    record OwnerSplitTrace(long nodeId, long childId, byte[] pivot, byte[] hi) {
+    record OwnerSplitTrace(long nodeId, long childId, byte[] pivot, byte[] hi, OwnerSplitGateInputs gateInputs) {
+
+        /** {@link #childId} for a decision that published no child (a blocked gate, or an aborted CAS). */
+        static final long NO_SPLIT = -1L;
+
+        /** Whether a child was actually published — i.e. whether an {@code owner_split} event is due. */
+        boolean split() {
+            return childId != NO_SPLIT;
+        }
     }
 
     /**

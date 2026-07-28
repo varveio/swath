@@ -10,6 +10,7 @@ import io.varve.swath.checkpoint.CheckpointStore;
 import io.varve.swath.checkpoint.Node;
 import io.varve.swath.checkpoint.PageCommit;
 import io.varve.swath.concurrent.Scope;
+import io.varve.swath.engine.policy.OwnerSplitGateInputs;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.error.CancelledException;
 import io.varve.swath.error.SwathException;
@@ -687,10 +688,20 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             }
                             // Emit the owner-split trace OUTSIDE ws.lock, before pageCommitted
                             // to preserve the original event order (the split happened during this commit).
+                            // The gate chain's own decision first (blocked OR carved — the per-range
+                            // attribution the aggregate OWNER_SPLIT.* counters cannot give), then the
+                            // published carve, if this decision produced one.
                             if (ownerSplitTrace != null) {
-                                trace.ownerSplit(RunContext.workerIdOrNone(), ownerSplitTrace.nodeId(),
-                                        ownerSplitTrace.childId(), "self_published",
-                                        ownerSplitTrace.pivot(), ownerSplitTrace.hi());
+                                OwnerSplitGateInputs gate = ownerSplitTrace.gateInputs();
+                                trace.ownerSplitDecision(RunContext.workerIdOrNone(), ownerSplitTrace.nodeId(),
+                                        gate.reason(), gate.est(), gate.pagesSinceLastSelfSplit(),
+                                        gate.outstanding(), gate.workerCount(), gate.farAheadFraction(),
+                                        gate.densityRatio(), gate.keysEmitted());
+                                if (ownerSplitTrace.split()) {
+                                    trace.ownerSplit(RunContext.workerIdOrNone(), ownerSplitTrace.nodeId(),
+                                            ownerSplitTrace.childId(), "self_published",
+                                            ownerSplitTrace.pivot(), ownerSplitTrace.hi());
+                                }
                             }
                             if (madeProgress) {
                                 signalStealableProgress();

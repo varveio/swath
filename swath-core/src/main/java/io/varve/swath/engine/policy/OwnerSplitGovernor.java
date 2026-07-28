@@ -99,15 +99,22 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // reasons below are already counted against. Inert for the shipped reading.
         List<Engagement> engagements = new ArrayList<>();
         estimator.classify("SENSING_OWNER", cursorTo, lo, H, view.keysEmitted(), engagements);
+        // The rate limit's input, hoisted so every decision below can report it (§7's
+        // owner_split_decision event) — read, not computed, so it is known at every gate.
+        long pagesSinceLastSelfSplit = view.committed() - view.lastSelfSplitPage();
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             // Remaining work too small to be worth a proactive carve — issue #16.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code()));
-            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR, engagements, List.of());
+            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR, engagements, List.of(),
+                    gateInputs(OwnerSplitSkipReason.REMAINING_EST_FLOOR.code(), view, est, pagesSinceLastSelfSplit,
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
         }
-        if (view.committed() - view.lastSelfSplitPage() < SELF_SPLIT_MIN_PAGES_BETWEEN) {
+        if (pagesSinceLastSelfSplit < SELF_SPLIT_MIN_PAGES_BETWEEN) {
             // Rate-limit: O(1) self-splits per drain, not one per page.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code()));
-            return new Skip(OwnerSplitSkipReason.RATE_LIMITED, engagements, List.of());
+            return new Skip(OwnerSplitSkipReason.RATE_LIMITED, engagements, List.of(),
+                    gateInputs(OwnerSplitSkipReason.RATE_LIMITED.code(), view, est, pagesSinceLastSelfSplit,
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
         }
         // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live
         // nodes to keep every worker busy, so an extra child buys ZERO parallelism and only costs a
@@ -119,7 +126,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // range at the identical cost either way. See docs/internals/metrics-internals.md §5.
         if (workerCount > 1 && view.outstanding() >= (long) workerCount) {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.DEMAND_GATED.code()));
-            return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements, List.of());
+            return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements, List.of(),
+                    gateInputs(OwnerSplitSkipReason.DEMAND_GATED.code(), view, est, pagesSinceLastSelfSplit,
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
         }
         // Far-ahead pivot fraction from the worker's own zero-cost density (>= 0.5 ⇒ >= byteMidpoint).
         // The child owns the far tail — so floor that tail above two pages: even below the demand gate an
@@ -131,7 +140,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         double densityRatio = toggles.observedDensityRatio(view.observedDensityRatio());
         if (StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys)) {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code()));
-            return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of());
+            return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of(),
+                    gateInputs(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(), view, est,
+                            pagesSinceLastSelfSplit, f, densityRatio));
         }
         // CONFETTI FEEDBACK GATE. The gates above reason from upstream estimates (est/densityRatio);
         // on a keyspace whose tail thins out over most of the observed span those estimates still
@@ -142,6 +153,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // ConfettiObservation snapshot (issue #22) — see ConfettiFeedbackGate's javadoc and
         // docs/internals/metrics-internals.md §5.
         List<OwnerSplitMutation> mutations = List.of();
+        // The terminal reason a CARVE reports (§7): the last gate the carve path engaged, or the
+        // plain published carve when it engaged none.
+        String carveReason = "self_published";
         if (toggles.confettiFeedback()) {
             ConfettiObservation obs = view.confetti();
             if (obs.taggedTotal() >= ConfettiFeedbackGate.MIN_SAMPLE) {
@@ -149,7 +163,8 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                 if (rate > SUPPRESS_THRESHOLD) {
                     List<OwnerSplitMutation> probeSlot = List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
                     if ((obs.probeSeq() + 1) % PROBE_K == 0) {
-                        engagements.add(new Engagement("OWNER_SPLIT", "confetti_probe"));
+                        carveReason = "confetti_probe";
+                        engagements.add(new Engagement("OWNER_SPLIT", carveReason));
                         // CLAIM, not CONSUME (issue #31): this decision is a pure function of the
                         // probeSeq the view was built from, so every owner sharing that snapshot
                         // decides PROBE here -- and all of them would carve. The executor resolves the
@@ -160,7 +175,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                         mutations = List.of(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT);
                     } else {
                         engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
-                        return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot);
+                        return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot,
+                                gateInputs(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), view, est,
+                                        pagesSinceLastSelfSplit, f, densityRatio));
                     }
                 }
             }
@@ -180,7 +197,9 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             // unconditional advance (issue #31): the slot was granted and spent, exactly as the
             // pre-#22 fused increment spent it, and no other owner's carve is being excluded.
             return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements,
-                    consumeInsteadOfClaim(mutations));
+                    consumeInsteadOfClaim(mutations),
+                    gateInputs(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code(), view, est, pagesSinceLastSelfSplit,
+                            f, densityRatio));
         }
         // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a
         // populated value (differs from the plain code-point interpolate at the same fraction)? Recorded
@@ -201,7 +220,8 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, H);
             if (StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, maxKeys)) {
                 m = mReflect;
-                engagements.add(new Engagement("OWNER_SPLIT", "pivot_reflect_clamped"));
+                carveReason = "pivot_reflect_clamped";
+                engagements.add(new Engagement("OWNER_SPLIT", carveReason));
             }
         }
         // REFLECT-LIFT. When the FINAL post-clamp pivot would leave the owner a sub-one-page kept
@@ -223,10 +243,25 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, H);
             if (StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, maxKeys)) {
                 m = mReflect;
-                engagements.add(new Engagement("OWNER_SPLIT", "pivot_reflect_lifted"));
+                carveReason = "pivot_reflect_lifted";
+                engagements.add(new Engagement("OWNER_SPLIT", carveReason));
             }
         }
-        return new Carve(m, engagements, mutations);
+        return new Carve(m, engagements, mutations,
+                gateInputs(carveReason, view, est, pagesSinceLastSelfSplit, f, densityRatio));
+    }
+
+    /**
+     * The {@link OwnerSplitGateInputs} one {@link #decide} outcome reports: {@code reason} is the
+     * terminal gate's own code, and {@code f}/{@code densityRatio} are {@link
+     * OwnerSplitGateInputs#NOT_COMPUTED} for a gate that terminated ABOVE where the chain computes
+     * them. Pure construction — no state, no side effect (the whole point of returning it rather
+     * than emitting it here: the governor never holds the trace sink).
+     */
+    private OwnerSplitGateInputs gateInputs(String reason, OwnerSplitView view, double est,
+                                            long pagesSinceLastSelfSplit, double f, double densityRatio) {
+        return new OwnerSplitGateInputs(reason, est, pagesSinceLastSelfSplit, view.outstanding(), workerCount,
+                f, densityRatio, view.keysEmitted());
     }
 
     /**
