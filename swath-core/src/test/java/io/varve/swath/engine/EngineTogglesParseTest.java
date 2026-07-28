@@ -262,4 +262,73 @@ final class EngineTogglesParseTest {
                 .isInstanceOf(InvalidArgsException.class)
                 .hasMessageContaining(EngineToggles.RATE_ANCHORED_SENSING_NAME);
     }
+
+    // ---- tail_floor: value-taking (not on|off), default `current`, excluded from disabledNames() --
+
+    @Test
+    void tailFloorDefaultsToTheShippedModeAndIsExcludedFromNames() throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+        // The only value-taking toggle: like the two opt-ins it turns nothing OFF, so it is
+        // deliberately outside NAMES (which drives disabledNames()'s ablated-mechanism set).
+        assertThat(EngineToggles.NAMES).doesNotContain(EngineToggles.TAIL_FLOOR_NAME);
+        assertThat(EngineToggles.parse(null, false).disabledNames()).isEmpty();
+    }
+
+    @Test
+    void tailFloorCurrentExplicitlyIsTheDefaultConfiguration() throws InvalidArgsException {
+        EngineToggles toggles = EngineToggles.parse(List.of("tail_floor=current"), false);
+        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+        assertThat(toggles).as("naming the shipped mode is bit-identical to not naming it")
+                .isEqualTo(EngineToggles.DEFAULT);
+        assertThat(toggles.isDefault()).isTrue();
+    }
+
+    @Test
+    void tailFloorArmsParseAndAreNotDefault() throws InvalidArgsException {
+        for (TailFloorMode arm : new TailFloorMode[] {TailFloorMode.EST_DIRECT, TailFloorMode.REACH_FLOORED}) {
+            EngineToggles toggles = EngineToggles.parse(List.of("tail_floor=" + arm.code()), false);
+            assertThat(toggles.tailFloor()).isEqualTo(arm);
+            assertThat(toggles.isDefault()).isFalse();
+            assertThat(toggles.disabledNames()).isEmpty();
+            assertThat(toggles.rateAnchoredSensing())
+                    .as("%s disturbs no other mechanism -- the race wants the factorial", arm).isFalse();
+        }
+    }
+
+    @Test
+    void tailFloorIsCaseInsensitiveAndComposesWithTheSensorToggle() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("tail_floor=EST_DIRECT", "rate_anchored_sensing=on"), false);
+        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.EST_DIRECT);
+        assertThat(toggles.rateAnchoredSensing()).isTrue();
+    }
+
+    @Test
+    void tailFloorUnknownValueIsRejectedListingTheModes() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("tail_floor=on"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("current|est_direct|reach_floored");
+    }
+
+    @Test
+    void tailFloorContradictoryValuesAreRejected() {
+        assertThatThrownBy(() ->
+                EngineToggles.parse(List.of("tail_floor=est_direct", "tail_floor=reach_floored"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("contradictory");
+    }
+
+    @Test
+    void tailFloorRepeatedIdenticalValuesAreFine() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("tail_floor=reach_floored", "tail_floor=reach_floored"), false);
+        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.REACH_FLOORED);
+    }
+
+    @Test
+    void theUnknownNameErrorListsTheTailFloorToggleToo() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("tail_floors=current"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining(EngineToggles.TAIL_FLOOR_NAME);
+    }
 }

@@ -11,6 +11,7 @@ import io.varve.swath.engine.AlphabetDigest;
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
+import io.varve.swath.engine.TailFloorMode;
 import io.varve.swath.engine.WorkerState;
 import io.varve.swath.model.KeyBytes;
 import java.nio.charset.StandardCharsets;
@@ -263,6 +264,87 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
+    }
+
+    // -------------------------------------------------------------------------
+    // tail_floor arms: the governor reads the floor at the run's mode, at BOTH sites it consults it,
+    // and records what the mode changed (TAIL_FLOOR.* -- metrics-internals.md §5).
+    // -------------------------------------------------------------------------
+
+    /**
+     * The measured `nara` input profile, mirrored at this test's scale: an honest estimate (~92,307
+     * keys here, 322k-1.65M live) over a wide-flat trailing density (0.0003) at f=0.5. The shipped
+     * floor multiplies the estimate away and refuses; both arms carve. This is the governor-level
+     * half of {@code OwnerSplitTailFloorModeTest}'s regression pin -- it fails against the pre-cure
+     * engine because the toggle's admitting path did not exist.
+     */
+    @Test
+    void tailFloorArmsCarveTheWideFlatTailTheShippedFloorRefuses() {
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0003);
+
+        OwnerSplitDecision current = governor().decide(v);
+        assertThat(current).isInstanceOf(Skip.class);
+        assertThat(((Skip) current).reason()).isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED);
+        assertThat(current.engagements())
+                .as("the default mode never computes a second verdict, so it never records one")
+                .containsExactly(new Engagement("OWNER_SPLIT", "floor_reflected_blocked"));
+
+        for (TailFloorMode arm : new TailFloorMode[] {TailFloorMode.EST_DIRECT, TailFloorMode.REACH_FLOORED}) {
+            OwnerSplitDecision decision =
+                    governor(EngineToggles.DEFAULT.withTailFloor(arm), WORKER_COUNT).decide(v);
+
+            assertThat(decision).as("%s carves the tail", arm).isInstanceOf(Carve.class);
+            assertThat(decision.engagements())
+                    .as("%s: the gate's verdict flipped, and the run says so", arm)
+                    .contains(new Engagement("TAIL_FLOOR", "gate_admit_current_blocks"));
+        }
+    }
+
+    /**
+     * The mode also reaches the reflection clamp, not just the gate — and the clamp's own divergence
+     * is counted under its own reason prefix (its denominator is carves that reached pivot synthesis,
+     * not qualifying page commits). Geometry: {@code lo=d/00}, {@code cursorTo=d/02}, {@code hi=d/09}
+     * puts the density-reflected pivot {@code d/04} strictly inside the f-interpolated one, so the
+     * clamp is live and only the floor decides it.
+     */
+    @Test
+    void tailFloorArmsReachTheReflectionClampAndRecordItsOwnDivergence() {
+        OwnerSplitView v = new OwnerSplitView(b("d/09"), b("d/00"), b("d/02"), 100_000L,
+                OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0003,
+                coldDigest(b("d/00"), b("d/09")), NO_CONFETTI_SIGNAL);
+
+        OwnerSplitDecision current = governor().decide(v);
+        assertThat(((Skip) current).reason())
+                .as("under the shipped floor the chain never gets past the gate on this shape")
+                .isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED);
+
+        OwnerSplitDecision decision = governor(
+                EngineToggles.DEFAULT.withTailFloor(TailFloorMode.EST_DIRECT), WORKER_COUNT).decide(v);
+
+        assertThat(decision).isInstanceOf(Carve.class);
+        assertThat(decision.engagements()).contains(
+                new Engagement("TAIL_FLOOR", "gate_admit_current_blocks"),
+                new Engagement("TAIL_FLOOR", "clamp_admit_current_blocks"),
+                new Engagement("OWNER_SPLIT", "pivot_reflect_clamped"));
+        assertThat(((Carve) decision).pivot())
+                .as("the carve lands on the reflected pivot the shipped floor would have refused")
+                .isEqualTo(StealMath.extrapolate(b("d/00"), b("d/02"), b("d/09")));
+    }
+
+    @Test
+    void tailFloorArmsStayOutOfTheWayOnAShapeTheShippedFloorAlreadyAdmits() {
+        // Uniform density: the gate admits under every mode, so no verdict changed and nothing is
+        // recorded -- the counters must mark divergence, not merely "an arm was selected".
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0);
+
+        OwnerSplitDecision decision = governor(
+                EngineToggles.DEFAULT.withTailFloor(TailFloorMode.REACH_FLOORED), WORKER_COUNT).decide(v);
+
+        assertThat(decision).isInstanceOf(Carve.class);
+        assertThat(decision.engagements())
+                .filteredOn(e -> "TAIL_FLOOR".equals(e.category()))
+                .as("agreement is silent")
+                .isEmpty();
     }
 
     // -------------------------------------------------------------------------

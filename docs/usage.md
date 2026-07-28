@@ -520,13 +520,14 @@ slip — is rejected outright (exit 2) rather than silently signing with SigV4.
 #### Diagnostic-tier ablation (`--engine-toggle`)
 
 **EXPERIMENTAL / DIAGNOSTIC — a measurement tool, not a supported configuration.** `--engine-toggle
-NAME=on|off` (repeatable) is a single ablation namespace so a per-mechanism A/B measurement of the
+NAME=VALUE` (repeatable) is a single ablation namespace so a per-mechanism A/B measurement of the
 `WorkStealingScan` engine runs from one binary instead of a bespoke flag per experiment. Every
 structure toggle defaults to `on` (`readahead` and `rate_anchored_sensing` default to `off`;
-`mass_aware_seed` is default ON, opt-out `mass_aware_seed=off`); **the defaults are the only
-supported configuration** —
+`mass_aware_seed` is default ON, opt-out `mass_aware_seed=off`; `tail_floor` is the one
+value-taking toggle, default `current`); **the defaults are the only supported configuration** —
 toggling never changes correctness (I2/I3 tiling holds either way), only which optimization
-mechanisms engage. An unknown name, a malformed value (not `on`/`off`), or a contradictory combination
+mechanisms engage. An unknown name, a malformed value (not `on`/`off` — or, for `tail_floor`, not
+one of its modes), or a contradictory combination
 (the same name repeated with both values) is a startup validation error (exit 2).
 
 | Name | Default | Effect when `off` |
@@ -543,8 +544,8 @@ mechanisms engage. An unknown name, a malformed value (not `on`/`off`), or a con
 | `fanout_tiling` | on | `SeedStep`'s zero-probe `key=value/` partition-fanout tiling is disabled — a truncated partition fan-out is no longer tiled along its first-page child prefixes. NOTE: with `mass_aware_seed` at its ON default the un-tiled cut may instead be sample-proven heavy and BANDED; a pure fan-out-tiling ablation needs `mass_aware_seed=off` too. |
 
 (`mass_aware_seed` and `readahead` — the two toggles whose defaults have diverged over time — are
-documented in the "New-mechanism performance toggles" section below, as is the opt-in
-`rate_anchored_sensing` position-sensor arm.)
+documented in the "New-mechanism performance toggles" section below, as are the opt-in
+`rate_anchored_sensing` position-sensor arm and the value-taking `tail_floor` arm.)
 
 Each disabled toggle's effect is provable post-hoc from the metrics alone: turning a mechanism off
 silences its own §5 counters (e.g. `structure_probes=off` ⇒ `swath.probe.structure_fetches` stays
@@ -555,16 +556,18 @@ alongside `max_duration_ms`) both echo the effective state whenever any toggle i
 
 #### New-mechanism performance toggles — defaults and cost profile
 
-Unlike the ablation namespace above (default `on` = the shipped behavior), three toggles are
+Unlike the ablation namespace above (default `on` = the shipped behavior), four toggles are
 **new mechanisms outside that namespace**, and are the only knobs a perf-focused user needs
 to consider. `mass_aware_seed` is **default `on`** — opt-*out*
 (`--engine-toggle mass_aware_seed=off`), not opt-in; `readahead` and `rate_anchored_sensing`
-remain **opt-in**, default `off`.
+remain **opt-in**, default `off`; `tail_floor` selects a *mode* rather than on/off, default
+`current` (the shipped floor arithmetic, bit-identical).
 
 | Name | Default | Change from default when |
 | --- | --- | --- |
 | `mass_aware_seed` | **on** | You need the older, non-mass-aware seed exactly, for a diagnostic A/B (`--engine-toggle mass_aware_seed=off`). It is what carries the badly skewed buckets: `pdbsnapshots` only reaches completion with it on, `genome-browser` completes materially faster, and `meeo` covers far more of the keyspace under the same time cap. It is also cheaper *per object* even on the hive-partitioned buckets where it spends more absolute API calls (`blockchain`) — because it enumerates proportionally more of them. There is no ordinary reason to turn it off. |
 | `rate_anchored_sensing` | **off** | You are running the position-sensor A/B and want the arm the simulator's corpus race promoted: remaining work read as the range's own proven mass (`max(keysEmitted, page)`), which cursor-anchored geometry may lift by up to sixteen and cut by at most four. It replaces the shipped local-density-times-span reading at the two fleet-level sites that steer on it — victim choice and the owner-split gate chain (`readahead`'s own engage gate keeps the shipped reading either way: it scores one owner's local runway, not a fleet-wide ranking) — on a deep-nested keyspace where the shipped window's consumed span underflows to zero and a range's emitted keys drop out of its own estimate. **Unproven on real buckets**: it changes which range is stolen from and when an owner carves, so run it as a measured A/B against the default, never as a blind default flip. A run on this arm marks itself `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own classification counters, one namespace per site (`SENSING_OWNER.*`, `SENSING_STEAL.*` — metrics-internals.md §5a). |
+| `tail_floor` | **`current`** | You are racing the owner-split child-tail floor's cure arms on a **wide-flat** keyspace, where the shipped floor is measurably blind: it scores the child tail as `est × max(0, min(1, densityRatio) − f)`, and on a wide-flat tail the trailing-density ratio reads ~3e-4 against `f`≈0.5, so the product is **exactly zero regardless of `est`** — a range with 10^5–10^6 keys left is refused every time (measured: 5,326 of 5,326 owner attempts on one `nara` tail range, which then drained serially for the rest of the run). `tail_floor=est_direct` blocks iff `est <= 2×max-keys`, dropping the byte-geometry window entirely (under `rate_anchored_sensing` the estimate is already realized-mass-anchored, so multiplying it by geometry double-counts); `tail_floor=reach_floored` keeps the window product but floors the reach term at 1/16, so a thin trailing density shrinks the child's share instead of erasing it (it admits from ~32 pages of estimate up). Both are strictly more permissive than `current` and neither changes where a pivot lands, so tiling is untouched — but they change **how often an owner carves**, so run them as a measured A/B (composable with `rate_anchored_sensing`, deliberately not coupled to it). A run on an arm marks itself `TOGGLE.tail_floor_<mode>_on` and counts every decision the mode flipped, per consult site (`TAIL_FLOOR.gate_*`, `TAIL_FLOOR.clamp_*`, `TAIL_FLOOR.lift_*` — metrics-internals.md §5). |
 | `readahead` | **off** | You want the lowest wall-clock on a drain-heavy bucket (`encode` and `pmc` are the shapes it has been measured engaging on) and can pay for it: readahead trades materially more API calls and a materially higher peak RSS for less wall time. Leave it off when API cost or memory matters more than latency. |
 
 **When both apply to the same cut.** On a truncated cut that is BOTH a `key=value/` partition
@@ -576,13 +579,17 @@ NON-partition cut.
 Maximum-performance recipe (readahead on top of the now-default `mass_aware_seed`):
 `swath list s3://BUCKET ... --tune engine.readahead=on`
 
-Cost notes: none of the three performance toggles has an unbounded direct call-amplification mechanism —
+Cost notes: none of the four performance toggles has an unbounded direct call-amplification mechanism —
 readahead speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
 mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes), and
-rate-anchored sensing is local estimate arithmetic.
+rate-anchored sensing and the tail-floor arms are local estimate arithmetic (a `tail_floor` arm's
+extra cost is one more owner-side split per admitted carve — bounded by the same
+one-carve-per-32-pages rate limit as any other, plus one duplicate floor evaluation per consult so
+the run can report what the arm changed).
 The api multipliers only cost money on requester-pays/private buckets (public-bucket LIST
-is free); the RSS cost is real everywhere. Each of the three announces itself via a once-per-run
-`TOGGLE.<name>_on` engagement mark, so a run's summary always shows what was enabled.
+is free); the RSS cost is real everywhere. Each of the four announces itself via a once-per-run
+`TOGGLE.<name>_on` engagement mark (`TOGGLE.tail_floor_<mode>_on` for the value-taking one), so a
+run's summary always shows what was enabled.
 
 #### Run trace (`--trace`, V1)
 
