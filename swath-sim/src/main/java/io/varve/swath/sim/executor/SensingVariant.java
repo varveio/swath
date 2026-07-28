@@ -26,6 +26,17 @@ public enum SensingVariant {
     /** E1 and E2 together: the rate estimate, modulated by the anchored geometry within a band. */
     RATE_CURSOR_ANCHORED,
     /**
+     * E4b: the same combination with the band's lower half shortened to an eighth rather than removed.
+     * Raced under {@code GeometryFloorSweepProtocol}, against the finding that the lower half cuts a
+     * measured shortfall and an inferred one with one factor, and that only removing both is what E4's
+     * cures are bought with.
+     */
+    RATE_ANCHORED_FLOOR_EIGHTH,
+    /** E4b: the lower half shortened to a quarter. @see #RATE_ANCHORED_FLOOR_EIGHTH */
+    RATE_ANCHORED_FLOOR_QUARTER,
+    /** E4b: the lower half shortened to a half. @see #RATE_ANCHORED_FLOOR_EIGHTH */
+    RATE_ANCHORED_FLOOR_HALF,
+    /**
      * E4: the same combination with the band's lower half removed, so the anchored geometry may lift a
      * range's proven mass but never cut it. Raced under {@code CarveAdmissionRaceProtocol}, against the
      * finding that a proven-mass estimate cut by the band is what refuses the owner's carve on the one
@@ -41,6 +52,12 @@ public enum SensingVariant {
             case CURSOR_ANCHORED -> new CursorAnchoredEstimator();
             case RATE_CURSOR_ANCHORED ->
                     new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+            case RATE_ANCHORED_FLOOR_EIGHTH ->
+                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.EIGHTH_MIN_GEOMETRY);
+            case RATE_ANCHORED_FLOOR_QUARTER ->
+                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY);
+            case RATE_ANCHORED_FLOOR_HALF ->
+                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.HALF_MIN_GEOMETRY);
             case RATE_ANCHORED_LIFT_ONLY ->
                     new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
         };

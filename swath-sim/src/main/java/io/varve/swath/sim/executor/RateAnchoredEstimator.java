@@ -32,7 +32,18 @@ import io.varve.swath.model.KeyBytes;
  *       heavy-tailed size law, so a geometric factor below one asserts the opposite of the evidence
  *       the estimator is built on. The exact bound test below still scores a finished range zero, so
  *       what this drops is the <em>inferred</em> shortfall, not the measured one.</li>
+ *   <li>{@link #EIGHTH_MIN_GEOMETRY}, {@link #QUARTER_MIN_GEOMETRY}, {@link #HALF_MIN_GEOMETRY} —
+ *       the ladder between those two ends. Removing the whole lower half discards the inferred
+ *       shortfall <em>and</em> the measured one, and only the first of those is the estimator's own
+ *       under-statement; a floor part-way down keeps a cut the measured shortfall can still express
+ *       while refusing the deep cuts the inferred one needs. Which of them, if any, separates the two
+ *       is a fact about real keyspaces, so they are arms of a sweep rather than a default.</li>
  * </ul>
+ *
+ * <p>What a floor decides, in the units the gate consuming it uses: a range clears the owner's
+ * admission floor once its emitted mass reaches {@code SELF_SPLIT_MIN_REMAINING_PAGES / minGeometry}
+ * pages, so the ladder moves that boundary as the floor's reciprocal — sixty-four pages under the
+ * symmetric band, four under the lift-only one.
  */
 final class RateAnchoredEstimator implements RemainingWorkEstimator {
 
@@ -45,13 +56,23 @@ final class RateAnchoredEstimator implements RemainingWorkEstimator {
     /** The band read upwards only: geometry may lift a range's proven mass but never cut it. */
     static final double LIFT_ONLY_MIN_GEOMETRY = 1.0;
 
+    /** Interior floor: geometry may cut a range's proven mass by eight, and no further. */
+    static final double EIGHTH_MIN_GEOMETRY = 1.0 / 8.0;
+
+    /** Interior floor: geometry may cut a range's proven mass by four, and no further. */
+    static final double QUARTER_MIN_GEOMETRY = 1.0 / 4.0;
+
+    /** Interior floor: geometry may cut a range's proven mass in half, and no further. */
+    static final double HALF_MIN_GEOMETRY = 1.0 / 2.0;
+
     private final int pageSize;
     private final double minGeometry;
 
     /**
      * @param pageSize    the no-evidence floor, exactly as {@link RateEstimator} uses it
-     * @param minGeometry how far geometry may cut the rate estimate — {@link #SYMMETRIC_MIN_GEOMETRY}
-     *                    or {@link #LIFT_ONLY_MIN_GEOMETRY}
+     * @param minGeometry how far geometry may cut the rate estimate — one of the two settled ends,
+     *                    {@link #SYMMETRIC_MIN_GEOMETRY} or {@link #LIFT_ONLY_MIN_GEOMETRY}, or one of
+     *                    the interior floors between them
      */
     RateAnchoredEstimator(int pageSize, double minGeometry) {
         this.pageSize = pageSize;
@@ -83,6 +104,8 @@ final class RateAnchoredEstimator implements RemainingWorkEstimator {
 
     @Override
     public String toString() {
-        return minGeometry >= LIFT_ONLY_MIN_GEOMETRY ? "rate+anchored lift-only" : "rate+anchored";
+        return minGeometry >= LIFT_ONLY_MIN_GEOMETRY
+                ? "rate+anchored lift-only"
+                : "rate+anchored floor 1/" + Math.round(1.0 / minGeometry);
     }
 }

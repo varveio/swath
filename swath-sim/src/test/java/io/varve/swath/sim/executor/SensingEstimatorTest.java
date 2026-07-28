@@ -215,4 +215,40 @@ class SensingEstimatorTest {
                 .as("under the lift-only band the same range clears it by its proven mass alone")
                 .isGreaterThan(floor);
     }
+
+    /**
+     * <b>The floors the sweep races are the floors the protocol registered</b>, each read against the
+     * gate that consumes it. The two settled ends bracket the ladder at the same reading: sixty-four
+     * pages of proven mass before the owner's carve is admitted under the symmetric band, four under
+     * the lift-only one. Every interior floor is that boundary at its own reciprocal, so what the
+     * sweep's arms differ by is exactly one number — pinned here, at the arms rather than at the
+     * constants, because installing the wrong floor into an arm is the one way this round could
+     * measure a ladder it never ran.
+     */
+    @Test
+    void eachInteriorArmInstallsItsRegisteredFloorAndAdmitsTheCarveAtThatFloorsReciprocal() {
+        byte[] mostlyDrained = key("species/Bat");
+        int page = 1_000;
+        double floor = (double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * page;
+        SensingVariant[] arms = {SensingVariant.RATE_ANCHORED_FLOOR_EIGHTH,
+            SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, SensingVariant.RATE_ANCHORED_FLOOR_HALF};
+        assertThat(arms.length).as("one arm per registered floor")
+                .isEqualTo(GeometryFloorSweepProtocol.FLOORS.length);
+
+        for (int i = 0; i < arms.length; i++) {
+            double registered = GeometryFloorSweepProtocol.FLOORS[i];
+            RemainingWorkEstimator estimator = arms[i].estimator(page);
+            String at = arms[i] + " at a floor of " + registered;
+            assertThat(estimator.estRemaining(mostlyDrained, LO, HI, 64L * page))
+                    .as("%s: a geometry past the band cuts proven mass by exactly that floor", at)
+                    .isEqualTo(64.0 * page * registered);
+
+            long boundary = Math.round(OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES / registered);
+            assertThat(estimator.estRemaining(mostlyDrained, LO, HI, boundary * page))
+                    .as("%s: %d pages is the last mass the owner's floor still refuses", at, boundary)
+                    .isLessThanOrEqualTo(floor);
+            assertThat(estimator.estRemaining(mostlyDrained, LO, HI, (boundary + 1) * page))
+                    .as("%s: and one page more is the first it admits", at).isGreaterThan(floor);
+        }
+    }
 }
