@@ -388,14 +388,20 @@ and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes
 the shipped sensor and reads exactly what it read before. The rungs of the geometry-floor ladder the
 sweep rejected (`..._EIGHTH`, `..._HALF`, the symmetric `RATE_CURSOR_ANCHORED` and lift-only ends) are
 kept so those races stay reproducible; they run through the promoted arm's engine object at their own
-floor rather than through a second implementation of it. Victim selection and the owner-split gate
-chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
-pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
-drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical
-decisions, so a copy that drifts fails a test rather than becoming a race result. The route itself is
-instrumented like every other algo path here: a run counts `SENSING_ROUTE.owner_split_*` and
-`SENSING_ROUTE.thief_*` once each, off the objects it actually installed, so which pair a table's legs
-were taken through is a reading of the run rather than an inference from its `sensing` field.
+floor rather than through a second implementation of it. Victim selection, the owner-split gate chain
+and the whole pivot cascade are **the engine's own classes**, consumed through the estimator seam they
+already have (#68): an arm is a `RemainingWorkEstimator` handed to `OwnerSplitGovernor` and
+`ThiefPolicy`, and no mirror of either remains in this module — so a variant run and a deployed run
+differ in the sensor and in nothing else. `SensingVariantParityTest` drives the battery through that
+chain under every arm (decisions complete and stable; the observed-mass floor's structural zero visible
+under each), and pins `CURRENT` against a chain nobody steered — which is what says the sensor seam
+carries the shipped path unchanged. The route itself is instrumented like every other algo path here: a
+run counts `SENSING_ROUTE.owner_split_*` and `SENSING_ROUTE.thief_*` once each, off whether an estimator
+was actually installed, so which sensor a table's legs were taken through is a reading of the run rather
+than an inference from its `sensing` field. A run on a rate+anchored arm also emits the engine's own
+per-reading classification rows for that sensor (`SENSING_OWNER.*` / `SENSING_STEAL.*`,
+docs/internals/metrics-internals.md §5a) — the same rows a deployed run under
+`rate_anchored_sensing=on` emits, because it is the same object reporting them.
 
 **What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
 four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key

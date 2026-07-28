@@ -246,8 +246,9 @@ class SensingEstimatorTest {
     /**
      * The same arithmetic read <b>against the gate that consumes it</b>, which is where the defect
      * actually lived: the owner's carve is refused while the estimate does not clear
-     * {@code SELF_SPLIT_MIN_REMAINING_PAGES × page} ({@code EstimatorOwnerSplitPolicy}, the engine's
-     * governor mirrored). The test above pins the cut; this pins the <b>consequence</b> — sixty-four
+     * {@code SELF_SPLIT_MIN_REMAINING_PAGES × page} (the engine's own {@code OwnerSplitGovernor}, which
+     * an arm steers through its estimator seam). The test above pins the cut; this pins the
+     * <b>consequence</b> — sixty-four
      * pages of proven mass is exactly the boundary, so the trace's sixty-four refusals on a range's
      * committed pages are the floor's own arithmetic and not a coincidence of that fixture.
      *

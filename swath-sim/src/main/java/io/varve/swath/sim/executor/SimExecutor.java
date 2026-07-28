@@ -200,19 +200,19 @@ public final class SimExecutor {
     /** The outcome of an attempt whose victim selection found nothing eligible to steal from. */
     public static final String NO_VICTIM_OUTCOME = "NO_VICTIM";
     /**
-     * The category the two <b>sensing routes</b> are counted under: which pair of policy objects a run's
-     * decisions were actually taken through, counted once each at the top of the run. The
+     * The category the two <b>sensing routes</b> are counted under: which sensor the engine's own two
+     * policies were actually constructed with, counted once each at the top of the run. The
      * instrument-every-algo-path rule (AGENTS.md) applied to the route selection itself — the run record
-     * states which sensor was <em>asked</em> for, and these state which code path served it.
+     * states which sensor was <em>asked</em> for, and these state which one was installed.
      */
     public static final String SENSING_ROUTE_CATEGORY = "SENSING_ROUTE";
-    /** The owner-side split decision came from the engine's own governor. */
+    /** The engine's governor ran on the engine's own sensor: no estimator was passed through its seam. */
     public static final String OWNER_SPLIT_ROUTE_SHIPPED = "owner_split_shipped";
-    /** It came from the estimator-parameterised mirror a sensing variant installs. */
+    /** It ran on the sensor a variant installed through that seam. */
     public static final String OWNER_SPLIT_ROUTE_ESTIMATOR = "owner_split_estimator";
-    /** Victim selection and the pivot cascade came from the engine's own thief policy. */
+    /** The engine's thief scored victims on the engine's own sensor, its seam left unsteered. */
     public static final String THIEF_ROUTE_SHIPPED = "thief_shipped";
-    /** They came from the estimator-parameterised selection a sensing variant wraps it in. */
+    /** It scored them on the sensor a variant installed through that seam. */
     public static final String THIEF_ROUTE_ESTIMATOR = "thief_estimator";
     /**
      * Page commits on a bounded range that emitted at least one key — a commit that emitted none moved
@@ -290,6 +290,8 @@ public final class SimExecutor {
     private final PolicyScenario scenario;
     private final SensingVariant sensing;
     private final RemainingWorkEstimator estimator;
+    /** What the policies were constructed with: the variant's estimator, or null under {@code CURRENT}. */
+    private final RemainingWorkEstimator installedEstimator;
     private final String storeLabel;
     private final SimListingView view;
     private final SimNodeLedger ledger = new SimNodeLedger();
@@ -319,12 +321,14 @@ public final class SimExecutor {
         this.scenario = scenario;
         this.sensing = sensing;
         this.estimator = sensing.estimator(scenario.pageSize());
+        // The seam takes null for the shipped reading, so CURRENT installs the engine's own WINDOW
+        // object rather than this module's delegate to it: a control leg is then not merely the same
+        // arithmetic, it is the same field the engine holds when nothing steers the seam.
+        this.installedEstimator = sensing == SensingVariant.CURRENT ? null : estimator;
         this.storeLabel = storeLabel;
         this.view = new SimListingView(store, scenario.scanPrefix());
-        this.governor = sensing == SensingVariant.CURRENT
-                ? new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(), scenario.pageSize(), null)
-                : new EstimatorOwnerSplitPolicy(estimator, scenario.toggles(), scenario.workerCount(),
-                        scenario.pageSize());
+        this.governor = new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(),
+                scenario.pageSize(), installedEstimator);
         this.seedPlanner = new HybridSeedPlanner(scenario.scanPrefix(), scenario.workerCount(),
                 scenario.toggles());
         // The controller is one instrument for the whole fleet, so its jitter is drawn on the reserved
@@ -509,10 +513,8 @@ public final class SimExecutor {
             // of the interleaving -- the property a comparison between two simulated variants needs to
             // not have.
             DecisionRng rng = bound -> ctx.rng(SimRngStream.STEAL_DECISION).nextInt(bound);
-            StealPolicy cascade = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng, null);
-            this.thief = sensing == SensingVariant.CURRENT
-                    ? cascade
-                    : new EstimatorStealPolicy(estimator, cascade);
+            this.thief = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng,
+                    installedEstimator);
         }
 
         /**
@@ -1290,19 +1292,20 @@ public final class SimExecutor {
 
     /**
      * Counts the two policy routes this run's decisions are taken through, once each, at the top of the
-     * run. Read off the objects that were actually installed rather than off {@link #sensing}, so a
-     * wiring change that installs one side's mirror and not the other's is visible in the metrics
-     * instead of being attested by the same expression that made the mistake.
+     * run. Both sides are the engine's own policy objects, so what a route now proves is which
+     * <b>sensor</b> was installed through their estimator seam: the shipped route is the one that
+     * passed no estimator at all, and left the engine on its own {@code WINDOW} default.
      *
      * <p>Once per run and not once per worker: the thief brain is deliberately constructed per worker
      * (its decision tape is that worker's own), so counting it there would report the fleet size under
      * a name that reads like a route.
      */
     private void recordSensingRoutes(SimContext ctx) {
-        ctx.count(SENSING_ROUTE_CATEGORY + "." + (governor instanceof EstimatorOwnerSplitPolicy
-                ? OWNER_SPLIT_ROUTE_ESTIMATOR : OWNER_SPLIT_ROUTE_SHIPPED), 1);
-        ctx.count(SENSING_ROUTE_CATEGORY + "." + (workers[0].thief instanceof EstimatorStealPolicy
-                ? THIEF_ROUTE_ESTIMATOR : THIEF_ROUTE_SHIPPED), 1);
+        boolean steered = installedEstimator != null;
+        ctx.count(SENSING_ROUTE_CATEGORY + "."
+                + (steered ? OWNER_SPLIT_ROUTE_ESTIMATOR : OWNER_SPLIT_ROUTE_SHIPPED), 1);
+        ctx.count(SENSING_ROUTE_CATEGORY + "."
+                + (steered ? THIEF_ROUTE_ESTIMATOR : THIEF_ROUTE_SHIPPED), 1);
     }
 
     /** Records every engagement a policy fired, under the same category and reason the engine uses. */
