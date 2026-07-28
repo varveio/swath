@@ -6,6 +6,7 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
@@ -109,6 +110,38 @@ class SensingEstimatorTest {
         assertThat(anchored.estRemaining(cursor, LO, HI, 12_345L))
                 .as("and the two readings are more than an order of magnitude apart anyway")
                 .isLessThan(StealMath.estRemaining(cursor, LO, HI, 12_345L) / 10.0);
+    }
+
+    /**
+     * <b>The killed E2 arm's frame is still the engine's.</b> {@link CursorAnchoredEstimator} measures
+     * its own consumed and remaining spans, and the shared {@code geometricFactor} that used to hold
+     * those two readings and {@link StealMath#anchoredGeometricFactor} together was deleted when the
+     * promoted arm moved into the engine. The identity it asserted is unchanged — this arm's estimate
+     * IS {@code keysEmitted × anchoredGeometricFactor} wherever the cursor has consumed evidence to
+     * anchor — so pin it directly, or an edit to either frame leaves this arm's race records
+     * describing arithmetic nothing computes. Both branches are covered: the anchored boundary itself
+     * ({@code d == d0}, where the frame is the incumbent's), and the deeper frame either side of the
+     * {@code 0x80} divergence byte where it stops lifting.
+     */
+    @Test
+    void theAnchoredArmsFrameIsStillTheEnginesAnchoredGeometricFactor() {
+        CursorAnchoredEstimator anchored = new CursorAnchoredEstimator();
+        long keys = 12_345L;
+        int d0 = RemainingWorkEstimator.commonPrefixLen(LO, HI);
+        byte[][] cursors = {key("species/Bat"), key("species/Balf"), CURSOR_EARLY, CURSOR_LATER,
+            deeper((byte) 0xC0)};
+        assertThat(RemainingWorkEstimator.commonPrefixLen(LO, cursors[0]))
+                .as("the boundary case is in the roster").isEqualTo(d0);
+
+        for (byte[] cursor : cursors) {
+            double factor = StealMath.anchoredGeometricFactor(cursor, LO, HI);
+            double estimate = anchored.estRemaining(cursor, LO, HI, keys);
+            // The arm divides then multiplies and the engine's factor divides last, so the only slack
+            // allowed is floating-point association.
+            assertThat(estimate)
+                    .as("cursor %s", new String(cursor, StandardCharsets.UTF_8))
+                    .isCloseTo(keys * factor, within(Math.abs(keys * factor) * 1e-12));
+        }
     }
 
     @Test
