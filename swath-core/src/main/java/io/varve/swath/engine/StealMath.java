@@ -40,6 +40,13 @@ public final class StealMath {
      */
     private static final byte[] MAX_UTF8_KEY = {(byte) 0xF4, (byte) 0x8F, (byte) 0xBF, (byte) 0xBF};
 
+    /**
+     * The ⊥ sentinel (a {@code null} lower bound or cursor) as bytes, for the comparisons that need a
+     * real array. Shared rather than freshly allocated inside {@link #anchoredGeometricFactor}, whose
+     * every root-range reading would otherwise allocate on a scan-hot, documented allocation-free path.
+     */
+    private static final byte[] EMPTY = new byte[0];
+
     private StealMath() {}
 
     // -------------------------------------------------------------------------
@@ -114,8 +121,8 @@ public final class StealMath {
      * caller that wants only the geometry gets a neutral answer rather than a degenerate one.
      */
     public static double anchoredGeometricFactor(byte[] cursor, byte[] lo, byte[] hi) {
-        byte[] cur = (cursor == null) ? new byte[0] : cursor;
-        byte[] loKey = (lo == null) ? new byte[0] : lo;
+        byte[] cur = (cursor == null) ? EMPTY : cursor;
+        byte[] loKey = (lo == null) ? EMPTY : lo;
         if (hi == null || KeyBytes.compareUnsigned(cur, loKey) <= 0) return 1.0;
         int d  = commonPrefixLen(loKey, cur);
         int d0 = commonPrefixLen(loKey, hi);

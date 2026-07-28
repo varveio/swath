@@ -137,9 +137,13 @@ public final class WorkerState {
      * Observed-alphabet digest — a zero-API companion to the density digest that learns the
      * per-position populated byte alphabet from keys already in hand (updated under {@link #lock()} in
      * {@link #recordPage}, read lock-free by the {@link Thief}). Fed to {@link StealMath#interpolate}
-     * so a synthesized pivot lands on a real populated value (not a hex/UUID dead zone). Both
-     * {@code estRemaining} call sites (owner-split gate, {@link Thief} victim selection) use the
-     * plain code-point {@link StealMath#estRemaining(byte[], byte[], byte[], long)} estimate.
+     * so a synthesized pivot lands on a real populated value (not a hex/UUID dead zone). The
+     * {@code estRemaining} readers all take the plain code-point estimate, never the rank-space one:
+     * the three behind the {@link RemainingWorkEstimator} seam (owner-split gate, {@link Thief} victim
+     * selection, the {@code slow_ranges} dump) through whichever reading {@code
+     * --engine-toggle rate_anchored_sensing} selected for the run, and {@link RangeScanner}'s
+     * readahead engage gate through {@link StealMath#estRemaining(byte[], byte[], byte[], long)}
+     * directly (deliberately outside the seam — see its own call-site comment).
      */
     private final AlphabetDigest alphabet;
 

@@ -327,8 +327,8 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         }
         // Same polarity, same reason, for the position sensor: which estimator a run's victim choice
         // and owner-split gates were steered by is a reading of the run rather than an inference from
-        // its argv, and the SENSING.* classification counters below it are silent on a keyspace that
-        // never reached the sensor at all.
+        // its argv, and the SENSING_OWNER.*/SENSING_STEAL.* classification counters below it are
+        // silent on a keyspace that never reached the sensor at all.
         if (toggles.rateAnchoredSensing()) {
             metrics.recordStealReason("TOGGLE", "rate_anchored_sensing_on");
         }

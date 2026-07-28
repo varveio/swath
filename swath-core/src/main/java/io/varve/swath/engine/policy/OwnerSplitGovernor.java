@@ -94,9 +94,11 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // which needs no estRemaining change to land on a populated value.
         double est = estimator.estRemaining(cursorTo, lo, H, view.keysEmitted());
         // What the sensor's reading did (§5 discipline), collected before the gates it feeds so a
-        // refusal carries its own reading's classification. Inert for the shipped reading.
+        // refusal carries its own reading's classification. Under this site's OWN category: one
+        // reading per qualifying page commit, which is the denominator the OWNER_SPLIT.* skip
+        // reasons below are already counted against. Inert for the shipped reading.
         List<Engagement> engagements = new ArrayList<>();
-        estimator.classify(cursorTo, lo, H, view.keysEmitted(), engagements);
+        estimator.classify("SENSING_OWNER", cursorTo, lo, H, view.keysEmitted(), engagements);
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             // Remaining work too small to be worth a proactive carve — issue #16.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code()));

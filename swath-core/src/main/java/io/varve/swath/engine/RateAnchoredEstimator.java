@@ -35,7 +35,8 @@ import java.util.List;
  *       measured position may lift the proven mass; {@code minGeometry} is where it stops cutting it.
  *       A factor below one asserts that less remains than has already come out, which is the inference
  *       the proven-mass magnitude exists to refuse — and it is what refused a straggler's carve at the
- *       owner's remaining-work floor until the range had emitted 64 pages. The exact
+ *       owner's remaining-work floor until the range had emitted sixteen pages — the quarter's own
+ *       boundary, the reciprocal of its floor. The exact
  *       {@code cursor >= hi} test below still scores a finished range zero, so what a floor drops is
  *       the <em>inferred</em> shortfall, not the measured one.</li>
  * </ul>
@@ -69,12 +70,17 @@ public final class RateAnchoredEstimator implements RemainingWorkEstimator {
     private final double minGeometry;
 
     /**
-     * @param pageSize    the run's page size {@code maxKeys}, used as the no-evidence floor
+     * @param pageSize    the run's page size {@code maxKeys}, used as the no-evidence floor; at least
+     *                    one, because a floor of zero scores an un-started range zero and takes it out
+     *                    of victim selection entirely — the exact outcome the floor exists to prevent
      * @param minGeometry how far the anchored geometry may cut the proven mass — {@link
      *                    #QUARTER_MIN_GEOMETRY} for the promoted reading, a losing rung of the same
      *                    ladder for a simulator arm re-running the race
      */
     public RateAnchoredEstimator(int pageSize, double minGeometry) {
+        if (pageSize < 1) {
+            throw new IllegalArgumentException("pageSize must be >= 1 (got " + pageSize + ")");
+        }
         this.pageSize = pageSize;
         this.minGeometry = minGeometry;
     }
@@ -93,7 +99,7 @@ public final class RateAnchoredEstimator implements RemainingWorkEstimator {
     }
 
     @Override
-    public void classify(byte[] cursor, byte[] lo, byte[] hi, long keysEmitted,
+    public void classify(String category, byte[] cursor, byte[] lo, byte[] hi, long keysEmitted,
                          List<Engagement> collector) {
         if (hi == null || KeyBytes.compareUnsigned(cursor == null ? BOTTOM : cursor, hi) >= 0) {
             // The two readings that never consult geometry: the open frontier's +INF and a finished
@@ -104,9 +110,10 @@ public final class RateAnchoredEstimator implements RemainingWorkEstimator {
         double geometry = StealMath.anchoredGeometricFactor(cursor, lo, hi);
         // Which way the band bit, as one mutually-exclusive reading per classified estimate: whether
         // the measured position lifted the proven mass, passed through it, cut it within what the
-        // floor allows, or was refused by the floor. Read against OWNER_SPLIT.remaining_est_floor and
-        // NO_VICTIM.all_no_remaining_span, the two gates the estimate feeds.
-        collector.add(new Engagement("SENSING",
+        // floor allows, or was refused by the floor. Under the caller's own category, so each reading
+        // is read against the gate that consumed it: OWNER_SPLIT.remaining_est_floor for the owner
+        // site, an attempt that found a winner for the steal one.
+        collector.add(new Engagement(category,
                 geometry > GEOMETRY_BAND ? "geometry_capped"
                         : geometry > 1.0 ? "geometry_lift"
                         : geometry == 1.0 ? "geometry_neutral"
@@ -114,7 +121,7 @@ public final class RateAnchoredEstimator implements RemainingWorkEstimator {
         if (keysEmitted < pageSize) {
             // The estimate is the no-evidence page floor rather than proven mass — the range has not
             // yet produced a page, so its magnitude is an assumption and not a measurement.
-            collector.add(new Engagement("SENSING", "page_floor"));
+            collector.add(new Engagement(category, "page_floor"));
         }
     }
 }

@@ -38,9 +38,9 @@ import org.junit.jupiter.api.io.TempDir;
  * rate_anchored_sensing=on} actually installs {@link RateAnchoredEstimator} as the run's position
  * sensor, and that a run says so in its metrics alone (AGENTS.md's instrument-every-algo-path rule):
  * the once-per-run {@code TOGGLE.rate_anchored_sensing_on} mark for the route, and the sensor's own
- * {@code SENSING.*} classification counters for what its band did to the estimates the gates
- * consumed. The default arm is the control: the identical keyspace, byte-identical coverage, and
- * total silence on both counters.
+ * per-site {@code SENSING_OWNER.*}/{@code SENSING_STEAL.*} classification counters for what its band
+ * did to the estimates the gates consumed. The default arm is the control: the identical keyspace,
+ * byte-identical coverage, and total silence on both counters.
  */
 final class RateAnchoredSensingWiringTest {
 
@@ -99,7 +99,8 @@ final class RateAnchoredSensingWiringTest {
 
         assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L))
                 .as("the once-per-run route mark fired").isEqualTo(1L);
-        assertThat(sumCategory(result.stealReasons(), "SENSING"))
+        assertThat(sumCategory(result.stealReasons(), "SENSING_OWNER")
+                + sumCategory(result.stealReasons(), "SENSING_STEAL"))
                 .as("and the installed sensor classified the readings the gates consumed")
                 .isGreaterThan(0L);
     }
@@ -116,7 +117,8 @@ final class RateAnchoredSensingWiringTest {
         assertExactlyOnce(result.emitted(), keyspace);
 
         assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L)).isZero();
-        assertThat(sumCategory(result.stealReasons(), "SENSING"))
+        assertThat(sumCategory(result.stealReasons(), "SENSING_OWNER")
+                + sumCategory(result.stealReasons(), "SENSING_STEAL"))
                 .as("the shipped reading adds no counter to a run that has always existed").isZero();
     }
 }

@@ -143,8 +143,10 @@ public final class ThiefPolicy implements StealPolicy {
         }
         // What the sensor's reading of the WINNING candidate did (§5 discipline) — once per attempt
         // rather than once per scored candidate, so the signal costs one classification per steal
-        // instead of one per pool member. Inert for the shipped reading.
-        estimator.classify(chosen.cursor(), chosen.lo(), chosen.hi(), chosen.keysEmitted(), engagements);
+        // instead of one per pool member. That count is a different denominator from the owner gate's
+        // per-page-commit one, so it carries its own category. Inert for the shipped reading.
+        estimator.classify("SENSING_STEAL", chosen.cursor(), chosen.lo(), chosen.hi(),
+                chosen.keysEmitted(), engagements);
         return new Selected(chosen.nodeId(), engagements, mutations);
     }
 

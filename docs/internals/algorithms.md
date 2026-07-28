@@ -667,7 +667,14 @@ estRemaining(w):
   picks one. The engine builds exactly one per run and shares it (it is pure and
   stateless) between `ThiefPolicy`'s selection, `OwnerSplitGovernor`'s gate chain, and the
   `slow_ranges[]` diagnostic dump, so a run's reported estimate is the one its decisions
-  were taken on.
+  were taken on. A **fourth** reader sits deliberately outside the seam: `RangeScanner`'s
+  readahead engage gate calls `StealMath.estRemaining` directly, because its frame is the
+  drain STREAK's own `lo` rather than the range's, it converts the result to pages against
+  `maxKeys`, and its precision guard is written against the window reading's exact
+  degenerate branch (a consumed span that rounds to zero, which it fails OPEN on). Which
+  range the fleet steals from and when an owner carves is a fleet-wide ranking decision;
+  whether one owner has the local runway to earn back a speculative fetch is not, so
+  `readahead=on rate_anchored_sensing=on` leaves that gate on the shipped reading.
 - **The opt-in second reading: `RateAnchoredEstimator` (`--engine-toggle
   rate_anchored_sensing=on`, default OFF).** The window reading above is degenerate on a
   deep-nested keyspace: a cursor that agrees with `hi` across all `K = 12` window bytes
@@ -693,8 +700,9 @@ estRemaining(w):
   promoted. Both bounds stay exact: an open frontier still scores `+infinity` and a cursor
   at its bound still scores `0`. **This changes which range is stolen from and when an
   owner carves, so it is an A/B arm and not a default**; a run on it marks itself
-  `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own `SENSING.*` classification
-  counters (metrics-internals §5a).
+  `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own classification counters,
+  one namespace per decision site (`SENSING_OWNER.*` at the owner gate, `SENSING_STEAL.*`
+  at victim selection — the two count against different denominators, metrics-internals §5a).
 - Pick the victim with the largest `estRemaining`. A left-skewed (dense-head)
   victim is attacked by the **density-reflected pivot** and, behind it, the
   **retry-nearer-cursor** bisection in `steal()` (§3) — both walk the pivot back

@@ -6,6 +6,7 @@
 package io.varve.swath.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import io.varve.swath.engine.policy.Engagement;
@@ -43,6 +44,10 @@ class RateAnchoredEstimatorTest {
 
     private static final int PAGE = 1_000;
 
+    /** The two decision sites' categories, spelled as {@code OwnerSplitGovernor}/{@code ThiefPolicy} pass them. */
+    private static final String OWNER = "SENSING_OWNER";
+    private static final String STEAL = "SENSING_STEAL";
+
     private static final RateAnchoredEstimator QUARTER =
             new RateAnchoredEstimator(PAGE, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY);
 
@@ -65,6 +70,23 @@ class RateAnchoredEstimatorTest {
         assertThat(QUARTER.estRemaining(CURSOR_DEEP, LO, HI, 0L))
                 .as("and with no evidence yet the magnitude is the page in flight, not zero")
                 .isEqualTo(1626.9617931562836);
+    }
+
+    /**
+     * WHICH rung the toggle installs, not merely that it installs one. The floor is the single number
+     * the corpus race's arms differed by, so an edit to {@link EngineToggles#remainingWorkEstimator}
+     * handing a run a losing rung — the eighth or the half — would otherwise leave every test green:
+     * both are the same class, both classify, both wire. They read this fixture at half and at double
+     * the quarter's number, which is what this pins.
+     */
+    @Test
+    void theToggleInstallsThePromotedQuarterRungAndNotAnotherOfTheLadder() {
+        RemainingWorkEstimator installed =
+                EngineToggles.DEFAULT.withRateAnchoredSensing(true).remainingWorkEstimator(PAGE);
+
+        assertThat(installed.estRemaining(MOSTLY_DRAINED, LO, HI, 64L * PAGE))
+                .as("the promoted quarter's own reading of the mostly-drained fixture")
+                .isEqualTo(16_000.0);
     }
 
     @Test
@@ -150,19 +172,35 @@ class RateAnchoredEstimatorTest {
      */
     @Test
     void everyClassifiedReadingReportsWhatTheBandDidToIt() {
-        assertThat(classify(CURSOR_DEEP, 5_000L)).containsExactly("SENSING.geometry_lift");
-        assertThat(classify(JUST_PAST_DIVERGENCE, 5_000L)).containsExactly("SENSING.geometry_capped");
-        assertThat(classify(IN_BAND_CUT, 5_000L)).containsExactly("SENSING.geometry_cut");
-        assertThat(classify(MOSTLY_DRAINED, 5_000L)).containsExactly("SENSING.geometry_floored");
-        assertThat(classify(LO, 5_000L)).containsExactly("SENSING.geometry_neutral");
-        assertThat(classify(CURSOR_DEEP, 0L))
+        assertThat(classify(OWNER, CURSOR_DEEP, 5_000L)).containsExactly("SENSING_OWNER.geometry_lift");
+        assertThat(classify(OWNER, JUST_PAST_DIVERGENCE, 5_000L))
+                .containsExactly("SENSING_OWNER.geometry_capped");
+        assertThat(classify(OWNER, IN_BAND_CUT, 5_000L)).containsExactly("SENSING_OWNER.geometry_cut");
+        assertThat(classify(OWNER, MOSTLY_DRAINED, 5_000L)).containsExactly("SENSING_OWNER.geometry_floored");
+        assertThat(classify(OWNER, LO, 5_000L)).containsExactly("SENSING_OWNER.geometry_neutral");
+        assertThat(classify(OWNER, CURSOR_DEEP, 0L))
                 .as("a range that has not produced a page yet says so alongside its geometry")
-                .containsExactly("SENSING.geometry_lift", "SENSING.page_floor");
-        assertThat(classify(HI, 5_000L)).as("a finished range's zero is the shipped contract's").isEmpty();
+                .containsExactly("SENSING_OWNER.geometry_lift", "SENSING_OWNER.page_floor");
+        assertThat(classify(OWNER, HI, 5_000L))
+                .as("a finished range's zero is the shipped contract's").isEmpty();
 
         List<Engagement> openFrontier = new ArrayList<>();
-        QUARTER.classify(CURSOR_DEEP, LO, null, 5_000L, openFrontier);
+        QUARTER.classify(OWNER, CURSOR_DEEP, LO, null, 5_000L, openFrontier);
         assertThat(openFrontier).as("as is the open frontier's +INF").isEmpty();
+    }
+
+    /**
+     * The reading is the sensor's; the NAMESPACE is the caller's. The two decision sites count over
+     * incompatible denominators — an owner-gate consult per qualifying page commit, a steal
+     * classification per attempt with a winner — so the identical reading must land under whichever
+     * category the site passed, and never in one pooled family that no ratio could be drawn from.
+     */
+    @Test
+    void theReadingIsFiledUnderTheCallingSitesOwnCategory() {
+        assertThat(classify(STEAL, CURSOR_DEEP, 5_000L)).containsExactly("SENSING_STEAL.geometry_lift");
+        assertThat(classify(STEAL, MOSTLY_DRAINED, 5_000L)).containsExactly("SENSING_STEAL.geometry_floored");
+        assertThat(classify(STEAL, CURSOR_DEEP, 0L))
+                .containsExactly("SENSING_STEAL.geometry_lift", "SENSING_STEAL.page_floor");
     }
 
     @Test
@@ -170,14 +208,26 @@ class RateAnchoredEstimatorTest {
         assertThat(RemainingWorkEstimator.WINDOW.estRemaining(CURSOR_DEEP, LO, HI, 400_000L))
                 .isEqualTo(StealMath.estRemaining(CURSOR_DEEP, LO, HI, 400_000L));
         List<Engagement> collected = new ArrayList<>();
-        RemainingWorkEstimator.WINDOW.classify(CURSOR_DEEP, LO, HI, 400_000L, collected);
+        RemainingWorkEstimator.WINDOW.classify(OWNER, CURSOR_DEEP, LO, HI, 400_000L, collected);
         assertThat(collected).isEmpty();
     }
 
+    /** The page floor is the magnitude of an un-started range, so it cannot be zero. */
+    @Test
+    void aPageSizeBelowOneIsRefusedRatherThanScoringEveryRangeZero() {
+        assertThatThrownBy(() -> new RateAnchoredEstimator(0, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pageSize");
+        assertThat(new RateAnchoredEstimator(1, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY)
+                .estRemaining(CURSOR_DEEP, LO, HI, 0L))
+                .as("one key is the smallest page that still keeps an un-started range in selection")
+                .isPositive();
+    }
+
     /** {@code QUARTER}'s classification of {@code cursor} in {@code [LO, HI]}, as {@code category.reason}. */
-    private static List<String> classify(byte[] cursor, long keysEmitted) {
+    private static List<String> classify(String category, byte[] cursor, long keysEmitted) {
         List<Engagement> collected = new ArrayList<>();
-        QUARTER.classify(cursor, LO, HI, keysEmitted, collected);
+        QUARTER.classify(category, cursor, LO, HI, keysEmitted, collected);
         return collected.stream().map(e -> e.category() + "." + e.reason()).toList();
     }
 }

@@ -188,9 +188,10 @@ public record RunSummary(
     /**
      * One live range's terminal/mid-run diagnostic snapshot — bounds are display-escaped/
      * truncated (same idiom as every other byte-key rendering here; never raw, unbounded key
-     * bytes). {@code estRemaining}/{@code drainRate} are that range's own {@code StealMath}
-     * remaining-span estimate and observed keys/sec; the four tallies are cheap per-range counters
-     * bumped alongside the existing global {@code swath.steal_reason} counters at the same
+     * bytes). {@code estRemaining}/{@code drainRate} are that range's own remaining-work estimate —
+     * taken through the run's own {@code RemainingWorkEstimator}, so a dumped estimate is the one the
+     * run's decisions were taken on — and observed keys/sec; the four tallies are cheap per-range
+     * counters bumped alongside the existing global {@code swath.steal_reason} counters at the same
      * decision points (never a new hot-path check) — see {@code WorkerState}.
      */
     public record SlowRange(String lo, String hi, String cursor, double estRemaining, double drainRate,
