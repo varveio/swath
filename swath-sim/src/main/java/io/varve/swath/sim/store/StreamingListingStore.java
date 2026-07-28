@@ -12,6 +12,7 @@ import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.store.SortedRouting;
+import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -229,7 +230,11 @@ public final class StreamingListingStore implements ListingStore {
      *
      * <p>The block's own rejection message names the offending key and its position <em>within the
      * group</em>, which is all a block can know; the file and row group it came from are added here,
-     * so a sweep that trips this over one fixture out of a corpus says which fixture and where.
+     * so a sweep that trips this over one fixture out of a corpus says which fixture and where. A
+     * disorder rejection is {@linkplain RowGroupOrderException typed} and
+     * {@linkplain SimStoreMetrics#SEGMENT_REFUSED_METRIC counted before it is rethrown}, so a sweep
+     * classifies the exclusion from the metrics and {@link RowGroupOrderException#reason()} rather
+     * than by matching a message.
      */
     private KeyBlock decode(int group) {
         IndexEntry entry = index.get(group);
@@ -241,6 +246,12 @@ public final class StreamingListingStore implements ListingStore {
                 boolean fits;
                 try {
                     fits = builder.append(key);
+                } catch (RowGroupOrderException disordered) {
+                    // Count BEFORE rethrowing: the run aborts on this, and the exclusion still has to
+                    // be readable from the sweep's metrics (the same discipline PageRunSegmentIo's
+                    // own pre-throw count keeps).
+                    metrics.recordStreamingSegmentRefused(disordered.reason());
+                    throw disordered.locatedIn(entry.file(), entry.rowGroup());
                 } catch (IllegalStateException rejected) {
                     throw new IllegalStateException("row group " + entry.rowGroup() + " of " + entry.file()
                             + " cannot be served: " + rejected.getMessage(), rejected);

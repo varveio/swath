@@ -123,7 +123,13 @@ which on a 300 MB fixture would cost as much as the run:
 
 So a corpus fixture large enough for a real sweep — which `AUTO` puts on `STREAMING` — is guarded,
 and one small enough to fit the arena is served in key order whatever its file holds. A sweep runner
-treats the hard failure as "exclude this bucket and record why", not as a reason to stop.
+treats the hard failure as "exclude this bucket and record why", not as a reason to stop — and it can
+read the *why* mechanically: the failure is an `io.varve.swath.sort.RowGroupOrderException` carrying
+`reason() == "row_group_disorder"`, and the decode bumps
+`swath.sim.store.streaming.segment.refused{reason}` **before** it rethrows, so the exclusion survives
+into the metrics of a run that ended in an exception. Nothing downstream has to match a message. (The
+replay server raises the same typed failure from its own skip-scan and counts it as
+`swath.replay.serving.refused{reason}`; see `docs/swath-replay-server.md`.)
 
 **Why `WINDOWED` is forced-only.** It decodes Parquet *inside* the serving loop: every window
 refill is a bounded range query, and because the `key` column is a `BLOB` with no usable zonemaps

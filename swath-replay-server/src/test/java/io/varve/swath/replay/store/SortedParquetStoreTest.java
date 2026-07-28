@@ -26,6 +26,7 @@ import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedParquetWriter;
@@ -433,6 +434,11 @@ class SortedParquetStoreTest {
      * bypassing {@link CaptureSorter}, because the sorter cannot produce the shape being guarded
      * against: what it stands in for is a listing published by some other producer and stamped
      * sorted while not being so.
+     *
+     * <p>The refusal is <b>counted before it is thrown</b>, and the reason is a typed constant, not a
+     * phrase in the message: a corpus sweep excluding this capture has to be able to say <em>why</em>
+     * from the metrics of a run that ended in an exception, which is the same discipline
+     * {@code io.varve.swath.sort.PageRunSegmentIo}'s own pre-throw count keeps.
      */
     @Test
     void delimitedRollupRefusesARowGroupWhoseRowsAreNotAscending(@TempDir Path dir) throws IOException {
@@ -447,14 +453,21 @@ class SortedParquetStoreTest {
         List<Path> files = SortedFixtures.resolveFiles(out);
         IndexLoadResult loaded = SortedFixtures.loadIndex(files, new FixtureMetrics());
         Fixture fixture = new Fixture(files, ((IndexLoadResult.Loaded) loaded).entries());
+        ReplayMetrics metrics = new ReplayMetrics(new SimpleMeterRegistry(), ReplayMetrics.SERVING_MODE_SORTED);
 
-        try (SortedParquetStore store = store(fixture)) {
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 2)) {
             assertThatThrownBy(() -> store.delimitedRollup(null, true, upperOf(""), new byte[0], slash(),
                     1000, Projection.KEYS_ONLY))
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
+                        assertThat(e.file()).isEqualTo(file);
+                        assertThat(e.rowGroup()).isZero();
+                    })
                     .hasMessageContaining("row group 0 of " + file)
                     .hasMessageContaining("strictly ascending");
         }
+        assertThat(metrics.registry().find("swath.replay.serving.refused")
+                .tag("reason", RowGroupOrderException.ROW_GROUP_DISORDER).counter().count()).isEqualTo(1);
     }
 
     private record Fixture(List<Path> files, List<IndexEntry> index) {

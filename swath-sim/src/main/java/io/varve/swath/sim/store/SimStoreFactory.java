@@ -78,7 +78,10 @@ import org.slf4j.LoggerFactory;
  *       not. A fixture that reaches this tier is served in key order regardless.</li>
  * </ul>
  * {@link SimStoreBackend#AUTO} therefore hard-fails an unsorted fixture whenever it lands on the
- * streaming tier — which is where a fixture large enough for a real sweep lands by construction.
+ * streaming tier — which is where a fixture large enough for a real sweep lands by construction. The
+ * failure is a typed {@link io.varve.swath.sort.RowGroupOrderException} and is counted
+ * ({@link SimStoreMetrics#SEGMENT_REFUSED_METRIC}) before it is rethrown, so a sweep classifies the
+ * excluded fixture from the reason and the metrics rather than from a message.
  */
 public final class SimStoreFactory {
 

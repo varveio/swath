@@ -13,6 +13,7 @@ import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
+import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileIndex;
@@ -53,19 +54,31 @@ class UnsortedFixtureGuardTest {
      * them, and the first row that is not strictly above its predecessor fails that decode — naming
      * the file, the row group and the row, because the caller is a sweep over many fixtures and
      * "something was unsorted" is not an actionable report.
+     *
+     * <p>That report has to be machine-readable too: the sweep sees a run that ended in an exception,
+     * and must classify the exclusion from {@link RowGroupOrderException#reason()} and the counter the
+     * decode bumps <b>before</b> it rethrows — never by matching the message.
      */
     @Test
     void theStreamingTierFailsOnTheFirstUnsortedRowNamingFileRowGroupAndRow() throws IOException {
         Path fixture = stampedFixture("out", List.of("a/1", "a/3", "a/2", "a/4"));
+        Path file = soleFile(fixture);
 
         SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.STREAMING);
         try (ListingStore store = result.store()) {
             assertThatThrownBy(() -> store.rows(null, true, null, 10, Projection.KEYS_ONLY))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("row group 0 of " + soleFile(fixture))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
+                        assertThat(e.file()).isEqualTo(file);
+                        assertThat(e.rowGroup()).isZero();
+                        assertThat(e.row()).isEqualTo(2);
+                    })
+                    .hasMessageContaining("row group 0 of " + file)
                     .hasMessageContaining("strictly ascending")
                     .hasMessageContaining("key 2");
         }
+        assertThat(result.metrics().registry().find(SimStoreMetrics.SEGMENT_REFUSED_METRIC)
+                .tag("reason", RowGroupOrderException.ROW_GROUP_DISORDER).counter().count()).isEqualTo(1);
     }
 
     /**

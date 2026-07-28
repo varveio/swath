@@ -158,7 +158,9 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * sortedness a fixture was admitted on ({@code SortedFileIndex}/the replay server's index derive)
      * proves the ascent of row-group <em>first</em> keys only, so a group's own rows are proved here,
      * where they are decoded anyway, and nowhere else. The comparison is the same one
-     * {@link #advanceTo} already makes per stepped row, so it costs a compare and no I/O.
+     * {@link #advanceTo} already makes per stepped row, so it costs a compare and no I/O. The failure
+     * is a {@link RowGroupOrderException}, carrying the machine-readable
+     * {@link RowGroupOrderException#ROW_GROUP_DISORDER} reason its callers count and classify by.
      */
     public static final class KeyCursor implements AutoCloseable {
 
@@ -191,10 +193,10 @@ public final class SortedRowGroupReader implements AutoCloseable {
             currentKey = position < rowCount ? rowReader.read().getBinary(KEY_FIELD, 0).getBytes() : null;
             if (currentKey != null && previousKey != null
                     && KeyBytes.compareUnsigned(previousKey, currentKey) >= 0) {
-                throw new IllegalStateException("row group " + blockIndex + " of " + file
-                        + " is not sorted: its keys must be in strictly ascending unsigned order, but row "
-                        + position + " (" + HexFormat.of().formatHex(currentKey)
-                        + ") is at or below its predecessor");
+                throw RowGroupOrderException.at(file, blockIndex, position,
+                        "its keys must be in strictly ascending unsigned order, but row " + position
+                                + " (" + HexFormat.of().formatHex(currentKey)
+                                + ") is at or below its predecessor");
             }
         }
 

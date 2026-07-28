@@ -61,6 +61,13 @@ public final class SimStoreMetrics {
     /** Bumped per decoded segment dropped to stay inside the residency budget. */
     public static final String SEGMENT_EVICT_METRIC = "swath.sim.store.streaming.segment.evict";
 
+    /** Bumped when a segment decode refuses the row group it was reading, tagged with the typed
+     *  reason ({@code io.varve.swath.sort.RowGroupOrderException#ROW_GROUP_DISORDER}). A decline
+     *  above ({@link #STREAMING_DECLINE_METRIC}) means another tier served the fixture; this one
+     *  means nothing can, so a sweep must be able to tell the two apart — and to tell a disorder
+     *  exclusion from any other read failure without matching a message. */
+    public static final String SEGMENT_REFUSED_METRIC = "swath.sim.store.streaming.segment.refused";
+
     /** The decoded segments' current footprint in bytes. */
     public static final String RESIDENT_BYTES_METRIC = "swath.sim.store.streaming.resident.bytes";
 
@@ -96,6 +103,10 @@ public final class SimStoreMetrics {
 
     public void recordStreamingSegmentEvict() {
         Counter.builder(SEGMENT_EVICT_METRIC).register(registry).increment();
+    }
+
+    public void recordStreamingSegmentRefused(String reason) {
+        Counter.builder(SEGMENT_REFUSED_METRIC).tag(REASON_TAG, reason).register(registry).increment();
     }
 
     public Timer.Sample startStreamingDecodeTimer() {

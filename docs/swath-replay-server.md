@@ -218,12 +218,39 @@ absolute timing at `--latency-scale 1`.
   `swath.replay.serving.fallback{reason}` (`no_stamp`, `unsupported_mode`,
   `unknown_format_version`, `incomplete_multifile`, `mixed_row_types`, or
   `sanity_failed`) with a log line explaining the decline. This is the right
-  default: it is fast on `--sort` output and still works on any legacy capture.
+  default: it is fast on `--sort` output and still works on any legacy capture
+  **whose declared order the file actually has** — see the next paragraph for the
+  one shape that is discovered later than startup.
 - **`sorted`** — require a sorted-eligible fixture and **fail fast** (the server does
   not start) if it is not one. Use it to guarantee you are exercising the direct
   sorted path.
 - **`duckdb`** — always use the materialized DuckDB path, even on a sorted file.
   This is the conformance **oracle** and the path for unsorted captures.
+
+**Disorder *inside* a row group is a request-time hard failure, not a startup
+decline.** Eligibility proves the ascent of row-group **first** keys, because that
+is all the derive step reads; the rows within one group are proved where they are
+stepped over, in the `delimiter=/` skip-scan's key cursor. So a fixture that is
+stamped, complete, pure-`OBJECT` and internally disordered — what an older or
+foreign producer can publish, and what `sort-fixture` cannot produce — passes
+eligibility under `auto`, takes the **sorted** path, and then fails **every**
+`delimiter=/` request with `500 InternalError` the moment the scan reaches the bad
+row group (typically the first such request, at discovery time). There is no
+fallback at that point: the path was chosen at startup, the request has no other
+path to take, and the server keeps serving the same fixture until it is restarted
+against `--serving-mode duckdb`.
+
+That is deliberate. Serving the request instead would mean trusting a cursor
+position that no longer stands for "the first key at/after this target": the hop
+would emit a common prefix it had already passed, or skip a subtree it never
+reached — keys silently dropped or misplaced in an output whose whole purpose is
+to be a faithful replay. A hard failure with an address (file, row group, row) is
+recoverable; a wrong listing that looks right is not. The refusal bumps
+`swath.replay.serving.refused{reason=row_group_disorder}`, so a corpus sweep
+classifies the excluded capture from the metrics alone — the HTTP body carries the
+reason, the fixture's **file name** and the row group, never the server's paths,
+which go to the server log. Re-sort such a capture with `sort-fixture`, or serve it
+with `--serving-mode duckdb`, which re-sorts at query time and does not care.
 
 A **sorted** fixture skips materialization entirely: there is no temporary DuckDB
 database and no `key` index. At startup the server derives a tiny in-memory routing
@@ -522,6 +549,7 @@ documents the replay-server-specific set.
 | `swath.replay.index.load.latency{source=derived}` | timer | Time to derive the in-memory row-group routing index at startup (the `source` tag anticipates a future `footer` value, once an embedded routing blob lets the server skip the derive pass). |
 | `swath.replay.index.entries` | distribution | Row-group index entries produced by one derive pass. |
 | `swath.replay.serving.fallback{reason}` | counter | Auto serving-mode declined sorted serving. Reasons: `no_stamp` (a resolved file carries no recognized sortedness stamp), `unsupported_mode` (a resolved file is stamped a `versions` file — unsupported for serving in v1), `unknown_format_version` (a resolved file's stamp carries a `format_version` this reader doesn't recognize), `incomplete_multifile` (the resolved file set's `file_index`/`file_final` stamps don't prove completeness — e.g. a crash left only a prefix of a multi-file publish on disk), `mixed_row_types` (a row group's `row_type` footer stats do not prove every row is `OBJECT` — e.g. a legacy delimiter'd capture re-sorted by `sort-fixture`, which stamps `mode=objects` unconditionally without checking `row_type`), `sanity_failed` (the derived row-group first-key array was not strictly ascending — a corrupt/mis-stamped/mis-ordered fixture). Every resolved file is checked for the first four reasons, not just the first one. |
+| `swath.replay.serving.refused{reason}` | counter | A request the sorted path had to refuse outright, tagged with the typed reason from `io.varve.swath.sort.RowGroupOrderException`: `row_group_disorder` (a row group's own rows are not in strictly ascending key order, seen by the `delimiter=/` skip-scan's key cursor as it steps over them). NOT a `serving.fallback` reason: eligibility already passed (it proves the ascent of row-group *first* keys only), the serving path was chosen at startup, and nothing can take the request over — it fails `500`. Bumped BEFORE the throw, so the exclusion survives into a sweep's metrics; a corpus sweep classifies a disordered capture from this counter, never from the error body. |
 | `swath.replay.page.read.latency` | timer | One store-level range read (`ListingStore#rows`), excluding connection-pool wait. Emitted by both stores. |
 | `swath.replay.serving.path{mode}` | counter | Per-`list`-request engagement signal for the resolved serving path (`sorted` or `duckdb`), fixed once at server startup. |
 

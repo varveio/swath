@@ -11,6 +11,7 @@ import io.varve.swath.replay.protocol.S3Error;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3Xml;
+import io.varve.swath.sort.RowGroupOrderException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -22,8 +23,12 @@ import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.util.Callback;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class ReplayHandler extends Handler.Abstract {
+
+    private static final Logger log = LoggerFactory.getLogger(ReplayHandler.class);
 
     private final String bucket;
     private final ListingFixture fixture;
@@ -72,6 +77,15 @@ final class ReplayHandler extends Handler.Abstract {
         } catch (S3Error e) {
             status = e.status();
             body = S3Xml.error(e.code(), e.getMessage(), request.getHttpURI().getPath());
+        } catch (RowGroupOrderException e) {
+            // The fixture is internally disordered and no path can serve this request (see
+            // docs/swath-replay-server.md, "--serving-mode"). The full report — including the
+            // fixture's absolute path — goes to the server's own log; the response body carries the
+            // typed reason, the file NAME and the row group, because a client is not entitled to the
+            // server's filesystem layout and a sweep classifies from the reason, not from the text.
+            log.error("replay refused a request over a disordered fixture: {}", e.getMessage(), e);
+            status = HttpStatus.INTERNAL_SERVER_ERROR_500;
+            body = S3Xml.error("InternalError", e.redactedMessage(), request.getHttpURI().getPath());
         } catch (RuntimeException e) {
             status = HttpStatus.INTERNAL_SERVER_ERROR_500;
             body = S3Xml.error("InternalError", e.getMessage(), request.getHttpURI().getPath());
