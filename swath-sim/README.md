@@ -388,7 +388,10 @@ the shipped sensor and reads exactly what it read before. Victim selection and t
 chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
 pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
 drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical
-decisions, so a copy that drifts fails a test rather than becoming a race result.
+decisions, so a copy that drifts fails a test rather than becoming a race result. The route itself is
+instrumented like every other algo path here: a run counts `SENSING_ROUTE.owner_split_*` and
+`SENSING_ROUTE.thief_*` once each, off the objects it actually installed, so which pair a table's legs
+were taken through is a reading of the run rather than an inference from its `sensing` field.
 
 **What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
 four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key

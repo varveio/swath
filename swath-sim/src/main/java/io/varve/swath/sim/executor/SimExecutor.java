@@ -186,6 +186,35 @@ public final class SimExecutor {
     /** Children published by a thief's steal. */
     public static final String THIEF_SPLIT_COUNTER = "steal.children";
     /**
+     * The category every owner-side split engagement and refusal is counted under — the engine's own
+     * {@code recordStealReason} category, held here as one name so a reader composing a counter out of
+     * it and an {@link OwnerSplitSkipReason} fails to compile rather than reading a column of zeroes.
+     */
+    public static final String OWNER_SPLIT_CATEGORY = "OWNER_SPLIT";
+    /** Completed owner-split children whose realized mass came back confetti-sized. */
+    public static final String OWNER_SPLIT_CHILD_CONFETTI_COUNTER = "OWNER_SPLIT_CHILD.confetti";
+    /** Completed owner-split children that came back substantial — the denominator's other half. */
+    public static final String OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER = "OWNER_SPLIT_CHILD.substantial";
+    /** The prefix a steal attempt's terminal outcome is counted under; the outcome's name follows. */
+    public static final String STEAL_OUTCOME_PREFIX = "steal.outcome.";
+    /** The outcome of an attempt whose victim selection found nothing eligible to steal from. */
+    public static final String NO_VICTIM_OUTCOME = "NO_VICTIM";
+    /**
+     * The category the two <b>sensing routes</b> are counted under: which pair of policy objects a run's
+     * decisions were actually taken through, counted once each at the top of the run. The
+     * instrument-every-algo-path rule (AGENTS.md) applied to the route selection itself — the run record
+     * states which sensor was <em>asked</em> for, and these state which code path served it.
+     */
+    public static final String SENSING_ROUTE_CATEGORY = "SENSING_ROUTE";
+    /** The owner-side split decision came from the engine's own governor. */
+    public static final String OWNER_SPLIT_ROUTE_SHIPPED = "owner_split_shipped";
+    /** It came from the estimator-parameterised mirror a sensing variant installs. */
+    public static final String OWNER_SPLIT_ROUTE_ESTIMATOR = "owner_split_estimator";
+    /** Victim selection and the pivot cascade came from the engine's own thief policy. */
+    public static final String THIEF_ROUTE_SHIPPED = "thief_shipped";
+    /** They came from the estimator-parameterised selection a sensing variant wraps it in. */
+    public static final String THIEF_ROUTE_ESTIMATOR = "thief_estimator";
+    /**
      * Page commits on a bounded range that emitted at least one key — a commit that emitted none moved
      * no cursor, so it is neither visible nor invisible and is not counted either way. The denominator
      * {@link #SENSOR_INVISIBLE_ADVANCE_COUNTER} reads against.
@@ -374,6 +403,7 @@ public final class SimExecutor {
      * skips straight to one range over the whole keyspace.
      */
     private void startSeedPhase(SimContext ctx) {
+        recordSensingRoutes(ctx);
         if (scenario.seedMode() == PolicyScenario.SimSeedMode.NONE) {
             ctx.record("seed.mode", "none");
             seedRanges(ctx, List.of());
@@ -696,7 +726,7 @@ public final class SimExecutor {
                 if (confettiFeedback.claimProbeSlot(confetti.probeSeq())) {
                     probeSlotClaimed = true;
                 } else {
-                    at.count("OWNER_SPLIT." + OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), 1);
+                    at.count(OWNER_SPLIT_CATEGORY + "." + OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), 1);
                     recordOwnerSplitSkip(at, OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
                     return;
                 }
@@ -719,7 +749,7 @@ public final class SimExecutor {
             long childId = ledger.splitNode(nodeId, pivot, hi);
             if (childId == SimNodeLedger.SPLIT_ABORTED) {
                 state.restoreHi(hi);
-                at.count("OWNER_SPLIT.self_aborted", 1);
+                at.count(OWNER_SPLIT_CATEGORY + ".self_aborted", 1);
                 return;
             }
             if (scenario.toggles().confettiFeedback()) {
@@ -730,7 +760,7 @@ public final class SimExecutor {
             lastSelfSplitPage = committed;
             timeline.splitPublished(at.nowNanos());
             at.count(OWNER_SPLIT_COUNTER, 1);
-            at.count("OWNER_SPLIT.self_published", 1);
+            at.count(OWNER_SPLIT_CATEGORY + ".self_published", 1);
             at.record("owner_split", "node=" + nodeId + "|child=" + childId);
             wakeParked(at, WAKE_CHILD_PUBLISHED);
         }
@@ -760,7 +790,8 @@ public final class SimExecutor {
             }
             boolean confetti = state.keysEmitted() <= 2L * scenario.pageSize() && !state.hasSplit();
             confettiFeedback.recordCompletion(confetti);
-            at.count("OWNER_SPLIT_CHILD." + (confetti ? "confetti" : "substantial"), 1);
+            at.count(confetti ? OWNER_SPLIT_CHILD_CONFETTI_COUNTER
+                    : OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER, 1);
         }
 
         // ---- the thief ---------------------------------------------------------------------
@@ -805,7 +836,7 @@ public final class SimExecutor {
             recordEngagements(ctx, selection.engagements());
             applyVictimMutations(selection.mutations(), null);
             if (selection instanceof NoVictim noVictim) {
-                finishSteal("NO_VICTIM", noVictim.reason().code(), false);
+                finishSteal(NO_VICTIM_OUTCOME, noVictim.reason().code(), false);
                 return;
             }
             victim = livePool.get(((Selected) selection).victimNodeId());
@@ -976,11 +1007,18 @@ public final class SimExecutor {
             ctx.count("PIVOT." + commit.mechanism().code(), 1);
             ctx.record("steal.split", "victim=" + victim.nodeId() + "|child=" + childId
                     + "|mechanism=" + commit.mechanism().code());
+            // The child is claimable now, so whoever this wakes was woken by the publication and is
+            // traced as such — the owner-side carve's own wake, on the other side of the same ledger.
+            // Without it every one of these workers is attributed to the attempt slot being released a
+            // moment later, which is the one wake source that says nothing about where work came from.
+            // Nothing else moves: this empties the park list, so finishSteal's wake finds it empty and
+            // the same workers resume with the same delay in the same order.
+            wakeParked(ctx, WAKE_CHILD_PUBLISHED);
             finishSteal("CHILD_CREATED", "split_committed", true);
         }
 
         private void finishSteal(String outcome, String reason, boolean productive) {
-            ctx.count("steal.outcome." + outcome, 1);
+            ctx.count(STEAL_OUTCOME_PREFIX + outcome, 1);
             ctx.count(outcome + "." + reason, 1);
             victim = null;
             attempt = null;
@@ -1248,6 +1286,23 @@ public final class SimExecutor {
             names[i] = "store.calls." + classes[i].name().toLowerCase(Locale.ROOT);
         }
         return names;
+    }
+
+    /**
+     * Counts the two policy routes this run's decisions are taken through, once each, at the top of the
+     * run. Read off the objects that were actually installed rather than off {@link #sensing}, so a
+     * wiring change that installs one side's mirror and not the other's is visible in the metrics
+     * instead of being attested by the same expression that made the mistake.
+     *
+     * <p>Once per run and not once per worker: the thief brain is deliberately constructed per worker
+     * (its decision tape is that worker's own), so counting it there would report the fleet size under
+     * a name that reads like a route.
+     */
+    private void recordSensingRoutes(SimContext ctx) {
+        ctx.count(SENSING_ROUTE_CATEGORY + "." + (governor instanceof EstimatorOwnerSplitPolicy
+                ? OWNER_SPLIT_ROUTE_ESTIMATOR : OWNER_SPLIT_ROUTE_SHIPPED), 1);
+        ctx.count(SENSING_ROUTE_CATEGORY + "." + (workers[0].thief instanceof EstimatorStealPolicy
+                ? THIEF_ROUTE_ESTIMATOR : THIEF_ROUTE_SHIPPED), 1);
     }
 
     /** Records every engagement a policy fired, under the same category and reason the engine uses. */

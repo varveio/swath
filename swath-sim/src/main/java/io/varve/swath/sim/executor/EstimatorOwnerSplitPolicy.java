@@ -45,6 +45,13 @@ import java.util.List;
 final class EstimatorOwnerSplitPolicy implements OwnerSplitPolicy {
 
     /**
+     * The category every engagement this policy fires is filed under, which is
+     * {@link SimExecutor#OWNER_SPLIT_CATEGORY}: the gate chain fires nine of them, and the counters
+     * they become are read back by name elsewhere in the module.
+     */
+    private static final String OWNER_SPLIT = SimExecutor.OWNER_SPLIT_CATEGORY;
+
+    /**
      * The engine's own {@code OwnerSplitGovernor.SUPPRESS_THRESHOLD}, which is package-private there.
      * Duplicated rather than widened: the engine is not modified for a simulator experiment, and the
      * parity test is what keeps the copy honest.
@@ -84,23 +91,23 @@ final class EstimatorOwnerSplitPolicy implements OwnerSplitPolicy {
         double est = estimator.estRemaining(cursorTo, lo, hi, view.keysEmitted());
         if (est <= (double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())),
+                    List.of(new Engagement(OWNER_SPLIT, OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())),
                     List.of());
         }
         if (view.committed() - view.lastSelfSplitPage() < OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN) {
             return new Skip(OwnerSplitSkipReason.RATE_LIMITED,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code())),
+                    List.of(new Engagement(OWNER_SPLIT, OwnerSplitSkipReason.RATE_LIMITED.code())),
                     List.of());
         }
         List<Engagement> engagements = new ArrayList<>();
         if (workerCount > 1 && view.outstanding() >= (long) workerCount) {
-            engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.DEMAND_GATED.code()));
+            engagements.add(new Engagement(OWNER_SPLIT, OwnerSplitSkipReason.DEMAND_GATED.code()));
             return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements, List.of());
         }
         double f = toggles.farAheadFraction(view.densityFraction());
         double densityRatio = toggles.observedDensityRatio(view.observedDensityRatio());
         if (StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys)) {
-            engagements.add(new Engagement("OWNER_SPLIT",
+            engagements.add(new Engagement(OWNER_SPLIT,
                     OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code()));
             return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of());
         }
@@ -113,10 +120,10 @@ final class EstimatorOwnerSplitPolicy implements OwnerSplitPolicy {
                     List<OwnerSplitMutation> probeSlot =
                             List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
                     if ((obs.probeSeq() + 1) % PROBE_K == 0) {
-                        engagements.add(new Engagement("OWNER_SPLIT", "confetti_probe"));
+                        engagements.add(new Engagement(OWNER_SPLIT, "confetti_probe"));
                         mutations = List.of(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT);
                     } else {
-                        engagements.add(new Engagement("OWNER_SPLIT",
+                        engagements.add(new Engagement(OWNER_SPLIT,
                                 OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
                         return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot);
                     }
@@ -127,7 +134,7 @@ final class EstimatorOwnerSplitPolicy implements OwnerSplitPolicy {
         if (m == null
                 || KeyBytes.compareUnsigned(cursorTo, m) >= 0
                 || KeyBytes.compareUnsigned(m, hi) > 0) {
-            engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code()));
+            engagements.add(new Engagement(OWNER_SPLIT, OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code()));
             return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements,
                     consumeInsteadOfClaim(mutations));
         }
@@ -138,14 +145,14 @@ final class EstimatorOwnerSplitPolicy implements OwnerSplitPolicy {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, hi);
             if (StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, hi, est, densityRatio, maxKeys)) {
                 m = mReflect;
-                engagements.add(new Engagement("OWNER_SPLIT", "pivot_reflect_clamped"));
+                engagements.add(new Engagement(OWNER_SPLIT, "pivot_reflect_clamped"));
             }
         }
         if (toggles.reflect() && toggles.reflectLift()) {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, hi);
             if (StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, hi, est, densityRatio, maxKeys)) {
                 m = mReflect;
-                engagements.add(new Engagement("OWNER_SPLIT", "pivot_reflect_lifted"));
+                engagements.add(new Engagement(OWNER_SPLIT, "pivot_reflect_lifted"));
             }
         }
         return new Carve(m, engagements, mutations);

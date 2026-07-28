@@ -21,6 +21,8 @@ import io.varve.swath.engine.policy.Selection;
 import io.varve.swath.engine.policy.StealPolicy;
 import io.varve.swath.engine.policy.ThiefPolicy;
 import io.varve.swath.engine.policy.VictimView;
+import io.varve.swath.sim.fixture.KeyspaceFixtures;
+import io.varve.swath.sim.fixture.ListingFixtureStore;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -92,6 +94,44 @@ class SensingVariantParityTest {
                 .contains(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), "confetti_probe",
                         OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(),
                         "alphabet_chosen", "alphabet_fallback");
+    }
+
+    /**
+     * <b>Which route a run's decisions were taken through, out of the run's own counters.</b> The
+     * mirrors above are only the algorithm they claim to be if they were the objects the run steered
+     * with, and a run that quietly installed the shipped pair under a variant's name would produce a
+     * whole race table of the incumbent measured twice. The route is instrumented like every other algo
+     * path here (AGENTS.md), so the check is a counter read rather than a reflection over fields.
+     */
+    @Test
+    void aRunsCountersNameTheRouteItsDecisionsWereTakenThrough() {
+        ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(2_000));
+        PolicyScenario scenario = PolicyRunFixtures.scenario(4, PAGE, PolicyRunFixtures.REMOTE_LATENCY,
+                PolicyRunFixtures.measuredCost());
+
+        PolicyRunResult shipped = SimExecutor.run(scenario, store, "in-memory dense flat leaf");
+        PolicyRunResult variant = SimExecutor.run(
+                scenario.withClientCost(PolicyRunFixtures.measuredCost()), store,
+                "in-memory dense flat leaf", SensingVariant.RATE_CURSOR_ANCHORED);
+
+        assertThat(route(shipped)).as("the shipped sensor steers on the engine's own pair")
+                .containsExactly(SimExecutor.OWNER_SPLIT_ROUTE_SHIPPED, SimExecutor.THIEF_ROUTE_SHIPPED);
+        assertThat(route(variant)).as("a variant steers on both mirrors, not one of them")
+                .containsExactly(SimExecutor.OWNER_SPLIT_ROUTE_ESTIMATOR,
+                        SimExecutor.THIEF_ROUTE_ESTIMATOR);
+    }
+
+    /** The routes {@code result} counted, in name order — one counter per route, once per run. */
+    private static List<String> route(PolicyRunResult result) {
+        String prefix = SimExecutor.SENSING_ROUTE_CATEGORY + ".";
+        List<String> routes = new ArrayList<>();
+        result.counters().forEach((name, value) -> {
+            if (name.startsWith(prefix)) {
+                assertThat(value).as("%s is a per-run route, not a tally", name).isEqualTo(1L);
+                routes.add(name.substring(prefix.length()));
+            }
+        });
+        return routes;
     }
 
     private static void assertSameDecision(OwnerSplitDecision expected, OwnerSplitDecision actual,

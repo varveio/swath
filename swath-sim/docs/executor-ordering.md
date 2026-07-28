@@ -86,10 +86,17 @@ engine's four, not a simplification of them:
 
 | Wake | Fired when | How often |
 |---|---|---|
-| A split child is published | the ledger enqueues a child, owner-side or thief | tens to hundreds a run |
+| A split child is published | the ledger enqueues a child — the owner's carve and the thief's committed steal alike, since both make a child claimable | tens to hundreds a run |
 | A range completes | the ledger's outstanding count is decremented | once per range |
-| A steal attempt finishes | the fleet's single attempt slot is released, whatever the outcome | once per attempt, thousands a run |
-| **A non-empty page commit** | **every page any worker commits that emitted a key** | **once per page — the dominant one by an order of magnitude** |
+| A steal attempt finishes | the fleet's single attempt slot is released, whatever the outcome — in practice the wake a *non-productive* attempt fires, because a productive one has already woken the fleet under its own publication an instant earlier | once per attempt, thousands a run |
+| **A non-empty page commit** | **every page any worker commits that emitted a key** | **once per page — the most frequent firing of the four by an order of magnitude** |
+
+**Fired is not woken.** A signal only wakes whoever happens to be parked at that instant, so the mix of
+wake events in a trace is not the mix of firings: on `WorkerWakeSourcesTest`'s eight-worker dense flat
+leaf the four sources are within ~1.4× of each other (183 / 197 / 160 / 223 in table order), because the
+frequent per-page signal usually finds nobody parked while a publication usually finds most of the fleet
+parked behind it. That test asserts the shape — all four present, none of them a rounding error — rather
+than a ranking.
 
 The last one also **resets the idle-steal backoff ladder**, and both halves of that are the engine's
 behaviour: its page-commit path resets the fleet-wide backoff and broadcasts on the worklist for

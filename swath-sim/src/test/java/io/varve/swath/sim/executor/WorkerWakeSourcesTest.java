@@ -13,6 +13,7 @@ import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimEventLog;
 import io.varve.swath.sim.model.EngineTimeBudgets;
 import io.varve.swath.sim.model.LatencyModel;
+import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
@@ -53,9 +54,15 @@ class WorkerWakeSourcesTest {
         assertThat(wakes).containsOnlyKeys(SimExecutor.WAKE_CHILD_PUBLISHED,
                 SimExecutor.WAKE_PAGE_COMMITTED, SimExecutor.WAKE_RANGE_COMPLETED,
                 SimExecutor.WAKE_STEAL_ATTEMPT_FINISHED);
-        assertThat(wakes.get(SimExecutor.WAKE_PAGE_COMMITTED))
-                .as("the per-commit signal dominates: it fires for every page any worker commits")
-                .isGreaterThan(wakes.get(SimExecutor.WAKE_CHILD_PUBLISHED)
-                        + wakes.get(SimExecutor.WAKE_RANGE_COMPLETED));
+        // And none of the four is vestigial on a fixture that has to split its one range to
+        // parallelise at all: every one of them carries real traffic. That is a shape claim rather
+        // than a magnitude, and it is the one a misattribution breaks — a signal whose wakes are
+        // being filed under another's collapses to a rounding error here while the total stays put.
+        // The thief's own publication is the case in point: it wakes the fleet because a child is
+        // claimable, not because the attempt slot was released a moment later.
+        long busiest = Collections.max(wakes.values());
+        assertThat(wakes).allSatisfy((source, count) -> assertThat(count)
+                .as("wakes attributed to %s, against the busiest source's %d", source, busiest)
+                .isGreaterThan(busiest / 10));
     }
 }
