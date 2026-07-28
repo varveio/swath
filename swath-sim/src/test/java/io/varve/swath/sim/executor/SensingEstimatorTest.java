@@ -251,4 +251,77 @@ class SensingEstimatorTest {
                     .as("%s: and one page more is the first it admits", at).isGreaterThan(floor);
         }
     }
+
+    /**
+     * <b>A floor conditioned on which frame the reading came from has no population to act on.</b> The
+     * candidate was to keep the symmetric band where the frame is the incumbent's own
+     * ({@code cpl(lo, cursor) == cpl(lo, hi)}, where the reading is a measurement) and to lift the floor
+     * only in the deeper frame, which {@link CursorAnchoredEstimator} itself discloses as a local
+     * under-statement. The deeper frame cannot produce the reading such a floor would remove.
+     *
+     * <p>Why, as arithmetic: in that frame the remaining span is measured to the top of the prefix the
+     * cursor shares with {@code lo}, the constant 1.0, so the factor is {@code (1 − f) / (f − f_lo)} for
+     * the cursor's own fraction {@code f} read from its divergence. That is below one only where
+     * {@code f > (1 + f_lo) / 2 ≥ 1/2}, which needs a divergence byte at or above {@code 0x80}. Object
+     * keys diverge on printable bytes, so the deeper frame lifts and never cuts — and a floor applied
+     * only there returns the symmetric band's own estimate at every call.
+     *
+     * <p>Measured, not only argued: over the geometry-floor sweep's fourteen-fixture roster, at two
+     * seeds under both ends of the band, the deeper frame carried 14% of 495,968 estimate calls and
+     * <b>none of the 349,005 cut readings, nor any of the 44,614 refusals the lift-only floor frees</b>
+     * — every one of those came from the {@code d == d0} frame, which is the branch the candidate
+     * leaves alone. Pinned here so the candidate is refuted rather than re-proposed.
+     */
+    @Test
+    void theDeeperFrameOnlyLiftsAtTheByteValuesObjectKeysDivergeOn() {
+        int page = 1_000;
+        int d0 = RemainingWorkEstimator.commonPrefixLen(LO, HI);
+        RateAnchoredEstimator symmetric =
+                new RateAnchoredEstimator(page, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredEstimator liftOnly =
+                new RateAnchoredEstimator(page, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+        RateAnchoredEstimator quarter =
+                new RateAnchoredEstimator(page, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY);
+
+        for (int b = 0x20; b < 0x80; b++) {
+            byte[] cursor = deeper((byte) b);
+            String at = "a cursor diverging from lo on byte 0x" + Integer.toHexString(b);
+            assertThat(RemainingWorkEstimator.commonPrefixLen(LO, cursor))
+                    .as("%s is in the deeper frame", at).isGreaterThan(d0);
+            assertThat(CursorAnchoredEstimator.geometricFactor(cursor, LO, HI))
+                    .as("%s reads as a lift, so no floor of any height binds", at)
+                    .isGreaterThanOrEqualTo(RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+            assertThat(liftOnly.estRemaining(cursor, LO, HI, 64L * page))
+                    .as("%s: conditioning the floor on this frame returns the symmetric estimate", at)
+                    .isEqualTo(symmetric.estRemaining(cursor, LO, HI, 64L * page));
+            assertThat(quarter.estRemaining(cursor, LO, HI, 64L * page))
+                    .as("%s: and so does conditioning it at any interior height", at)
+                    .isEqualTo(symmetric.estRemaining(cursor, LO, HI, 64L * page));
+        }
+
+        // The bound is the byte range and not the frame: past 0x80 the deeper frame does cut, and there
+        // the two floors part company. Keyspaces are what make the branch empty, so it is measured.
+        byte[] highByte = deeper((byte) 0xC0);
+        assertThat(CursorAnchoredEstimator.geometricFactor(highByte, LO, HI)).isLessThan(1.0);
+        assertThat(liftOnly.estRemaining(highByte, LO, HI, 64L * page))
+                .isGreaterThan(symmetric.estRemaining(highByte, LO, HI, 64L * page));
+
+        // And the cut the candidate exists to remove is in the other branch: the worked example, whose
+        // sixteen-fold cut refuses the owner's carve above, diverges from lo exactly where hi does.
+        byte[] mostlyDrained = key("species/Bat");
+        assertThat(RemainingWorkEstimator.commonPrefixLen(LO, mostlyDrained))
+                .as("the cut population sits in the frame the candidate leaves symmetric").isEqualTo(d0);
+        assertThat(CursorAnchoredEstimator.geometricFactor(mostlyDrained, LO, HI))
+                .isLessThan(RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+    }
+
+    /** A cursor inside {@code lo}'s own subtree, diverging from it on {@code first} — the deeper frame. */
+    private static byte[] deeper(byte first) {
+        byte[] tail = key("assembly_vgp/intermediates/00417");
+        byte[] cursor = new byte[LO.length + 1 + tail.length];
+        System.arraycopy(LO, 0, cursor, 0, LO.length);
+        cursor[LO.length] = first;
+        System.arraycopy(tail, 0, cursor, LO.length + 1, tail.length);
+        return cursor;
+    }
 }

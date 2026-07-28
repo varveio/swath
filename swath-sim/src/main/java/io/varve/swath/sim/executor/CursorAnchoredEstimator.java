@@ -40,7 +40,11 @@ import io.varve.swath.model.KeyBytes;
  *       — every key under a prefix that agrees with {@code lo} at byte {@code d0} is below {@code hi},
  *       which diverges upward there — so the frame is closed and both terms are ordinary fractions in
  *       {@code [0, 1]}. In this frame the estimate reads "at the rate this range has been consuming
- *       the subtree its cursor is in, how much of that subtree is left".</li>
+ *       the subtree its cursor is in, how much of that subtree is left". <b>Because that ceiling is
+ *       the constant 1.0, this frame's geometric factor drops below one only for a cursor whose own
+ *       divergence from {@code lo} is on a byte at or above {@code 0x80}</b> — on the printable bytes
+ *       object keys diverge on it lifts and never cuts, which is what {@code SensingEstimatorTest}
+ *       pins and what leaves a floor conditioned on this branch with nothing to act on.</li>
  * </ul>
  *
  * <h2>What it gives up, stated rather than hidden</h2>
