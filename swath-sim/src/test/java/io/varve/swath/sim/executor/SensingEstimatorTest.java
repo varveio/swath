@@ -8,6 +8,7 @@ package io.varve.swath.sim.executor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.StealMath;
+import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
@@ -180,5 +181,38 @@ class SensingEstimatorTest {
                 .isEqualTo(symmetric.estRemaining(CURSOR_LATER, LO, HI, 5_000L));
         assertThat(liftOnly.ignoresEmittedKeys(mostlyDrained, LO, HI)).isFalse();
         assertThat(liftOnly.advanceVisible(LO, CURSOR_EARLY, CURSOR_LATER, HI)).isTrue();
+    }
+
+    /**
+     * The same arithmetic read <b>against the gate that consumes it</b>, which is where the defect
+     * actually lived: the owner's carve is refused while the estimate does not clear
+     * {@code SELF_SPLIT_MIN_REMAINING_PAGES × page} ({@code EstimatorOwnerSplitPolicy}, the engine's
+     * governor mirrored). The test above pins the cut; this pins the <b>consequence</b> — sixty-four
+     * pages of proven mass is exactly the boundary, so the trace's sixty-four refusals on a range's
+     * committed pages are the floor's own arithmetic and not a coincidence of that fixture.
+     *
+     * <p>Both constants are referenced rather than written out: a floor of four pages at a 1,000-key
+     * page is 4,000 keys only until somebody changes either, and a literal here would then pin a
+     * boundary that had moved.
+     */
+    @Test
+    void theSymmetricBandRefusesSixtyFourPagesOfProvenMassAtTheOwnersFloorAndTheLiftOnlyBandAdmitsIt() {
+        byte[] mostlyDrained = key("species/Bat");
+        int page = 1_000;
+        double floor = (double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * page;
+        RateAnchoredEstimator symmetric =
+                new RateAnchoredEstimator(page, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredEstimator liftOnly =
+                new RateAnchoredEstimator(page, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+
+        assertThat(symmetric.estRemaining(mostlyDrained, LO, HI, 64L * page))
+                .as("sixty-four pages, cut by sixteen, does not clear the floor — the carve is refused")
+                .isLessThanOrEqualTo(floor);
+        assertThat(symmetric.estRemaining(mostlyDrained, LO, HI, 65L * page))
+                .as("and sixty-five is the first page that does, which is where the refusals stop")
+                .isGreaterThan(floor);
+        assertThat(liftOnly.estRemaining(mostlyDrained, LO, HI, 64L * page))
+                .as("under the lift-only band the same range clears it by its proven mass alone")
+                .isGreaterThan(floor);
     }
 }

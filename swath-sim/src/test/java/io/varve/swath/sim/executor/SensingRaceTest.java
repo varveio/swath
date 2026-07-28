@@ -350,6 +350,16 @@ class SensingRaceTest {
      * own seed. Per the protocol only a four-seed reading may be pinned, so what is asserted here is the
      * split as measured — three seeds clear the line and the table prints all four — rather than a line
      * moved until the candidate clears it.
+     *
+     * <p><b>The same seed's other two readings are marginal, and are stated rather than left to the
+     * table.</b> At 987654321 on the hash-fanned guard this candidate reads a <b>serial fraction of
+     * 0.0481</b> — 96% of the {@code < 0.05} line {@link #assertGuardHeld} holds it to, i.e. a pass with
+     * no room in it — and a <b>NO_VICTIM share of 0.6729</b>, which is above the 0.5 worst-seed reading
+     * this campaign counted against E1 on this very fixture. Neither is asserted here: the guard set is
+     * the protocol's, and widening or tightening it to fit a candidate is the move the pre-registration
+     * exists to prevent. What they mean is that this candidate's hold on the hash-fanned guard at that
+     * seed is a hold by a margin, on three readings that all point the same way — a promotion decision
+     * has to be taken with that in front of it rather than reconstructed from a table afterwards.
      */
     @Test
     void theCarveAdmissionCandidateKeepsTheBenchCureAndBothGuards() {
@@ -388,10 +398,16 @@ class SensingRaceTest {
             assertThat(leg.tailFraction()).as("%s: post-split tail", at).isLessThan(0.01);
             assertThat(leg.result().timeline().meanOccupancy()).as("%s: mean occupancy", at)
                     .isGreaterThan(7.0);
+            assertThat(leg.noVictimShare()).as("%s: steal attempts that found no victim", at)
+                    .isLessThan(0.50);
+            assertThat(leg.stealAttempts()).as("%s: steal attempts", at).isLessThan(500L);
             assertThat(leg.result().virtualNanos()).as("%s: virtual duration", at)
                     .isLessThan((long) (0.85 * control.result().virtualNanos()));
             assertThat(leg.result().storeCalls()).as("%s: store calls", at)
                     .isLessThanOrEqualTo(control.result().storeCalls());
+            assertThat(leg.estFloorRefusalsPerPage())
+                    .as("%s: owner carves refused by the remaining-work floor, per page", at)
+                    .isLessThan(0.2 * control.estFloorRefusalsPerPage());
 
             assertGuardHeld(SensingRaceProtocol.at(uniform, candidate, seed),
                     SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
@@ -410,8 +426,11 @@ class SensingRaceTest {
                             .result().virtualNanos()));
         }
         assertThat(hashFannedTailsClear)
-                .as("%s: seeds clearing the hash-fanned guard's tail line — three of four, the split "
-                        + "this candidate is recorded with rather than a line moved to fit it", candidate)
-                .isEqualTo(3);
+                .as("%s: seeds clearing the hash-fanned guard's tail line — at least the three measured, "
+                        + "the split this candidate is recorded with rather than a line moved to fit "
+                        + "it. A floor and not an equality: a candidate that later clears the line at "
+                        + "all four has removed the split, which this must not report as a failure",
+                        candidate)
+                .isGreaterThanOrEqualTo(3);
     }
 }

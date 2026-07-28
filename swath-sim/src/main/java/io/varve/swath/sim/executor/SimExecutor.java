@@ -697,6 +697,7 @@ public final class SimExecutor {
                     probeSlotClaimed = true;
                 } else {
                     at.count("OWNER_SPLIT." + OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), 1);
+                    recordOwnerSplitSkip(at, OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
                     return;
                 }
             }
@@ -708,12 +709,7 @@ public final class SimExecutor {
                 }
             }
             if (decision instanceof Skip skipped) {
-                if (log.isRecording()) {
-                    // Which gate refused, against WHICH range. The counter says a gate fired N times
-                    // over a run; a straggler holding the fleet alone is one range, and the question
-                    // its diagnosis turns on is which gate kept refusing to divide THAT one.
-                    at.record("owner_split.skip", "node=" + nodeId + "|reason=" + skipped.reason().code());
-                }
+                recordOwnerSplitSkip(at, skipped.reason());
                 return;
             }
             byte[] pivot = ((Carve) decision).pivot();
@@ -737,6 +733,19 @@ public final class SimExecutor {
             at.count("OWNER_SPLIT.self_published", 1);
             at.record("owner_split", "node=" + nodeId + "|child=" + childId);
             wakeParked(at, WAKE_CHILD_PUBLISHED);
+        }
+
+        /**
+         * Which gate refused, against WHICH range. The counter says a gate fired N times over a run; a
+         * straggler holding the fleet alone is one range, and the question its diagnosis turns on is
+         * which gate kept refusing to divide THAT one — so every refusal that increments a counter
+         * writes this record too, the lost probe slot's included. A refusal reported only as a run
+         * total is a refusal no per-range decomposition can attribute.
+         */
+        private void recordOwnerSplitSkip(SimContext at, OwnerSplitSkipReason reason) {
+            if (log.isRecording()) {
+                at.record("owner_split.skip", "node=" + nodeId + "|reason=" + reason.code());
+            }
         }
 
         /**

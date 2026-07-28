@@ -117,7 +117,7 @@ class RealListingRunTest {
             List.of(SimStoreBackend.ARENA, SimStoreBackend.PARQUET);
 
     /** The two trace kinds that move occupancy, and so the whole of the reconstruction's input. */
-    private static final Set<String> CLAIM_KINDS = Set.of("range.claim", "range.complete");
+    private static final Set<String> OCCUPANCY_KINDS = Set.of("range.claim", "range.complete");
 
     /** The pseudo-range a serial span with nothing being drained at all is attributed to. */
     private static final long FLEET_IDLE = -1L;
@@ -355,7 +355,7 @@ class RealListingRunTest {
         Set<Long> live = new LinkedHashSet<>();
         long since = result.timeline().seedCompletedNanos();
         for (SimEventLog.Entry entry : result.log().entries()) {
-            if (entry.atNanos() < since || !CLAIM_KINDS.contains(entry.kind())) {
+            if (entry.atNanos() < since || !OCCUPANCY_KINDS.contains(entry.kind())) {
                 continue;
             }
             if (live.size() <= 1) {
@@ -421,12 +421,14 @@ class RealListingRunTest {
                     range.keys += Long.parseLong(field(entry, "keys="));
                     range.pages++;
                     range.lastPageNanos = entry.atNanos();
-                    byte[] from = HexFormat.of().parseHex(field(entry, "from="));
                     if (range.firstPageNanos < 0L) {
                         range.firstPageNanos = entry.atNanos();
-                        range.firstKey = from;
+                        range.firstKey = HexFormat.of().parseHex(field(entry, "from="));
                     }
-                    range.lastKey = from;
+                    // The page's LAST key, not its first: the row calls this the range's key extent, and
+                    // a last page's from= is where that page started, which understates the extent by a
+                    // page every time.
+                    range.lastKey = HexFormat.of().parseHex(field(entry, "to="));
                 }
                 case "owner_split.skip" -> ranges
                         .computeIfAbsent(nodeOf(entry), node -> new TracedRange())

@@ -69,7 +69,12 @@ import java.util.TreeMap;
  * <p>The yardstick is the one the review corrected the sweep to: <b>paired, same seed, relative to
  * the control's own duration at that seed</b>, averaged over the four seeds. Never a ratio of means
  * across arms, never a mean across fixtures. A fixture whose four per-seed deltas do not share a sign
- * is reported as a <b>split</b> and never as a win or a loss ({@link Verdict#split()}).
+ * is reported as a <b>split</b> and never as a win or a loss ({@link Verdict#split()}) — the one
+ * qualification being that four readings all inside {@link #NEUTRAL_BAND} are a <em>neutral</em>
+ * fixture whichever way each of them leans, since the band is this protocol's own statement of which
+ * differences are not differences. A fixture read at fewer than all four seeds is neither: it is
+ * labelled <b>partial</b> ({@link Verdict#partial()}) and carries no verdict at all, per the
+ * cherry-picking rule below.
  *
  * <h2>Criteria, named before the numbers</h2>
  * <ol>
@@ -129,8 +134,9 @@ final class CarveAdmissionRaceProtocol {
      *
      * @param delta the mean over seeds of {@code (control − arm) / control} at that seed — positive is
      *              faster than the control
-     * @param perSeed the four values that mean is over, in seed order, so no reader has to take it
-     * @param split whether those four disagree in sign, which makes the fixture a split rather than a
+     * @param perSeed the values that mean is over, so no reader has to take it — in <b>ascending
+     *                seed</b>, which is not the order {@code SensingRaceProtocol.SEEDS} lists them in
+     * @param split whether those values disagree in sign, which makes the fixture a split rather than a
      *              win or a loss whatever the mean says
      */
     record Verdict(String fixture, String arm, double delta, List<Double> perSeed, boolean split) {
@@ -140,8 +146,23 @@ final class CarveAdmissionRaceProtocol {
             return Math.abs(delta) <= NEUTRAL_BAND;
         }
 
-        /** {@code win}, {@code loss}, {@code neutral} or {@code split} — the label, never a number. */
+        /**
+         * Whether this reading is short of the protocol's four seeds — an unpaired leg, a fixture the
+         * control did not finish. A subset is not a result, so such a reading carries no verdict at all
+         * rather than a verdict a reader has to remember to discount.
+         */
+        boolean partial() {
+            return perSeed.size() != SensingRaceProtocol.SEEDS.length;
+        }
+
+        /**
+         * {@code win}, {@code loss}, {@code neutral}, {@code split} or {@code partial} — the label,
+         * never a number.
+         */
         String label() {
+            if (partial()) {
+                return "partial";
+            }
             if (split) {
                 return "split";
             }
@@ -189,12 +210,27 @@ final class CarveAdmissionRaceProtocol {
                     return;
                 }
                 double mean = perSeed.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
-                boolean split = perSeed.stream().anyMatch(value -> value > NEUTRAL_BAND)
-                        && perSeed.stream().anyMatch(value -> value < -NEUTRAL_BAND);
-                verdicts.add(new Verdict(fixture, arm, mean, List.copyOf(perSeed), split));
+                verdicts.add(new Verdict(fixture, arm, mean, List.copyOf(perSeed), split(perSeed)));
             });
         });
         return List.copyOf(verdicts);
+    }
+
+    /**
+     * The pre-registered split rule, as written: <b>per-seed deltas that do not share a sign</b>. Not
+     * "one seed past the band one way and another seed past it the other" — that reading, which this
+     * file's first cut implemented, silently calls a fixture reading {@code +0.30 +0.30 +0.30 −0.02} a
+     * win, which is exactly the averaging-away the protocol's four-seed rule exists to forbid.
+     *
+     * <p>The one qualification is the band's own meaning: a fixture whose every seed sits inside
+     * {@link #NEUTRAL_BAND} moved nothing, and reporting the sign of a reading the protocol has already
+     * declared to be no difference would turn measurement noise into a verdict of instability. So a
+     * split needs a sign disagreement <em>and</em> at least one seed that left the band.
+     */
+    private static boolean split(List<Double> perSeed) {
+        return perSeed.stream().anyMatch(value -> value > 0)
+                && perSeed.stream().anyMatch(value -> value < 0)
+                && perSeed.stream().anyMatch(value -> Math.abs(value) > NEUTRAL_BAND);
     }
 
     /** The verdict table under one caption, in fixture-then-arm order. */
