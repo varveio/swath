@@ -7,6 +7,8 @@ package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.sim.fixture.ListingFixtureStore;
+import io.varve.swath.sim.kernel.SimEventLog;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Tag;
@@ -530,5 +532,82 @@ class SensingRaceTest {
                 .as("%s: seeds clearing the hash-fanned guard's tail line — at least the three measured, "
                         + "the split this floor inherits from the end it descends from", candidate)
                 .isGreaterThanOrEqualTo(3);
+    }
+
+    /**
+     * <b>What the hash-fanned guard's 0.05 tail line is actually reading at seed 987654321, pinned so a
+     * future change that moves it is visible.</b> The split disclosed above at this one seed — the
+     * E4-family readings of 0.051-0.065 against the {@code < 0.05} line — is not a quality signal at this
+     * seed: the range still active when the run goes quiescent is the fixture's own open-frontier seed
+     * range ({@code hi == null}, the unbounded tail {@code seedRanges} always tiles the keyspace with),
+     * and it is never split, by either side, over the whole run. {@link RateAnchoredEstimator#estRemaining}
+     * reads an open frontier as infinite remaining mass, which clears every floor built on that estimate
+     * without exception, so the owner side refuses every carve of it with
+     * {@code OwnerSplitSkipReason#OPEN_FRONTIER} — hundreds of times over a run this size — and no thief
+     * ever catches it either. The tail line is therefore scoring the fleet's last-carve instant against a
+     * range nothing here can divide, not against a healthy shape that failed to divide, which is why no
+     * tail-fraction magnitude is asserted below. <b>If this test ever fails, the guard's 0.05 line on this
+     * fixture has become meaningful again, and the disclosed E4-family readings above must be re-read
+     * against whatever changed it.</b> One arm, {@code RATE_ANCHORED_FLOOR_QUARTER} — the promoted
+     * floor — is enough: the invariant is about the fixture and the seed, not about which rate-family arm
+     * is steering.
+     */
+    @Test
+    void theHashFannedGuardsFinalRangeAtSeed987654321IsAnUnsplitOpenFrontier() {
+        ListingFixtureStore store = new ListingFixtureStore(SensingRaceProtocol.hashFannedGuard().get());
+        SensingVariant variant = SensingVariant.RATE_ANCHORED_FLOOR_QUARTER;
+        long seed = 987654321L;
+        PolicyScenario scenario = PolicyRunFixtures.scenario(SensingRaceProtocol.WORKERS,
+                        SensingRaceProtocol.BENCH_PAGE_SIZE, PolicyRunFixtures.REMOTE_LATENCY,
+                        PolicyRunFixtures.measuredCost())
+                .withSeed(seed)
+                .withEventLog(true);
+        PolicyRunResult result = SimExecutor.run(scenario, store, "in-memory hash-fanned", variant);
+        SensingRaceProtocol.requireCompleted(result, variant + "/hash-fanned/" + seed);
+
+        List<SimEventLog.Entry> trace = result.log().entries();
+        String finalRange = null;
+        for (SimEventLog.Entry entry : trace) {
+            if (entry.kind().equals("range.complete")) {
+                finalRange = field(entry.detail(), "node");
+            }
+        }
+        assertThat(finalRange).as("a completed run leaves at least one range to finish last").isNotNull();
+
+        long openFrontierRefusals = 0;
+        boolean finalRangeIsTheOpenFrontier = false;
+        for (SimEventLog.Entry entry : trace) {
+            switch (entry.kind()) {
+                case "owner_split" -> assertThat(field(entry.detail(), "node"))
+                        .as("the range active at run end was never split by its owner")
+                        .isNotEqualTo(finalRange);
+                case "steal.split" -> assertThat(field(entry.detail(), "victim"))
+                        .as("the range active at run end was never split by a thief either")
+                        .isNotEqualTo(finalRange);
+                case "owner_split.skip" -> {
+                    if ("open_frontier".equals(field(entry.detail(), "reason"))) {
+                        openFrontierRefusals++;
+                        finalRangeIsTheOpenFrontier |= finalRange.equals(field(entry.detail(), "node"));
+                    }
+                }
+                default -> { }
+            }
+        }
+        assertThat(openFrontierRefusals)
+                .as("open-frontier owner-split refusals recorded on this leg").isGreaterThan(0L);
+        assertThat(finalRangeIsTheOpenFrontier)
+                .as("the range active at run end (%s) is the fixture's own open frontier", finalRange)
+                .isTrue();
+    }
+
+    /** One {@code key=value} field out of a trace entry's {@code |}-joined detail string. */
+    private static String field(String detail, String key) {
+        for (String part : detail.split("\\|")) {
+            int split = part.indexOf('=');
+            if (split > 0 && part.substring(0, split).equals(key)) {
+                return part.substring(split + 1);
+            }
+        }
+        throw new AssertionError("no field '" + key + "' in '" + detail + "'");
     }
 }

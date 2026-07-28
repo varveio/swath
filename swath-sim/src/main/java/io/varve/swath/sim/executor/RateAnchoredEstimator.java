@@ -82,6 +82,10 @@ final class RateAnchoredEstimator implements RemainingWorkEstimator {
     @Override
     public double estRemaining(byte[] cursor, byte[] lo, byte[] hi, long keysEmitted) {
         if (hi == null) {
+            // Infinite remaining mass clears every floor built on this estimate without exception, so an
+            // open-frontier range never gets an owner-side carve on any minGeometry setting, and a guard
+            // fixture whose run ends on one is reading its tail fraction against a drain nothing here can
+            // divide (see SensingRaceTest.theHashFannedGuardsFinalRangeAtSeed987654321IsAnUnsplitOpenFrontier).
             return Double.POSITIVE_INFINITY;
         }
         if (KeyBytes.compareUnsigned(RemainingWorkEstimator.orBottom(cursor), hi) >= 0) {
