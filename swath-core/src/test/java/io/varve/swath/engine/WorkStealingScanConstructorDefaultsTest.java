@@ -433,11 +433,13 @@ final class WorkStealingScanConstructorDefaultsTest {
         public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
                 long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
                 double densityRatio, long keysEmitted) {
+            // Constructor-default tests only observe seeded/completed lifecycle events.
         }
 
         @Override
         public void victimScan(long workerId, int seen, int skippedUnsplittable, int skippedPaced,
                 int skippedNoSpan, long chosenNodeId, double bestEst, String reason) {
+            // Constructor-default tests only observe seeded/completed lifecycle events.
         }
 
         @Override

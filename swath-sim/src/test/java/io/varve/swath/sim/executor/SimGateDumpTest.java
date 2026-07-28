@@ -6,8 +6,10 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.engine.policy.OwnerSplitSkipReason;
+import io.varve.swath.engine.policy.VictimScan;
 import io.varve.swath.sim.fixture.KeyspaceFixtures;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import java.io.IOException;
@@ -88,6 +90,23 @@ class SimGateDumpTest {
                     assertThat(fields[reason]).isNotEmpty();
                     assertThat(fields[bestEst]).isEqualTo("-Infinity");
                 });
+    }
+
+    @Test
+    void aKeyThatIsNotValidUtf8IsRefusedRatherThanWrittenAsReplacementCharacters(@TempDir Path dir) {
+        Path dump = dir.resolve("gate-inputs.tsv");
+        System.setProperty(SimGateDump.DUMP_PATH_PROPERTY, dump.toString());
+        try (SimGateDump gateDump = SimGateDump.fromSystemProperties()) {
+            byte[] malformed = {(byte) 0xC3, (byte) 0x28};
+            VictimScan scan = new VictimScan(1, 0, 0, 0, 1.0);
+            assertThatThrownBy(() -> gateDump.victimScan(0L, scan, 1L, null, malformed, malformed, malformed))
+                    .as("a key that decodes as replacement characters would silently corrupt the "
+                            + "byte-exact diff the dump exists to support")
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("not valid UTF-8");
+        } finally {
+            System.clearProperty(SimGateDump.DUMP_PATH_PROPERTY);
+        }
     }
 
     @Test

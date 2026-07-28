@@ -10,6 +10,10 @@ import io.varve.swath.engine.policy.VictimScan;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -184,7 +188,16 @@ public final class SimGateDump implements AutoCloseable {
         if (key == null) {
             return;
         }
-        String text = new String(key, StandardCharsets.UTF_8);
+        String text;
+        try {
+            CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT);
+            text = decoder.decode(ByteBuffer.wrap(key)).toString();
+        } catch (CharacterCodingException e) {
+            throw new IllegalStateException("a key that is not valid UTF-8 cannot be written as a TSV "
+                    + "text column without corrupting it: " + HexFormat.of().formatHex(key), e);
+        }
         if (text.indexOf('\t') >= 0 || text.indexOf('\n') >= 0 || text.indexOf('\r') >= 0) {
             throw new IllegalStateException("a key carrying a tab or a newline cannot be a TSV column "
                     + "without silently shifting every column after it: " + HexFormat.of().formatHex(key));
