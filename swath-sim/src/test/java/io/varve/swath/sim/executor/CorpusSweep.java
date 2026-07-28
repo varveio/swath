@@ -36,7 +36,7 @@ import java.util.function.LongPredicate;
 import java.util.stream.Stream;
 
 /**
- * <b>The same three sensing arms over a whole corpus of captured listings, in one JVM.</b>
+ * <b>The same four sensing arms over a whole corpus of captured listings, in one JVM.</b>
  * {@link RealListingRunTest} answers "what does this bucket do"; this answers "which buckets do it",
  * which is a different question only because of what it costs: opening a multi-million-key fixture
  * dominates every run over it by an order of magnitude, and a JVM start plus a Gradle invocation
@@ -111,14 +111,21 @@ final class CorpusSweep {
     /** The concurrency a capture ran at, in that summary. */
     static final String MAX_PARALLEL_LISTINGS = "max_parallel_listings";
 
-    /** The three arms: the shipped sensor, and the two the sensing race left standing. */
+    /**
+     * The four arms: the shipped sensor, the two the sensing race left standing, and the carve-admission
+     * candidate that round left standing in turn — the combination with the geometry band's lower half
+     * removed. It is swept beside its own incumbent rather than in place of it: what a promotion turns
+     * on is the head-to-head over the same corpus at the same seeds, and an arm the sweep dropped is an
+     * arm every later comparison has to re-run to get back.
+     */
     static final List<SensingVariant> ARMS = List.of(
-            SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED);
+            SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED,
+            SensingVariant.RATE_ANCHORED_LIFT_ONLY);
 
     /**
      * The arms the screen reads <em>against</em> {@link SensingVariant#CURRENT} — every one but the
-     * shipped sensor. Both of them, not the first: a fixture the sweep is quiet about is one nobody
-     * looks at again, so a divergence only the second candidate shows must earn the same four seeds
+     * shipped sensor. Every one, not the first: a fixture the sweep is quiet about is one nobody
+     * looks at again, so a divergence only the last candidate shows must earn the same four seeds
      * the first candidate's would. Screening against one arm and promoting on all of them is how a
      * corpus of arms-in-agreement gets asserted from a corpus that was never asked.
      */
@@ -240,7 +247,7 @@ final class CorpusSweep {
      * Which arms a sweep races and whether it screens before confirming — the two choices that decide
      * what a sweep <em>is</em>, rather than what it finds.
      *
-     * <p>{@link #SCREEN} is the corpus sweep's own: three arms, two seeds, four where the screen
+     * <p>{@link #SCREEN} is the corpus sweep's own: {@link #ARMS}, two seeds, four where the screen
      * diverges. A round convened to resolve verdicts rather than to find them sets
      * {@code confirmEverySeed}, and then no row it writes is a screen — which is what lets its
      * {@code escalated} column be read as "every leg here is one of four" instead of as a filter.
@@ -250,9 +257,13 @@ final class CorpusSweep {
      *                         skipping the screening tier and its divergence rule entirely
      */
     record Race(List<SensingVariant> arms, boolean confirmEverySeed) {
+
+        Race {
+            arms = List.copyOf(arms);
+        }
     }
 
-    /** The corpus sweep's own race: the three sensing arms, screened at two seeds and escalated. */
+    /** The corpus sweep's own race: every sensing arm, screened at two seeds and escalated. */
     static final Race SCREEN = new Race(ARMS, false);
 
     /** What a whole sweep produced. */

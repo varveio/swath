@@ -381,6 +381,7 @@ and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes
 | `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
 | `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
 | `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
+| `RATE_ANCHORED_LIFT_ONLY` | the same, with the band's lower half removed: geometry may **lift** a range's proven mass and never cut it. A factor below one asserts that less remains than has already come out, which is the inference the rate reading exists to refuse — and it is what refused a straggler's carve at the owner's remaining-work floor until the range had emitted 64 pages (`CarveAdmissionRaceProtocol`) |
 
 `SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
 the shipped sensor and reads exactly what it read before. Victim selection and the owner-split gate
@@ -519,7 +520,7 @@ give the run a smaller heap so the arena declines by budget.
 
 ### Sweeping a whole corpus of captured listings
 
-`CorpusSweepRunTest` (`@Tag("perf")`, mechanics in `CorpusSweep`) is the same three arms over a
+`CorpusSweepRunTest` (`@Tag("perf")`, mechanics in `CorpusSweep`) is the same four arms over a
 *directory* of staged captures, in one JVM. One process, because the fixed costs are what decide
 whether a corpus sweep is affordable at all: a JVM start plus a Gradle invocation dominates a small
 fixture, and each fixture's own open dominates every run over it.
