@@ -110,8 +110,18 @@ release VERSION NEXT="":
     if [[ ! "{{VERSION}}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]]; then
         echo "error: VERSION must be X.Y.Z or X.Y.Z-rc.N (no other pre-release forms, no build metadata)" >&2; exit 2
     fi
+    current_branch="$(git branch --show-current)"
+    if [[ "$current_branch" != "main" ]]; then
+        echo "error: must be run from main (currently on '${current_branch:-detached HEAD}') -- the documented push is 'git push origin main vX.Y.Z', so preparing the release anywhere else can tag the release while leaving remote main without the snapshot commit" >&2; exit 2
+    fi
     if [[ -n "$(git status --porcelain)" ]]; then
         echo "error: working tree is not clean; commit or stash first" >&2; exit 2
+    fi
+    if git rev-parse -q --verify "refs/tags/v{{VERSION}}" >/dev/null; then
+        echo "error: tag v{{VERSION}} already exists locally" >&2; exit 2
+    fi
+    if git ls-remote --exit-code --tags origin "refs/tags/v{{VERSION}}" >/dev/null 2>&1; then
+        echo "error: tag v{{VERSION}} already exists on origin" >&2; exit 2
     fi
     base="{{VERSION}}"; base="${base%%-rc.*}"
     next="{{NEXT}}"

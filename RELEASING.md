@@ -54,7 +54,7 @@ actually work.
 1. Make sure `main` is green and you are on a clean checkout of the commit you want to
    release.
 2. Prepare the release commits and tag:
-   ```
+   ```sh
    just release 0.2.0
    ```
    This produces **two** commits and tags the first:
