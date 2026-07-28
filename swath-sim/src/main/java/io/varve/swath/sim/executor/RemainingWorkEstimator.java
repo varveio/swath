@@ -6,11 +6,13 @@
 package io.varve.swath.sim.executor;
 
 /**
- * <b>The position sensor, as a swappable thing.</b> The engine steers victim choice, pivot placement,
- * the owner-side self-split and the density feedback on one quantity — estimated remaining work on a
- * range — and computes it one way. This interface is that quantity behind a seam, so a candidate cure
- * can be raced against the incumbent without the engine changing at all: the variants live here, in
- * the simulator, and the policies they drive are the engine's own.
+ * <b>The engine's position sensor, plus what only a simulated run asks of it.</b> The engine steers
+ * victim choice, pivot placement, the owner-side self-split and the density feedback on one quantity —
+ * estimated remaining work on a range — and {@link io.varve.swath.engine.RemainingWorkEstimator} is
+ * that quantity behind the seam the engine already has. This interface <b>is</b> that one, widened by
+ * the two degeneracy readings a race needs; a variant implemented here is therefore installed into the
+ * engine's own thief and owner-split policies directly, with nothing in this module reproducing what
+ * they decide.
  *
  * <p><b>What the engine owns, this interface delegates to rather than reimplements.</b> The incumbent
  * reading is {@link WindowEstimator}, which calls the engine's public {@code StealMath}; the promoted
@@ -31,15 +33,7 @@ package io.varve.swath.sim.executor;
  * bound or a cursor and the open frontier for an upper one — the same conventions the policy views
  * use.
  */
-interface RemainingWorkEstimator {
-
-    /**
-     * Estimated remaining work in {@code (cursor, hi]}, in keys, for a range {@code [lo, hi]} that has
-     * emitted {@code keysEmitted} keys. Contract shared with the engine's own: an open frontier
-     * ({@code hi == null}) scores {@link Double#POSITIVE_INFINITY}, and a non-positive score takes a
-     * candidate out of victim selection entirely.
-     */
-    double estRemaining(byte[] cursor, byte[] lo, byte[] hi, long keysEmitted);
+interface RemainingWorkEstimator extends io.varve.swath.engine.RemainingWorkEstimator {
 
     /**
      * Whether this estimator's reading of a bounded range <b>discards the keys it has emitted</b> —

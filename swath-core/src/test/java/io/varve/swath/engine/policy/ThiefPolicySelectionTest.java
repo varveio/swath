@@ -8,6 +8,7 @@ package io.varve.swath.engine.policy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.StealMath;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.stream.Stream;
@@ -142,5 +143,46 @@ class ThiefPolicySelectionTest {
 
         assertThat(selection).isInstanceOf(NoVictim.class);
         assertThat(((NoVictim) selection).reason()).isEqualTo(expected);
+    }
+
+    // -------------------------------------------------------------------------
+    // The per-scan record the executor emits as the victim_scan trace event (§7).
+    // -------------------------------------------------------------------------
+
+    @Test
+    void anAllPacedRefusalReportsWhichCauseSkippedEveryCandidate() {
+        // The nara signature: every NO_VICTIM attempt found every candidate pacing-skipped, so
+        // victims EXIST and none was even estimated -- exactly what this record has to make readable.
+        Selection selection = policy.selectVictim(List.of(pacedFreshBounded(1, b("a"), b("z")),
+                pacedFreshBounded(2, b("a"), b("z"))));
+
+        assertThat(((NoVictim) selection).reason()).isEqualTo(NoVictimReason.ALL_FUTILITY_PACED);
+        VictimScan scan = selection.scan();
+        assertThat(scan.seen()).isEqualTo(2);
+        assertThat(scan.skippedPaced()).isEqualTo(2);
+        assertThat(scan.skippedUnsplittable()).isZero();
+        assertThat(scan.skippedNoSpan()).as("pacing skips BEFORE any estimate is taken").isZero();
+        assertThat(scan.bestEst())
+                .as("nothing was ever scored, so the argmax is still at its seed")
+                .isEqualTo(Double.NEGATIVE_INFINITY);
+    }
+
+    @Test
+    void aChosenVictimReportsTheWinningEstimateAndTheSkipsItBeat() {
+        VictimView unsplittable = new VictimView(1, b("a"), b("m"), b("z"), 1_000_000, true, false);
+        VictimView paced = pacedFreshBounded(2, b("a"), b("z"));
+        VictimView drained = new VictimView(3, b("a"), b("z"), b("z"), 500, false, false);
+        VictimView winner = freshBounded(4, b("a"), b("z"));
+
+        Selection selection = policy.selectVictim(List.of(unsplittable, paced, drained, winner));
+
+        assertThat(((Selected) selection).victimNodeId()).isEqualTo(4L);
+        VictimScan scan = selection.scan();
+        assertThat(scan.seen()).isEqualTo(4);
+        assertThat(scan.skippedUnsplittable()).isEqualTo(1);
+        assertThat(scan.skippedPaced()).isEqualTo(1);
+        assertThat(scan.skippedNoSpan()).isEqualTo(1);
+        assertThat(scan.bestEst())
+                .isEqualTo(StealMath.estRemaining(winner.cursor(), winner.lo(), winner.hi(), winner.keysEmitted()));
     }
 }

@@ -23,12 +23,16 @@ are banned in this repo) and records one JSON object per decision:
 - **`thief.steal`** — the pool of candidate victims (the *view*), the ordered probe
   request/response log the attempt issued, the `RunMetrics` engagement-counter deltas
   (which named branch of the pivot cascade fired — plain midpoint, far-ahead,
-  step-back, structure probe, reflect, bisect, flat-leaf), any `TraceSink` events, and
+  step-back, structure probe, reflect, bisect, flat-leaf), any `TraceSink` events
+  (including the per-attempt `victim_scan` record — metrics-internals.md §7), and
   the final outcome (the *decision*: `CHILD_CREATED`/`RETRY`/`UNSPLITTABLE`/`NO_VICTIM`,
   plus the committed pivot bytes when one exists).
 - **`owner_self_split`** — the victim's density view, the same counter-delta/trace
   capture, and whether a carve published (with its pivot bytes) or which gate
-  suppressed it.
+  suppressed it. (The `owner_split`/`owner_split_decision` trace events themselves are
+  emitted by `WorkStealingScan` **after** it releases `ws.lock`, not by the
+  `OwnerSelfSplit` these fixtures drive directly, so they do not appear in the recorded
+  `trace_events` — `WorkStealingScanTraceTest` covers that emission instead.)
 - **`pacing.steal_paced`** — the per-victim futility cooldown, driven directly as a pure
   state machine (no I/O). This fixture drives `WorkerState.stealPaced()` — which is
   **not** the live pair (an independent review's finding, issue #26's widening lives on

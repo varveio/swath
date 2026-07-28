@@ -13,7 +13,8 @@ import java.util.List;
 /**
  * A test-scoped {@link TraceSink} that records every call as an ordered {@link ObjectNode}
  * instead of writing JSONL to disk — the decision-trace golden recorder's tap on the {@code
- * stealAttempt}/{@code split}/{@code ownerSplit} events {@link io.varve.swath.engine.Thief} and
+ * stealAttempt}/{@code victimScan}/{@code split}/{@code ownerSplit}/{@code ownerSplitDecision}
+ * events {@link io.varve.swath.engine.Thief} and
  * {@link OwnerSelfSplit} already emit through the production {@link TraceSink} seam (see
  * {@code docs/ops/dev/decision-trace-goldens.md}). {@code enabled()} is always {@code true} so a
  * caller that gates a split's return value on it (see {@link
@@ -81,6 +82,55 @@ final class RecordingTraceSink implements TraceSink {
         e.put("outcome", outcome);
         e.put("reason", reason);
         events.add(e);
+    }
+
+    @Override
+    public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
+            long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
+            double densityRatio, long keysEmitted) {
+        ObjectNode e = GoldenTrace.newNode();
+        e.put("event", "owner_split_decision");
+        e.put("worker_id", workerId);
+        e.put("node_id", nodeId);
+        e.put("reason", reason);
+        putNum(e, "est", est);
+        e.put("pages_since_last_self_split", pagesSinceLastSelfSplit);
+        e.put("outstanding", outstanding);
+        e.put("worker_count", workerCount);
+        putNum(e, "far_ahead_fraction", farAheadFraction);
+        putNum(e, "density_ratio", densityRatio);
+        e.put("keys_emitted", keysEmitted);
+        events.add(e);
+    }
+
+    @Override
+    public void victimScan(long workerId, int seen, int skippedUnsplittable, int skippedPaced, int skippedNoSpan,
+            long chosenNodeId, double bestEst, String reason) {
+        ObjectNode e = GoldenTrace.newNode();
+        e.put("event", "victim_scan");
+        e.put("worker_id", workerId);
+        e.put("seen", seen);
+        e.put("skipped_unsplittable", skippedUnsplittable);
+        e.put("skipped_paced", skippedPaced);
+        e.put("skipped_no_span", skippedNoSpan);
+        e.put("chosen_node_id", chosenNodeId);
+        putNum(e, "best_est", bestEst);
+        e.put("reason", reason);
+        events.add(e);
+    }
+
+    /**
+     * A numeric field, JSON <b>null</b> when non-finite — the same convention {@code JsonlTraceSink}
+     * writes with, so a golden fixture stays strictly parseable JSON (JSONL has no {@code NaN}/
+     * {@code Infinity} literal, and both occur here: a not-computed gate input, an open-frontier
+     * estimate).
+     */
+    private static void putNum(ObjectNode e, String field, double v) {
+        if (Double.isFinite(v)) {
+            e.put(field, v);
+        } else {
+            e.putNull(field);
+        }
     }
 
     @Override

@@ -126,6 +126,9 @@ public final class ThiefPolicy implements StealPolicy {
                 chosen = w;
             }
         }
+        // What this pass saw, for the executor's victim_scan trace event (§7) — the tallies the loop
+        // above already kept, handed back rather than emitted here (this policy holds no sink).
+        VictimScan scan = new VictimScan(seen, skippedUnsplittable, skippedPaced, skippedNoSpan, best);
         if (chosen == null) {
             NoVictimReason reason;
             if (seen == 0) {
@@ -139,7 +142,7 @@ public final class ThiefPolicy implements StealPolicy {
             } else {
                 reason = NoVictimReason.MIXED_SKIPS;
             }
-            return new NoVictim(reason, engagements, mutations);
+            return new NoVictim(reason, engagements, mutations, scan);
         }
         // What the sensor's reading of the WINNING candidate did (§5 discipline) — once per attempt
         // rather than once per scored candidate, so the signal costs one classification per steal
@@ -147,7 +150,7 @@ public final class ThiefPolicy implements StealPolicy {
         // per-page-commit one, so it carries its own category. Inert for the shipped reading.
         estimator.classify("SENSING_STEAL", chosen.cursor(), chosen.lo(), chosen.hi(),
                 chosen.keysEmitted(), engagements);
-        return new Selected(chosen.nodeId(), engagements, mutations);
+        return new Selected(chosen.nodeId(), engagements, mutations, scan);
     }
 
     @Override

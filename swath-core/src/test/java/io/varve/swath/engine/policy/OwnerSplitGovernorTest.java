@@ -483,4 +483,72 @@ class OwnerSplitGovernorTest {
         assertThat(carve.engagements()).anyMatch(e -> e.category().equals("ALPHABET"));
         assertThat(carve.mutations()).isEmpty();
     }
+
+    // -------------------------------------------------------------------------
+    // Gate inputs: what the executor emits as the owner_split_decision trace event (§7). The gate
+    // chain is pure, so the readings a refusal was taken on ride back on the decision itself.
+    // -------------------------------------------------------------------------
+
+    @Test
+    void aBlockedGateReportsTheReadingsItBlockedOn() {
+        // The observed-mass floor: densityRatio (0.0) < f (0.5) -- the gate that blocks REGARDLESS of
+        // how large est is, so its report has to carry both of those inputs, not just the reason.
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 3, 0.5, 0.0);
+
+        OwnerSplitGateInputs inputs = governor().decide(v).gateInputs();
+
+        assertThat(inputs.reason()).isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code());
+        assertThat(inputs.est()).isEqualTo(StealMath.estRemaining(v.cursorTo(), v.lo(), v.hi(), v.keysEmitted()));
+        assertThat(inputs.farAheadFraction()).as("computed: this gate reads it").isEqualTo(0.5);
+        assertThat(inputs.densityRatio()).as("computed: this gate reads it").isEqualTo(0.0);
+        assertThat(inputs.pagesSinceLastSelfSplit()).isEqualTo(OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN);
+        assertThat(inputs.outstanding()).isEqualTo(3L);
+        assertThat(inputs.workerCount()).isEqualTo(WORKER_COUNT);
+        assertThat(inputs.keysEmitted()).isEqualTo(100_000L);
+    }
+
+    @Test
+    void aCarveReportsSelfPublishedWithEveryReadingItCleared() {
+        OwnerSplitView v = clearedView(OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0);
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).isInstanceOf(Carve.class);
+        OwnerSplitGateInputs inputs = decision.gateInputs();
+        assertThat(inputs.reason())
+                .as("no reflection clamp/lift engaged on this uniform view, so the plain published carve")
+                .isEqualTo("self_published");
+        assertThat(inputs.est()).isEqualTo(StealMath.estRemaining(v.cursorTo(), v.lo(), v.hi(), v.keysEmitted()));
+        assertThat(inputs.farAheadFraction()).isEqualTo(0.5);
+        assertThat(inputs.densityRatio()).isEqualTo(1.0);
+        assertThat(inputs.pagesSinceLastSelfSplit()).isEqualTo(OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN);
+        assertThat(inputs.outstanding()).isZero();
+        assertThat(inputs.workerCount()).isEqualTo(WORKER_COUNT);
+        assertThat(inputs.keysEmitted()).isEqualTo(100_000L);
+    }
+
+    @Test
+    void aGateAboveTheFloorReportsTheUncomputedInputsAsNotComputed() {
+        // Rate-limited: the chain short-circuits ABOVE where f/densityRatio are computed, so the
+        // report must say "not computed" rather than a plausible-looking 0.0.
+        OwnerSplitView v = clearedView(0, 0, 0);
+
+        OwnerSplitGateInputs inputs = governor().decide(v).gateInputs();
+
+        assertThat(inputs.reason()).isEqualTo(OwnerSplitSkipReason.RATE_LIMITED.code());
+        assertThat(inputs.farAheadFraction()).isNaN();
+        assertThat(inputs.densityRatio()).isNaN();
+        assertThat(inputs.est()).as("read before the first gate -- always computed").isPositive();
+        assertThat(inputs.pagesSinceLastSelfSplit()).isZero();
+    }
+
+    @Test
+    void theOpenFrontierEarlyOutReportsNoGateInputsAtAll() {
+        OwnerSplitView frontierView = new OwnerSplitView(null, b("a"), b("n"), 100_000L, 0, 0, 0, 0.5, 1.0,
+                coldDigest(b("a"), null), NO_CONFETTI_SIGNAL);
+
+        assertThat(governor().decide(frontierView).gateInputs())
+                .as("it decides nothing and reads nothing -- no owner_split_decision event is due")
+                .isNull();
+    }
 }

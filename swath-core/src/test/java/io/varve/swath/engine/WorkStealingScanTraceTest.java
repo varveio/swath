@@ -121,10 +121,24 @@ final class WorkStealingScanTraceTest {
                 assertThat(node.hasNonNull("outcome")).isTrue();
                 assertThat(node.hasNonNull("reason")).isTrue();
             }
+            if (event.equals("owner_split_decision")) {
+                // Per-decision gate visibility: which range, which gate, on which readings.
+                assertThat(node.hasNonNull("node_id")).isTrue();
+                assertThat(node.hasNonNull("reason")).isTrue();
+                assertThat(node.has("est")).isTrue();
+                assertThat(node.has("far_ahead_fraction")).as("present even when not computed (null)").isTrue();
+                assertThat(node.hasNonNull("outstanding")).isTrue();
+            }
+            if (event.equals("victim_scan")) {
+                assertThat(node.hasNonNull("seen")).isTrue();
+                assertThat(node.hasNonNull("chosen_node_id")).isTrue();
+                assertThat(node.has("best_est")).as("present even when non-finite (null)").isTrue();
+            }
         }
 
         assertThat(eventTypes).as("full range lifecycle observed")
-                .contains("seeded", "claimed", "page_committed", "steal_attempt", "completed");
+                .contains("seeded", "claimed", "page_committed", "steal_attempt", "completed",
+                        "owner_split_decision", "victim_scan");
         assertThat(sawSplitMechanism).as("at least one split fired with a mechanism tag").isTrue();
         assertThat(lines.getFirst()).as("the very first event is the initial seed").contains("\"event\":\"seeded\"");
     }

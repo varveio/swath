@@ -34,6 +34,8 @@ final class TraceSinkTest {
             TraceSink.NONE.claimed(0L, 1L, null, null, null);
             TraceSink.NONE.pageCommitted(0L, 1L, 10, null, false);
             TraceSink.NONE.stealAttempt(0L, "RETRY", "cursor_passed_pivot");
+            TraceSink.NONE.ownerSplitDecision(0L, 1L, "demand_gated", 1.0, 4L, 8L, 8, Double.NaN, Double.NaN, 10L);
+            TraceSink.NONE.victimScan(0L, 3, 1, 2, 0, -1L, Double.NEGATIVE_INFINITY, "all_futility_paced");
             TraceSink.NONE.split(0L, 1L, 2L, "midpoint", null, null);
             TraceSink.NONE.ownerSplit(0L, 1L, 2L, "self_published", null, null);
             TraceSink.NONE.completed(0L, 1L);
@@ -69,6 +71,49 @@ final class TraceSinkTest {
         // ts_ns is strictly increasing under the injected nanoClock (deterministic ordering, §
         // "reuse the nanoClock seam" — mirrors RunMetrics's avg-in-flight test seam).
         assertThat(claimed.get("ts_ns").asLong()).isGreaterThan(seeded.get("ts_ns").asLong());
+    }
+
+    @Test
+    void jsonl_writesGateDecisionsAndVictimScans_withNonFiniteNumbersAsJsonNull(@TempDir Path dir)
+            throws Exception {
+        Path file = dir.resolve("gates.trace.jsonl");
+        TraceSink sink = TraceSink.jsonl(file);
+        try {
+            // A gate that short-circuited above f/densityRatio: both carry the NaN not-computed sentinel.
+            sink.ownerSplitDecision(7L, 42L, "remaining_est_floor", 399.5, 4L, 2L, 8,
+                    Double.NaN, Double.NaN, 5_500_000L);
+            // A refusal: no victim, and the argmax seed (-Infinity) as best_est.
+            sink.victimScan(7L, 3, 0, 3, 0, -1L, Double.NEGATIVE_INFINITY, "all_futility_paced");
+        } finally {
+            sink.close();
+        }
+
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        JsonNode gate = MAPPER.readTree(lines.get(0));   // strictly parseable JSON -- no NaN literal
+        assertThat(gate.get("event").asText()).isEqualTo("owner_split_decision");
+        assertThat(gate.get("worker_id").asLong()).isEqualTo(7L);
+        assertThat(gate.get("node_id").asLong()).isEqualTo(42L);
+        assertThat(gate.get("reason").asText()).isEqualTo("remaining_est_floor");
+        assertThat(gate.get("est").asDouble()).isEqualTo(399.5);
+        assertThat(gate.get("pages_since_last_self_split").asLong()).isEqualTo(4L);
+        assertThat(gate.get("outstanding").asLong()).isEqualTo(2L);
+        assertThat(gate.get("worker_count").asInt()).isEqualTo(8);
+        assertThat(gate.get("keys_emitted").asLong()).isEqualTo(5_500_000L);
+        assertThat(gate.get("far_ahead_fraction").isNull())
+                .as("a not-computed gate input serializes as JSON null, never a plausible-looking 0")
+                .isTrue();
+        assertThat(gate.get("density_ratio").isNull()).isTrue();
+
+        JsonNode scan = MAPPER.readTree(lines.get(1));
+        assertThat(scan.get("event").asText()).isEqualTo("victim_scan");
+        assertThat(scan.has("node_id")).as("a scan spans the whole pool, so it carries no node_id").isFalse();
+        assertThat(scan.get("seen").asInt()).isEqualTo(3);
+        assertThat(scan.get("skipped_unsplittable").asInt()).isZero();
+        assertThat(scan.get("skipped_paced").asInt()).isEqualTo(3);
+        assertThat(scan.get("skipped_no_span").asInt()).isZero();
+        assertThat(scan.get("chosen_node_id").asLong()).isEqualTo(-1L);
+        assertThat(scan.get("best_est").isNull()).as("-Infinity, the argmax seed, is JSON null too").isTrue();
+        assertThat(scan.get("reason").asText()).isEqualTo("all_futility_paced");
     }
 
     @Test

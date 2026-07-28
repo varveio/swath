@@ -33,4 +33,12 @@ public sealed interface OwnerSplitDecision permits Skip, Carve {
      * OwnerSplitMutation#CONSUME_CONFETTI_PROBE_SLOT} on.
      */
     List<OwnerSplitMutation> mutations();
+
+    /**
+     * The gate chain's terminal reason plus the numeric inputs it read, for the executor's {@code
+     * owner_split_decision} trace event (§7) — {@code null} exactly for the {@link
+     * OwnerSplitSkipReason#OPEN_FRONTIER} early-out, which decides nothing and reads nothing, and
+     * for a decision built by a caller that does not populate it. See {@link OwnerSplitGateInputs}.
+     */
+    OwnerSplitGateInputs gateInputs();
 }

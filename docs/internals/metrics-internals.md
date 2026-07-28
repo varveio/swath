@@ -821,10 +821,31 @@ would-be event.
 | `claimed` | `worker_id`, `node_id`, `lo`, `cursor`, `hi` | a worker pulls a range off the ready queue |
 | `page_committed` | `worker_id`, `node_id`, `keys`, `cursor`, `completed` | after every durable page commit (dominates volume, ~1/page) |
 | `steal_attempt` | `worker_id`, `outcome`, `reason` | every `Thief.steal` attempt (piggybacks the `recordStealReason` call site) |
+| `victim_scan` | `worker_id`, `seen`, `skipped_unsplittable`, `skipped_paced`, `skipped_no_span`, `chosen_node_id`, `best_est`, `reason` | every `ThiefPolicy.selectVictim` pass — one per steal attempt, immediately before that attempt's `steal_attempt`. Aggregate over the pool, never per candidate (the scan runs constantly). `chosen_node_id` is `-1` and `reason` the `NoVictimReason` discriminator when the scan refused; on a hit `reason` is `null` |
+| `owner_split_decision` | `worker_id`, `node_id`, `reason`, `est`, `pages_since_last_self_split`, `outstanding`, `worker_count`, `far_ahead_fraction`, `density_ratio`, `keys_emitted` | every `OwnerSplitGovernor.decide` past the open-frontier early-out — one per qualifying page commit, blocked OR carved (so ~1/page on a bounded range, `page_committed`'s order of volume). `reason` is the GATE CHAIN's terminal reason: an `OwnerSplitSkipReason` code, or `confetti_probe`/`pivot_reflect_clamped`/`pivot_reflect_lifted`/`self_published` on the carve side |
 | `split` | `worker_id`, `node_id` (parent), `child_node_id`, `mechanism`, `pivot`, `hi` | a thief commits a split — `mechanism` is the same pivot-attribution tag as the `PIVOT.<mechanism>` counter (§5) |
 | `owner_split` | same shape as `split` | an owner-side proactive self-split — `mechanism` is always `self_published` |
 | `completed` | `worker_id`, `node_id` | a range drains to its `hi` bound |
 | `failed` | `worker_id`, `node_id`, `reason` | a range's scan ends without completing (exception; excludes the expected broken-pipe/cancel teardown) |
+
+**Numbers, and the two "missing value" conventions.** JSONL has no `NaN`/`Infinity` literal, so a
+non-finite numeric field is written as JSON **`null`** — the line stays strictly parseable. Two
+distinct things produce it, disambiguated by the event's own `reason`:
+
+- **not computed** — the owner-split gate chain short-circuits, so a gate that terminated ABOVE
+  where `far_ahead_fraction`/`density_ratio` are read reports them as `null` rather than a
+  plausible-looking `0` (`OwnerSplitGateInputs.NOT_COMPUTED`, i.e. `NaN`, in the engine). Today that
+  is exactly `reason ∈ {remaining_est_floor, rate_limited, demand_gated}`; every other input is read
+  before the first gate. An integral input under the same convention would carry `-1`.
+- **a genuinely non-finite reading** — `density_ratio` is `+∞` with `density_ewma=off` (the floor's
+  own "no signal" fallback), `est`/`best_est` is `+∞` for an open frontier, and `best_est` is `-∞`
+  when a `victim_scan` refused (the argmax's own seed, nothing ever scored).
+
+**Gate decision vs executor outcome.** `owner_split_decision.reason` reports what the *gate chain*
+decided. A carve the chain admitted can still fail to publish executor-side (a lost confetti
+probe-slot claim, a rejected split CAS) — that shows as the absence of a following `owner_split`
+event for the same `node_id`, and in the `OWNER_SPLIT.confetti_suppressed`/`self_aborted` counters,
+never as a different `reason` here.
 
 **Durability (JFR framing).** Written stream-append, never atomic-rename — a real process kill
 leaves a readable prefix, doubling as a black box. Buffered; explicitly flushed only on
@@ -838,7 +859,9 @@ write atomicity against buffer-full auto-flush).
 **Versioning.** The `"v":1` field is the compatibility contract for any downstream consumer
 (the planned V2 Perfetto exporter, V3 keyspace×time renderer). A breaking schema change bumps
 `v`; this table is the source of truth for what `v:1` contains — update it in the same change
-that adds/removes/renames an event field.
+that adds/removes/renames an event field. Adding a whole new **event kind** (as `victim_scan` and
+`owner_split_decision` were) is additive, not breaking, and does **not** bump `v`: every existing
+kind keeps its exact fields, and a consumer is required to ignore event kinds it does not know.
 
 **Not covered by the §5 drift guard.** `scripts/ci/check-instrumentation-drift.py` enforces the
 `recordStealReason` counter table above; it does **not** parse trace event call sites (trace

@@ -73,6 +73,8 @@ tasks.test {
     System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
     System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
     System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
+    System.getProperty("swath.sim.listing.arm")?.let { systemProperty("swath.sim.listing.arm", it) }
+    System.getProperty("swath.sim.listing.seed")?.let { systemProperty("swath.sim.listing.seed", it) }
     // Same forwarding, same reason, for the corpus sweep (CorpusSweepRunTest, @Tag("perf")): a root
     // directory of staged captures, the TSV it writes its per-leg rows to, and the ceiling above
     // which a staged capture is passed over rather than swept. The first two are the operator's
@@ -81,6 +83,10 @@ tasks.test {
     System.getProperty("swath.sim.listing.results")?.let { systemProperty("swath.sim.listing.results", it) }
     System.getProperty("swath.sim.listing.corpus-max-keys")
         ?.let { systemProperty("swath.sim.listing.corpus-max-keys", it) }
+    // Same forwarding, same reason, for the per-decision gate dump (`SimGateDump`): the TSV a single
+    // run writes its owner-split and victim-scan gate inputs to, for diffing against a replay trace.
+    // Absent (the common case), no run dumps anything.
+    System.getProperty("swath.sim.gate-dump")?.let { systemProperty("swath.sim.gate-dump", it) }
     // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.

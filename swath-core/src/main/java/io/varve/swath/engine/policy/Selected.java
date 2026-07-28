@@ -8,6 +8,12 @@ package io.varve.swath.engine.policy;
 import java.util.List;
 
 /** A victim was chosen: {@code argmax estRemaining} over the eligible pool (algorithms.md §3.2). */
-public record Selected(long victimNodeId, List<Engagement> engagements, List<VictimMutation> mutations)
+public record Selected(long victimNodeId, List<Engagement> engagements, List<VictimMutation> mutations,
+                       VictimScan scan)
         implements Selection {
+
+    /** As the canonical constructor, for a policy that records no {@link VictimScan}. */
+    public Selected(long victimNodeId, List<Engagement> engagements, List<VictimMutation> mutations) {
+        this(victimNodeId, engagements, mutations, null);
+    }
 }

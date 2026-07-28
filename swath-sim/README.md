@@ -321,14 +321,33 @@ proposer, and the fleet admits one steal attempt at a time. So `splits_rejected`
 that are losing four proposals in five, and that zero is a fact about the ordering rather than a
 simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
 
-How often **that race** is lost is a property of the *keyspace*, not of the timings a scenario declares
-— a claim about the loss share specifically, and not about the serial tail it contributes to, which
-depends on the page regime and is discussed under the fixtures below. Where a pivot lands relative to
-the cursor and how far the cursor travels while the probes are in flight both scale with the page, so
-moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms a real deployment was measured at
-leaves the loss share in the same place (81% and 66% on the same fixture). What moves it is mass: the
-same geometry with a twentieth of the keys per directory loses 52%. The measured page/probe regime is
-available as a named pair of inputs so that claim can be re-checked rather than believed.
+**How often that race is lost turns on one ratio the scenario declares: what a probe costs relative to
+a page.** This README used to say the opposite — that the loss share is a property of the keyspace and
+not of the declared timings — on the evidence that moving from a 100-key page in 30 ms to the
+1,000-key page in 110 ms leaves it in the same place (81% and 66% on the same fixture). Both of those
+regimes price a probe at ~0.32 of a page, so what that pair of runs actually held fixed was the ratio,
+and the claim generalised from it was wrong. The live store was measured at 121 ms against 223 ms
+(0.54). A thief spends a cascade of probes placing a pivot and loses if the victim drained past it
+meanwhile, so `probes × probe/page` *is* the race window in owner pages: about two at the live ratio,
+under one at 0.32. On a wide-flat tail that difference is the whole outcome — at 0.54 the engine loses
+essentially every race on the tail range (measured on a real bucket: 460 of 461 attempts), and a
+fleet modelled at 0.32 keeps winning them and reports a bucket carved up that a real run leaves to
+drain serially.
+
+So the loss share is ratio-sensitive, and *mass* moves it too: the same geometry with a twentieth of
+the keys per directory loses 52%. The real-listing instruments (`RealListingRunTest`, the corpus
+sweep, `SingleLegRunTest`) therefore run at the live profile — `PolicyRunFixtures.LIVE_S3_LATENCY`,
+223 ms page / 121 ms pivot probe / 223 ms delimited probe, measured 2026-07-28 — and
+`ProbeToPageRatioTailTest` pins the mechanism: one fixture, one fleet, one page size, one arm, with
+only the ratio changed, and the heavy leaf goes from carved-up to a single unstealable range holding
+the fleet for half the run.
+
+**The bench tables published at the 35 ms / 110 ms regime remain valid as characterisations of that
+regime** and are still pinned there — a bench number states its regime, and re-running them at the
+live ratio would replace measurements, not correct them. What does not survive is quoting one of them
+as what a fleet would do against the live store on a race-sensitive shape; that needs a run at the
+live ratio. Every regime is a named pair of inputs so either claim can be re-checked rather than
+believed.
 
 Two denominators are in circulation and they are not interchangeable. The shares above are proposals
 lost over proposals that reached the re-validation; a deployment's own numbers are usually quoted per
@@ -367,6 +386,31 @@ Two parts of that record are worth naming, because a counter total cannot expres
   *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
   would report the disease while the cure was running.
 
+### Dumping what the gates read
+
+A counter says a gate fired *n* times; it cannot say which reading made it fire, and when a simulated
+run and a real one disagree that is the only question worth asking. `-Dswath.sim.gate-dump=<path>`
+turns on a per-decision dump: one TSV row per `OwnerSplitGovernor.decide` past the open-frontier
+early-out, and — at `<path>.scans.tsv` — one per `ThiefPolicy.selectVictim` pass. The columns are the
+engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which are also what the engine emits
+as its `owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7), so the two
+sides diff **row for row against a replay-server trace of the same listing** and a divergence lands on
+the gate and the reading that produced it. The decision file carries `virtual_time_ns`, `node_id`,
+`reason`, `est`, `pages_since_last_self_split`, `outstanding`, `far_ahead_fraction`, `density_ratio`,
+`keys_emitted`, then the decided range's own `lo`, `cursor_to` and `hi` — the bounds, because sim node
+ids and a replay run's node ids are different id spaces and a tail range is matched by *keys*. The scan
+file carries `virtual_time_ns`, `seen`, `skipped_paced`, `skipped_unsplittable`, `skipped_no_span`,
+`chosen_node_id`, `best_est`, `reason`, and the chosen victim's `chosen_lo`/`chosen_cursor`/`chosen_hi`.
+A double the short-circuiting gate chain never computed is written as `NaN`, and an unseeded argmax as
+`-Infinity`: a TSV carries what the run held, without JSON's ban on a non-finite number.
+
+The dump is a **write-only observer** — a run dumping takes exactly the decisions it takes not
+dumping, and with the property unset no row is formatted and no key is rendered. Its instants are the
+run's own virtual clock, never the host's. It is **one run per dump**: both files are created
+`CREATE_NEW` and every IO failure fails the run, because an artifact that silently truncates would
+have its missing rows read as a finding — so point a multi-leg harness at a fresh path per invocation
+rather than at one it has already written.
+
 ### Swapping the position sensor
 
 Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
@@ -388,14 +432,20 @@ and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes
 the shipped sensor and reads exactly what it read before. The rungs of the geometry-floor ladder the
 sweep rejected (`..._EIGHTH`, `..._HALF`, the symmetric `RATE_CURSOR_ANCHORED` and lift-only ends) are
 kept so those races stay reproducible; they run through the promoted arm's engine object at their own
-floor rather than through a second implementation of it. Victim selection and the owner-split gate
-chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
-pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
-drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical
-decisions, so a copy that drifts fails a test rather than becoming a race result. The route itself is
-instrumented like every other algo path here: a run counts `SENSING_ROUTE.owner_split_*` and
-`SENSING_ROUTE.thief_*` once each, off the objects it actually installed, so which pair a table's legs
-were taken through is a reading of the run rather than an inference from its `sensing` field.
+floor rather than through a second implementation of it. Victim selection, the owner-split gate chain
+and the whole pivot cascade are **the engine's own classes**, consumed through the estimator seam they
+already have (#68): an arm is a `RemainingWorkEstimator` handed to `OwnerSplitGovernor` and
+`ThiefPolicy`, and no mirror of either remains in this module — so a variant run and a deployed run
+differ in the sensor and in nothing else. `SensingVariantParityTest` drives the battery through that
+chain under every arm (decisions complete and stable; the observed-mass floor's structural zero visible
+under each), and pins `CURRENT` against a chain nobody steered — which is what says the sensor seam
+carries the shipped path unchanged. The route itself is instrumented like every other algo path here: a
+run counts `SENSING_ROUTE.owner_split_*` and `SENSING_ROUTE.thief_*` once each, off whether an estimator
+was actually installed, so which sensor a table's legs were taken through is a reading of the run rather
+than an inference from its `sensing` field. A run on a rate+anchored arm also emits the engine's own
+per-reading classification rows for that sensor (`SENSING_OWNER.*` / `SENSING_STEAL.*`,
+docs/internals/metrics-internals.md §5a) — the same rows a deployed run under
+`rate_anchored_sensing=on` emits, because it is the same object reporting them.
 
 **What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
 four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key
@@ -493,6 +543,10 @@ A generated keyspace is a hypothesis about what a bucket looks like. `RealListin
 listing** instead, and prints the sensing race's own table so the two read side by side — plus a run
 cost table (wall time, events, store calls) that is how a corpus sweep gets sized, and a "where does
 the tail live" leg that reports the longest common prefix of the keys committed after the last split.
+
+Its legs run at the **live store's call-class latency profile** (`LIVE_S3_LATENCY`), not the synthetic
+benches' — an answer quoted as "what the fleet would do on this bucket" has to be taken at the ratio
+that bucket's store actually charges, and that ratio decides the steal race (above).
 
 ```shell
 ./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=/path/to/sorted-fixture
@@ -685,6 +739,15 @@ is: the honest statement is that reproducing this tail needs a bucket about ten 
 size, and the small page buys that at a tenth of the memory while buying nothing else. The 36.8% /
 84.0% concentration shares it deals (against a measured 32.6% / 90.7%) are pinned in
 `KeyspaceFixturesTest`.
+
+**And that 0.001 is quoted at a probe:page ratio too.** The same fixture, the same 1,000-key page and
+the same fleet, run at the live store's ratio instead of the bench's, does not have its heavy leaf
+absorbed at all: the leaf drains as one range that holds the fleet for **49%** of the run, 668 steal
+attempts against it produce a single child that carries no keys, and the run publishes 18 splits where
+the bench ratio publishes 39–61. `ProbeToPageRatioTailTest` (`@Tag("perf")`) pins that, and it is the
+leg to read before quoting any tail or loss number from this module as what a real fleet would do:
+the page size decides how many round trips a range is, and the probe:page ratio decides whether anyone
+can take it away.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

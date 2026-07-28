@@ -94,6 +94,13 @@ import java.util.function.Supplier;
  * {@link PolicyRunFixtures#MEASURED_TAIL_LATENCY}) alongside the bench regime, and <b>every serial or
  * tail number is reported with the page size it was taken at</b>. Loss share is quoted across both.
  *
+ * <p>Both of those regimes price a probe at 0.32 of a page, and the live store prices it at 0.54
+ * ({@link PolicyRunFixtures#LIVE_S3_LATENCY}) — a ratio the race's numbers were never taken at, and the
+ * one that sets how many owner pages a steal attempt has to win inside. The race stays here, because
+ * its pinned tables were measured here and a bench number states its regime; but a verdict from it on a
+ * race-sensitive shape is a verdict at this ratio, and transfers to the live store only once re-run at
+ * that one — which is what {@link ProbeToPageRatioTailTest} exists to show can change the answer.
+ *
  * <h2>What may be pinned, and what may only be reported</h2>
  * Only readings that hold at <b>all four seeds</b> may become assertions. Everything else — every
  * magnitude, every ranking that one seed disagrees with — is reported as prose alongside the printed
@@ -124,9 +131,16 @@ final class SensingRaceProtocol {
 
     // ---- the three keyspaces ------------------------------------------------------------
 
+    /**
+     * Files the bench's heaviest species holds, all of them in one leaf directory — the mass a tail on
+     * this fixture is made of, and the denominator anything asking "did one range drain the whole of
+     * it" has to divide by.
+     */
+    static final int BENCH_HEAVIEST_LEAF_FILES = 400_000;
+
     /** The designated bench: eight species over a Zipf rank law, each holding its mass in one leaf. */
     static Supplier<List<byte[]>> bench() {
-        return () -> KeyspaceFixtures.deepNestedSharedPrefix(2, 4, 1, 400_000,
+        return () -> KeyspaceFixtures.deepNestedSharedPrefix(2, 4, 1, BENCH_HEAVIEST_LEAF_FILES,
                 SubtreeMass.LEAF_CONCENTRATED);
     }
 

@@ -6,6 +6,8 @@
 package io.varve.swath.sim.executor;
 
 import io.varve.swath.engine.RateAnchoredEstimator;
+import io.varve.swath.engine.policy.Engagement;
+import java.util.List;
 
 /**
  * <b>E1 and E2 together: a rate estimate that geometry may adjust but not overrule</b> — and, since
@@ -91,6 +93,15 @@ final class RateAnchoredArm implements RemainingWorkEstimator {
         // fixture whose run ends on one is reading its tail fraction against a drain nothing here can
         // divide (see SensingRaceTest.theHashFannedGuardsFinalRangeAtSeed987654321IsAnUnsplitOpenFrontier).
         return reading.estRemaining(cursor, lo, hi, keysEmitted);
+    }
+
+    @Override
+    public void classify(String category, byte[] cursor, byte[] lo, byte[] hi, long keysEmitted,
+                         List<Engagement> collector) {
+        // The reading's own account of what the band did, delegated like the reading itself: a run on
+        // this arm emits the SENSING_OWNER.*/SENSING_STEAL.* rows a real run on the promoted sensor
+        // emits, off the same object, so a simulated arm and a deployed one are read on one namespace.
+        reading.classify(category, cursor, lo, hi, keysEmitted, collector);
     }
 
     @Override

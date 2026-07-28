@@ -13,11 +13,13 @@ import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.ConfettiObservation;
 import io.varve.swath.engine.policy.OwnerSplitDecision;
+import io.varve.swath.engine.policy.OwnerSplitGateInputs;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.engine.policy.OwnerSplitPolicy;
 import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.engine.policy.Selection;
+import io.varve.swath.engine.policy.Skip;
 import io.varve.swath.engine.policy.StealPolicy;
 import io.varve.swath.engine.policy.ThiefPolicy;
 import io.varve.swath.engine.policy.VictimView;
@@ -32,79 +34,138 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>The two mirrored policies are held to the engine's own.</b> A sensing variant is installed by
- * reproducing victim selection and the owner-split gate chain in this module with one substitution —
- * where the estimate comes from — and a copy that drifts from its original would turn a race result
- * into a comparison of two unrelated algorithms without failing anything.
+ * <b>Every arm drives the engine's own gate chain, and the control leg drives it unchanged.</b> A
+ * sensing variant is an estimator installed into the engine's {@code OwnerSplitGovernor} and
+ * {@code ThiefPolicy} through the seam they already have — nothing in this module reproduces what
+ * either decides — so what needs guarding is no longer "does the copy match the original" but
+ * "does the chain under each arm decide completely and stably, and does the control arm leave the
+ * shipped path exactly as it was".
  *
- * <p>So both mirrors are driven with the <b>incumbent</b> estimator installed, over the same inputs
- * as the engine's own policies, and required to decide identically. That is what guards the two
- * constants the engine keeps package-private and this module therefore has to duplicate — but only as
- * far as the battery's own observations reach, which is stated exactly on
- * {@link #confettiObservations()} rather than implied: the confetti rates bracket the suppression
- * threshold at 0.5 and 0.5625, and the probe sequences catch a probe period that halves or doubles.
+ * <p>The batteries below are the ones the mirror comparison used, driven now through the engine
+ * chain under all eight arms. In particular the confetti observations still bracket the gate's two
+ * package-private constants (stated exactly on {@link #confettiObservations()}): those constants are
+ * no longer duplicated anywhere, but the battery that reaches the branches they govern is what makes
+ * the chain-under-arm decisions cover them at all.
  */
 class SensingVariantParityTest {
 
     private static final int WORKERS = 8;
     private static final int PAGE = 100;
 
+    /**
+     * <b>Every arm decides, on every view, and decides the same way twice.</b> A variant that faulted
+     * or that carried state between decisions would produce a race table nobody could reproduce, and
+     * the estimator contract is a pure function of its arguments — so the battery is run twice per arm
+     * and the two passes are required to agree, decision for decision, including the gate inputs each
+     * decision reports.
+     *
+     * <p>The named branches are asserted rather than counted: an arm whose estimate is so large that
+     * the chain never reaches the confetti gate, or so small that it never carves, would cover far
+     * less of the chain than its race table implies.
+     */
     @Test
-    void mirroredVictimSelectionDecidesExactlyAsTheEnginesDoes() {
-        StealPolicy engine = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null);
-        StealPolicy mirror = new EstimatorStealPolicy(new WindowEstimator(),
-                new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null));
+    void everyArmDecidesCompletelyAndDeterministicallyAcrossTheBattery() {
+        List<OwnerSplitView> views = ownerSplitViews();
+        List<List<VictimView>> pools = victimPools();
+        for (SensingVariant arm : SensingVariant.values()) {
+            OwnerSplitPolicy governor = governor(arm);
+            OwnerSplitPolicy again = governor(arm);
+            StealPolicy thief = thief(arm);
+            StealPolicy thiefAgain = thief(arm);
 
-        int pools = 0;
-        for (List<VictimView> pool : victimPools()) {
-            pools++;
-            Selection expected = engine.selectVictim(pool);
-            Selection actual = mirror.selectVictim(pool);
-            assertThat(actual).as("pool %s", pool).isEqualTo(expected);
-        }
-        assertThat(pools).as("the battery has to actually exercise something").isGreaterThan(200);
-    }
-
-    @Test
-    void theMirroredOwnerSplitGateChainDecidesExactlyAsTheEnginesDoes() {
-        OwnerSplitPolicy engine = new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, null);
-        OwnerSplitPolicy mirror = new EstimatorOwnerSplitPolicy(new WindowEstimator(),
-                EngineToggles.DEFAULT, WORKERS, PAGE);
-
-        int carves = 0;
-        int skips = 0;
-        Set<String> reasons = new HashSet<>();
-        for (OwnerSplitView view : ownerSplitViews()) {
-            OwnerSplitDecision expected = engine.decide(view);
-            OwnerSplitDecision actual = mirror.decide(view);
-            assertSameDecision(expected, actual, view);
-            if (expected instanceof Carve) {
-                carves++;
-            } else {
-                skips++;
+            int carves = 0;
+            int skips = 0;
+            Set<String> reasons = new HashSet<>();
+            for (OwnerSplitView view : views) {
+                OwnerSplitDecision decision = governor.decide(view);
+                assertSameDecision(decision, again.decide(view), view);
+                if (decision instanceof Carve) {
+                    carves++;
+                } else {
+                    skips++;
+                }
+                decision.engagements().forEach(e -> reasons.add(e.reason()));
             }
-            expected.engagements().forEach(e -> reasons.add(e.reason()));
+            assertThat(carves + skips).as("%s decided every view", arm).isEqualTo(views.size());
+            assertThat(carves).as("carves reached under %s", arm).isPositive();
+            assertThat(skips).as("skips reached under %s", arm).isPositive();
+            assertThat(reasons).as("branches reached under %s", arm)
+                    .contains(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), "confetti_probe",
+                            OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(),
+                            "alphabet_chosen", "alphabet_fallback");
+
+            for (List<VictimView> pool : pools) {
+                Selection selection = thief.selectVictim(pool);
+                assertThat(selection).as("%s, pool %s", arm, pool).isNotNull()
+                        .isEqualTo(thiefAgain.selectVictim(pool));
+            }
         }
-        // A parity check that only ever saw refusals would prove nothing about the pivot half of the
-        // chain, and one that never reached a branch says nothing about the constants that govern it --
-        // so the branches the battery has to reach are named rather than counted.
-        assertThat(carves).as("carves reached").isPositive();
-        assertThat(skips).as("skips reached").isPositive();
-        assertThat(reasons).as("branches reached")
-                .contains(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), "confetti_probe",
-                        OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(),
-                        "alphabet_chosen", "alphabet_fallback");
+        assertThat(pools).as("the battery has to actually exercise something").hasSizeGreaterThan(200);
     }
 
     /**
-     * <b>Which route a run's decisions were taken through, out of the run's own counters.</b> The
-     * mirrors above are only the algorithm they claim to be if they were the objects the run steered
-     * with, and a run that quietly installed the shipped pair under a variant's name would produce a
-     * whole race table of the incumbent measured twice. The route is instrumented like every other algo
-     * path here (AGENTS.md), so the check is a counter read rather than a reflection over fields.
+     * <b>The control leg is the shipped path, byte for byte.</b> {@code CURRENT} installs no estimator
+     * at all — the executor passes {@code null} and the engine keeps its own {@code WINDOW} reading —
+     * and this is the pin that the convergence of the two construction paths changed nothing there:
+     * the chain steered by this module's incumbent delegate decides identically to the chain nobody
+     * steered, on every view and every pool of the battery, down to the gate inputs.
      */
     @Test
-    void aRunsCountersNameTheRouteItsDecisionsWereTakenThrough() {
+    void theCurrentArmDecidesExactlyAsAnUnsteeredEngineChainDoes() {
+        OwnerSplitPolicy unsteered = new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, null);
+        OwnerSplitPolicy current = governor(SensingVariant.CURRENT);
+        for (OwnerSplitView view : ownerSplitViews()) {
+            assertSameDecision(unsteered.decide(view), current.decide(view), view);
+        }
+
+        StealPolicy unsteeredThief = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null);
+        StealPolicy currentThief = thief(SensingVariant.CURRENT);
+        for (List<VictimView> pool : victimPools()) {
+            assertThat(currentThief.selectVictim(pool)).as("pool %s", pool)
+                    .isEqualTo(unsteeredThief.selectVictim(pool));
+        }
+    }
+
+    /**
+     * <b>The observed-mass floor's structural zero is visible under every arm.</b> When
+     * {@code min(1, densityRatio) <= f} the reachable child tail is zero however large the estimate
+     * is, so the gate blocks on a range the sensor reads as enormous. An arm that hid that — by
+     * reporting an estimate the chain never consumed, or by a chain that stopped short of the gate —
+     * would let a race table claim a cure the gate below it refuses; the assertion is therefore made
+     * of the gate's OWN reported inputs at its own terminal decision, per arm.
+     */
+    @Test
+    void everyArmExposesTheStructuralZeroAtTheObservedMassFloor() {
+        for (SensingVariant arm : SensingVariant.values()) {
+            OwnerSplitPolicy governor = governor(arm);
+            List<OwnerSplitGateInputs> structuralZeroes = new ArrayList<>();
+            for (OwnerSplitView view : ownerSplitViews()) {
+                if (!(governor.decide(view) instanceof Skip skip)
+                        || skip.reason() != OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED) {
+                    continue;
+                }
+                OwnerSplitGateInputs inputs = skip.gateInputs();
+                if (inputs.est() > (double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * PAGE
+                        && Math.min(1.0, inputs.densityRatio()) <= inputs.farAheadFraction()) {
+                    structuralZeroes.add(inputs);
+                }
+            }
+            assertThat(structuralZeroes)
+                    .as("%s: a large estimate blocked by a zero reachable tail", arm)
+                    .isNotEmpty();
+        }
+    }
+
+    /**
+     * <b>Which sensor a run's decisions were taken through, out of the run's own counters.</b> Both
+     * routes are the engine's own policy objects now, so what the counters state is which sensor was
+     * installed through their seam: a run that quietly left the seam unsteered under a variant's name
+     * would produce a whole race table of the incumbent measured twice. The route is instrumented like
+     * every other algo path here (AGENTS.md), so the check is a counter read rather than a reflection
+     * over fields.
+     */
+    @Test
+    void aRunsCountersNameTheSensorItsDecisionsWereTakenThrough() {
         ListingFixtureStore store = new ListingFixtureStore(KeyspaceFixtures.denseFlatLeaf(2_000));
         PolicyScenario scenario = PolicyRunFixtures.scenario(4, PAGE, PolicyRunFixtures.REMOTE_LATENCY,
                 PolicyRunFixtures.measuredCost());
@@ -114,11 +175,21 @@ class SensingVariantParityTest {
                 scenario.withClientCost(PolicyRunFixtures.measuredCost()), store,
                 "in-memory dense flat leaf", SensingVariant.RATE_CURSOR_ANCHORED);
 
-        assertThat(route(shipped)).as("the shipped sensor steers on the engine's own pair")
+        assertThat(route(shipped)).as("the shipped sensor leaves both seams unsteered")
                 .containsExactly(SimExecutor.OWNER_SPLIT_ROUTE_SHIPPED, SimExecutor.THIEF_ROUTE_SHIPPED);
-        assertThat(route(variant)).as("a variant steers on both mirrors, not one of them")
+        assertThat(route(variant)).as("a variant steers both seams, not one of them")
                 .containsExactly(SimExecutor.OWNER_SPLIT_ROUTE_ESTIMATOR,
                         SimExecutor.THIEF_ROUTE_ESTIMATOR);
+    }
+
+    /** The engine's governor with {@code arm}'s sensor installed through its seam. */
+    private static OwnerSplitPolicy governor(SensingVariant arm) {
+        return new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, arm.estimator(PAGE));
+    }
+
+    /** The engine's thief with {@code arm}'s sensor installed through its seam. */
+    private static StealPolicy thief(SensingVariant arm) {
+        return new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, arm.estimator(PAGE));
     }
 
     /** The routes {@code result} counted, in name order — one counter per route, once per run. */
@@ -141,6 +212,12 @@ class SensingVariantParityTest {
                 .isEqualTo(expected.engagements());
         assertThat(actual.mutations()).as("mutations for %s", describe(view))
                 .isEqualTo(expected.mutations());
+        assertThat(actual.gateInputs()).as("gate inputs for %s", describe(view))
+                .isEqualTo(expected.gateInputs());
+        if (expected instanceof Skip skip) {
+            assertThat(((Skip) actual).reason()).as("skip reason for %s", describe(view))
+                    .isEqualTo(skip.reason());
+        }
         if (expected instanceof Carve carve) {
             // Carve's generated equals compares the pivot array by reference, so the bytes are compared
             // here instead -- the whole point of this test is that they are the same bytes.
@@ -240,8 +317,7 @@ class SensingVariantParityTest {
      * <ul>
      *   <li><b>the suppression threshold</b> — 2/16 = 0.125 and 15/16 = 0.9375 straddle it loosely;
      *       <b>8/16 = 0.5 (which must NOT suppress, the comparison being strict) and 9/16 = 0.5625
-     *       (which must)</b> straddle it tightly. Between them, any engine threshold outside
-     *       {@code [0.5, 0.5625)} makes one of these two decide differently here than there.</li>
+     *       (which must)</b> straddle it tightly.</li>
      *   <li><b>the probe period</b> — {@code probeSeq} 15 probes at a period of sixteen and suppresses
      *       at thirty-two, so a doubling is caught; {@code probeSeq} 7 suppresses at sixteen and
      *       probes at eight, so a halving is caught. The old battery had neither: 3 and 15 alone
@@ -263,9 +339,7 @@ class SensingVariantParityTest {
      * One (observed density ratio, observed alphabet) pair the gate battery is run under: the neutral
      * default, a <b>thinning</b> density whose ratio below 1 shrinks the reachable child tail the
      * observed-mass floor and both reflection decisions read, and an <b>observed alphabet</b>, which
-     * is what sends pivot synthesis down its alphabet-aware branch instead of its fallback. Both sides
-     * call the same {@code StealMath} for these, so this is coverage of the mirrored chain rather than
-     * a suspected divergence.
+     * is what sends pivot synthesis down its alphabet-aware branch instead of its fallback.
      */
     private record PivotShape(double observedDensityRatio, AlphabetDigest.Snapshot alphabet) {
     }
