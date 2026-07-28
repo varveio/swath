@@ -576,9 +576,10 @@ NON-partition cut.
 Maximum-performance recipe (readahead on top of the now-default `mass_aware_seed`):
 `swath list s3://BUCKET ... --tune engine.readahead=on`
 
-Cost notes: neither of the two performance toggles has an unbounded call-amplification mechanism — readahead
-speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
-and mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes).
+Cost notes: none of the three performance toggles has an unbounded direct call-amplification mechanism —
+readahead speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
+mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes), and
+rate-anchored sensing is local estimate arithmetic.
 The api multipliers only cost money on requester-pays/private buckets (public-bucket LIST
 is free); the RSS cost is real everywhere. Each of the three announces itself via a once-per-run
 `TOGGLE.<name>_on` engagement mark, so a run's summary always shows what was enabled.

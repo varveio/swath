@@ -696,7 +696,7 @@ estRemaining(w):
   `[lo, hi]`'s. The band is what keeps geometry an adjustment rather than the estimate: a
   factor below one asserts that less remains than has already come out, which is what
   refused a straggler's owner-side carve at the remaining-work floor until it had emitted
-  64 pages — the quarter floor puts that boundary at 16 pages, and is the rung the sweep
+  16 pages — the quarter floor puts that boundary at 16 pages, and is the rung the sweep
   promoted. Both bounds stay exact: an open frontier still scores `+infinity` and a cursor
   at its bound still scores `0`. **This changes which range is stolen from and when an
   owner carves, so it is an A/B arm and not a default**; a run on it marks itself

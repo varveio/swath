@@ -178,8 +178,8 @@ class SensingEstimatorTest {
     /**
      * <b>The promoted arm reads exactly what the engine reads.</b> {@code RATE_ANCHORED_FLOOR_QUARTER}
      * is the arm the corpus race promoted, and the composition it is made of now lives in the engine
-     * ({@code io.varve.swath.engine.RateAnchoredArm}) with this arm delegating to it. Every value
-     * below is pinned digit for digit in swath-core's own {@code RateAnchoredArmTest}, and both
+     * ({@code io.varve.swath.engine.RateAnchoredEstimator}) with this arm delegating to it. Every value
+     * below is pinned digit for digit in swath-core's own {@code RateAnchoredEstimatorTest}, and both
      * sides were green on these numbers before the delegation existed — so a port that drifted from
      * the implementation this race measured fails here, on the arm, rather than quietly becoming a
      * different algorithm with the same race table attached to it.
