@@ -116,8 +116,8 @@ which on a 300 MB fixture would cost as much as the run:
 
 | Tier | Unsorted input |
 |---|---|
-| `STREAMING` | **Hard fail** on the first violation in any row group a run faults in, naming file, row group and row (`KeyBlock` on the way in, context added by the tier). |
-| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedRowGroupReader.KeyCursor`). Its plain range reads go through a DuckDB query that sorts what it returns, so intra-group disorder shows up there as a **short page**, not an out-of-order one. |
+| `STREAMING` | **Hard fail** on the first violation in any row group a run faults in, naming file, row group and the offending key's position within that group — the message spells it `key N`, the position the block counted (`KeyBlock` on the way in, file and row group added by the tier). |
+| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedRowGroupReader.KeyCursor`). Its plain range reads are **not** guarded, and what they do is worse than a short page — see below. |
 | `ARENA` | Loaded through the Parquet store, whose reads are `ORDER BY key`: disorder is normalised on the way in and only a **duplicate** key trips the arena's check. |
 | `PARQUET` | Not checked, by design — that store exists to serve arbitrary unsorted captures and re-sorts at query time. |
 
@@ -130,6 +130,16 @@ read the *why* mechanically: the failure is an `io.varve.swath.sort.RowGroupOrde
 into the metrics of a run that ended in an exception. Nothing downstream has to match a message. (The
 replay server raises the same typed failure from its own skip-scan and counts it as
 `swath.replay.serving.refused{reason}`; see `docs/swath-replay-server.md`.)
+
+**What `WINDOWED`'s unguarded range reads actually do is lose keys, silently.** They are routed off
+the derived index, which describes an order the file does not have, so on a multi-file fixture the
+plan for a range can leave out the file a misplaced in-range key physically sits in — and then that
+key is never read at all. Nothing is short and nothing is out of order: the client walks to a clean,
+**un-truncated** end of listing missing a key it was entitled to. Worse, a whole-listing read can
+find the key anyway (its plan spans every file), so the loss appears only once a cursor *starts*
+above the misplaced key's own file — which is every steal and every split a simulated run performs.
+`UnsortedFixtureGuardTest` asserts both halves, the refusal and the loss, so the masked behaviour is
+a pinned fact rather than a claim in prose.
 
 **Why `WINDOWED` is forced-only.** It decodes Parquet *inside* the serving loop: every window
 refill is a bounded range query, and because the `key` column is a `BLOB` with no usable zonemaps
@@ -488,7 +498,22 @@ location**, and with the property unset the run skips itself. One store handle (
 `AUTO`, with the arena budget at a third of the heap) serves every leg, because opening a
 multi-million-key fixture costs more than the runs do. Nothing there asserts a magnitude — a
 threshold invented against a real bucket's numbers would be a threshold fitted to them — but every
-leg must complete and every leg must emit the same key count as the first.
+leg must complete and every leg must emit **the fixture's own key total**, which the resolved tier
+reports (`SimStoreFactory.Result#keyCount`); only under `PARQUET`, which cannot supply one without a
+scan, does it fall back to comparing the legs with each other, and it says which check it used. The
+per-leg `heap_peak_mb` column is the heap high-water mark **during that leg** (pool peak usage, reset
+between legs) — an upper bound on what the leg held, not its live set. It necessarily includes the one
+shared store handle, which is held across every leg: on an `ARENA` resolution that is nearly all of
+it and the column reads flat, and it is on `STREAMING` — whose decoded segments are off-heap and so
+absent from this figure — that the number is mostly the run's own.
+
+**Which tier `AUTO` lands on depends on the heap this invocation was given** — including the heap the
+line above raises. The arena budget is a third of `-Xmx`, so `-PsimTestHeap=6g` gives it ~2 GB and a
+listing whose encoded keys fit that is served by `ARENA`, **not** `STREAMING`. That matters beyond
+speed: `ARENA` and `PARQUET` are the order-masked tiers (they serve the fixture in an order they
+imposed), so a run on either proves nothing about whether the capture is in order. The harness prints
+a `WARNING` line next to the resolved backend when it lands on one. To exercise the guarded tier,
+give the run a smaller heap so the arena declines by budget.
 
 ### Keyspace shapes, generated
 

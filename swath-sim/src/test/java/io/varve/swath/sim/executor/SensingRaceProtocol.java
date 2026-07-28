@@ -263,15 +263,25 @@ final class SensingRaceProtocol {
                         .withSeed(seed),
                 store, "in-memory " + keyspace, variant);
         String leg = variant + "/" + keyspace + "/" + seed + "/page " + pageSize;
-        if (!result.completed()) {
-            throw new AssertionError("leg " + leg + " did not complete:" + System.lineSeparator()
-                    + result.describe());
-        }
+        requireCompleted(result, leg);
         if (result.keysEmitted() != store.size()) {
             throw new AssertionError("leg " + leg + " emitted " + result.keysEmitted() + " of "
                     + store.size() + " keys");
         }
         return new Leg(label(variant), keyspace, seed, pageSize, result);
+    }
+
+    /**
+     * The one thing every row of every table here must be true of: the leg finished. Raised as an
+     * {@link AssertionError} carrying the run's own diagnosis, since a leg that stalled is unusable as
+     * a measurement and the stall is the finding. Shared with the real-listing harness, which reports
+     * the same columns and needs the same failure.
+     */
+    static void requireCompleted(PolicyRunResult result, String leg) {
+        if (!result.completed()) {
+            throw new AssertionError("leg " + leg + " did not complete:" + System.lineSeparator()
+                    + result.describe());
+        }
     }
 
     /**

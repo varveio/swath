@@ -8,7 +8,13 @@ package io.varve.swath.sim.store;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.ListedObject;
+import io.varve.swath.replay.protocol.S3ListRequest;
+import io.varve.swath.replay.protocol.S3ListResult;
+import io.varve.swath.replay.protocol.S3ResultEntry;
+import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import io.varve.swath.replay.testkit.ObjectEntries;
@@ -23,6 +29,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,6 +52,9 @@ import org.junit.jupiter.api.io.TempDir;
  * behaviour.
  */
 class UnsortedFixtureGuardTest {
+
+    /** A finite upper bound past every plain-ASCII key here — the skip-scan declines an open one. */
+    private static final ByteKey PAST_EVERY_KEY = ByteKey.copyOf(new byte[] {(byte) 0xFF});
 
     @TempDir
     private Path dir;
@@ -170,6 +180,117 @@ class UnsortedFixtureGuardTest {
         assertThatThrownBy(() -> SimStoreFactory.open(fixture, SimStoreBackend.STREAMING))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sorted-eligible");
+    }
+
+    /**
+     * The windowed tier's <b>guarded</b> half. Its {@code delimiter=/} skip-scan reads the fixture in
+     * its physical order through {@code SortedRowGroupReader.KeyCursor}, so it sees the disorder and
+     * refuses — with the same typed reason the streaming tier raises, counted on the replay module's
+     * side of the seam because that is the store doing the reading. The simulator reaches this path on
+     * every structure probe a split issues, so it is not an exotic corner of the tier.
+     */
+    @Test
+    void theWindowedTiersDelimiterPathRefusesADisorderedRowGroup() throws IOException {
+        Path fixture = disorderedTwoFileFixture("windowed-rollup");
+
+        SimStoreFactory.Result result = SimStoreFactory.open(fixture, SimStoreBackend.WINDOWED);
+        try (ListingStore store = result.store()) {
+            assertThatThrownBy(() -> store.delimitedRollup(null, true, PAST_EVERY_KEY, new byte[0],
+                    new byte[] {'/'}, 1000, Projection.KEYS_ONLY))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class,
+                            e -> assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER))
+                    .hasMessageContaining("strictly ascending");
+        }
+        assertThat(result.metrics().registry().find("swath.replay.serving.refused")
+                .tag("reason", RowGroupOrderException.ROW_GROUP_DISORDER).counter().count()).isEqualTo(1);
+    }
+
+    /**
+     * The windowed tier's <b>masked</b> half, pinned rather than described — and it is worse than the
+     * "short page" it is easy to assume. Its plain range reads are routed off the derived index, which
+     * describes an order the file does not have: the plan for a range starting mid-keyspace leaves out
+     * the file an in-range key physically sits in, so the key is never read at all. Nothing is short
+     * and nothing is out of order; the client walks to a clean, un-truncated end of listing and is
+     * simply missing a key.
+     *
+     * <p>A walk from the very beginning happens to find {@code z/9}, because its plan spans every file
+     * anyway — which is the trap: the loss is not visible in the whole-listing read that a smoke test
+     * would do. It is visible the moment a cursor <em>starts</em> above the misplaced key's own file,
+     * i.e. on every steal and every split the simulator performs.
+     *
+     * <p>This test asserts the wrong answer on purpose. It is the reason the sim's own tier
+     * ({@code STREAMING}) reads in physical order and refuses, and part of the reason the windowed
+     * tier is forced-only: if this behaviour ever changes, the change is a fix, and this is where it
+     * is noticed.
+     */
+    @Test
+    void theWindowedTiersRangeReadsSilentlyLoseKeysRatherThanShorteningAPage() throws IOException {
+        Path fixture = disorderedTwoFileFixture("windowed-range");
+
+        SimStoreFactory.Result whole = SimStoreFactory.open(fixture, SimStoreBackend.WINDOWED);
+        try (ListingStore store = whole.store()) {
+            assertThat(walk(store, null)).containsExactly("a/1", "a/2", "aa/9", "b/1", "b/2", "z/9");
+        }
+
+        // The same fixture, read by a cursor that starts where a steal or a split would put it.
+        SimStoreFactory.Result resumed = SimStoreFactory.open(fixture, SimStoreBackend.WINDOWED);
+        try (ListingStore store = resumed.store()) {
+            assertThat(walk(store, "b/1".getBytes(StandardCharsets.UTF_8)))
+                    .as("z/9 is above b/1 and in the fixture, and this walk never sees it")
+                    .containsExactly("b/2");
+        }
+        assertThat(resumed.metrics().registry().find("swath.replay.serving.refused").counter()).isNull();
+    }
+
+    /**
+     * Every key a paginating client sees walking from {@code startAfter} to the end of the listing —
+     * driven through {@link ListObjectsV2Pager}, the same pager the simulator's own view drives, so the
+     * truncation the client would act on is the one being observed. Ends only on an un-truncated page.
+     */
+    private static List<String> walk(ListingStore store, byte[] startAfter) {
+        ListObjectsV2Pager pager = new ListObjectsV2Pager(store, new ReplayMetrics());
+        List<String> walked = new ArrayList<>();
+        byte[] cursor = startAfter;
+        boolean truncated;
+        do {
+            S3ListResult page = pager.list(new S3ListRequest("sim", new byte[0], null, cursor,
+                    null, 2, false, false));
+            for (S3ResultEntry entry : page.entries()) {
+                walked.add(new String(entry.key(), StandardCharsets.UTF_8));
+                cursor = entry.key();
+            }
+            truncated = page.truncated();
+        } while (truncated);
+        return walked;
+    }
+
+    /**
+     * A stamped, complete, <b>two-file</b> fixture that passes sorted eligibility and is disordered
+     * inside the first file's only row group. Eligibility reads each row group's first key and proves
+     * <em>those</em> ascend ({@code a/1} then {@code b/1}); it never reads the rest, so neither the
+     * inversion at {@code a/2} nor {@code z/9} — physically the last row of the first file, above
+     * every key of the second — is visible to it. Written straight through
+     * {@link SortedParquetWriter} because the sorter cannot produce this; what it stands in for is a
+     * listing published by some other producer and stamped sorted.
+     */
+    private Path disorderedTwoFileFixture(String name) throws IOException {
+        Path out = Files.createDirectory(dir.resolve(name));
+        writeStamped(out.resolve("part-00001.parquet"), 1, false, List.of("a/1", "aa/9", "a/2", "z/9"));
+        writeStamped(out.resolve("part-00002.parquet"), 2, true, List.of("b/1", "b/2"));
+        return out;
+    }
+
+    private static void writeStamped(Path file, int fileIndex, boolean last, List<String> keys)
+            throws IOException {
+        try (SortedFileWriter writer = new SortedParquetWriter(file, SortConfigs.base(),
+                SortMode.OBJECTS, fileIndex)) {
+            if (last) {
+                writer.markFinal();
+            }
+            for (String key : keys) {
+                writer.write(ObjectEntries.bare(key));
+            }
+        }
     }
 
     /** A stamped, complete, single-row-group fixture holding {@code keys} in exactly the order given. */

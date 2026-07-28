@@ -51,8 +51,11 @@ import org.apache.parquet.schema.Type;
  * streaming tier packs each faulted group into an in-memory key block) wants neither the cursor's
  * resumability nor its per-step comparison, and reads the key column through parquet's column API
  * directly rather than through record assembly — measured at ~10.5M keys/s against ~6.5M for the same
- * group drained a step at a time through {@link KeyCursor}. The two never disagree, which
- * {@code SortedRowGroupReaderTest} pins directly rather than leaving to inspection.
+ * group drained a step at a time through {@link KeyCursor}. <b>Both figures were taken before the
+ * cursor's ascent check existed</b>, so the cursor's is now an over-statement by one unsigned compare
+ * per row; the gap the two numbers are quoted for is only wider, and neither has been re-measured
+ * since. The two tiers never disagree on what they read, which {@code SortedRowGroupReaderTest} pins
+ * directly rather than leaving to inspection.
  *
  * <p>Every method here traffics only in {@code byte[]}/{@code long}/{@code String}/collections. That
  * is the whole point of putting this class in {@code swath-core}: {@code io.varve.swath.replay}'s

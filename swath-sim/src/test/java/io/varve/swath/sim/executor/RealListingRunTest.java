@@ -14,6 +14,10 @@ import io.varve.swath.sim.model.LatencyModel;
 import io.varve.swath.sim.store.SimStoreBackend;
 import io.varve.swath.sim.store.SimStoreConfig;
 import io.varve.swath.sim.store.SimStoreFactory;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
+import java.lang.management.MemoryUsage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -79,20 +83,35 @@ class RealListingRunTest {
      * result is comparable with the synthetic benches by default; set it to the concurrency the
      * listing's own capture ran at when the question is why <em>that</em> run behaved as it did, since
      * how hard a keyspace is to divide is a statement about a fleet size, not about the bucket alone.
+     *
+     * <p>Parsed strictly (see {@link #intProperty}): a typo must not silently produce a run at eight
+     * workers labelled as whatever the operator meant.
      */
     static final String WORKERS_PROPERTY = "swath.sim.listing.workers";
 
     /**
-     * System property choosing which of the protocol's seeds the traced leg re-runs. Defaults to the
-     * first, and exists because the seed worth tracing is whichever one the table above misbehaved at
-     * — a run that collapses at one seed and not another is asking exactly the question the trace
-     * answers, and tracing every seed would retain a trace per run for no reason.
+     * System property choosing which of {@link SensingRaceProtocol#SEEDS} the traced leg re-runs.
+     * Defaults to the first, and exists because the seed worth tracing is whichever one the table above
+     * misbehaved at — a run that collapses at one seed and not another is asking exactly the question
+     * the trace answers, and tracing every seed would retain a trace per run for no reason.
+     *
+     * <p>It must name one of those seeds, and is rejected otherwise: the trace exists to explain a row
+     * of the table above, and a seed that produced no such row explains nothing.
      */
     static final String TRACE_SEED_PROPERTY = "swath.sim.listing.trace-seed";
 
     /** The variants raced on this fixture: the shipped sensor, and the two the sensing race left standing. */
     private static final List<SensingVariant> VARIANTS = List.of(
             SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED);
+
+    /**
+     * The tiers that serve a fixture in an order they imposed rather than the order it holds, so a
+     * disordered capture is simulated as if it were a real bucket's key order: the arena reads through
+     * a store whose queries are {@code ORDER BY key}, and the Parquet tier re-sorts at query time.
+     * Documented on {@code SimStoreFactory}; named here because {@code AUTO} can land on either.
+     */
+    private static final List<SimStoreBackend> ORDER_MASKED_BACKENDS =
+            List.of(SimStoreBackend.ARENA, SimStoreBackend.PARQUET);
 
     private static int workers;
     private static long traceSeed;
@@ -108,8 +127,8 @@ class RealListingRunTest {
                 "-D" + FIXTURE_PROPERTY + " is unset; no real listing to run");
         fixture = Path.of(configured);
         assertThat(Files.exists(fixture)).as("fixture at %s", fixture).isTrue();
-        workers = Integer.getInteger(WORKERS_PROPERTY, SensingRaceProtocol.WORKERS);
-        traceSeed = Long.getLong(TRACE_SEED_PROPERTY, SensingRaceProtocol.SEEDS[0]);
+        workers = intProperty(WORKERS_PROPERTY, SensingRaceProtocol.WORKERS);
+        traceSeed = traceSeedProperty();
 
         // A third of the heap, not the whole of it: an arena sized to the heap OOMs before its own
         // budget check can decline, and declining is the outcome a giant listing is supposed to have.
@@ -122,9 +141,22 @@ class RealListingRunTest {
         storeLabel = "real listing fixture (" + opened.resolvedBackend() + ")";
         System.out.printf(Locale.ROOT,
                 "real_listing phase=open backend=%s open_ms=%d arena_budget_mb=%d heap_used_mb=%.1f "
-                        + "workers=%d%n",
+                        + "workers=%d fixture_keys=%s%n",
                 opened.resolvedBackend(), open.toMillis(), config.arenaMaxEncodedBytes() >> 20, heapUsedMb(),
-                workers);
+                workers, opened.keyCount().isPresent() ? opened.keyCount().getAsLong() : "unknown");
+        // Which tier AUTO picked is a function of the arena budget, i.e. of the heap this JVM was
+        // given -- and the harness's own documented invocation raises it (-PsimTestHeap). A run at a
+        // big enough heap therefore lands on the arena, which normalises key order on the way in: a
+        // disordered capture would be simulated here as if it were the bucket's real order, which is
+        // the one thing these numbers must not quietly be.
+        if (ORDER_MASKED_BACKENDS.contains(opened.resolvedBackend())) {
+            System.out.printf(Locale.ROOT,
+                    "real_listing phase=open WARNING backend=%s masks key disorder (it serves the "
+                            + "fixture in an order it imposed, not the order the file holds), so these "
+                            + "numbers do not prove the capture is in order — run at a smaller heap to "
+                            + "put the arena over budget and land on %s, whose decode is guarded%n",
+                    opened.resolvedBackend(), SimStoreBackend.STREAMING);
+        }
     }
 
     @AfterAll
@@ -161,14 +193,23 @@ class RealListingRunTest {
         printCosts(costs);
         System.out.println(measured.getFirst().result().describe());
 
+        // The fixture's own total where the resolved tier knows it, so "emitted every key" is checked
+        // against the bucket rather than against the other legs: a systematic loss — the shape a
+        // routing or pagination bug takes — is identical in every leg and passes a cross-leg
+        // comparison unnoticed. Only the Parquet tier cannot supply one, and then the weaker check is
+        // the honest one and says which it used.
         long keys = measured.getFirst().result().keysEmitted();
         assertThat(keys).as("the fixture served keys at all").isPositive();
+        long expected = opened.keyCount().orElse(keys);
+        String against = opened.keyCount().isPresent()
+                ? "the fixture's own key total" : "the first leg (backend supplies no key total)";
         for (SensingRaceProtocol.Leg leg : measured) {
             assertThat(leg.result().keysEmitted())
-                    .as("%s at seed %d emitted every key", leg.variant(), leg.seed()).isEqualTo(keys);
+                    .as("%s at seed %d emitted every key, against %s", leg.variant(), leg.seed(), against)
+                    .isEqualTo(expected);
         }
         assertThat(bench.getFirst().result().keysEmitted())
-                .as("the bench-regime leg emitted every key").isEqualTo(keys);
+                .as("the bench-regime leg emitted every key, against %s", against).isEqualTo(expected);
     }
 
     /**
@@ -195,6 +236,14 @@ class RealListingRunTest {
         assertThat(result.completed()).as("the traced leg completed").isTrue();
 
         List<byte[]> tailKeys = committedKeysAfter(result, result.timeline().lastSplitNanos());
+        // Couples this leg's detail-string parser to the emitter: a change to the page.commit detail
+        // format would otherwise leave every line below silently unprinted and the leg still green,
+        // which is a no-op test wearing a diagnosis's name. The timeline counts the tail's keys
+        // independently of the trace, so it is the witness that there was something to parse.
+        if (result.timeline().keysInTail() > 0) {
+            assertThat(tailKeys).as("the trace's page.commit entries carry the tail's key endpoints")
+                    .isNotEmpty();
+        }
         System.out.printf(Locale.ROOT,
                 "real_listing phase=tail page=%d seed=%d tail_fraction=%.4f serial_fraction=%.4f "
                         + "keys_in_tail=%d traced_pages_in_tail=%d%n",
@@ -239,38 +288,56 @@ class RealListingRunTest {
         return printable(key);
     }
 
-    /** One leg, and the run cost it took to produce — the two things a sweep is sized from. */
+    /**
+     * One leg, and the run cost it took to produce — the two things a sweep is sized from.
+     *
+     * <p>The heap figure is taken <b>per leg, here</b>, between resetting the heap pools' peak-usage
+     * marks and reading them back: a number read once at print time after every leg has finished is
+     * the same number thirteen times, and says nothing about any of them.
+     */
     private static SensingRaceProtocol.Leg runLeg(SensingVariant variant, long seed, int pageSize,
                                                   LatencyModel latency, List<Cost> costs) {
         PolicyScenario scenario = PolicyRunFixtures
                 .scenario(workers, pageSize, latency, PolicyRunFixtures.measuredCost())
                 .withSeed(seed);
+        resetHeapPeaks();
         Instant startedAt = Instant.now();
         PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, variant);
         Duration wall = Duration.between(startedAt, Instant.now());
+        double heapPeakMb = heapPeakMb();
         String label = SensingRaceProtocol.label(variant);
-        if (!result.completed()) {
-            throw new AssertionError("leg " + label + "/seed " + seed + "/page " + pageSize
-                    + " did not complete:" + System.lineSeparator() + result.describe());
-        }
-        costs.add(new Cost(label, seed, pageSize, wall, result));
+        SensingRaceProtocol.requireCompleted(result, label + "/seed " + seed + "/page " + pageSize);
+        costs.add(new Cost(label, seed, pageSize, wall, heapPeakMb, result));
         return new SensingRaceProtocol.Leg(label, "real-listing", seed, pageSize, result);
     }
 
-    /** What one leg cost to produce, as opposed to what it found. */
-    private record Cost(String variant, long seed, int pageSize, Duration wall, PolicyRunResult result) {
+    /**
+     * What one leg cost to produce, as opposed to what it found. {@code heapPeakMb} is the high-water
+     * mark of heap <em>allocated and not yet collected</em> during that leg, not its live set — so it
+     * is an upper bound on what the leg needed to hold, and it moves with GC timing as well as with
+     * the run.
+     *
+     * <p>Two things it necessarily includes, because they are on the heap while the leg runs: the one
+     * shared store handle, opened before any leg and held across all of them, and whatever the
+     * previous leg left uncollected. On an {@code ARENA} resolution the store is the whole of it — the
+     * arena's key column dwarfs a leg's own allocation and the column reads nearly flat. It is the
+     * {@code STREAMING} resolution, whose decoded segments are <b>off-heap</b> and absent from this
+     * figure, where the number is mostly the run's.
+     */
+    private record Cost(String variant, long seed, int pageSize, Duration wall, double heapPeakMb,
+                        PolicyRunResult result) {
 
         String row() {
-            return String.format(Locale.ROOT, "%-14s %-10d %5d  %8d %9d %9d %9d %10.1f",
+            return String.format(Locale.ROOT, "%-14s %-10d %5d  %8d %9d %9d %9d %13.1f",
                     variant, seed, pageSize, wall.toMillis(), result.run().eventsProcessed(),
-                    result.storeCalls(), result.storeReads(), heapUsedMb());
+                    result.storeCalls(), result.storeReads(), heapPeakMb);
         }
     }
 
     private static void printCosts(List<Cost> costs) {
         StringBuilder out = new StringBuilder("real listing — run cost").append(System.lineSeparator());
-        out.append(String.format(Locale.ROOT, "%-14s %-10s %5s  %8s %9s %9s %9s %10s",
-                "variant", "seed", "page", "wall_ms", "events", "calls", "reads", "heap_mb"))
+        out.append(String.format(Locale.ROOT, "%-14s %-10s %5s  %8s %9s %9s %9s %13s",
+                "variant", "seed", "page", "wall_ms", "events", "calls", "reads", "heap_peak_mb"))
                 .append(System.lineSeparator());
         for (Cost cost : costs) {
             out.append(cost.row()).append(System.lineSeparator());
@@ -279,9 +346,15 @@ class RealListingRunTest {
     }
 
     /**
-     * Every key interval committed strictly after {@code fromNanos}, flattened to its endpoints. The
+     * Every key interval committed at or after {@code fromNanos}, flattened to its endpoints. The
      * trace carries each committed page's own {@code from}/{@code to} keys precisely so a reader can
      * see which part of the keyspace a phase covered; nothing else in a run record can answer that.
+     *
+     * <p>The endpoints are not all keys the run emitted: a {@code from} is a real key the page started
+     * at, but a {@code to} is a cursor target, which for the last page of a range is the range's own
+     * upper bound and so may be a synthetic successor rather than anything the bucket holds. That is
+     * the right input for "where in the keyspace was the tail" — the question this feeds — and the
+     * wrong one for counting keys.
      */
     private static List<byte[]> committedKeysAfter(PolicyRunResult result, long fromNanos) {
         List<byte[]> keys = new ArrayList<>();
@@ -324,10 +397,76 @@ class RealListingRunTest {
         return out.toString();
     }
 
-    /** Live heap after a collection — the on-heap half of "what did this run cost to hold". */
+    /**
+     * Live heap after a collection — the on-heap half of "what did the fixture cost to hold". Called
+     * once, at open, where a single forced collection buys a figure worth having; the per-leg column
+     * uses {@link #heapPeakMb()} instead, which needs no collection at all.
+     */
     private static double heapUsedMb() {
         System.gc();
         Runtime runtime = Runtime.getRuntime();
         return (runtime.totalMemory() - runtime.freeMemory()) / (double) (1 << 20);
+    }
+
+    /** The heap pools, whose peak-usage marks are per-leg resettable — unlike {@link Runtime}'s totals. */
+    private static List<MemoryPoolMXBean> heapPools() {
+        return ManagementFactory.getMemoryPoolMXBeans().stream()
+                .filter(pool -> pool.getType() == MemoryType.HEAP)
+                .toList();
+    }
+
+    /** Drops every heap pool's peak mark, so the next read measures one leg and not the run so far. */
+    private static void resetHeapPeaks() {
+        heapPools().forEach(MemoryPoolMXBean::resetPeakUsage);
+    }
+
+    /** The heap high-water mark since the last {@link #resetHeapPeaks()} — see {@link Cost}. */
+    private static double heapPeakMb() {
+        long peak = 0;
+        for (MemoryPoolMXBean pool : heapPools()) {
+            MemoryUsage usage = pool.getPeakUsage();
+            if (usage != null) {
+                peak += usage.getUsed();
+            }
+        }
+        return peak / (double) (1 << 20);
+    }
+
+    /**
+     * {@code name}'s value as an {@code int}, or {@code fallback} when unset. Parsed explicitly rather
+     * than through {@link Integer#getInteger}, which answers a malformed value with the default — a
+     * run at eight workers reported as a run at whatever was typed — and reads a leading {@code 0} as
+     * octal.
+     */
+    private static int intProperty(String name, int fallback) {
+        String raw = System.getProperty(name);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("-D" + name + " must be a decimal integer, got: " + raw, e);
+        }
+    }
+
+    /** {@link #TRACE_SEED_PROPERTY}, checked against the protocol's own seeds — see its javadoc. */
+    private static long traceSeedProperty() {
+        String raw = System.getProperty(TRACE_SEED_PROPERTY);
+        if (raw == null || raw.isBlank()) {
+            return SensingRaceProtocol.SEEDS[0];
+        }
+        long seed;
+        try {
+            seed = Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("-D" + TRACE_SEED_PROPERTY
+                    + " must be one of " + Arrays.toString(SensingRaceProtocol.SEEDS) + ", got: " + raw, e);
+        }
+        if (Arrays.stream(SensingRaceProtocol.SEEDS).noneMatch(s -> s == seed)) {
+            throw new IllegalArgumentException("-D" + TRACE_SEED_PROPERTY + " must be one of "
+                    + Arrays.toString(SensingRaceProtocol.SEEDS) + ", got: " + seed);
+        }
+        return seed;
     }
 }
