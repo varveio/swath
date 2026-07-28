@@ -433,4 +433,102 @@ class SensingRaceTest {
                         candidate)
                 .isGreaterThanOrEqualTo(3);
     }
+
+    /**
+     * <b>{@code GeometryFloorSweepProtocol}'s F4, for the best interior floor the sweep found</b> — the
+     * quarter, the only floor that holds all four of the roster's cures while returning the larger of
+     * its two regressions to its incumbent's own reading. It is held to exactly what the lift-only end
+     * is held to above, on the same three fixtures at the same regimes and against the same baselines,
+     * because a floor that bought its behaviour on the roster by spending the bench's cure or either
+     * healthy shape would be no better than the end it replaces.
+     *
+     * <p>This is a reading on a candidate that <b>did not pass its round</b>: the sweep's deciding
+     * question needed both regressions returned and this floor returns one. It is taken anyway because
+     * the floor is what a later frame-conditioned candidate would sit on top of, and a guard reading
+     * gathered now is one that round does not have to re-derive.
+     *
+     * <p><b>It inherits the lift-only end's split, and deepens it.</b> The hash-fanned guard's extra
+     * tail line — the {@code < 0.05} the two anchored candidates hold at four seeds of four — this
+     * floor misses at the same one seed of four, at <b>0.0651</b> against the lift-only end's 0.0510,
+     * the combination's 0.0324 and the control's 0.0092, all at seed 987654321. Everything else that
+     * guard is held to holds at all four, including that seed's serial fraction at 0.0370 against the
+     * {@code < 0.05} line. So the tail reading is <b>not</b> something the floor buys back from the end
+     * it descends from: on this guard the ladder's two upper rungs behave alike and the interior floor
+     * is the worse of them. Asserted as the split as measured — three seeds clear — rather than as a
+     * line moved to fit it.
+     *
+     * <p>Its own seed's third reading is stated for the same reason it was on the end above: at
+     * 987654321 the NO_VICTIM share is <b>0.5843</b>, above both the 0.5 worst-seed reading this
+     * campaign counted against E1 on this fixture and the end's own 0.4720. Not asserted — the guard
+     * set is the protocol's — but a promotion decision has to be taken with it in front of it.
+     */
+    @Test
+    void theBestInteriorFloorKeepsTheBenchCureAndBothGuards() {
+        SensingVariant[] arms = {SensingVariant.CURRENT, SensingVariant.RATE_CURSOR_ANCHORED,
+            SensingVariant.RATE_ANCHORED_FLOOR_QUARTER};
+        SensingVariant candidate = SensingVariant.RATE_ANCHORED_FLOOR_QUARTER;
+        List<SensingRaceProtocol.Leg> bench = SensingRaceProtocol.raceOn("leaf-conc",
+                SensingRaceProtocol.bench(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> hashFanned = SensingRaceProtocol.raceOn("hash-fanned",
+                SensingRaceProtocol.hashFannedGuard(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> uniform = SensingRaceProtocol.raceOn("uniform",
+                SensingRaceProtocol.uniformGuard(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> measured = SensingRaceProtocol.raceOn("leaf-conc",
+                SensingRaceProtocol.bench(), PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
+                PolicyRunFixtures.MEASURED_TAIL_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> legs = new ArrayList<>(bench);
+        legs.addAll(hashFanned);
+        legs.addAll(uniform);
+        SensingRaceProtocol.printTable("== interior floor: bench and guards at a 100-key page", legs);
+        SensingRaceProtocol.printTable("== interior floor: the bench at the measured 1000-key page",
+                measured);
+
+        int hashFannedTailsClear = 0;
+        for (long seed : SensingRaceProtocol.SEEDS) {
+            SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(bench, candidate, seed);
+            SensingRaceProtocol.Leg control = SensingRaceProtocol.at(bench, SensingVariant.CURRENT, seed);
+            String at = candidate + " on the bench at seed " + seed;
+            assertThat(leg.estIgnoresKeysShare())
+                    .as("%s: estimate discards keys (zero by construction)", at).isZero();
+            assertThat(leg.estZeroShare()).as("%s: zero estimates (zero by construction)", at).isZero();
+            assertThat(leg.revalidationLossShare()).as("%s: revalidation loss share", at).isLessThan(0.70);
+            assertThat(leg.serialFraction()).as("%s: serial fraction", at).isLessThan(0.05);
+            assertThat(leg.tailFraction()).as("%s: post-split tail", at).isLessThan(0.01);
+            assertThat(leg.result().timeline().meanOccupancy()).as("%s: mean occupancy", at)
+                    .isGreaterThan(7.0);
+            assertThat(leg.noVictimShare()).as("%s: steal attempts that found no victim", at)
+                    .isLessThan(0.50);
+            assertThat(leg.stealAttempts()).as("%s: steal attempts", at).isLessThan(500L);
+            assertThat(leg.result().virtualNanos()).as("%s: virtual duration", at)
+                    .isLessThan((long) (0.85 * control.result().virtualNanos()));
+            assertThat(leg.result().storeCalls()).as("%s: store calls", at)
+                    .isLessThanOrEqualTo(control.result().storeCalls());
+            assertThat(leg.estFloorRefusalsPerPage())
+                    .as("%s: owner carves refused by the remaining-work floor, per page", at)
+                    .isLessThan(0.2 * control.estFloorRefusalsPerPage());
+
+            assertGuardHeld(SensingRaceProtocol.at(uniform, candidate, seed),
+                    SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
+                    candidate + " on the uniform guard at seed " + seed);
+            SensingRaceProtocol.Leg fanned = SensingRaceProtocol.at(hashFanned, candidate, seed);
+            assertGuardHeld(fanned, SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed),
+                    candidate + " on the hash-fanned guard at seed " + seed);
+            if (fanned.tailFraction() < 0.05) {
+                hashFannedTailsClear++;
+            }
+
+            assertThat(SensingRaceProtocol.at(measured, candidate, seed).result().virtualNanos())
+                    .as("%s: measured-regime duration against the combination's at seed %d", candidate, seed)
+                    .isLessThan((long) (1.05 * SensingRaceProtocol
+                            .at(measured, SensingVariant.RATE_CURSOR_ANCHORED, seed)
+                            .result().virtualNanos()));
+        }
+        assertThat(hashFannedTailsClear)
+                .as("%s: seeds clearing the hash-fanned guard's tail line — at least the three measured, "
+                        + "the split this floor inherits from the end it descends from", candidate)
+                .isGreaterThanOrEqualTo(3);
+    }
 }
