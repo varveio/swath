@@ -1,0 +1,94 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.sim.executor;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+/**
+ * <b>The quarter geometry floor, over a whole corpus.</b> {@link GeometryFloorSweepRunTest} answers
+ * the ladder's question on an operator-staged roster at all four seeds; this is the same floor's own
+ * {@link CorpusSweepRunTest}-shaped round — a corpus sweep like the campaign's N2 rounds, screened at
+ * two seeds and escalated to four on divergence, rather than an all-seeds roster round. That is a
+ * deliberate difference from {@link GeometryFloorSweepRunTest}: a quarter floor that only ever earns a
+ * verdict on fixtures somebody hand-picked for it is a floor that has never been asked whether it
+ * matters on a fixture nobody picked.
+ *
+ * <p>The quarter floor sits outside {@link CorpusSweep#ARMS} — {@code CorpusSweep.ARMS} names the
+ * campaign's own four, and the geometry ladder's interior floors are extended in per invocation
+ * rather than folded into the default; see {@code CorpusSweep} class javadoc. This round is the
+ * extension: {@link SensingVariant#CURRENT}, {@link SensingVariant#CURSOR_ANCHORED},
+ * {@link SensingVariant#RATE_CURSOR_ANCHORED}, {@link SensingVariant#RATE_ANCHORED_LIFT_ONLY} and
+ * {@link SensingVariant#RATE_ANCHORED_FLOOR_QUARTER}, in that table order, over its own custom
+ * {@link CorpusSweep.Race}. What makes the screen correct over a fifth arm outside the default four is
+ * {@link CorpusSweep.Race#candidateArms()} reading the invocation's own arms rather than a list fixed
+ * to {@link CorpusSweep#ARMS} — a fixture divergent only at the quarter floor now earns its
+ * confirmation seeds exactly as one divergent at any of the other four would.
+ *
+ * <pre>{@code ./gradlew :swath-sim:test -PonlyPerf \
+ *     -Dswath.sim.listing.corpus=/path/to/staged/captures \
+ *     -Dswath.sim.listing.results=/path/to/quarter-floor.tsv}</pre>
+ *
+ * <p>Opt-in and fixture-free on the same two properties and for the same reasons as every other round
+ * in this package: the corpus is a local directory the operator supplies, the repo names none of it,
+ * the results file must not already exist, and with the corpus property unset the run <em>skips</em>
+ * rather than fails.
+ *
+ * <p><b>Nothing here asserts a magnitude.</b> The three verdict tables this prints — against the
+ * shipped sensor, against the incumbent combination, and against the lift-only end the quarter floor
+ * must beat to justify itself — are the readings a promotion decision is made from. A threshold
+ * asserted here would be one fitted to the numbers it is judging. What is asserted is what every round
+ * of this campaign asserts: that the sweep measured something, and that no leg in it produced a
+ * number nobody may use.
+ */
+@Tag("perf")
+class QuarterFloorCorpusSweepRunTest {
+
+    /**
+     * The four campaign arms plus the quarter floor, in table order, the control first — the order
+     * every reading this round reports.
+     */
+    static final List<SensingVariant> ARMS = List.of(SensingVariant.CURRENT,
+            SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED,
+            SensingVariant.RATE_ANCHORED_LIFT_ONLY, SensingVariant.RATE_ANCHORED_FLOOR_QUARTER);
+
+    @Test
+    void theQuarterGeometryFloorScreenedOverTheCorpusAndEscalatedOnDivergence() throws IOException {
+        String corpus = System.getProperty(CorpusSweepRunTest.CORPUS_PROPERTY);
+        assumeTrue(corpus != null && !corpus.isBlank(),
+                "-D" + CorpusSweepRunTest.CORPUS_PROPERTY + " is unset; no corpus to sweep");
+        String results = System.getProperty(CorpusSweepRunTest.RESULTS_PROPERTY);
+        assertThat(results).as("-D" + CorpusSweepRunTest.RESULTS_PROPERTY + " (where the sweep writes)")
+                .isNotNull().isNotBlank();
+        Path root = Path.of(corpus);
+        assertThat(Files.isDirectory(root)).as("corpus root at %s", root).isTrue();
+
+        CorpusSweep.Result swept =
+                CorpusSweep.sweep(root, Path.of(results), new CorpusSweep.Race(ARMS, false));
+
+        CarveAdmissionRaceProtocol.printVerdicts(
+                "quarter-floor corpus sweep — paired relative duration against the shipped sensor, "
+                        + "same seed",
+                CarveAdmissionRaceProtocol.verdicts(swept.rows(), SensingVariant.CURRENT));
+        CarveAdmissionRaceProtocol.printVerdicts(
+                "quarter-floor corpus sweep — and against the incumbent combination, same seed",
+                CarveAdmissionRaceProtocol.verdicts(swept.rows(), SensingVariant.RATE_CURSOR_ANCHORED));
+        CarveAdmissionRaceProtocol.printVerdicts(
+                "quarter-floor corpus sweep — and against the lift-only end it must beat to justify "
+                        + "itself, same seed",
+                CarveAdmissionRaceProtocol.verdicts(swept.rows(), SensingVariant.RATE_ANCHORED_LIFT_ONLY));
+
+        assertThat(swept.rows()).as("the sweep measured at least one leg").isNotEmpty();
+        assertThat(swept.problems()).as("legs whose numbers are unusable").isEmpty();
+    }
+}

@@ -122,16 +122,6 @@ final class CorpusSweep {
             SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED,
             SensingVariant.RATE_ANCHORED_LIFT_ONLY);
 
-    /**
-     * The arms the screen reads <em>against</em> {@link SensingVariant#CURRENT} — every one but the
-     * shipped sensor. Every one, not the first: a fixture the sweep is quiet about is one nobody
-     * looks at again, so a divergence only the last candidate shows must earn the same four seeds
-     * the first candidate's would. Screening against one arm and promoting on all of them is how a
-     * corpus of arms-in-agreement gets asserted from a corpus that was never asked.
-     */
-    static final List<SensingVariant> CANDIDATE_ARMS =
-            ARMS.stream().filter(arm -> arm != SensingVariant.CURRENT).toList();
-
     /** The two seeds every fixture is screened at — the first two of the protocol's four. */
     static final long[] SCREENING_SEEDS = {SensingRaceProtocol.SEEDS[0], SensingRaceProtocol.SEEDS[1]};
 
@@ -261,6 +251,20 @@ final class CorpusSweep {
         Race {
             arms = List.copyOf(arms);
         }
+
+        /**
+         * The arms {@link #divergent} reads <em>against</em> {@link SensingVariant#CURRENT} — every
+         * one of {@link #arms} but the shipped sensor itself. Every one, not the first: a fixture the
+         * sweep is quiet about is one nobody looks at again, so a divergence only the last candidate
+         * shows must earn the same four seeds the first candidate's would. Screening against one arm
+         * and promoting on all of them is how a corpus of arms-in-agreement gets asserted from a
+         * corpus that was never asked. Derived from {@link #arms} rather than carried alongside it —
+         * an invocation that swaps in a custom race gets a screen over its own arms, not the default
+         * four's, and there is exactly one list of arms to keep in step.
+         */
+        List<SensingVariant> candidateArms() {
+            return arms.stream().filter(arm -> arm != SensingVariant.CURRENT).toList();
+        }
     }
 
     /** The corpus sweep's own race: every sensing arm, screened at two seeds and escalated. */
@@ -385,8 +389,14 @@ final class CorpusSweep {
      *       threshold — the fixture then reads as uninteresting precisely because it is unstable. A
      *       mean over two seeds is a summary of two numbers; the sweep has both.</li>
      * </ul>
+     *
+     * @param screening        the fixture's two-seed screen, one {@link Screen} per arm and seed
+     * @param candidateArms    the arms read against {@link SensingVariant#CURRENT} — an invocation's
+     *                         own {@link Race#candidateArms()}, never the default's, so a fixture
+     *                         divergent only at an arm outside the default four still earns its
+     *                         confirmation seeds
      */
-    static boolean divergent(List<Screen> screening) {
+    static boolean divergent(List<Screen> screening, List<SensingVariant> candidateArms) {
         for (Screen screen : screening) {
             if (screen.serialFraction() > COLLAPSE_SERIAL_FRACTION
                     || screen.noVictimShare() > DIVERGENT_NO_VICTIM_SHARE) {
@@ -394,7 +404,7 @@ final class CorpusSweep {
             }
         }
         long[] seeds = screening.stream().mapToLong(Screen::seed).distinct().toArray();
-        for (SensingVariant candidate : CANDIDATE_ARMS) {
+        for (SensingVariant candidate : candidateArms) {
             if (gap(screening, candidate, ANY_SEED) > DIVERGENT_DURATION_DELTA) {
                 return true;
             }
@@ -586,7 +596,8 @@ final class CorpusSweep {
                     race.confirmEverySeed() ? SensingRaceProtocol.SEEDS : SCREENING_SEEDS, race.arms(),
                     name, opened.keyCount(), problems);
             boolean escalated = race.confirmEverySeed()
-                    || divergent(measured.stream().map(leg -> Screen.of(leg.leg())).toList());
+                    || divergent(measured.stream().map(leg -> Screen.of(leg.leg())).toList(),
+                            race.candidateArms());
             if (escalated && !race.confirmEverySeed()) {
                 measured = new ArrayList<>(measured);
                 measured.addAll(legs(store, label, fleet.workers(), CONFIRMATION_SEEDS, race.arms(), name,

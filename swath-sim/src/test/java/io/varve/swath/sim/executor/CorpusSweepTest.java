@@ -49,6 +49,9 @@ class CorpusSweepTest {
 
     private static final long SEED_B = CorpusSweep.SCREENING_SEEDS[1];
 
+    /** The default screen's own candidate arms — {@link CorpusSweep#SCREEN}'s, not a duplicated list. */
+    private static final List<SensingVariant> CANDIDATE_ARMS = CorpusSweep.SCREEN.candidateArms();
+
     @TempDir
     private Path root;
 
@@ -304,7 +307,7 @@ class CorpusSweepTest {
                 screen(SensingVariant.CURRENT, SEED_B, 0.02, 100, 0.1),
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.1),
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_B,
-                        CorpusSweep.COLLAPSE_SERIAL_FRACTION + 0.01, 100, 0.1))))
+                        CorpusSweep.COLLAPSE_SERIAL_FRACTION + 0.01, 100, 0.1)), CANDIDATE_ARMS))
                 .isTrue();
     }
 
@@ -312,15 +315,15 @@ class CorpusSweepTest {
     void aCurrentVersusCandidateDurationGapEarnsThemInEitherDirection() {
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 70, 0.1))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 70, 0.1)), CANDIDATE_ARMS))
                 .as("the anchored arm 30%% faster — a cure worth confirming").isTrue();
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 130, 0.1))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 130, 0.1)), CANDIDATE_ARMS))
                 .as("the anchored arm 30%% slower — a regression worth confirming just as much").isTrue();
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 90, 0.1))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 90, 0.1)), CANDIDATE_ARMS))
                 .as("ten per cent apart is not divergence").isFalse();
     }
 
@@ -335,8 +338,41 @@ class CorpusSweepTest {
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.RATE_CURSOR_ANCHORED, SEED_A, 0.02, 60, 0.1))))
+                screen(SensingVariant.RATE_CURSOR_ANCHORED, SEED_A, 0.02, 60, 0.1)), CANDIDATE_ARMS))
                 .isTrue();
+    }
+
+    /**
+     * The candidate set the screen reads is the <em>invocation's</em>, not a list fixed to the default
+     * four — a custom {@link CorpusSweep.Race} whose arms include one outside {@link CorpusSweep#ARMS}
+     * gets its own divergence rule read over it too. Before {@link CorpusSweep.Race#candidateArms()}
+     * existed, {@code divergent} read only the default four's candidates, so a fixture divergent solely
+     * at a custom race's fifth arm would never earn its confirmation seeds — this is that fixture.
+     */
+    @Test
+    void aGapAtAnArmOutsideTheDefaultFourEscalatesWhenThatArmIsInTheInvocationsRace() {
+        List<CorpusSweep.Screen> screening = List.of(
+                screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
+                screen(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, SEED_A, 0.02, 60, 0.1));
+        CorpusSweep.Race race = new CorpusSweep.Race(
+                List.of(SensingVariant.CURRENT, SensingVariant.RATE_ANCHORED_FLOOR_QUARTER), false);
+
+        assertThat(CorpusSweep.divergent(screening, race.candidateArms()))
+                .as("the fifth arm's own 40%% gap, read against its own race's candidate set").isTrue();
+        assertThat(CorpusSweep.divergent(screening, CANDIDATE_ARMS))
+                .as("the default screen's candidate arms don't name this arm at all").isFalse();
+    }
+
+    /**
+     * {@link CorpusSweep#SCREEN}'s candidate set must be exactly what the pre-refactor
+     * {@code CANDIDATE_ARMS} constant was — every {@link CorpusSweep#ARMS} entry but the control — so
+     * the default sweep's escalation rule is byte-identical to before {@code candidateArms()} existed.
+     */
+    @Test
+    void theDefaultScreensCandidateArmsAreExactlyEveryArmBesidesTheControl() {
+        assertThat(CorpusSweep.SCREEN.candidateArms())
+                .containsExactlyElementsOf(CorpusSweep.ARMS.stream()
+                        .filter(arm -> arm != SensingVariant.CURRENT).toList());
     }
 
     /**
@@ -353,13 +389,13 @@ class CorpusSweepTest {
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 130, 0.1),
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_B, 0.02, 80, 0.1));
 
-        assertThat(CorpusSweep.divergent(bimodal))
+        assertThat(CorpusSweep.divergent(bimodal, CANDIDATE_ARMS))
                 .as("the two legs mean out to a 5%% gap; one of them is 30%%").isTrue();
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
                 screen(SensingVariant.CURRENT, SEED_B, 0.02, 100, 0.1),
                 screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 110, 0.1),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_B, 0.02, 90, 0.1))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_B, 0.02, 90, 0.1)), CANDIDATE_ARMS))
                 .as("two legs that are each within the band are not a divergence at either").isFalse();
     }
 
@@ -368,11 +404,11 @@ class CorpusSweepTest {
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100,
                         CorpusSweep.DIVERGENT_NO_VICTIM_SHARE + 0.01),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.1))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.1)), CANDIDATE_ARMS))
                 .isTrue();
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.9))))
+                screen(SensingVariant.CURSOR_ANCHORED, SEED_A, 0.02, 100, 0.9)), CANDIDATE_ARMS))
                 .as("a candidate that starves its own thieves is a regression worth four seeds too")
                 .isTrue();
     }
@@ -382,7 +418,7 @@ class CorpusSweepTest {
     void anArmThatDidNotRunIsNotAGap() {
         assertThat(CorpusSweep.divergent(List.of(
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.CURRENT, SEED_B, 0.02, 100, 0.1))))
+                screen(SensingVariant.CURRENT, SEED_B, 0.02, 100, 0.1)), CANDIDATE_ARMS))
                 .isFalse();
     }
 
