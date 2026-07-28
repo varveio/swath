@@ -233,12 +233,16 @@ is all the derive step reads; the rows within one group are proved where they ar
 stepped over, in the `delimiter=/` skip-scan's key cursor. So a fixture that is
 stamped, complete, pure-`OBJECT` and internally disordered — what an older or
 foreign producer can publish, and what `sort-fixture` cannot produce — passes
-eligibility under `auto`, takes the **sorted** path, and then fails **every**
-`delimiter=/` request with `500 InternalError` the moment the scan reaches the bad
-row group (typically the first such request, at discovery time). There is no
-fallback at that point: the path was chosen at startup, the request has no other
-path to take, and the server keeps serving the same fixture until it is restarted
-against `--serving-mode duckdb`.
+eligibility under `auto`, takes the **sorted** path, and then fails any `delimiter=/`
+request **whose skip-scan actually steps into the bad row group** with `500
+InternalError`. The check is per stepped row, in the cursor that decodes them, so the
+disorder is discovered by whichever request first walks that far and fails every later
+one that walks there too — while requests served entirely out of ordered groups keep
+succeeding. Nothing latches, so one prefix's listing can be fine while the next
+prefix's is a hard failure, and a fixture can look healthy for as long as nothing scans
+that far. There is no fallback at the point it does: the path was chosen at startup,
+the request has no other path to take, and the server keeps serving the same fixture
+until it is restarted against `--serving-mode duckdb`.
 
 That is deliberate. Serving the request instead would mean trusting a cursor
 position that no longer stands for "the first key at/after this target": the hop

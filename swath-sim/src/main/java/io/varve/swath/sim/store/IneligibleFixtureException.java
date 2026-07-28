@@ -34,7 +34,14 @@ public final class IneligibleFixtureException extends IllegalArgumentException {
 
     private final SimStoreBackend backend;
     private final String reason;
-    private final List<Path> files;
+    /**
+     * Transient because a {@link Path} is not serializable, and this is a {@link java.io.Serializable}
+     * exception whose whole report is already in {@link #getMessage()}: what survives a round trip is
+     * the message a log carries, and {@link #files()} and {@link #redactedMessage()} are for the
+     * in-process sweep that catches it. A deserialized instance is not one, and never reaches one —
+     * nothing here writes an exception anywhere.
+     */
+    private final transient List<Path> files;
 
     IneligibleFixtureException(SimStoreBackend backend, String reason, List<Path> files) {
         super(message(backend, reason, files.stream().map(Path::toString).toList()));
