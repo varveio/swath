@@ -74,6 +74,16 @@ public record EngineToggles(
         boolean rateAnchoredSensing,
         TailFloorMode tailFloor) {
 
+    /**
+     * The one non-boolean component must exist: every consumer (the governor's gate consults, the
+     * effective-toggle log, the run-summary writer) dereferences it, so a null would surface as an
+     * NPE far from the construction that caused it. {@code parse} can never produce one (absent
+     * defaults to {@link TailFloorMode#CURRENT}); this guards the public constructor.
+     */
+    public EngineToggles {
+        java.util.Objects.requireNonNull(tailFloor, "tailFloor");
+    }
+
     public EngineToggles withOwnerSplit(boolean ownerSplit) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,

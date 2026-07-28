@@ -311,6 +311,13 @@ final class EngineTogglesParseTest {
     }
 
     @Test
+    void aNullTailFloorModeIsRejectedAtConstructionNotAtFirstDereference() {
+        assertThatThrownBy(() -> EngineToggles.DEFAULT.withTailFloor(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("tailFloor");
+    }
+
+    @Test
     void tailFloorContradictoryValuesAreRejected() {
         assertThatThrownBy(() ->
                 EngineToggles.parse(List.of("tail_floor=est_direct", "tail_floor=reach_floored"), false))
