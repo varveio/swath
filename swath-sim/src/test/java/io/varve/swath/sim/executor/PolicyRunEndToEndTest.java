@@ -6,11 +6,16 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import io.varve.swath.sim.fixture.KeyspaceFixtures;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.model.ClientCostTerm;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -45,8 +50,82 @@ class PolicyRunEndToEndTest {
         assertThat(result.counter("seed.ranges"))
                 .as("the descent found cuts, so the fleet starts parallel").isGreaterThan(1L);
         assertThat(result.virtualNanos()).isPositive();
+        // A run's duration is its time to QUIESCENCE. The kernel's own last event is later — it cannot
+        // cancel a park timer, so parks armed before the last range completed still fire afterwards and
+        // still move the clock — and that residue is an artifact of the kernel rather than anything the
+        // policies did. Quoting it as the duration would charge every run a constant of up to the
+        // steal-attempt-slot park, which is more than the difference between two variants on a fixture
+        // this size.
+        assertThat(result.virtualNanos()).isEqualTo(result.timeline().endNanos());
+        assertThat(result.kernelNanos())
+                .as("the kernel's last event is the quiescence instant plus the retired-park drain")
+                .isGreaterThan(result.virtualNanos());
         assertThat(result.scenario().clientCost().term().provenance())
                 .isEqualTo(ClientCostTerm.Provenance.FINAL);
+    }
+
+    /**
+     * The run record's field set, pinned by name.
+     *
+     * <p>A record that quietly loses a field is worse than one that never had it: everything still
+     * prints, everything still parses, and the reader is left inferring an input that was stated
+     * yesterday. The seed is the sharpest case — without it a record cannot be reproduced at all, and
+     * nothing about the rest of the line would look wrong. So the whole set is asserted exactly:
+     * adding a field is a deliberate act, and so is removing one.
+     */
+    @Test
+    void theRunRecordStatesEveryInputAReproductionNeeds() {
+        ListingFixtureStore store = new ListingFixtureStore(
+                KeyspaceFixtures.hashFannedCorpus(4, 4, 100));
+
+        PolicyRunResult result = SimExecutor.run(
+                PolicyRunFixtures.scenario(4, 100, PolicyRunFixtures.REMOTE_LATENCY,
+                        PolicyRunFixtures.measuredCost()),
+                store, "in-memory hash-fanned corpus");
+
+        // Parenthesised text is removed before the scan, innermost first: a store's own name and a cost
+        // term's provenance label are free-form, and a label that happened to contain `x=` would
+        // otherwise be counted as a field this record states.
+        String runRecord = result.describe();
+        for (String previous = ""; !runRecord.equals(previous); ) {
+            previous = runRecord;
+            runRecord = runRecord.replaceAll("\\([^()]*\\)", "");
+        }
+        Set<String> fields = new TreeSet<>();
+        // Anchored at a line start or a space, so only a field NAME can match: `idle_park=5ms..50ms`
+        // contributes one field, not one per token in its value.
+        Matcher matcher = Pattern.compile("(?m)(?:^|(?<= ))([a-z_]+)=").matcher(runRecord);
+        while (matcher.find()) {
+            fields.add(matcher.group(1));
+        }
+
+        assertThat(fields).containsExactlyInAnyOrder(
+                // what the run was asked to do
+                "seed", "workers", "page_size", "seed_mode", "store", "client_cost",
+                "store_server_capacity", "max_events", "fault_disposition", "sensing",
+                // its declared budgets
+                "worker_attempt_timeout", "probe_attempt_timeout", "clean_window", "idle_park",
+                "attempt_slot_park",
+                // what it did
+                "virtual_duration", "stop_reason", "completed", "stuck", "events", "stale_events",
+                "final_concurrency_target", "keys_emitted", "pages", "store_calls", "store_reads",
+                "ranges", "owner_split_children", "thief_children", "splits_lost_revalidation",
+                "splits_rejected", "seed_probes", "seed_ranges",
+                // when it did it
+                "seed_end", "last_split", "quiesced", "kernel_end", "tail_fraction",
+                "keys_per_virtual_second", "tail_keys_per_virtual_second", "keys_in_tail",
+                "mean_ranges", "mean_tail_ranges", "serial_fraction", "max_concurrent_ranges",
+                // and what its position sensor read while it did
+                "cursor_advance_invisible", "victims_scanned", "est_ignores_keys", "est_zero");
+
+        // The other half of that contract, enforced rather than declared. The record's own javadoc says
+        // a number quoted without saying which sensor produced it is not a result -- so the field that
+        // makes every other field ambiguous is in the constructor's guard, alongside the three whose
+        // absence would merely have thrown later.
+        assertThatIllegalArgumentException().isThrownBy(() -> new PolicyRunResult(result.run(),
+                result.scenario(), result.storeLabel(), result.counters(), result.nodesCreated(),
+                result.splitsRejected(), result.storeReads(), result.finalConcurrencyTarget(),
+                result.stuck(), result.timeline(), null));
     }
 
     @Test

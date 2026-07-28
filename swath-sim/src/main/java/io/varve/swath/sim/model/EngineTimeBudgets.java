@@ -226,6 +226,19 @@ public record EngineTimeBudgets(
                 concurrencyCleanWindowNanos, aimd, maxDurationNanos);
     }
 
+    /**
+     * This budget set with the thief's probe retry ceiling replaced — the knob a scenario varies to ask
+     * how much a steal is willing to spend riding out a store that is not answering. A declared input
+     * like every other here: the executor honours whatever this says rather than the default it
+     * happens to agree with.
+     */
+    public EngineTimeBudgets withProbeAttemptRetryCap(int newProbeAttemptRetryCap) {
+        return new EngineTimeBudgets(seedProbeBudget, probeAttemptTimeoutNanos, workerAttemptTimeoutNanos,
+                workerAttemptRetryCap, newProbeAttemptRetryCap, transientRetryBackoffNanos,
+                idleStealBaseParkNanos, idleStealBackoffCapNanos, idleStealAttemptParkNanos,
+                concurrencyCleanWindowNanos, aimd, maxDurationNanos);
+    }
+
     private static void requirePositive(String name, long value) {
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive, got " + value);

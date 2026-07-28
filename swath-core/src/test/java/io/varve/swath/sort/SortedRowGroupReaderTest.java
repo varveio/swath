@@ -6,6 +6,8 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
@@ -228,6 +230,98 @@ class SortedRowGroupReaderTest {
             for (int i = 0; i < firstGroupKeys.size(); i++) {
                 assertThat(firstGroupKeysAgain.get(i)).isEqualTo(firstGroupKeys.get(i));
             }
+        }
+    }
+
+    /**
+     * A row group whose rows are not in ascending order must fail the read that steps over them, not
+     * be reported as positions the skip-scan can trust. Nothing upstream can catch this: the writer
+     * stamps whatever it is handed, and index derive proves the ascent of row-group FIRST keys only —
+     * so a fixture built by anything other than the sorter (an older producer, a hand-rolled writer)
+     * can be stamped, eligible, and internally disordered all at once. The failure must name the file
+     * and the row group, because the caller that hits it is a sweep over a corpus of fixtures — and it
+     * must do so in {@link RowGroupOrderException}'s typed fields, because that sweep classifies the
+     * exclusion by reason and location, not by matching substrings of a message.
+     */
+    @Test
+    void keyCursorRefusesARowGroupWhoseRowsAreNotAscending(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(path, config(Map.of()), SortMode.OBJECTS, 1)) {
+            writer.write(object("aaa"));
+            writer.write(object("ccc"));
+            writer.write(object("bbb"));   // below its predecessor: row 2 of row group 0
+            writer.write(object("ddd"));
+        }
+        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+
+            assertThatThrownBy(() -> cursor.advanceTo(bytes("zzz"), true))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
+                        assertThat(e.file()).isEqualTo(path);
+                        assertThat(e.rowGroup()).isZero();
+                        assertThat(e.row()).isEqualTo(2);
+                    })
+                    .hasMessageContaining("row group 0 of " + path)
+                    .hasMessageContaining("strictly ascending")
+                    .hasMessageContaining("row 2");
+            cursor.close();
+        }
+    }
+
+    /**
+     * The same failure as a surface that must not publish the server's filesystem layout renders it:
+     * the reason and the row group survive, the file is reduced to its NAME, and the directory that
+     * held it is gone — while {@link Throwable#getMessage()}, which is what a server logs, keeps the
+     * whole path. Pinned here rather than at the HTTP seam alone, because it is a property of the
+     * exception every caller reads.
+     */
+    @Test
+    void theRedactedReportKeepsTheReasonAndRowGroupButNotTheFixturePath(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(path, config(Map.of()), SortMode.OBJECTS, 1)) {
+            writer.write(object("aaa"));
+            writer.write(object("aaa"));
+        }
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+            RowGroupOrderException thrown = catchThrowableOfType(RowGroupOrderException.class,
+                    () -> cursor.advanceTo(bytes("zzz"), true));
+
+            assertThat(thrown.redactedMessage())
+                    .contains(RowGroupOrderException.ROW_GROUP_DISORDER)
+                    .contains("row group 0 of part-00001.parquet")
+                    .doesNotContain(dir.toString());
+            assertThat(thrown.getMessage()).contains(path.toString());
+            cursor.close();
+        }
+    }
+
+    /**
+     * A duplicate is as corrupting as an inversion here — a hop that lands on the first of two equal
+     * keys and advances "past" it exclusively would step onto the same key again — so the check is
+     * strict ascent, not non-descent.
+     */
+    @Test
+    void keyCursorRefusesADuplicateKeyWithinARowGroup(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(path, config(Map.of()), SortMode.OBJECTS, 1)) {
+            writer.write(object("aaa"));
+            writer.write(object("aaa"));
+        }
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0);
+
+            assertThatThrownBy(() -> cursor.advanceTo(bytes("zzz"), true))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class,
+                            e -> assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER))
+                    .hasMessageContaining("row group 0 of " + path)
+                    .hasMessageContaining("row 1");
+            cursor.close();
         }
     }
 

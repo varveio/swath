@@ -5,28 +5,43 @@
  */
 package io.varve.swath.sim.executor;
 
-import io.varve.swath.engine.StealMath;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.replay.protocol.ByteKey;
+import io.varve.swath.replay.protocol.ListObjectsV2Pager;
 import io.varve.swath.replay.protocol.ListedObject;
+import io.varve.swath.replay.protocol.S3ListRequest;
+import io.varve.swath.replay.protocol.S3ListResult;
+import io.varve.swath.replay.protocol.S3ResultEntry;
+import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
  * The protocol half of a simulated store call: turns the four listing shapes the engine issues — a
  * worker's page, a one-key pivot probe, a bounded {@code delimiter=/} structure probe, and a leaf
- * floor probe — into range reads against a ground-truth {@link ListingStore}, which speaks ranges and
- * nothing else.
+ * floor probe — into ListObjectsV2 requests against a ground-truth {@link ListingStore}, which speaks
+ * ranges and nothing else.
  *
- * <p><b>Why the rollup lives here.</b> The store seam deliberately excludes delimiter semantics: a
- * store answers "the next rows in this range" and the caller decides what a directory is. So a
- * delimiter probe is a skip-scan over that seam — read forward, and every time a key turns out to sit
- * under a directory, emit that directory once and jump the cursor past everything beneath it. That is
- * the same walk the real client's pager performs, and doing it here rather than inside a store keeps
- * every backend answering the identical, narrow contract.
+ * <p><b>Every protocol rule comes from the pager.</b> Max-keys accounting, truncation, delimiter
+ * rollup and common-prefix resume all live once, in {@link ListObjectsV2Pager}, which is also what
+ * every replay-server store is differentialled through. This class only shapes requests and reads
+ * answers. That matters more here than anywhere else in the module: the policies driven against this
+ * view are the production ones, written against S3's protocol, so a second implementation of it —
+ * however careful — mismodels the engine rather than the workload, and does so invisibly. Two rules
+ * are worth naming because a hand-rolled walk gets both wrong: a resumed delimiter probe must
+ * <b>not</b> roll up the directory it resumed at (every key beneath {@code d/} sorts after
+ * {@code d/}, so a resume that only lifts the range floor emits {@code d/} twice and pushes a real
+ * directory off the end of a page that stays capped), and a page that exactly consumes a range is
+ * <b>not</b> truncated (S3 looks one key past what it returns, which is why the pager reads
+ * {@code maxKeys + 1} rows). {@code SimListingViewProtocolTest} pins both against the pager.
+ *
+ * <p><b>Where to check that, if you are reviewing this.</b> In {@link ListObjectsV2Pager}, not here:
+ * this class contains no protocol rule to be right or wrong about, and reading only the seam
+ * documentation — which has always said the rules live in the pager — is how a second implementation
+ * of them survived here undetected once already. The two rules named above are at the pager's
+ * common-prefix boundary guard and its {@code maxKeys + 1} fetch respectively.
  *
  * <p><b>Costing.</b> Nothing here consumes virtual time. A call's modelled duration is drawn when the
  * request is issued and the store is consulted only when the response arrives, so the number of range
@@ -37,26 +52,42 @@ import java.util.List;
  */
 final class SimListingView {
 
-    /** Rows read per range hop while rolling up a directory listing. */
-    private static final int ROLLUP_BATCH = 256;
+    /** The one delimiter the engine ever probes with. */
+    private static final byte[] DELIMITER = {'/'};
 
-    /** One page as the store answered it, before any range bound is applied. */
+    /** Any bucket name: nothing below the pager reads it, and no request here crosses a wire. */
+    private static final String BUCKET = "sim";
+
+    /**
+     * One page as the store answered it, before any range bound is applied.
+     *
+     * <p>{@code keys} holds raw arrays, so this record's generated {@code equals}/{@code hashCode}
+     * compare array <em>references</em>: read the fields, never use a {@code Page} as a map key or in
+     * a set.
+     */
     record Page(List<byte[]> keys, boolean truncated) {
     }
 
-    /** One {@code delimiter=/} probe's distilled result. */
+    /**
+     * One {@code delimiter=/} probe's distilled result.
+     *
+     * <p>Same caveat as {@link Page}: the {@code byte[]} components make the generated
+     * {@code equals}/{@code hashCode} reference comparisons, so this is a carrier to read, not a key
+     * to look up by.
+     */
     record Rollup(List<byte[]> commonPrefixes, int objectCount, byte[] lastKey, boolean capped) {
     }
 
-    private final ListingStore store;
+    private final CountingStore store;
+    private final ListObjectsV2Pager pager;
     private final byte[] scanPrefix;
-    private final byte[] scanCeiling;
-    private long storeReads;
 
     SimListingView(ListingStore store, byte[] scanPrefix) {
-        this.store = store;
+        this.store = new CountingStore(store);
+        // The pager insists on a metrics sink; a run's own instrument is its counters and its
+        // timeline, so this one is a bit bucket that nothing reads and nothing publishes.
+        this.pager = new ListObjectsV2Pager(this.store, new ReplayMetrics());
         this.scanPrefix = scanPrefix == null ? new byte[0] : scanPrefix;
-        this.scanCeiling = StealMath.prefixCeil(this.scanPrefix);
     }
 
     /**
@@ -70,8 +101,12 @@ final class SimListingView {
      * @param startAfter the exclusive resume cursor, or {@code null} to start at the prefix
      */
     Page page(byte[] startAfter, int maxKeys) {
-        List<byte[]> keys = read(startAfter, false, scanCeiling, maxKeys);
-        return new Page(keys, keys.size() == maxKeys);
+        S3ListResult result = list(scanPrefix, null, startAfter, maxKeys);
+        List<byte[]> keys = new ArrayList<>(result.entries().size());
+        for (S3ResultEntry entry : result.entries()) {
+            keys.add(entry.key());
+        }
+        return new Page(keys, result.truncated());
     }
 
     /**
@@ -79,18 +114,17 @@ final class SimListingView {
      * {@code hi}? An open {@code hi} accepts any key the probe finds.
      */
     boolean probeNonEmpty(byte[] startAfter, byte[] hi) {
-        List<byte[]> keys = read(startAfter, false, scanCeiling, 1);
-        if (keys.isEmpty()) {
+        List<S3ResultEntry> entries = list(scanPrefix, null, startAfter, 1).entries();
+        if (entries.isEmpty()) {
             return false;
         }
-        return hi == null || KeyBytes.compareUnsigned(keys.getFirst(), hi) <= 0;
+        return hi == null || KeyBytes.compareUnsigned(entries.getFirst().key(), hi) <= 0;
     }
 
     /** The flat-leaf floor probe: the first key at or after {@code prefix}, or {@code null}. */
     byte[] firstKeyUnder(byte[] prefix) {
-        byte[] ceiling = StealMath.prefixCeil(prefix);
-        List<byte[]> keys = read(prefix, true, ceiling, 1);
-        return keys.isEmpty() ? null : keys.getFirst();
+        List<S3ResultEntry> entries = list(prefix, null, null, 1).entries();
+        return entries.isEmpty() ? null : entries.getFirst().key();
     }
 
     /**
@@ -105,92 +139,76 @@ final class SimListingView {
      * either interpretation.
      */
     Rollup rollup(byte[] probePrefix, byte[] startAfter, int maxKeys) {
-        byte[] prefix = probePrefix == null ? scanPrefix : probePrefix;
-        byte[] ceiling = StealMath.prefixCeil(prefix);
-        // Entries in key order, each flagged as a rolled-up directory or a bare object. One entry past
-        // the limit is collected on purpose: finding it is the only way to tell a directory that ends
-        // exactly at the limit from one that goes on, and the two are read very differently upstream.
-        List<byte[]> entries = new ArrayList<>();
-        List<Boolean> isDirectory = new ArrayList<>();
-        boolean fromInclusive = startAfter == null;
-        byte[] from = startAfter == null ? prefix : startAfter;
-        boolean exhausted = false;
-        while (entries.size() <= maxKeys && !exhausted) {
-            List<byte[]> batch = read(from, fromInclusive, ceiling, ROLLUP_BATCH);
-            if (batch.isEmpty()) {
-                exhausted = true;
-                break;
-            }
-            boolean jumped = false;
-            for (byte[] key : batch) {
-                if (entries.size() > maxKeys) {
-                    break;
-                }
-                int slash = indexOfDelimiter(key, prefix.length);
-                if (slash < 0) {
-                    entries.add(key);
-                    isDirectory.add(false);
-                    from = key;
-                    fromInclusive = false;
-                    continue;
-                }
-                byte[] child = Arrays.copyOf(key, slash + 1);
-                entries.add(child);
-                isDirectory.add(true);
-                byte[] childCeiling = StealMath.prefixCeil(child);
-                if (childCeiling == null) {
-                    // Every byte of the child prefix is 0xFF: nothing sorts after it, so the walk is
-                    // finished rather than merely past this directory.
-                    exhausted = true;
-                    break;
-                }
-                from = childCeiling;
-                fromInclusive = true;
-                jumped = true;
-                break;
-            }
-            if (!jumped && batch.size() < ROLLUP_BATCH) {
-                exhausted = true;   // the directory ended inside this batch
-            }
-        }
-        boolean capped = entries.size() > maxKeys;
-        int kept = Math.min(entries.size(), maxKeys);
+        S3ListResult result = list(probePrefix == null ? scanPrefix : probePrefix, DELIMITER, startAfter, maxKeys);
         List<byte[]> commonPrefixes = new ArrayList<>();
         int objects = 0;
         byte[] lastKey = null;
-        for (int i = 0; i < kept; i++) {
-            if (isDirectory.get(i)) {
-                commonPrefixes.add(entries.get(i));
+        for (S3ResultEntry entry : result.entries()) {
+            if (entry instanceof S3ResultEntry.CommonPrefixResult) {
+                commonPrefixes.add(entry.key());
             } else {
                 objects++;
             }
-            lastKey = entries.get(i);
+            lastKey = entry.key();
         }
-        return new Rollup(commonPrefixes, objects, lastKey, capped);
+        return new Rollup(commonPrefixes, objects, lastKey, result.truncated());
     }
 
     /** Range reads issued against the fixture — the sim's own cost, never the modelled system's. */
     long storeReads() {
-        return storeReads;
+        return store.reads();
     }
 
-    private int indexOfDelimiter(byte[] key, int from) {
-        for (int i = from; i < key.length; i++) {
-            if (key[i] == '/') {
-                return i;
+    private S3ListResult list(byte[] prefix, byte[] delimiter, byte[] startAfter, int maxKeys) {
+        return pager.list(new S3ListRequest(BUCKET, prefix, delimiter, startAfter, null, maxKeys, false, false));
+    }
+
+    /**
+     * Counts what the pager asks of the fixture. The pager may need several reads to answer one
+     * modelled call (a rollup hops once per directory), and that ratio is the simulator's own runtime
+     * cost — hence a count of store work, kept separate from the modelled call counters.
+     */
+    private static final class CountingStore implements ListingStore {
+
+        private final ListingStore delegate;
+        private long reads;
+
+        private CountingStore(ListingStore delegate) {
+            this.delegate = delegate;
+        }
+
+        private long reads() {
+            return reads;
+        }
+
+        @Override
+        public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
+                                       Projection projection) {
+            reads++;
+            return delegate.rows(from, fromInclusive, toExclusive, limit, projection);
+        }
+
+        /**
+         * A store that declines the fast path returns {@code null} having done no work, so only an
+         * answered rollup is counted — the pager then falls back to the range walk above and every hop
+         * it makes is counted there instead. A declining store therefore never contributes a phantom
+         * read, and an answering one contributes exactly one however wide the directory was.
+         */
+        @Override
+        public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
+                                                    byte[] prefix, byte[] delimiter, int limit,
+                                                    Projection projection) {
+            List<DelimitedEntry> rollup =
+                    delegate.delimitedRollup(from, fromInclusive, toExclusive, prefix, delimiter, limit, projection);
+            if (rollup != null) {
+                reads++;
             }
+            return rollup;
         }
-        return -1;
-    }
 
-    private List<byte[]> read(byte[] from, boolean fromInclusive, byte[] toExclusive, int limit) {
-        storeReads++;
-        List<ListedObject> rows = store.rows(from == null ? null : ByteKey.copyOf(from), fromInclusive,
-                toExclusive == null ? null : ByteKey.copyOf(toExclusive), limit, Projection.KEYS_ONLY);
-        List<byte[]> keys = new ArrayList<>(rows.size());
-        for (ListedObject row : rows) {
-            keys.add(row.key());
+        /** The fixture handle belongs to whoever opened it; a run never closes it. */
+        @Override
+        public void close() {
         }
-        return keys;
     }
 }

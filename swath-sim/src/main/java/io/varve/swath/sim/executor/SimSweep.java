@@ -79,7 +79,14 @@ public final class SimSweep {
         return List.copyOf(results);
     }
 
-    /** Every counter and timer count in {@code registry}, by name, or an empty map when there is none. */
+    /**
+     * Every counter and timer count in {@code registry}, by name, or an empty map when there is none.
+     *
+     * <p>Counters and timers only: a gauge is a level, not an accumulation, so subtracting one leg's
+     * reading from the next would produce a "delta" with no meaning — a store's open-file gauge that
+     * read the same at both ends would report zero change over a leg that opened and closed a hundred.
+     * Levels are deliberately absent rather than silently differenced.
+     */
     private static SortedMap<String, Double> snapshot(MeterRegistry registry) {
         TreeMap<String, Double> values = new TreeMap<>();
         if (registry == null) {

@@ -56,6 +56,18 @@ public final class SortedFileIndex {
     }
 
     /**
+     * {@code file}'s total row count as its footer declares it — the one reading here that costs no
+     * column read at all, so a caller can size a file before deciding whether to pay for its index.
+     * A footer row count is not a statistic in the sense the class javadoc refuses: it is the count
+     * the writer recorded of rows actually written, which the reader relies on to decode at all.
+     */
+    public static long rowCount(Path file) throws IOException {
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+            return reader.getRecordCount();
+        }
+    }
+
+    /**
      * One row group's actual first key, row count, and whether every row in the group is
      * <b>provably</b> {@code row_type='OBJECT'} (see {@link #firstKeysPerRowGroup} — {@code firstKey}
      * and {@code rowCount} never come from footer stats, but {@link #pureObjectRowType} deliberately

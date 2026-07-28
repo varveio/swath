@@ -7,6 +7,8 @@
 // (`/src/swath-cli/build/libs/swath.jar`), so a module ships iff swath-cli depends on it —
 // nothing here does, and nothing here may. This is a `java-library`, not an `application`:
 // it produces no start scripts, no dist, and no image layer.
+import java.time.Duration
+
 plugins {
     id("swath.java-conventions")
     `java-library`
@@ -43,6 +45,12 @@ dependencies {
     // output, built the same way SortedParquetStoreTest builds its own.
     testImplementation(testFixtures(project(":swath-core")))
     testImplementation(project(":swath-model"))
+    // The corpus sweep reads each staged capture's own run record (its `summary.json`) for the one
+    // input it cannot invent -- the concurrency that capture ran at. Declared here rather than leaned
+    // on transitively: jackson-databind is `implementation`-scoped inside swath-core, so it reaches
+    // this module's runtime classpath but not its compile one, and a test that imports a type needs
+    // it named.
+    testImplementation(libs.jackson.databind)
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj)
@@ -59,4 +67,27 @@ tasks.test {
     // forwarded and the bench test's own assumeTrue skips it, exactly as before.
     System.getProperty("swath.sim.bench.fixture")?.let { systemProperty("swath.sim.bench.fixture", it) }
     System.getProperty("swath.sim.bench.giant-fixture")?.let { systemProperty("swath.sim.bench.giant-fixture", it) }
+    // Same forwarding, same reason, for the real-listing run (RealListingRunTest, @Tag("perf")):
+    // `-Dswath.sim.listing.fixture=<local sorted capture>`. The repo never names a fixture -- the
+    // path is the operator's, supplied per invocation, and the test skips itself without one.
+    System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
+    System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
+    System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
+    // Same forwarding, same reason, for the corpus sweep (CorpusSweepRunTest, @Tag("perf")): a root
+    // directory of staged captures, the TSV it writes its per-leg rows to, and the ceiling above
+    // which a staged capture is passed over rather than swept. The first two are the operator's
+    // paths, supplied per invocation, and the sweep skips itself without the first.
+    System.getProperty("swath.sim.listing.corpus")?.let { systemProperty("swath.sim.listing.corpus", it) }
+    System.getProperty("swath.sim.listing.results")?.let { systemProperty("swath.sim.listing.results", it) }
+    System.getProperty("swath.sim.listing.corpus-max-keys")
+        ?.let { systemProperty("swath.sim.listing.corpus-max-keys", it) }
+    // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
+    // synthetic benches; raise the forked JVM's heap for one invocation with
+    // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.
+    (project.findProperty("simTestHeap") as String?)?.let { maxHeapSize = it }
+    // A corpus sweep is one task that runs for as long as the corpus is large, and the conventions'
+    // ten-minute cap is sized for the per-commit suite; without this the sweep is killed mid-corpus
+    // and its results file simply stops. Same shape and same reason as the heap knob above: minutes,
+    // for one invocation (`-PsimTestTimeout=180`), rather than lifting the cap for every module.
+    (project.findProperty("simTestTimeout") as String?)?.let { timeout.set(Duration.ofMinutes(it.toLong())) }
 }

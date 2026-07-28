@@ -30,6 +30,16 @@ import java.util.Set;
  * <p>This store honors only range bounds — prefix, delimiter, start-after and pagination live in the
  * pager above it. Owner columns are always projected (cheap here), so {@link Projection} is accepted
  * but not used to prune.
+ *
+ * <p><b>It is order-agnostic, and that hides a fixture's disorder from every caller.</b> Serving an
+ * unsorted capture is this store's purpose — the {@code ORDER BY key} above is what makes that
+ * correct — so a file whose rows are in no particular order is served here exactly as a sorted one
+ * is, and a caller that wanted to know the input was unsorted will not learn it here. The sorted
+ * tiers ({@link SortedParquetStore}'s skip-scan, the simulator's streaming tier) check the ascent of
+ * the rows they physically step over, in the loops they already run; matching that here would mean a
+ * dedicated scan of a whole materialized table, which buys a caller that has already chosen the
+ * order-agnostic store nothing it can act on. Stated rather than fixed: a consumer that needs an
+ * unsorted input refused must route the fixture through a tier that reads it in physical order.
  */
 public final class DuckDbListingStore implements ListingStore {
 

@@ -33,9 +33,13 @@ import java.util.List;
  *
  * <ul>
  *   <li>A range holding {@code n} keys costs exactly {@code floor(n / pageSize) + 1} calls: full
- *       pages until the remainder, and then one short page, which is the only way a lister learns it
- *       has reached the end. A range whose size is an exact multiple of the page size therefore
- *       costs one call more than dividing would suggest, and an empty range still costs one.</li>
+ *       pages until the remainder, and then one short page, which is the only way <em>this</em>
+ *       lister learns it has reached the end. A range whose size is an exact multiple of the page
+ *       size therefore costs one call more than dividing would suggest, and an empty range still
+ *       costs one. That is this driver's rule, not S3's: it reads a bounded range straight off the
+ *       store seam, with no {@code IsTruncated} to consult, which is why it is a load generator and
+ *       not a model of the listing protocol. The protocol lives in {@code ListObjectsV2Pager}, and
+ *       the policy executor — which does model it — costs {@code ceil(n / pageSize)} instead.</li>
  *   <li>The total call count {@code P = sum over ranges of (floor(n_r / pageSize) + 1)} does not
  *       depend on the worker count at all — no work is duplicated or skipped by adding workers, so
  *       concurrency changes only <em>when</em> calls happen. This makes call count a structural

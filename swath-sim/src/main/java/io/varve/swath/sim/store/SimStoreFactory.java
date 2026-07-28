@@ -21,6 +21,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,6 +52,43 @@ import org.slf4j.LoggerFactory;
  * <p><b>Fixtures are local paths.</b> {@code fixturePath} is a swath Parquet capture file or a
  * directory of them, on this machine. Nothing here resolves a remote object-store location:
  * fetching a fixture to local disk is the caller's job, deliberately outside this seam.
+ *
+ * <h2>What an unsorted fixture does here, tier by tier</h2>
+ * A fixture that is not in strictly ascending key order is a corrupt input for a simulator: the sim's
+ * whole premise is that its store answers the ranges a real ordered store would. The check is inline
+ * in the loops each tier already runs — never a separate validation pass — and it does not reach every
+ * tier equally, which is stated here rather than left to be discovered:
+ * <ul>
+ *   <li>{@link SimStoreBackend#STREAMING} — <b>guarded</b>. Row-group first keys are proved ascending
+ *       at index derive ({@link SortedFixtures#loadIndex}, the fixture is otherwise ineligible), and
+ *       every key of every row group the run actually faults in is proved on the way into its
+ *       {@link KeyBlock}. The first violation fails the read, naming file, row group and the
+ *       offending key's position within that group (spelled {@code key N}, the position the
+ *       block counted — the skip-scan's cursor calls the same thing {@code row N}).</li>
+ *   <li>{@link SimStoreBackend#WINDOWED} — <b>partly guarded, and the unguarded half loses keys</b>.
+ *       Same index-derive gate, and the {@code delimiter=/} skip-scan proves the ascent of every row
+ *       it steps over ({@code SortedRowGroupReader.KeyCursor}). Its plain range reads are routed off
+ *       the derived index — which describes an order the file does not have — so on a multi-file
+ *       fixture the plan for a range can omit the file a misplaced in-range key physically sits in,
+ *       and that key is then never read. Not a short page and not an out-of-order one: a clean,
+ *       un-truncated end of listing that is missing a key. It surfaces on a range that <em>starts</em>
+ *       above the misplaced key's own file (every steal, every split), not on a whole-listing read,
+ *       whose plan spans every file anyway. {@code UnsortedFixtureGuardTest} pins both halves.</li>
+ *   <li>{@link SimStoreBackend#ARENA} — <b>duplicates guarded, disorder normalised</b>. The arena is
+ *       loaded <em>through</em> the Parquet store below, whose reads are {@code ORDER BY key}: keys
+ *       therefore arrive sorted whatever the file holds, and the arena's ascending check can only
+ *       fire on a duplicate (which survives sorting). The keys it then serves are the fixture's, in
+ *       order.</li>
+ *   <li>{@link SimStoreBackend#PARQUET} — <b>not guarded, and deliberately</b>. That store exists to
+ *       serve arbitrary captures, sorted or not, and it re-sorts at query time; proving the file's
+ *       physical order would mean a second scan of it, which is precisely what an inline check is
+ *       not. A fixture that reaches this tier is served in key order regardless.</li>
+ * </ul>
+ * {@link SimStoreBackend#AUTO} therefore hard-fails an unsorted fixture whenever it lands on the
+ * streaming tier — which is where a fixture large enough for a real sweep lands by construction. The
+ * failure is a typed {@link io.varve.swath.sort.RowGroupOrderException} and is counted
+ * ({@link SimStoreMetrics#SEGMENT_REFUSED_METRIC}) before it is rethrown, so a sweep classifies the
+ * excluded fixture from the reason and the metrics rather than from a message.
  */
 public final class SimStoreFactory {
 
@@ -59,8 +97,22 @@ public final class SimStoreFactory {
     private SimStoreFactory() {
     }
 
-    /** The resolved store, the backend actually chosen, and the metrics that back it. */
-    public record Result(ListingStore store, SimStoreBackend resolvedBackend, ReplayMetrics metrics) {
+    /**
+     * The resolved store, the backend actually chosen, the metrics that back it, and — where the
+     * chosen tier knows it — how many keys the fixture holds.
+     *
+     * <p>{@code keyCount} is the fixture's own total, not a run's output: the summed
+     * {@link IndexEntry#rowCount()} of the derived routing index for the two tiers that carry one
+     * ({@link SimStoreBackend#STREAMING}, {@link SimStoreBackend#WINDOWED} — eligibility already
+     * proved every row group is pure {@code OBJECT}, so a row count is a key count), and
+     * {@link ArenaListingStore#keyCount()} for the arena. It is what a run's emitted-key assertion
+     * must be checked against: comparing legs with each other passes a loss every leg shares, which
+     * is exactly the shape a routing or pagination bug takes. Empty under
+     * {@link SimStoreBackend#PARQUET}, whose store would have to scan the fixture to answer — a cost
+     * the caller has not asked for; those callers fall back to cross-leg equality and say so.
+     */
+    public record Result(ListingStore store, SimStoreBackend resolvedBackend, ReplayMetrics metrics,
+                         OptionalLong keyCount) {
     }
 
     /**
@@ -76,11 +128,13 @@ public final class SimStoreFactory {
     /**
      * Opens {@code fixturePath} under the requested {@code backend} and an explicit {@code config}.
      *
-     * @throws IllegalArgumentException under {@link SimStoreBackend#ARENA} when the fixture's keys
-     *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}, or
-     *                                  under {@link SimStoreBackend#STREAMING} /
-     *                                  {@link SimStoreBackend#WINDOWED} when the fixture is not
-     *                                  sorted-eligible
+     * @throws IllegalArgumentException      under {@link SimStoreBackend#ARENA} when the fixture's
+     *                                       keys do not fit
+     *                                       {@link SimStoreConfig#arenaMaxEncodedBytes()}
+     * @throws IneligibleFixtureException    under {@link SimStoreBackend#STREAMING} /
+     *                                       {@link SimStoreBackend#WINDOWED} when the fixture is not
+     *                                       sorted-eligible — typed, so a corpus sweep can file it as
+     *                                       an exclusion without reading a message
      */
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
@@ -93,7 +147,8 @@ public final class SimStoreFactory {
         return switch (backend) {
             case PARQUET -> {
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
-                yield resolved(parquetStore(fixturePath, metrics), SimStoreBackend.PARQUET, metrics, simMetrics);
+                yield resolved(parquetStore(fixturePath, metrics), SimStoreBackend.PARQUET, metrics, simMetrics,
+                        OptionalLong.empty());
             }
             case ARENA -> {
                 // SERVING_MODE_DUCKDB, and that is not a mislabel: the arena reads the fixture through
@@ -102,13 +157,14 @@ public final class SimStoreFactory {
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ArenaListingStore arena;
                 try (ListingStore source = parquetStore(fixturePath, metrics)) {
-                    arena = loadArena(source, config).orElseThrow(() -> new IllegalArgumentException(
+                    arena = loadArena(source, config, fixturePath).orElseThrow(() -> new IllegalArgumentException(
                             "backend " + SimStoreBackend.ARENA + " requires a fixture whose encoded keys fit in "
                                     + config.arenaMaxEncodedBytes() + " bytes (raise "
                                     + SimStoreConfig.ARENA_MAX_ENCODED_BYTES_PROPERTY + ", or use "
                                     + SimStoreBackend.PARQUET + "): " + fixturePath));
                 }
-                yield resolved(arena, SimStoreBackend.ARENA, metrics, simMetrics);
+                yield resolved(arena, SimStoreBackend.ARENA, metrics, simMetrics,
+                        OptionalLong.of(arena.keyCount()));
             }
             case STREAMING -> {
                 // SERVING_MODE_SORTED: like the windowed tier below, this one reads the fixture's own
@@ -117,14 +173,14 @@ public final class SimStoreFactory {
                 List<Path> files = resolveFiles(fixturePath);
                 List<IndexEntry> index = requireSortedIndex(files, fixtureMetrics, SimStoreBackend.STREAMING);
                 yield resolved(new StreamingListingStore(index, simMetrics, config.streamingMaxResidentBytes()),
-                        SimStoreBackend.STREAMING, metrics, simMetrics);
+                        SimStoreBackend.STREAMING, metrics, simMetrics, keyCount(index));
             }
             case WINDOWED -> {
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
                 List<Path> files = resolveFiles(fixturePath);
                 List<IndexEntry> index = requireSortedIndex(files, fixtureMetrics, SimStoreBackend.WINDOWED);
                 yield resolved(windowedStore(files, index, metrics), SimStoreBackend.WINDOWED,
-                        metrics, simMetrics);
+                        metrics, simMetrics, keyCount(index));
             }
             // AUTO is a fixture-tier router, not an engine algorithm path: AGENTS.md's "instrument
             // every new algorithm path" doctrine (recordStealReason) is scoped to the LISTING
@@ -138,14 +194,15 @@ public final class SimStoreFactory {
                 ListingStore source = parquetStore(fixturePath, duckdbMetrics);
                 Optional<ArenaListingStore> arena;
                 try {
-                    arena = loadArena(source, config);
+                    arena = loadArena(source, config, fixturePath);
                 } catch (RuntimeException e) {
                     source.close();
                     throw e;
                 }
                 if (arena.isPresent()) {
                     source.close();
-                    yield resolved(arena.get(), SimStoreBackend.ARENA, duckdbMetrics, simMetrics);
+                    yield resolved(arena.get(), SimStoreBackend.ARENA, duckdbMetrics, simMetrics,
+                            OptionalLong.of(arena.get().keyCount()));
                 }
                 simMetrics.recordArenaDecline(SimStoreMetrics.DECLINE_OVER_BUDGET);
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
@@ -166,25 +223,42 @@ public final class SimStoreFactory {
                     ReplayMetrics sortedMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
                     yield resolved(
                             new StreamingListingStore(eligible.index(), simMetrics, config.streamingMaxResidentBytes()),
-                            SimStoreBackend.STREAMING, sortedMetrics, simMetrics);
+                            SimStoreBackend.STREAMING, sortedMetrics, simMetrics, keyCount(eligible.index()));
                 }
                 String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
                 simMetrics.recordStreamingDecline(reason);
                 log.info("sim_store auto declined the streaming tier (reason={}) — falling back to {} for {}",
                         reason, SimStoreBackend.PARQUET, fixturePath);
-                yield resolved(source, SimStoreBackend.PARQUET, duckdbMetrics, simMetrics);
+                yield resolved(source, SimStoreBackend.PARQUET, duckdbMetrics, simMetrics, OptionalLong.empty());
             }
         };
     }
 
     private static Result resolved(ListingStore store, SimStoreBackend backend, ReplayMetrics metrics,
-                                   SimStoreMetrics simMetrics) {
+                                   SimStoreMetrics simMetrics, OptionalLong keyCount) {
         simMetrics.recordBackend(backend);
-        return new Result(store, backend, metrics);
+        return new Result(store, backend, metrics, keyCount);
     }
 
-    private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config) {
-        return ArenaListingStore.loadWithin(source, config.arenaMaxEncodedBytes());
+    /** The fixture's key total as the derived routing index carries it — see {@link Result#keyCount()}. */
+    private static OptionalLong keyCount(List<IndexEntry> index) {
+        return OptionalLong.of(index.stream().mapToLong(IndexEntry::rowCount).sum());
+    }
+
+    /**
+     * The arena load, with the fixture named on the way out of a rejection. The arena rejects a key
+     * that is over-long or not strictly above its predecessor, and its message names the offending key
+     * and its row ordinal — but it is built over a {@link ListingStore} and cannot know which fixture
+     * that store is reading, which is exactly what a sweep over a corpus needs told.
+     */
+    private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config,
+                                                         Path fixturePath) {
+        try {
+            return ArenaListingStore.loadWithin(source, config.arenaMaxEncodedBytes());
+        } catch (IllegalArgumentException rejected) {
+            throw new IllegalArgumentException("fixture " + fixturePath + " cannot be served by the "
+                    + SimStoreBackend.ARENA + " tier: " + rejected.getMessage(), rejected);
+        }
     }
 
     private static ListingStore parquetStore(Path fixturePath, ReplayMetrics metrics) {
@@ -195,6 +269,9 @@ public final class SimStoreFactory {
      * The derived routing index of a sorted-eligible {@code files}, for the two forced backends that
      * require one. {@code recordFallbackOnFailure=false}: a forced backend that declines hard-fails,
      * so this is not a "fallback" any more than {@link SimStoreBackend#ARENA}'s forced decline is.
+     * The decline is raised as a typed {@link IneligibleFixtureException} carrying the eligibility
+     * reason and the file set, for the same reason the mid-decode disorder is typed: a sweep must be
+     * able to file it as corpus data without reading a message.
      */
     private static List<IndexEntry> requireSortedIndex(List<Path> files, FixtureMetrics fixtureMetrics,
                                                        SimStoreBackend backend) {
@@ -203,8 +280,7 @@ public final class SimStoreFactory {
             return eligible.index();
         }
         String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
-        throw new IllegalArgumentException("backend " + backend + " requires a sorted-eligible fixture ("
-                + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + files);
+        throw new IneligibleFixtureException(backend, reason, files);
     }
 
     /**

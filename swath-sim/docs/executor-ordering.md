@@ -57,6 +57,65 @@ what eventually paces attempts against a drainer nobody can catch. That refusal 
 engineered away: it is the fidelity the simulator exists for, and there is a test that fails if the
 re-validation is removed.
 
+The two checks in body `n+1` are not two chances at the same thing, and a run's counters read very
+differently across them. The re-validation is where proposals die: it is the first place the victim's
+current cursor is compared with a pivot placed against a snapshot taken several bodies ago
+(`splits_lost_revalidation`). The durable guard sees only what that check has already passed, so it can
+reject only if something changed between the two — inside one body, where no other actor runs. That
+needs a second in-flight proposer, and the fleet allows one steal attempt at a time.
+
+What is left is narrow enough to describe exactly. The guard's third condition is completion, and a
+victim can complete while a steal attempt against it is in flight, its claim not yet retired (the page's
+client-side cost is charged before the range is released). For the earlier check to pass anyway, the
+victim's final cursor has to still be *below* the pivot — so the pivot has to sit above the last key in
+the range, which the cascade only produces where it commits a pivot it never probed: a structure
+boundary, or the flat-leaf reflection, landing in the empty span between a directory's last key and a
+bound synthesised above it. That combination was observed exactly once, in a sweep configuration that
+is not in the repository: the concentrated deep-nested shape at `(8, 8, 1, 160_000)` — 759,188 keys —
+under eight workers, a 1,000-key page at 110 ms with 35 ms probes, the measured client cost and seed
+`20260727`, which rejected one durable split. Fifty-four flat-leaf configurations swept across worker
+count, probe latency and the width of the client-cost window rejected none. The in-repo run of the
+concentrated shape pins `splits_rejected == 0`, which is the ordinary case. So `splits_rejected` reads zero on runs
+losing most of their steals, and it is not the number to read when asking how often a fleet loses this
+race.
+
+## Who wakes a parked worker, and how often
+
+A worker with nothing to claim parks on a timer. Four things cut that park short, and they are the
+engine's four, not a simplification of them:
+
+| Wake | Fired when | How often |
+|---|---|---|
+| A split child is published | the ledger enqueues a child — the owner's carve and the thief's committed steal alike, since both make a child claimable | tens to hundreds a run |
+| A range completes | the ledger's outstanding count is decremented | once per range |
+| A steal attempt finishes | the fleet's single attempt slot is released, whatever the outcome — in practice the wake a *non-productive* attempt fires, because a productive one has already woken the fleet under its own publication an instant earlier | once per attempt, thousands a run |
+| **A non-empty page commit** | **every page any worker commits that emitted a key** | **once per page — the most frequent firing of the four by an order of magnitude** |
+
+**Fired is not woken.** A signal only wakes whoever happens to be parked at that instant, so the mix of
+wake events in a trace is not the mix of firings: on `WorkerWakeSourcesTest`'s eight-worker dense flat
+leaf the four sources are within ~1.4× of each other (183 / 197 / 160 / 223 in table order), because the
+frequent per-page signal usually finds nobody parked while a publication usually finds most of the fleet
+parked behind it. That test asserts the shape — all four present, none of them a rounding error — rather
+than a ranking.
+
+The last one also **resets the idle-steal backoff ladder**, and both halves of that are the engine's
+behaviour: its page-commit path resets the fleet-wide backoff and broadcasts on the worklist for
+exactly the same reason — a fleet that has just been handed fresh progress should not sit out a full
+backoff window before looking for it. The consequence is worth stating plainly rather than
+rediscovering: **while any worker commits pages steadily, the ladder is structurally pinned near its
+bottom rung**, because the interval it needs to climb is an interval in which nothing anywhere commits.
+And during a single-owner serial tail the same broadcast fires on every page of the one range still
+draining — waking every parked thief, each of which attempts, is denied, and re-parks, only to be woken
+by the next page. That is where a large share of a run's events come from (retired park timers are
+38–43% of all events dispatched in the measured runs), and it is a cost the modelled fleet is supposed
+to be paying, because the real one pays it.
+
+The rung is not thereby dead: refusals are recorded (`IDLE_SLOT.paced`) in both regimes, because a
+thief whose attempt just returned non-productive re-enters the idle path in the same instant and is
+turned away by the backoff it has itself only just re-armed. What the per-commit reset governs is how
+high the ladder climbs, not whether it is consulted. `IdleStealPacingReachabilityTest` pins that the
+rung is reached at all.
+
 ## Timeouts, and what a cancelled timer costs
 
 The kernel has no cancellation. So:
@@ -68,8 +127,14 @@ The kernel has no cancellation. So:
   second firings are dispatched events: they count against the run's event budget, and they are
   counted (`events.stale`) so a budget can be sized including them rather than despite them.
 
-The same mechanism retires a park timer whose worker was woken early by a signal — a child being
-published, or a range completing.
+A timed-out call keeps one further event either way, at the instant the *store* would have answered,
+which is where its occupancy is retired. A call the client has given up on is still work the store is
+doing and still crowds out the next one, so retiring it at the client's timeout would understate
+occupancy by exactly the calls a struggling store is struggling with — the one regime where a latency
+model that reads occupancy has anything to say. The two paths answer that question the same way.
+
+The stale mechanism also retires a park timer whose worker was woken early by any of the four signals
+above.
 
 ## The three disclosed widenings this reproduces
 
@@ -90,6 +155,27 @@ engine that ships:
 The **fleet-wide idle-steal pacing window is not one of them.** Its arithmetic moved behind the seam
 unchanged and is still consulted under the same monitor, so this executor's single check-then-act at the
 top of an attempt is the engine's own shape rather than a widening of it.
+
+## Divergences from the engine, deliberately not modelled
+
+Distinct from the widenings above, which are the engine's current behaviour reproduced. These are
+places where the executor knowingly does something the engine does not, and the entry exists so a
+result that turns on one is recognisable as such rather than surprising.
+
+- **A retried attempt keeps the base timeout; the engine escalates it.** `GaugedFetcher` raises a
+  fetch's per-attempt budget on consecutive attempt timeouts (base → 20 s → 40 s, via
+  `TransientRetryFetcher.escalationLevel`), so a real retry gets longer to answer than the attempt it
+  is retrying. Here every attempt in a chain is bounded by the same declared
+  `probeAttemptTimeoutNanos` / `workerAttemptTimeoutNanos`. The effect is confined to the storm
+  regime — where the engine would ride out a slow store that this executor gives up on, so a modelled
+  run in that regime **under**-states how much a real fleet recovers. The retry *count* is faithful:
+  the declared cap is spent in full on both the first attempt's timeout and every retried one.
+- **A rejected durable split records futility against its victim; the engine does not.** The
+  `split_aborted` branch here calls `recordFutileSteal`, where `Thief.commit` restores the bound and
+  leaves the victim's futility tally alone (only the two earlier losers record it). Reachable at most
+  once in the runs measured so far — see the guard note above — so it has never moved a pacing
+  decision, and it is written down rather than quietly fixed because the fix is a behaviour change to
+  an executor whose whole claim is that it does what the engine does.
 
 ## What is deliberately not modelled
 

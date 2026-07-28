@@ -14,8 +14,10 @@ import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
 import io.varve.swath.replay.testkit.HttpProbe;
+import io.varve.swath.sort.RowGroupOrderException;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.Callable;
@@ -59,6 +61,33 @@ class ReplayServerTest {
 
             assertThat(response.statusCode()).isEqualTo(404);
             assertThat(response.body()).contains("<Code>NoSuchBucket</Code>");
+        }
+    }
+
+    /**
+     * A fixture that passed eligibility and is disordered <em>inside</em> a row group fails at request
+     * time, with nothing to fall back to (documented in {@code docs/swath-replay-server.md}). The
+     * response must carry enough to act on — the typed reason, the file NAME, the row group — and must
+     * <b>not</b> carry the server's filesystem layout, which is what a bare {@code getMessage()} on
+     * this exception spells out. The full path stays in the log, not on the wire.
+     */
+    @Test
+    void aDisorderedFixtureFailsTheRequestWithoutPublishingItsPath() throws Exception {
+        Path fixtureFile = Path.of("/srv/captures/some-bucket/part-00001.parquet");
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", request -> {
+            throw RowGroupOrderException.at(fixtureFile, 7, 42,
+                    "its keys must be in strictly ascending unsigned order");
+        })) {
+            server.start();
+
+            HttpResponse<String> response = HttpProbe.response(server, "/bucket?list-type=2&delimiter=%2F");
+
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.body())
+                    .contains("<Code>InternalError</Code>")
+                    .contains(RowGroupOrderException.ROW_GROUP_DISORDER)
+                    .contains("row group 7 of part-00001.parquet")
+                    .doesNotContain("/srv/captures");
         }
     }
 

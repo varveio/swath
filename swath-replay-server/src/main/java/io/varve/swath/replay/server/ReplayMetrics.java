@@ -165,6 +165,19 @@ public final class ReplayMetrics {
                 .tag("reason", reason).register(registry).increment();
     }
 
+    /**
+     * Records one request-time refusal of a fixture the sorted path cannot serve, tagged with the
+     * typed reason ({@code row_group_disorder}: a row group's own rows are not in ascending order,
+     * which eligibility cannot see because it proves the ascent of row-group <em>first</em> keys
+     * only). Its own counter and not a {@code serving.fallback} reason, because it is not a fallback
+     * — the fixture already passed eligibility, no other path can take over mid-request, and the
+     * request fails. A sweep classifying an excluded capture reads this, never the error body.
+     */
+    public void recordServingRefused(String reason) {
+        Counter.builder("swath.replay.serving.refused")
+                .tag("reason", reason).register(registry).increment();
+    }
+
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */
     public void recordPrefetchFillRows(int rows) {
         prefetchFillRows.record(rows);

@@ -6,6 +6,7 @@
 package io.varve.swath.sim.store;
 
 import io.varve.swath.replay.protocol.ByteKeys;
+import io.varve.swath.sort.RowGroupOrderException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -191,8 +192,8 @@ final class KeyBlock implements AutoCloseable {
          * {@code maxBytes}. Once {@code false} is returned the block is over budget for good — the
          * caller abandons it rather than serving a row group with keys missing from the middle.
          *
-         * @throws IllegalStateException when {@code key} is not strictly above its predecessor, or
-         *                               when more keys arrive than the row group declared
+         * @throws RowGroupOrderException when {@code key} is not strictly above its predecessor
+         * @throws IllegalStateException  when more keys arrive than the row group declared
          */
         boolean append(byte[] key) {
             if (count == rowCount) {
@@ -249,15 +250,20 @@ final class KeyBlock implements AutoCloseable {
          * or an out-of-order key does not merely degrade it — it corrupts every later search, and the
          * store then reports confident wrong answers. Sorted-serving eligibility proved the ascent of
          * row-group <em>first</em> keys only; this is what proves it within a group.
+         *
+         * <p>Raised {@linkplain RowGroupOrderException#atRow unlocated}: a block knows its own row
+         * ordinal and nothing about the fixture it came from, and {@link StreamingListingStore}'s
+         * decode adds the file and row group — the same typed reason the replay server's skip-scan
+         * raises, so a sweep classifies a disorder exclusion identically on both sides.
          */
         private void requireAscending(byte[] key) {
             // The decoder hands over a fresh array per row and never reuses it, so retaining the
             // previous one is a plain heap comparison — no read back out of the staging buffer, and
             // no per-key segment wrapper on the hottest loop in the tier.
             if (previousKey != null && Arrays.compareUnsigned(previousKey, key) >= 0) {
-                throw new IllegalStateException("row group keys must arrive in strictly ascending unsigned "
-                        + "order; key " + count + " (" + ByteKeys.percentEncode(key)
-                        + ") is at or below its predecessor");
+                throw RowGroupOrderException.atRow(count,
+                        "row group keys must arrive in strictly ascending unsigned order; key " + count
+                                + " (" + ByteKeys.percentEncode(key) + ") is at or below its predecessor");
             }
         }
 

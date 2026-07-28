@@ -100,6 +100,45 @@ class SimStoreFactoryTest {
         assertThat(backendCount(result, SimStoreBackend.STREAMING)).isEqualTo(1);
     }
 
+    /**
+     * <b>What a run's key-count assertion must be checked against.</b> A run that compares its legs
+     * only with each other passes a loss every leg shares — a routing or pagination bug drops the same
+     * keys every time, which is exactly the shape that guard cannot see. So the tiers that already
+     * know the fixture's total say so: the derived routing index carries a row count per row group,
+     * and eligibility has already proved every group pure {@code OBJECT}, so their sum is the key
+     * count; the arena counts what it loaded.
+     */
+    @Test
+    void everyTierThatKnowsTheFixturesKeyTotalReportsIt(@TempDir Path dir) throws IOException {
+        for (SimStoreBackend backend : List.of(SimStoreBackend.STREAMING, SimStoreBackend.WINDOWED)) {
+            SimStoreFactory.Result result = SimStoreFactory.open(
+                    sortedFixture(mkdir(dir, "sorted-" + backend)), backend, GENEROUS);
+            try (var ignored = result.store()) {
+                assertThat(result.keyCount()).as("%s", backend).hasValue(KEYS.size());
+            }
+        }
+        SimStoreFactory.Result arena = SimStoreFactory.open(fixture(mkdir(dir, "arena")),
+                SimStoreBackend.ARENA, GENEROUS);
+        try (var ignored = arena.store()) {
+            assertThat(arena.keyCount()).hasValue(KEYS.size());
+        }
+    }
+
+    /**
+     * The Parquet tier is the one that cannot answer without scanning the fixture it exists to serve
+     * arbitrarily, so it reports <em>nothing</em> rather than a number it had to pay for. A caller
+     * that gets an empty count has to fall back to cross-leg equality knowingly, which is the point of
+     * making the absence explicit.
+     */
+    @Test
+    void theParquetTierReportsNoKeyTotalRatherThanScanningForOne(@TempDir Path dir) throws IOException {
+        SimStoreFactory.Result result = SimStoreFactory.open(fixture(dir), SimStoreBackend.PARQUET, GENEROUS);
+
+        try (var ignored = result.store()) {
+            assertThat(result.keyCount()).isEmpty();
+        }
+    }
+
     @Test
     void forcedStreamingFailsFastWhenTheFixtureIsNotSortedEligible(@TempDir Path dir) throws IOException {
         Path fixture = fixture(dir);   // unsorted, unstamped

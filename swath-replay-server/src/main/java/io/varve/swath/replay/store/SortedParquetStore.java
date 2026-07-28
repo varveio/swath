@@ -11,6 +11,7 @@ import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.Successor;
 import io.varve.swath.replay.server.ReplayMetrics;
+import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -177,6 +178,12 @@ public final class SortedParquetStore implements ListingStore {
             entries = out.size();
             success = true;
             return out;
+        } catch (RowGroupOrderException e) {
+            // Count BEFORE rethrowing: the request fails and no other path can take over, so the
+            // exclusion has to survive into the metrics a sweep classifies from (the same discipline
+            // io.varve.swath.sort.PageRunSegmentIo's own pre-throw count keeps).
+            metrics.recordServingRefused(e.reason());
+            throw e;
         } catch (IOException e) {
             throw new IllegalStateException("failed to run sorted Parquet delimiter skip-scan", e);
         } finally {

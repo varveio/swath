@@ -106,7 +106,42 @@ regression.
 `STREAMING` and `WINDOWED` both require a **sorted-eligible** fixture: a stamped, `mode=objects`,
 strictly-sorted, pure-`OBJECT` capture, the same eligibility the replay server's own
 `--serving-mode sorted` checks (`SortedEligibility`, shared code). A fixture that is not
-sorted-eligible fails fast under either forced request, and `AUTO` falls back to `PARQUET`.
+sorted-eligible fails fast under either forced request — as a typed `IneligibleFixtureException`
+carrying the eligibility reason and the file set, so a sweep over a corpus classifies the refusal
+without reading a message — and `AUTO` falls back to `PARQUET`.
+
+### An unsorted fixture is a corrupt input, and where that is caught
+
+Eligibility proves the ascent of row-group **first** keys. The rows *inside* a group are proved
+where they are decoded, in the loop each tier already runs — never as a separate validation pass,
+which on a 300 MB fixture would cost as much as the run:
+
+| Tier | Unsorted input |
+|---|---|
+| `STREAMING` | **Hard fail** on the first violation in any row group a run faults in, naming file, row group and the offending key's position within that group — the message spells it `key N`, the position the block counted (`KeyBlock` on the way in, file and row group added by the tier). |
+| `WINDOWED` | Hard fail along the `delimiter=/` skip-scan, which proves every row it steps over (`SortedRowGroupReader.KeyCursor`). Its plain range reads are **not** guarded, and what they do is worse than a short page — see below. |
+| `ARENA` | Loaded through the Parquet store, whose reads are `ORDER BY key`: disorder is normalised on the way in and only a **duplicate** key trips the arena's check. |
+| `PARQUET` | Not checked, by design — that store exists to serve arbitrary unsorted captures and re-sorts at query time. |
+
+So a corpus fixture large enough for a real sweep — which `AUTO` puts on `STREAMING` — is guarded,
+and one small enough to fit the arena is served in key order whatever its file holds. A sweep runner
+treats the hard failure as "exclude this bucket and record why", not as a reason to stop — and it can
+read the *why* mechanically: the failure is an `io.varve.swath.sort.RowGroupOrderException` carrying
+`reason() == "row_group_disorder"`, and the decode bumps
+`swath.sim.store.streaming.segment.refused{reason}` **before** it rethrows, so the exclusion survives
+into the metrics of a run that ended in an exception. Nothing downstream has to match a message. (The
+replay server raises the same typed failure from its own skip-scan and counts it as
+`swath.replay.serving.refused{reason}`; see `docs/swath-replay-server.md`.)
+
+**What `WINDOWED`'s unguarded range reads actually do is lose keys, silently.** They are routed off
+the derived index, which describes an order the file does not have, so on a multi-file fixture the
+plan for a range can leave out the file a misplaced in-range key physically sits in — and then that
+key is never read at all. Nothing is short and nothing is out of order: the client walks to a clean,
+**un-truncated** end of listing missing a key it was entitled to. Worse, a whole-listing read can
+find the key anyway (its plan spans every file), so the loss appears only once a cursor *starts*
+above the misplaced key's own file — which is every steal and every split a simulated run performs.
+`UnsortedFixtureGuardTest` asserts both halves, the refusal and the loss, so the masked behaviour is
+a pinned fact rather than a claim in prose.
 
 **Why `WINDOWED` is forced-only.** It decodes Parquet *inside* the serving loop: every window
 refill is a bounded range query, and because the `key` column is a `BLOB` with no usable zonemaps
@@ -276,17 +311,120 @@ is hardest. The full ordering contract, including the two disclosed timing widen
 models and what a cancelled timer costs a run's event budget, is in
 [`docs/executor-ordering.md`](docs/executor-ordering.md).
 
+**There are two losers of that race, and only one of them is where the losses are.** The engine
+re-validates its pivot against the victim as it stands *now*, immediately before proposing the split,
+and then the durable split is guarded again on the same facts. The first check is where a thief that
+spent its probes on a drainer it cannot catch finds out — `RETRY.cursor_passed_pivot`,
+`RETRY.bound_moved`, reported as `splits_lost_revalidation`. The second can only fire when something
+changed *between* a re-validation that passed and the split it authorised, which needs a second
+proposer, and the fleet admits one steal attempt at a time. So `splits_rejected` sits at zero on runs
+that are losing four proposals in five, and that zero is a fact about the ordering rather than a
+simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
+
+How often **that race** is lost is a property of the *keyspace*, not of the timings a scenario declares
+— a claim about the loss share specifically, and not about the serial tail it contributes to, which
+depends on the page regime and is discussed under the fixtures below. Where a pivot lands relative to
+the cursor and how far the cursor travels while the probes are in flight both scale with the page, so
+moving from a 100-key page in 30 ms to the 1,000-key page in 110 ms a real deployment was measured at
+leaves the loss share in the same place (81% and 66% on the same fixture). What moves it is mass: the
+same geometry with a twentieth of the keys per directory loses 52%. The measured page/probe regime is
+available as a named pair of inputs so that claim can be re-checked rather than believed.
+
+Two denominators are in circulation and they are not interchangeable. The shares above are proposals
+lost over proposals that reached the re-validation; a deployment's own numbers are usually quoted per
+steal *attempt*, counting attempts that never got that far. The measured runs read 85% and 93% per
+attempt, which is 96% and 90% per proposal. On either, this bench loses fewer races than the
+deployment does — the conservative direction for an instrument whose job is to make a proposed cure
+prove itself.
+
 **What a run reports.** A duration on its own is not a result: the same fixture yields a different one
 under a different store backend, a different client-cost term, or different declared budgets, and all
 three are choices. So a run record carries them — which store served it, which cost term it was charged
 against and how far that term can be trusted, which budgets it declared — alongside the phase shape,
 the counters every policy path engaged, and how many events the kernel dispatched to produce it.
 
+Two parts of that record are worth naming, because a counter total cannot express either.
+
+- **The phase timeline.** Three instants — the seed's end, the last split of any kind, the run's own
+  end — plus what happened between the last two: the keys emitted in that tail, and the *occupancy*,
+  meaning how many ranges were actually being drained while they were. A run that divides its keyspace
+  and one that gives up early can have identical split counts and completely different shapes, and the
+  difference is the whole subject. The run's end here is **quiescence**, not the kernel's last event.
+  The kernel cannot cancel a timer, so a park that has already been retired still costs a dispatch when
+  it fires, and a dispatch moves the clock. The longest of them is the steal-attempt-slot backstop —
+  one second under the engine's own defaults, the park of a worker that found the fleet's single steal
+  slot busy — so the clock keeps advancing for up to that second after the last worker has retired.
+  Traced after quiescence, the residue is *only* retired parks: no call timeout, no retry, no key.
+  Both instants are reported, and the gap between them (0.75–1.0 s on the in-repo fixtures) is an
+  artifact of the kernel rather than a property of the modelled fleet — **so a comparison between runs
+  belongs on the timeline's end, not on the kernel's.**
+- **Position-sensor readings.** Whether the arithmetic the policies steer on can see a given keyspace
+  at all: how many page commits moved the cursor without moving the run's position metric, and how many
+  scanned victims had a degenerate estimate — one that read zero, or one that discarded the emitted keys
+  it was given. Nothing in swath-core changes to produce them, because whether a sensor works is a
+  property of the keys, and a fixture that defeats it needs to be able to say so in numbers. They are
+  read **through whichever sensor the run steers on** (below): the question a counter answers is whether
+  *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
+  would report the disease while the cure was running.
+
+### Swapping the position sensor
+
+Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
+quantity: estimated remaining work on a range. The engine computes it one way — a local density times a
+remaining span, both measured in a byte window anchored at the divergence of the range's own bounds —
+and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes the quantity swappable
+*here*, so a candidate cure can be run against a fixture without the engine changing at all:
+
+| variant | reading |
+|---|---|
+| `CURRENT` | the shipped one; delegates to the engine's own public `StealMath`, so a control leg is the algorithm and not a copy of it |
+| `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
+| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
+| `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
+| `RATE_ANCHORED_LIFT_ONLY` | the same, with the band's lower half removed: geometry may **lift** a range's proven mass and never cut it. A factor below one asserts that less remains than has already come out, which is the inference the rate reading exists to refuse — and it is what refused a straggler's carve at the owner's remaining-work floor until the range had emitted 64 pages (`CarveAdmissionRaceProtocol`) |
+
+`SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
+the shipped sensor and reads exactly what it read before. Victim selection and the owner-split gate
+chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
+pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
+drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical
+decisions, so a copy that drifts fails a test rather than becoming a race result. The route itself is
+instrumented like every other algo path here: a run counts `SENSING_ROUTE.owner_split_*` and
+`SENSING_ROUTE.thief_*` once each, off the objects it actually installed, so which pair a table's legs
+were taken through is a reading of the run rather than an inference from its `sensing` field.
+
+**What the first race found** (`SensingRaceTest`, protocol pre-registered in `SensingRaceProtocol`;
+four seeds, three keyspaces, two page regimes). On the deep-nested mass-concentrated bench at a 100-key
+page all three candidates remove the serial tail — 0.33 down to 0.0003–0.0090 at every seed, ~28% less
+virtual time, mean occupancy 5.5 → 7.6–7.9 of 8 workers, and *fewer* store calls. The mechanism is the
+one the estimate gates directly: owner carves refused by the remaining-work floor fall by an order of
+magnitude per page committed, and what replaces them is the demand gate declining to carve because
+there is already enough work queued. **At the measured 1,000-key page every candidate is worse, at every
+seed**, because an estimate with no sense of position places the owner's carve on a nearly-drained range,
+the child comes back confetti-sized, and the feedback gate that watches for that shuts owner splitting
+down for the rest of the run. The rate variant alone also damages the hash-fanned healthy shape, at one
+of the four seeds — read on the same yardstick for all three candidates, the control's own reading at
+the same seed — for the same reason. None of the three is shippable as it stands; what the race
+establishes is that the sensor, and not the split policy above it, is what gates division on that
+keyspace.
+
+**The degeneracy counters are not the evidence they look like.** Both go to zero for `RATE` and
+`RATE_CURSOR_ANCHORED`, but that is arithmetic and not a cure: an estimator whose estimate *is* the
+emitted count cannot discard it, and the only score that can read zero is a cursor already at its
+bound, which is a finished range and never a scanned candidate. Only `CURSOR_ANCHORED`'s readings there
+are measured — and its zero-estimate share is **not** an improvement (0.015–0.050 against the control's
+0.036–0.039, worse at one seed). What the counters do establish is that they follow whichever sensor is
+installed.
+
 ### What a run costs to produce
 
 Two different numbers, and confusing them is the classic simulator mistake. A run's **virtual
-duration** is the modelled system's answer. Its **wall time** is what this machine spent computing that
-answer, and the only thing it says about swath is whether sweeping over many runs is affordable.
+duration** is the modelled system's answer — its time to quiescence, per the timeline note above. Its
+**wall time** is what this machine spent computing that answer, and the only thing it says about swath
+is whether sweeping over many runs is affordable. (The two virtual durations below are ~0.9 s shorter
+than the same runs reported before the duration was re-pointed off the kernel's last event; the
+difference is that run's retired-park drain, and it was a near-constant, so nothing that compared two
+runs was affected by it.)
 
 Measured on one 8-core arm64 development box, the same keyspace shape at two sizes, 32 workers,
 1000-key pages, no seed:
@@ -297,8 +435,8 @@ Measured on one 8-core arm64 development box, the same keyspace shape at two siz
 | events dispatched | 30,345 | 46,936 |
 | of those, retired park timers | 13,195 (43%) | 18,056 (38%) |
 | **events per modelled call** | **30.3** | **16.7** |
-| wall time | 0.22 s (216 µs/call) | 0.14 s (49 µs/call) |
-| virtual duration | 3.6 s | 5.9 s |
+| wall time | 0.21 s (206 µs/call) | 0.13 s (48 µs/call) |
+| virtual duration (to quiescence) | 2.7 s | 5.0 s |
 
 **Events per call is not a constant, and the second size point is what shows it.** A large share of a
 run's events are park timers — an idle worker waiting to be woken — and their number is driven by how
@@ -316,27 +454,233 @@ opt-in).
 
 With a constant latency and the client-cost term explicitly zeroed, a run's wall time is pure
 arithmetic, so the tests assert it exactly rather than within a tolerance: a range of `n` keys costs
-`floor(n / pageSize) + 1` calls (the last, short page is how a lister learns it is finished); the
-total call count does not depend on the worker count at all; one worker costs the sum of the
-latencies; a worker per range costs the largest range. Scaling is asserted **monotonic and not
-proportional** — a range is claimed whole, and pacing intervals and client costs are fixed
-durations, so more workers legitimately stop helping.
+a fixed number of calls; the total call count does not depend on the worker count at all; one worker
+costs the sum of the latencies; a worker per range costs the largest range. Scaling is asserted
+**monotonic and not proportional** — a range is claimed whole, and pacing intervals and client costs
+are fixed durations, so more workers legitimately stop helping.
+
+The "fixed number of calls" is two different closed forms, and the difference is the point:
+
+* The **policy executor** (`PolicyInvariantsTest`) issues real `ListObjectsV2` requests through
+  `ListObjectsV2Pager`, so a range of `n` keys costs `ceil(n / pageSize)` calls. S3 looks one key
+  past the page it returns, so the page that consumes the last key comes back full **and not
+  truncated** — a range whose size divides by the page size ends there, not on an extra empty call.
+* `SequentialListingDriver` (`ExactModeInvariantsTest`) costs `floor(n / pageSize) + 1`, because it
+  is a load generator that reads a **bounded range** straight off the store seam and stops on a short
+  page. It is deliberately not a model of the listing protocol; it exists so the kernel's clock and
+  ordering can be checked without a policy or a protocol in the way.
+
+A test that pins the second form on the first path is pinning a simulator artefact, which is what
+`SimListingViewProtocolTest` exists to prevent.
 
 ## Fixtures
 
 A fixture is a **local path** — a swath Parquet capture file, or a directory of them — supplied
 by the caller (config or CLI argument). Nothing in this module hardcodes, or is allowed to
 hardcode, a remote object-store location; fetching a fixture to local disk is the caller's job,
-outside this module.
+outside this module. That rule is mechanical rather than conventional: a source scan fails the build
+on an object-store URI in `src/main`, alongside the scans for ambient clocks and for reads of row
+metadata a keys-only fixture does not have (`SimAmbientSourceGuardTest`).
+
+### Running the real policies against a real listing
+
+A generated keyspace is a hypothesis about what a bucket looks like. `RealListingRunTest`
+(`@Tag("perf")`) runs the same fleet, seeds, page regimes and measured client cost over a **captured
+listing** instead, and prints the sensing race's own table so the two read side by side — plus a run
+cost table (wall time, events, store calls) that is how a corpus sweep gets sized, and a "where does
+the tail live" leg that reports the longest common prefix of the keys committed after the last split.
+
+```shell
+./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=/path/to/sorted-fixture
+# a listing of tens of millions of keys wants more than the perf tier's 2 GB:
+./gradlew :swath-sim:test -PonlyPerf -PsimTestHeap=6g -Dswath.sim.listing.fixture=...
+# eight workers by default (comparable with the synthetic benches); model the fleet the
+# listing's own capture ran at when the question is why THAT run behaved as it did:
+./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=... -Dswath.sim.listing.workers=64
+```
+
+The path is the operator's, supplied per invocation: **the repo never names a fixture, a bucket or a
+location**, and with the property unset the run skips itself. One store handle (resolved through
+`AUTO`, with the arena budget at a third of the heap) serves every leg, because opening a
+multi-million-key fixture costs more than the runs do. Nothing there asserts a magnitude — a
+threshold invented against a real bucket's numbers would be a threshold fitted to them — but every
+leg must complete and every leg must emit **the fixture's own key total**, which the resolved tier
+reports (`SimStoreFactory.Result#keyCount`); only under `PARQUET`, which cannot supply one without a
+scan, does it fall back to comparing the legs with each other, and it says which check it used. The
+per-leg `heap_peak_mb` column is the heap high-water mark **during that leg** (pool peak usage, reset
+between legs) — an upper bound on what the leg held, not its live set. It necessarily includes the one
+shared store handle, which is held across every leg: on an `ARENA` resolution that is nearly all of
+it and the column reads flat, and it is on `STREAMING` — whose decoded segments are off-heap and so
+absent from this figure — that the number is mostly the run's own.
+
+**Which tier `AUTO` lands on depends on the heap this invocation was given** — including the heap the
+line above raises. The arena budget is a third of `-Xmx`, so `-PsimTestHeap=6g` gives it ~2 GB and a
+listing whose encoded keys fit that is served by `ARENA`, **not** `STREAMING`. That matters beyond
+speed: `ARENA` and `PARQUET` are the order-masked tiers (they serve the fixture in an order they
+imposed), so a run on either proves nothing about whether the capture is in order. The harness prints
+a `WARNING` line next to the resolved backend when it lands on one. To exercise the guarded tier,
+give the run a smaller heap so the arena declines by budget.
+
+### Sweeping a whole corpus of captured listings
+
+`CorpusSweepRunTest` (`@Tag("perf")`, mechanics in `CorpusSweep`) is the same four arms over a
+*directory* of staged captures, in one JVM. One process, because the fixed costs are what decide
+whether a corpus sweep is affordable at all: a JVM start plus a Gradle invocation dominates a small
+fixture, and each fixture's own open dominates every run over it.
+
+```shell
+./gradlew :swath-sim:test -PonlyPerf -PsimTestHeap=6g \
+  -Dswath.sim.listing.corpus=/path/to/staged/captures \
+  -Dswath.sim.listing.results=/path/to/sweep.tsv
+```
+
+A fixture is a subdirectory holding a `data/` directory of capture Parquet; its sibling `summary.json`
+is the capture's own run record. Both paths are the operator's, supplied per invocation — **the repo
+names no corpus, bucket or location**, and with the first property unset the sweep skips itself. The
+results path is required, not optional: a corpus produces thousands of numbers and its per-fixture
+tables scroll past on the way, so a run whose output lived only in a console buffer would have to be
+repeated to be read. Rows are appended and flushed per fixture, so the file is complete for every
+fixture finished so far at any moment — an hour-long sweep that dies at the ninetieth fixture still
+yields the eighty-nine before it. **The results file must not already exist**, and a sweep pointed at
+one fails before it opens a fixture: a sweep's rows are cited raw, and a re-run that truncated the
+previous run's file would destroy the evidence for a finding already published.
+
+**Which directories the sweep covered is itself an output.** A corpus is staged by hand, so a fixture
+silently dropped reads exactly like a fixture with nothing to say. Two kinds are passed over, and each
+is named with its reason in the result and on the console (`phase=skipped`): a directory holding no
+`data/*.parquet`, and a capture whose footers declare more rows than
+`-Dswath.sim.listing.corpus-max-keys` allows (default 20M). That ceiling is there because a staged
+corpus outlives the tier staged into it: a leftover fixture an order of magnitude larger than the rest
+would be swept at whatever fleet it could name, for hours, and its rows would be comparable with
+nothing. Reading it costs one Parquet footer per part and no decode at all.
+
+Three choices decide what its numbers mean, and all three are visible in the output:
+
+- **`STREAMING`, forced** rather than `AUTO`. The arena declines by budget on a corpus-scale fixture
+  anyway, and `AUTO` pays a DuckDB materialization to find that out once per fixture; forcing also
+  fixes the tier across the corpus, and it is the tier whose decode is order-guarded. Note what this
+  moves rather than removes: a forced-streaming open reads footers only, so it is near-instant, and
+  the decode is paid lazily by the runs — which then amortizes across the legs sharing the handle.
+- **Each fixture at its own capture's `max_parallel_listings`.** How hard a keyspace is to divide is a
+  statement about a fleet size, not about the bucket alone, so a corpus comparison at one arbitrary
+  fleet size compares the wrong thing. A capture with no usable summary is swept at the race's eight
+  and its rows say `fleet_source=fallback`, because those rows are then not comparable with the rest.
+- **Two screening seeds, four where it matters.** Four seeds is the verdict standard; the sweep
+  screens at two and escalates to all four on any fixture whose screen *diverged* — a collapsed leg
+  (serial fraction above ½) at any arm or seed, steals mostly finding no victim at any arm and either
+  seed, or a duration gap either way between the shipped sensor and **any** candidate arm, read both
+  over the two screening seeds' mean **and at each seed on its own**. Both halves of that last one
+  matter: screening against a single candidate leaves a divergence only the other candidate shows
+  unexamined, and a mean over two seeds is the reading least able to see a bimodal fixture — one leg
+  55% down and one leg level average to a 23% gap that clears no threshold, so the fixture reads as
+  uninteresting exactly because it is unstable. The `escalated` column says which fixtures got the
+  full four, so **no two-seed row can be quoted as a verdict**.
+
+A capture the streaming tier **refuses** is recorded and the sweep continues to the next fixture.
+There are two typed refusals and the exclusion carries what each of them knows: an eligibility failure
+at open — disorder across row groups, a missing stamp, an incomplete multi-file set — carries the
+eligibility reason and the file set, and a disorder *inside* a row group, which fails the first run
+that faults that group in, carries its file, row group and row. Neither carries the operator's
+directory tree: the exclusion's `where` is the failure's redacted report, and the full path stays in
+the console log. That exclusion list is an output, not a failure: it is corpus QA data, and one
+unreadable capture must not cost the other hundred.
+
+**Nothing else is corpus data.** Any other runtime failure — a bug in the sweep, a malformed
+`swath.sim.*` property — is recorded as a *problem* against that fixture, and problems fail the run.
+So does a leg that produced a number nobody may use: one that stalled, or one that did not emit its
+fixture's own key total. Both are collected across the whole sweep and raised at the end, so a single
+bad fixture costs no measurements either. (A fixture that is then excluded mid-run drops the problems
+its earlier legs recorded: those describe the exclusion, not a defect the run must fail on.)
+
+**Reading the table: check the fleet before comparing two rows.** The sweep closes by printing the
+fleets it actually ran at (`phase=fleet`) and naming every fixture off the corpus's modal one
+(`phase=fleet_mismatch`), because a `workers` column that varies is a comparability limit and not a
+measurement. A row at `fleet_source=fallback`, or at a capture fleet the rest of the corpus did not
+run at, is a reading about that bucket at that concurrency — quotable on its own, not against its
+neighbours in the same table.
 
 ### Keyspace shapes, generated
 
 A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass
 sits in a few of them or spreads evenly, whether a split can find a populated pivot — so the tests also
 generate small keyspaces shaped like real buckets: a deep date-partitioned observation archive, a
-hash-fanned content-addressed corpus, a tree with one object per directory, and a single dense flat
-leaf. Each runs in milliseconds and each provokes different policy paths, which a fixture of uniformly
-named keys does not.
+hash-fanned content-addressed corpus, a tree with one object per directory, a single dense flat leaf,
+and a deep-nested shared prefix. Each runs in milliseconds and each provokes different policy paths,
+which a fixture of uniformly named keys does not.
+
+**The deep-nested shared prefix is the one aimed at a specific mechanism.** It is taxonomy-shaped —
+`species/<Genus_epithet>/<accession>/<dataset>/<stage>/<file>` — and its numbers are the point: sibling
+species directories diverge ten bytes in, while everything inside either of them varies only from byte
+39 on. Position is measured by `StealMath.fracIn` over the twelve bytes *after* the longest common
+prefix of a range's own bounds, so on a range spanning sibling subtrees the measured window is bytes
+10–22 and a cursor draining a subtree changes nothing inside it. Ninety-odd per cent of that fixture's
+page commits therefore advance the cursor without moving the fraction at all, the consumed span reads
+zero, and `estRemaining` falls back to a raw width with the range's emitted keys discarded — which is
+what every layer downstream (victim choice, pivot mass floors, the owner's self-split, the density
+feedback) is then steering on.
+
+**A high invisible-advance share on its own is not diagnostic of any of that**, and the measurements
+say so: the flat hex-named control reproduces it too (95.0% at scale, against this fixture's 94.1%).
+Twelve bytes is simply narrower than the ground a hundred-page range covers, whatever its keys are
+named, so once ranges are that wide the counter is reporting range width rather than taxonomy depth.
+What separates the two shapes is the **consumed span** — whether the window can see the cursor move
+*away from its own `lo`*, which is what decides if the estimate keeps the range's emitted keys or
+throws them away. That is where the fixtures diverge by a factor of two to eleven
+(`est_ignores_keys`, `est_zero`), and it is the reading a cure has to move.
+
+How much each subtree holds is a separate parameter, because the
+geometry decides what can be *measured* and the mass distribution decides whether being unable to
+measure it costs anything: `UNIFORM` isolates the first, and the heavy-tailed law a real archive
+follows is what makes the second visible.
+
+**Where that mass sits is a third property, and it is the one that reaches the run.** Real deep-nested
+buckets do not thin out as the tree descends: a third of a bucket's objects sat in one subtree and 90%
+in five, and the chain leading down to them had a fan-out of one or two the whole way, ending in a
+single directory holding some 1.8 million objects. `LEAF_CONCENTRATED` reproduces that last step —
+the same species ranks as the heavy-tailed law, with each accession's whole file count in *one* of its
+data directories and a token file in the others. Two things follow that a keyspace whose leaves hold
+thousands cannot produce. Structure discovery stops rescuing the run: the fan-out it finds is real and
+carries no mass, so a cut at it sheds a directory holding one file. And once a range lies inside the
+heavy directory there is no structure below it at all, so every pivot has to come from arithmetic over
+the frozen position window. Both show up as measurements: at a million keys not one thief child is
+placed by a structure probe (219 probes, zero wins), against three on the same mass spread across the
+accession, and the estimate discards its victim's emitted keys for 72% of the victims it is computed
+over.
+
+Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
+to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
+against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
+what separates the two claims: the same geometry is just as blind (94% of commits invisible) and costs
+nothing at all, because equal subtrees leave the seed's own division balanced and the fleet is never
+left having to divide anything. `PositionSensorAtScaleTest` (`@Tag("perf")`) runs the heavy-tailed pair
+ten times further up, where the difference reaches the run: 8.4% of it after the last split at a mean of
+1.6 ranges in flight, against 0.8%. Note what that second test does *not* show — the deep-nested run
+publishes 205 split children there against the control's 64. The division is not missing; it is late,
+driven by thieves that spend 691 attempts to place 118 of them, and refused four thousand times over by
+the owner's own estimate.
+
+`MassConcentrationAtScaleTest` (`@Tag("perf")`) is the same geometry at a million keys with the mass
+where a real archive's is, and it is the fixture that reaches the régime worth curing: a third of the
+post-seed run with at most one range in flight, a third of it after the last split anything managed to
+make, and four split proposals in five lost to the victim's own cursor. That is within a factor of two
+of the 60% of a run a real deep-nested bucket spends serial, against the 3.5% the same shape produces
+with its mass spread over 20,000-key leaves. Its control differs in one property only — the same eight
+subtrees holding the same number of keys each (to within the rank law's integer division), spread
+across an accession instead of concentrated in one directory — which is what makes the pair a
+comparison rather than two experiments.
+
+**That tail number is quoted at a 100-key page, and the page size is doing work.** What a fleet has to
+serialise is round trips, not keys, so the scaling variable is *pages per range*. This fixture's heavy
+directory holds 400,000 keys: 4,000 pages at 100 keys a page, 400 at a real 1,000-key page, against
+roughly 1,800 pages for the 1.8-million-object directory measured on a real bucket. The 100-key run is
+therefore page-faithful and mass-short — its biggest range is 4,000 of the run's 11,019 pages, where
+the real one was ~1,800 of ~8,800 — and the same keys at the measured 1,000-key page are mass-faithful
+and page-short, with a biggest range of 400 pages out of 1,179 and a serial fraction of **0.001**
+rather than 0.332. Both are asserted, in the same test class, for the same reason the spread control
+is: the honest statement is that reproducing this tail needs a bucket about ten times this fixture's
+size, and the small page buys that at a tenth of the memory while buying nothing else. The 36.8% /
+84.0% concentration shares it deals (against a measured 32.6% / 90.7%) are pinned in
+`KeyspaceFixturesTest`.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

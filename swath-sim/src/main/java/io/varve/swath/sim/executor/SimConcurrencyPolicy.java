@@ -146,9 +146,12 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         this.budgets = budgets;
         this.shedJitter = shedJitter;
         this.effectiveT = Math.min(SLOW_START_INITIAL_T, tMax);
-        // Seeded up front, exactly as the shipped controller seeds it, so the first window roll never
-        // measures against a zero length.
-        this.shedWindowLengthNanos = drawShedWindow();
+        // No window is drawn here, unlike the shipped controller, which seeds one so that a co-runner
+        // computing `now - start <= 0` against a freshly published start cannot roll the window twice
+        // before the winner's reset becomes visible. That race needs two threads. This kernel has one,
+        // the window start is UNARMED until the first roll, and the first roll always redraws — so a
+        // constructor draw would be a value nothing could ever read as a window length, taken off the
+        // fleet's jitter tape ahead of every value that is read as one.
     }
 
     @Override
@@ -255,9 +258,10 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     }
 
     /**
-     * The jittered length drawn for the current shed window. Package-private: the draw is a property a
-     * test has to be able to read directly, since a controller that always drew the same length would
-     * behave identically to a correct one on every other observable.
+     * The jittered length drawn for the current shed window, or zero before the first window is rolled.
+     * Package-private: the draw is a property a test has to be able to read directly, since a
+     * controller that always drew the same length would behave identically to a correct one on every
+     * other observable.
      */
     long shedWindowLengthNanos() {
         return shedWindowLengthNanos;

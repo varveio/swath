@@ -6,6 +6,7 @@
 package io.varve.swath.replay.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.CommonPrefixEntry;
@@ -23,8 +24,12 @@ import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
+import io.varve.swath.sort.RowGroupOrderException;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
+import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortedFileWriter;
+import io.varve.swath.sort.SortedParquetWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -417,6 +422,53 @@ class SortedParquetStoreTest {
     }
 
     // --- helpers ---
+
+    /**
+     * A stamped fixture whose rows are not ascending <em>within</em> a row group must fail the
+     * skip-scan that walks them, not answer hops from positions that mean nothing. Eligibility cannot
+     * see this — it proves the ascent of row-group FIRST keys only, and a single-group file passes
+     * that vacuously — so the check lives where the rows are actually stepped over
+     * ({@code SortedRowGroupReader.KeyCursor}), and this is the caller's path arriving at it.
+     *
+     * <p>The fixture is written straight through {@link SortedParquetWriter},
+     * bypassing {@link CaptureSorter}, because the sorter cannot produce the shape being guarded
+     * against: what it stands in for is a listing published by some other producer and stamped
+     * sorted while not being so.
+     *
+     * <p>The refusal is <b>counted before it is thrown</b>, and the reason is a typed constant, not a
+     * phrase in the message: a corpus sweep excluding this capture has to be able to say <em>why</em>
+     * from the metrics of a run that ended in an exception, which is the same discipline
+     * {@code io.varve.swath.sort.PageRunSegmentIo}'s own pre-throw count keeps.
+     */
+    @Test
+    void delimitedRollupRefusesARowGroupWhoseRowsAreNotAscending(@TempDir Path dir) throws IOException {
+        Path out = Files.createDirectories(dir.resolve("unsorted"));
+        Path file = out.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(file, SortConfigs.base(), SortMode.OBJECTS, 1)) {
+            writer.markFinal();
+            for (String k : List.of("a/1", "c/1", "b/1", "d/1")) {
+                writer.write(object(k));
+            }
+        }
+        List<Path> files = SortedFixtures.resolveFiles(out);
+        IndexLoadResult loaded = SortedFixtures.loadIndex(files, new FixtureMetrics());
+        Fixture fixture = new Fixture(files, ((IndexLoadResult.Loaded) loaded).entries());
+        ReplayMetrics metrics = new ReplayMetrics(new SimpleMeterRegistry(), ReplayMetrics.SERVING_MODE_SORTED);
+
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 2)) {
+            assertThatThrownBy(() -> store.delimitedRollup(null, true, upperOf(""), new byte[0], slash(),
+                    1000, Projection.KEYS_ONLY))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
+                        assertThat(e.file()).isEqualTo(file);
+                        assertThat(e.rowGroup()).isZero();
+                    })
+                    .hasMessageContaining("row group 0 of " + file)
+                    .hasMessageContaining("strictly ascending");
+        }
+        assertThat(metrics.registry().find("swath.replay.serving.refused")
+                .tag("reason", RowGroupOrderException.ROW_GROUP_DISORDER).counter().count()).isEqualTo(1);
+    }
 
     private record Fixture(List<Path> files, List<IndexEntry> index) {
     }

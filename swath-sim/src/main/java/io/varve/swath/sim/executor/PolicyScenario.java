@@ -30,7 +30,11 @@ import io.varve.swath.sim.model.MissingSimDependencyException;
  * @param seed           the run's one seed; every draw is derived from it
  * @param workerCount    the fleet size, which is also the adaptive controller's ceiling
  * @param pageSize       keys per listing call (a full page for the real protocol is 1000)
- * @param scanPrefix     the listing prefix, {@code null} or empty for the whole bucket
+ * @param scanPrefix     the listing prefix, {@code null} or empty for the whole bucket. Being a
+ *                       {@code byte[]}, it makes this record's generated {@code equals}/{@code hashCode}
+ *                       compare array <em>references</em>: two otherwise-identical scenarios carrying
+ *                       equal prefix bytes in different arrays are unequal, so compare scenarios field by
+ *                       field and never use one as a map key
  * @param seedMode       how the keyspace is cut before any worker starts
  * @param toggles        the engine ablation namespace the policies are constructed with
  * @param latency        per-call service times
@@ -65,6 +69,14 @@ public record PolicyScenario(
     public static final long DEFAULT_MAX_EVENTS = 100_000_000L;
 
     /**
+     * The largest page a {@code ListObjectsV2} call can ask for, and therefore the largest a scenario
+     * may declare. The protocol layer clamps a larger request to this silently; a run declaring 2,000
+     * would list in pages of 1,000 while every number it reported was labelled 2,000, so the value is
+     * rejected here instead.
+     */
+    public static final int MAX_PAGE_SIZE = 1_000;
+
+    /**
      * What a worker page fetch does when its transient retries run out — a real choice the shipped
      * client makes, not an implementation detail, so a scenario states which one it is modelling.
      */
@@ -96,6 +108,13 @@ public record PolicyScenario(
         }
         if (pageSize <= 0) {
             throw new IllegalArgumentException("pageSize must be positive, got " + pageSize);
+        }
+        if (pageSize > MAX_PAGE_SIZE) {
+            // Refused, not clamped. The protocol layer would cap the request at 1,000 while the run
+            // record went on reporting the declared value, and a run that still produces a number
+            // while answering a different question is worse than one that does not start.
+            throw new IllegalArgumentException("pageSize must be <= " + MAX_PAGE_SIZE
+                    + ", the largest page a ListObjectsV2 call can ask for, got " + pageSize);
         }
         if (seedMode == null) {
             throw new MissingSimDependencyException("seed mode (how the keyspace is cut before the "
