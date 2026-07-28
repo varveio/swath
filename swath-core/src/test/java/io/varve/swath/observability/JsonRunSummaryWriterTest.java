@@ -335,7 +335,8 @@ final class JsonRunSummaryWriterTest {
                 EngineToggles.NAMES);
         expectedNames.add(EngineToggles.READAHEAD_NAME);
         expectedNames.add(EngineToggles.MASS_AWARE_SEED_NAME);
-        assertThat(expectedNames).as("the 12 names EngineToggles.parse currently accepts").hasSize(12);
+        expectedNames.add(EngineToggles.RATE_ANCHORED_SENSING_NAME);
+        assertThat(expectedNames).as("the 13 names EngineToggles.parse currently accepts").hasSize(13);
         for (String name : expectedNames) {
             assertThat(engineFlags.has(name)).as("engine_flags missing toggle '" + name + "'").isTrue();
         }

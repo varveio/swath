@@ -241,7 +241,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         this.toggles = context.toggles();
         this.trace = context.trace();
         this.retryConfig = context.retryConfig();
-        this.estimator = RemainingWorkEstimator.WINDOW;
+        this.estimator = this.toggles.remainingWorkEstimator(maxKeys);
         recordDisabledToggleMarks(this.toggles, this.metrics);
         this.metrics.setStrategy("WORK_STEALING");
         this.metrics.setPrefix(this.prefix);
@@ -324,6 +324,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         // speculative readahead even on a bucket where no range ever collapsed enough to engage it.
         if (toggles.readahead()) {
             metrics.recordStealReason("TOGGLE", "readahead_on");
+        }
+        // Same polarity, same reason, for the position sensor: which estimator a run's victim choice
+        // and owner-split gates were steered by is a reading of the run rather than an inference from
+        // its argv, and the SENSING.* classification counters below it are silent on a keyspace that
+        // never reached the sensor at all.
+        if (toggles.rateAnchoredSensing()) {
+            metrics.recordStealReason("TOGGLE", "rate_anchored_sensing_on");
         }
     }
 

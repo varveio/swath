@@ -65,71 +65,93 @@ public record EngineToggles(
         boolean reflectLift,
         boolean fanoutTiling,
         boolean readahead,
-        boolean massAwareSeed) {
+        boolean massAwareSeed,
+        boolean rateAnchoredSensing) {
 
     public EngineToggles withOwnerSplit(boolean ownerSplit) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withDensityEwma(boolean densityEwma) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withRadixBands(boolean radixBands) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withStructureProbes(boolean structureProbes) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withFarAhead(boolean farAhead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withAlphabetPivots(boolean alphabetPivots) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withReflect(boolean reflect) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withConfettiFeedback(boolean confettiFeedback) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withReflectLift(boolean reflectLift) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withFanoutTiling(boolean fanoutTiling) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withReadahead(boolean readahead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
     public EngineToggles withMassAwareSeed(boolean massAwareSeed) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
-                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed);
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
     }
 
-    /** The only supported configuration: every ablation toggle on, {@code readahead} off, {@code mass_aware_seed} on. */
+    public EngineToggles withRateAnchoredSensing(boolean rateAnchoredSensing) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing);
+    }
+
+    /**
+     * The only supported configuration: every ablation toggle on, {@code readahead} and {@code
+     * rate_anchored_sensing} off, {@code mass_aware_seed} on.
+     */
     public static final EngineToggles DEFAULT =
-            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true);
+            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, false);
 
     /**
      * Valid ablation {@code --engine-toggle} names (each {@code on} by default, {@code off} to
@@ -150,6 +172,15 @@ public record EngineToggles(
      * the documented opt-out. Not in {@link #NAMES}.
      */
     public static final String MASS_AWARE_SEED_NAME = "mass_aware_seed";
+
+    /**
+     * The opt-in {@code --engine-toggle rate_anchored_sensing=on} name, default OFF; not in {@link
+     * #NAMES}. Selects {@link RateAnchoredEstimator} — the simulator's promoted position sensor — as
+     * the run's {@link RemainingWorkEstimator} in place of the shipped window reading, so a
+     * real-bucket A/B runs both arms from one binary. Not an ablation (nothing is turned off), so it
+     * fires an engagement mark on the ON side exactly as {@code readahead} does.
+     */
+    public static final String RATE_ANCHORED_SENSING_NAME = "rate_anchored_sensing";
 
     /**
      * The far-ahead fraction substituted for {@link WorkerState#densityFraction()} when {@code
@@ -184,10 +215,11 @@ public record EngineToggles(
                 }
                 String name = entry.substring(0, eq).trim();
                 String rawValue = entry.substring(eq + 1).trim();
-                if (!NAMES.contains(name) && !READAHEAD_NAME.equals(name) && !MASS_AWARE_SEED_NAME.equals(name)) {
+                if (!NAMES.contains(name) && !READAHEAD_NAME.equals(name) && !MASS_AWARE_SEED_NAME.equals(name)
+                        && !RATE_ANCHORED_SENSING_NAME.equals(name)) {
                     throw new InvalidArgsException("--engine-toggle: unknown name '" + name
                             + "' (valid names: " + String.join(", ", NAMES) + ", " + READAHEAD_NAME + ", "
-                            + MASS_AWARE_SEED_NAME + ")");
+                            + MASS_AWARE_SEED_NAME + ", " + RATE_ANCHORED_SENSING_NAME + ")");
                 }
                 boolean on = parseOnOff(name, rawValue);
                 putConsistent(values, name, on, "--engine-toggle " + name + " given contradictory values");
@@ -209,7 +241,8 @@ public record EngineToggles(
                 values.getOrDefault("reflect_lift", true),
                 values.getOrDefault("fanout_tiling", true),
                 values.getOrDefault(READAHEAD_NAME, false),
-                values.getOrDefault(MASS_AWARE_SEED_NAME, true));
+                values.getOrDefault(MASS_AWARE_SEED_NAME, true),
+                values.getOrDefault(RATE_ANCHORED_SENSING_NAME, false));
     }
 
     private static void putConsistent(Map<String, Boolean> values, String name, boolean on, String conflictMessage)
@@ -342,6 +375,21 @@ public record EngineToggles(
      */
     public double observedDensityRatio(double rawObservedDensityRatio) {
         return densityEwma ? rawObservedDensityRatio : Double.POSITIVE_INFINITY;
+    }
+
+    /**
+     * The run's position sensor: {@link RateAnchoredEstimator} at its promoted floor when {@code
+     * rate_anchored_sensing} is on, else the shipped {@link RemainingWorkEstimator#WINDOW} reading —
+     * the same shape of substitution as {@link #interpolate} and {@link #farAheadFraction}, and the
+     * ONLY place the choice is made. Called once per run (the estimator is stateless and pure, so one
+     * instance serves the whole fleet).
+     *
+     * @param maxKeys the run's page size, which is the ported sensor's no-evidence floor
+     */
+    public RemainingWorkEstimator remainingWorkEstimator(int maxKeys) {
+        return rateAnchoredSensing
+                ? new RateAnchoredEstimator(maxKeys, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY)
+                : RemainingWorkEstimator.WINDOW;
     }
 
     /**
