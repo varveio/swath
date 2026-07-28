@@ -73,6 +73,8 @@ tasks.test {
     System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
     System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
     System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
+    System.getProperty("swath.sim.listing.arm")?.let { systemProperty("swath.sim.listing.arm", it) }
+    System.getProperty("swath.sim.listing.seed")?.let { systemProperty("swath.sim.listing.seed", it) }
     // Same forwarding, same reason, for the corpus sweep (CorpusSweepRunTest, @Tag("perf")): a root
     // directory of staged captures, the TSV it writes its per-leg rows to, and the ceiling above
     // which a staged capture is passed over rather than swept. The first two are the operator's
