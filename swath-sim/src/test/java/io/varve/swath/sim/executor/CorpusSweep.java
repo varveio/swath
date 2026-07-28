@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sim.executor;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.varve.swath.replay.fixture.SortedFixtures;
@@ -339,8 +340,15 @@ final class CorpusSweep {
 
     /**
      * The fleet {@code fixture} is swept at: its capture's own {@code max_parallel_listings}, or
-     * {@link #FALLBACK_WORKERS} when the capture staged no summary or the summary does not carry the
-     * field. Never silently the fallback — the {@link Fleet#source()} it returns is a column.
+     * {@link #FALLBACK_WORKERS} when the capture staged no summary, staged one that is not readable as
+     * JSON, or staged one that does not carry the field. Never silently the fallback — the
+     * {@link Fleet#source()} it returns is a column.
+     *
+     * <p>A summary that will not parse is the fallback and not a failure, for the reason the class
+     * javadoc gives about the fixtures themselves: it is one hand-staged file in somebody's corpus, and
+     * a sweep that died on it would cost the other hundred fixtures their rows. A genuine
+     * {@link IOException} reading the file is <em>not</em> caught here — a corpus the sweep cannot read
+     * at all is this program's problem, not a fact about a capture.
      */
     static Fleet fleetOf(Path fixture) throws IOException {
         Path summary = fixture.resolve(SUMMARY_FILE);
@@ -350,6 +358,8 @@ final class CorpusSweep {
         JsonNode workers;
         try (var in = Files.newInputStream(summary)) {
             workers = JSON.readTree(in).path("config").path(MAX_PARALLEL_LISTINGS);
+        } catch (JsonProcessingException malformed) {
+            return new Fleet(FALLBACK_WORKERS, FleetSource.FALLBACK);
         }
         if (!workers.isIntegralNumber() || workers.asInt() < 1) {
             return new Fleet(FALLBACK_WORKERS, FleetSource.FALLBACK);

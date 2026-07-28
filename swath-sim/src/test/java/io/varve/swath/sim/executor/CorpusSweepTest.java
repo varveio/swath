@@ -176,12 +176,21 @@ class CorpusSweepTest {
                 .isEqualTo(new CorpusSweep.Fleet(37, CorpusSweep.FleetSource.CAPTURE));
     }
 
+    /**
+     * The last of these is the one that used to end the sweep rather than the fixture: a summary
+     * truncated mid-write parses to a {@code JsonParseException}, which is an {@link IOException}, so
+     * it went straight past the per-fixture {@code catch (RuntimeException)} and out of {@code sweep}
+     * with the rest of the corpus unswept. A staged file nobody can read is exactly the kind of input
+     * this class promises one of cannot cost the other hundred.
+     */
     @Test
     void aCaptureWithNoUsableSummaryFallsBackAndSaysSo() throws IOException {
         Path missing = fixture("no-summary", null, keys(20));
         Path noField = fixture("no-field", "{ \"config\" : { \"region\" : \"somewhere\" } }", keys(20));
         Path notANumber = fixture("not-a-number",
                 "{ \"config\" : { \"" + CorpusSweep.MAX_PARALLEL_LISTINGS + "\" : \"64\" } }", keys(20));
+        Path truncated = fixture("truncated",
+                "{ \"config\" : { \"" + CorpusSweep.MAX_PARALLEL_LISTINGS + "\" : 6", keys(20));
 
         CorpusSweep.Fleet fallback =
                 new CorpusSweep.Fleet(CorpusSweep.FALLBACK_WORKERS, CorpusSweep.FleetSource.FALLBACK);
@@ -190,6 +199,33 @@ class CorpusSweepTest {
         assertThat(CorpusSweep.fleetOf(notANumber))
                 .as("a summary that carries the field as something other than a count is not a reading")
                 .isEqualTo(fallback);
+        assertThat(CorpusSweep.fleetOf(truncated))
+                .as("and a summary that is not JSON at all is the fallback too, not the end of the sweep")
+                .isEqualTo(fallback);
+    }
+
+    /**
+     * The same defect where it costs something: the whole sweep, not just the fixture that carries it.
+     */
+    @Test
+    void aFixtureWhoseSummaryWillNotParseIsSweptAtTheFallbackAndTheRestOfTheCorpusWithIt()
+            throws IOException {
+        fixture("aaa-healthy", capture(4), keys(20));
+        fixture("bbb-truncated-summary",
+                "{ \"config\" : { \"" + CorpusSweep.MAX_PARALLEL_LISTINGS + "\" : 6", keys(20));
+        fixture("ccc-healthy", capture(4), keys(20));
+
+        CorpusSweep.Result swept = CorpusSweep.sweep(root, root.resolve("results.tsv"));
+
+        assertThat(swept.rows()).extracting(CorpusSweep.Row::fixture)
+                .as("the fixtures on either side of the unreadable summary were both measured")
+                .contains("aaa-healthy", "bbb-truncated-summary", "ccc-healthy");
+        assertThat(rowsOf(swept, "bbb-truncated-summary"))
+                .as("and its own rows say the fleet was the fallback, so they are not comparable")
+                .extracting(row -> row.fleet().source())
+                .containsOnly(CorpusSweep.FleetSource.FALLBACK);
+        assertThat(swept.problems()).isEmpty();
+        assertThat(swept.exclusions()).as("an unreadable summary is not an unreadable capture").isEmpty();
     }
 
     /**
