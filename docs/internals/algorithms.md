@@ -658,6 +658,43 @@ estRemaining(w):
   return (w.keysEmitted / consumed) * remaining   // localDensity · remaining span
 ```
 
+- **The reading above is one implementation behind a seam, and it is the default.**
+  `estRemaining` is what victim choice, the owner-side self-split's remaining-work floor
+  and its pivot mass floors all steer on, so which arithmetic computes it is a run-time
+  choice: `RemainingWorkEstimator` (`swath-core`, `io.varve.swath.engine`) is that
+  quantity, `RemainingWorkEstimator.WINDOW` is `StealMath.estRemaining` itself expressed
+  through it, and `EngineToggles.remainingWorkEstimator(maxKeys)` is the only place a run
+  picks one. The engine builds exactly one per run and shares it (it is pure and
+  stateless) between `ThiefPolicy`'s selection, `OwnerSplitGovernor`'s gate chain, and the
+  `slow_ranges[]` diagnostic dump, so a run's reported estimate is the one its decisions
+  were taken on.
+- **The opt-in second reading: `RateAnchoredEstimator` (`--engine-toggle
+  rate_anchored_sensing=on`, default OFF).** The window reading above is degenerate on a
+  deep-nested keyspace: a cursor that agrees with `hi` across all `K = 12` window bytes
+  makes `consumed` underflow to exactly `0.0`, and the estimate collapses to a raw width
+  with the range's emitted keys discarded entirely (`NO_VICTIM.all_no_remaining_span`'s
+  measurement-artefact warning in metrics-internals §5a is this). The ported sensor —
+  raced against the shipped one over a captured-listing corpus in `:swath-sim` and promoted
+  out of that race (`SensingVariant.RATE_ANCHORED_FLOOR_QUARTER`, which delegates to this
+  same object) — reads
+
+  ```
+  estRemaining(w) = max(w.keysEmitted, maxKeys) × clamp(anchoredGeometricFactor(w), 1/4, 16)
+  ```
+
+  where the magnitude is the range's own proven mass (mean residual life of a Pareto-2
+  law, floored at the page in flight so an un-started range is not scored zero) and
+  `StealMath.anchoredGeometricFactor` is the same remaining-over-consumed ratio as above,
+  measured in a window anchored at the **cursor's own divergence from `lo`** instead of at
+  `[lo, hi]`'s. The band is what keeps geometry an adjustment rather than the estimate: a
+  factor below one asserts that less remains than has already come out, which is what
+  refused a straggler's owner-side carve at the remaining-work floor until it had emitted
+  64 pages — the quarter floor puts that boundary at 16 pages, and is the rung the sweep
+  promoted. Both bounds stay exact: an open frontier still scores `+infinity` and a cursor
+  at its bound still scores `0`. **This changes which range is stolen from and when an
+  owner carves, so it is an A/B arm and not a default**; a run on it marks itself
+  `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own `SENSING.*` classification
+  counters (metrics-internals §5a).
 - Pick the victim with the largest `estRemaining`. A left-skewed (dense-head)
   victim is attacked by the **density-reflected pivot** and, behind it, the
   **retry-nearer-cursor** bisection in `steal()` (§3) — both walk the pivot back
