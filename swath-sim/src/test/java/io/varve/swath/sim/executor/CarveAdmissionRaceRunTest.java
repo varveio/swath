@@ -6,10 +6,8 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Tag;
@@ -41,19 +39,12 @@ class CarveAdmissionRaceRunTest {
 
     @Test
     void theCarveAdmissionCandidateAgainstTheIncumbentAndTheControl() throws IOException {
-        String roster = System.getProperty(CorpusSweepRunTest.CORPUS_PROPERTY);
-        assumeTrue(roster != null && !roster.isBlank(),
-                "-D" + CorpusSweepRunTest.CORPUS_PROPERTY + " is unset; no roster to race");
-        String results = System.getProperty(CorpusSweepRunTest.RESULTS_PROPERTY);
-        assertThat(results).as("-D" + CorpusSweepRunTest.RESULTS_PROPERTY + " (where the race writes)")
-                .isNotNull().isNotBlank();
-        Path root = Path.of(roster);
-        assertThat(Files.isDirectory(root)).as("roster root at %s", root).isTrue();
+        CorpusSweepRunTest.Staged staged = CorpusSweepRunTest.staged("roster", "race");
 
         CorpusSweep.Race race = new CorpusSweep.Race(
                 List.of(SensingVariant.CURRENT, SensingVariant.RATE_CURSOR_ANCHORED,
                         SensingVariant.RATE_ANCHORED_LIFT_ONLY), true);
-        CorpusSweep.Result raced = CorpusSweep.sweep(root, Path.of(results), race);
+        CorpusSweep.Result raced = CorpusSweep.sweep(staged.root(), staged.results(), race);
 
         CarveAdmissionRaceProtocol.printVerdicts(
                 "carve-admission race — paired relative duration against the shipped sensor, same seed",

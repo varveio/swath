@@ -6,10 +6,8 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
@@ -67,24 +65,19 @@ class QuarterFloorCorpusSweepRunTest {
     /**
      * The four campaign arms plus the quarter floor, in table order, the control first — the order
      * every reading this round reports. Derived from {@link CorpusSweep#ARMS} rather than restated,
-     * so there is one list of the campaign's own four to keep in step.
+     * so there is one list of the campaign's own four to keep in step. Distinct because that list is
+     * the one that may grow: a floor folded into it later would otherwise be raced twice here, at
+     * twice the cost, for a table with a duplicated column.
      */
     static final List<SensingVariant> ARMS = Stream.concat(CorpusSweep.ARMS.stream(),
-            Stream.of(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER)).toList();
+            Stream.of(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER)).distinct().toList();
 
     @Test
     void theQuarterGeometryFloorScreenedOverTheCorpusAndEscalatedOnDivergence() throws IOException {
-        String corpus = System.getProperty(CorpusSweepRunTest.CORPUS_PROPERTY);
-        assumeTrue(corpus != null && !corpus.isBlank(),
-                "-D" + CorpusSweepRunTest.CORPUS_PROPERTY + " is unset; no corpus to sweep");
-        String results = System.getProperty(CorpusSweepRunTest.RESULTS_PROPERTY);
-        assertThat(results).as("-D" + CorpusSweepRunTest.RESULTS_PROPERTY + " (where the sweep writes)")
-                .isNotNull().isNotBlank();
-        Path root = Path.of(corpus);
-        assertThat(Files.isDirectory(root)).as("corpus root at %s", root).isTrue();
+        CorpusSweepRunTest.Staged staged = CorpusSweepRunTest.staged("corpus", "sweep");
 
-        CorpusSweep.Result swept =
-                CorpusSweep.sweep(root, Path.of(results), new CorpusSweep.Race(ARMS, false));
+        CorpusSweep.Result swept = CorpusSweep.sweep(staged.root(), staged.results(),
+                new CorpusSweep.Race(ARMS, false));
 
         CarveAdmissionRaceProtocol.printVerdicts(
                 "quarter-floor corpus sweep — paired relative duration against the shipped sensor, "

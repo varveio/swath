@@ -6,10 +6,8 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Tag;
@@ -54,17 +52,10 @@ class GeometryFloorSweepRunTest {
 
     @Test
     void everyInteriorGeometryFloorAgainstBothEndsOverTheRoster() throws IOException {
-        String roster = System.getProperty(CorpusSweepRunTest.CORPUS_PROPERTY);
-        assumeTrue(roster != null && !roster.isBlank(),
-                "-D" + CorpusSweepRunTest.CORPUS_PROPERTY + " is unset; no roster to sweep");
-        String results = System.getProperty(CorpusSweepRunTest.RESULTS_PROPERTY);
-        assertThat(results).as("-D" + CorpusSweepRunTest.RESULTS_PROPERTY + " (where the sweep writes)")
-                .isNotNull().isNotBlank();
-        Path root = Path.of(roster);
-        assertThat(Files.isDirectory(root)).as("roster root at %s", root).isTrue();
+        CorpusSweepRunTest.Staged staged = CorpusSweepRunTest.staged("roster", "sweep");
 
-        CorpusSweep.Result swept =
-                CorpusSweep.sweep(root, Path.of(results), new CorpusSweep.Race(ARMS, true));
+        CorpusSweep.Result swept = CorpusSweep.sweep(staged.root(), staged.results(),
+                new CorpusSweep.Race(ARMS, true));
 
         CarveAdmissionRaceProtocol.printVerdicts(
                 "geometry-floor sweep — paired relative duration against the shipped sensor, same seed",

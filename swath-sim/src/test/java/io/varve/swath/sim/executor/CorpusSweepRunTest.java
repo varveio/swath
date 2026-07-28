@@ -53,18 +53,39 @@ class CorpusSweepRunTest {
     /** System property naming the TSV the sweep writes its per-leg rows to. */
     static final String RESULTS_PROPERTY = "swath.sim.listing.results";
 
+    /**
+     * The two paths every round in this package is invoked with: the staged tree it reads and the file
+     * it writes. Returned together because they are one decision — a round with a tree and nowhere to
+     * write is a round whose output exists only in a console buffer.
+     */
+    record Staged(Path root, Path results) {
+    }
+
+    /**
+     * The invocation gate every round here shares: with {@link #CORPUS_PROPERTY} unset the round is
+     * <em>skipped</em> rather than failed, because the tree is a local one the operator supplies and the
+     * repo names none of it; with it set, a results path is required and the tree has to exist.
+     *
+     * @param tree what the staged root is to this round — a {@code corpus} or a {@code roster}
+     * @param verb what this round does with it — it {@code sweep}s or {@code race}s
+     */
+    static Staged staged(String tree, String verb) {
+        String staged = System.getProperty(CORPUS_PROPERTY);
+        assumeTrue(staged != null && !staged.isBlank(),
+                "-D" + CORPUS_PROPERTY + " is unset; no " + tree + " to " + verb);
+        String results = System.getProperty(RESULTS_PROPERTY);
+        assertThat(results).as("-D" + RESULTS_PROPERTY + " (where the " + verb + " writes)")
+                .isNotNull().isNotBlank();
+        Path root = Path.of(staged);
+        assertThat(Files.isDirectory(root)).as("%s root at %s", tree, root).isTrue();
+        return new Staged(root, Path.of(results));
+    }
+
     @Test
     void everySensingArmOverEveryFixtureInTheCorpus() throws IOException {
-        String corpus = System.getProperty(CORPUS_PROPERTY);
-        assumeTrue(corpus != null && !corpus.isBlank(),
-                "-D" + CORPUS_PROPERTY + " is unset; no corpus to sweep");
-        String results = System.getProperty(RESULTS_PROPERTY);
-        assertThat(results).as("-D" + RESULTS_PROPERTY + " (where the sweep writes its rows)")
-                .isNotNull().isNotBlank();
-        Path root = Path.of(corpus);
-        assertThat(Files.isDirectory(root)).as("corpus root at %s", root).isTrue();
+        Staged staged = staged("corpus", "sweep");
 
-        CorpusSweep.Result swept = CorpusSweep.sweep(root, Path.of(results));
+        CorpusSweep.Result swept = CorpusSweep.sweep(staged.root(), staged.results());
 
         assertThat(swept.rows()).as("the sweep measured at least one leg").isNotEmpty();
         assertThat(swept.problems()).as("legs whose numbers are unusable").isEmpty();

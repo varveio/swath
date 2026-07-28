@@ -71,9 +71,10 @@ package io.varve.swath.sim.executor;
  *
  * <p>Read as four criteria:
  * <ol>
- *   <li><b>F1 — the cures hold.</b> Each of the four cures reads {@code ≥ +15%} against the control,
- *       except that a cure whose incumbent reading is itself a loss need only reach {@code ≥} neutral
- *       against the control ({@code delta ≥ −}{@link CarveAdmissionRaceProtocol#NEUTRAL_BAND}).</li>
+ *   <li><b>F1 — the cures hold.</b> Each of the four cures reads {@code ≥ +}{@link #CURE_HELD_DELTA}
+ *       against the control, except that a cure whose incumbent reading is itself a loss need only
+ *       reach {@code ≥} neutral against the control
+ *       ({@code delta ≥ −}{@link CarveAdmissionRaceProtocol#NEUTRAL_BAND}).</li>
  *   <li><b>F2 — the returns come back.</b> Both returns read {@code ≥} neutral <em>against the
  *       incumbent</em>, at the same band. Against the incumbent and not the control, because what the
  *       lift-only end spent is measured from the incumbent's own reading.</li>
@@ -121,14 +122,18 @@ final class GeometryFloorSweepProtocol {
     /**
      * The interior floors this round sweeps, in ladder order, between the symmetric band's sixteenth
      * and the lift-only band's one. Stated as numbers here, before any arm installs one, so the arms
-     * can be held to the ladder that was registered rather than to the ladder that was run.
+     * can be held to the ladder that was registered rather than to the ladder that was run — which is
+     * what {@code SensingEstimatorTest} does, arm by arm, at the gate each floor is consumed by.
      */
     static final double[] FLOORS = {1.0 / 8.0, 1.0 / 4.0, 1.0 / 2.0};
 
     /**
      * The margin a cure has to keep against the control to count as held — the "still cured" line of
      * F1, set at the magnitude the lift-only end's own cures cleared, so a floor that merely halves a
-     * cure does not pass as one.
+     * cure does not pass as one. Applied by the reader against the verdict table
+     * {@link GeometryFloorSweepRunTest} prints and not asserted anywhere, for the reason that round
+     * asserts no magnitude at all: this number is what the round pre-registered as a pass, and a test
+     * that enforced it would be enforcing it against the numbers it is judging.
      */
     static final double CURE_HELD_DELTA = 0.15;
 

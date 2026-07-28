@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sim.executor;
 
+import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.sim.fixture.KeyspaceFixtures;
 import io.varve.swath.sim.fixture.KeyspaceFixtures.SubtreeMass;
 import io.varve.swath.sim.fixture.ListingFixtureStore;
@@ -153,13 +154,22 @@ final class SensingRaceProtocol {
         }
 
         double estZeroShare() {
-            return share(result.counter(SimExecutor.SENSOR_EST_ZERO_COUNTER),
-                    result.counter(SimExecutor.SENSOR_VICTIMS_BOUNDED_COUNTER));
+            return share(result.counter(SimExecutor.SENSOR_EST_ZERO_COUNTER), boundedVictimsScanned());
         }
 
         double estIgnoresKeysShare() {
             return share(result.counter(SimExecutor.SENSOR_EST_IGNORES_KEYS_COUNTER),
-                    result.counter(SimExecutor.SENSOR_VICTIMS_BOUNDED_COUNTER));
+                    boundedVictimsScanned());
+        }
+
+        /**
+         * The denominator both degenerate-estimate shares are read against. Exposed because a share
+         * over nothing is reported as zero (see {@link #share}), so a leg that scored no bounded victim
+         * at all would satisfy an {@code isZero()} criterion having measured nothing — the legs that
+         * assert those criteria assert this is positive first.
+         */
+        long boundedVictimsScanned() {
+            return result.counter(SimExecutor.SENSOR_VICTIMS_BOUNDED_COUNTER);
         }
 
         /** Proposals that died at the re-validation, over every proposal that reached it. */
@@ -169,7 +179,7 @@ final class SensingRaceProtocol {
         }
 
         double noVictimShare() {
-            return share(result.counter("steal.outcome.NO_VICTIM"),
+            return share(result.counter(SimExecutor.STEAL_OUTCOME_PREFIX + SimExecutor.NO_VICTIM_OUTCOME),
                     result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER));
         }
 
@@ -183,7 +193,8 @@ final class SensingRaceProtocol {
          * that costs nothing to make.
          */
         double estFloorRefusalsPerPage() {
-            return share(result.counter("OWNER_SPLIT.remaining_est_floor"), result.pages());
+            return share(result.counter(SimExecutor.OWNER_SPLIT_CATEGORY + "."
+                    + OwnerSplitSkipReason.REMAINING_EST_FLOOR.code()), result.pages());
         }
 
         /**
@@ -193,8 +204,9 @@ final class SensingRaceProtocol {
          * exactly that then suppresses owner splitting for the rest of the run.
          */
         double confettiChildShare() {
-            long confetti = result.counter("OWNER_SPLIT_CHILD.confetti");
-            return share(confetti, confetti + result.counter("OWNER_SPLIT_CHILD.substantial"));
+            long confetti = result.counter(SimExecutor.OWNER_SPLIT_CHILD_CONFETTI_COUNTER);
+            return share(confetti,
+                    confetti + result.counter(SimExecutor.OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER));
         }
 
         String row() {
@@ -208,6 +220,13 @@ final class SensingRaceProtocol {
                     estFloorRefusalsPerPage(), confettiChildShare());
         }
 
+        /**
+         * A share over nothing reads zero rather than {@code NaN}: every one of these is a column of a
+         * printed table and of the corpus sweep's TSV, and a {@code NaN} propagated into those is a row
+         * a reader has to interpret. What that costs is that a criterion asserted as {@code ~0} is
+         * satisfied by a leg that measured nothing — so a leg scored on one asserts its denominator
+         * (e.g. {@link #boundedVictimsScanned()}) rather than trusting the share alone.
+         */
         private static double share(long numerator, long denominator) {
             return denominator == 0L ? 0.0 : (double) numerator / denominator;
         }
@@ -232,14 +251,32 @@ final class SensingRaceProtocol {
         System.out.print(out);
     }
 
-    /** The one leg a variant ran at {@code seed}, for a paired same-seed comparison. */
+    /**
+     * The one leg a variant ran at {@code seed}, for a paired same-seed comparison.
+     *
+     * <p><b>{@code legs} has to be one keyspace's.</b> A (variant, seed) pair names one leg within a
+     * {@link #raceOn} result and one leg per keyspace across a concatenation of them, and a table is
+     * concatenated for printing on every call site here — so a lookup that answered with the first
+     * match would silently compare the bench's leg against a guard's. It is refused instead: the
+     * argument a caller passes is either a single race's legs, and the answer is unambiguous, or it is
+     * a printing table, and there is no answer to give.
+     */
     static Leg at(List<Leg> legs, SensingVariant variant, long seed) {
+        List<Leg> matches = new ArrayList<>();
         for (Leg leg : legs) {
             if (leg.variant().equals(label(variant)) && leg.seed() == seed) {
-                return leg;
+                matches.add(leg);
             }
         }
-        throw new AssertionError("no leg for " + variant + " at seed " + seed);
+        if (matches.isEmpty()) {
+            throw new AssertionError("no leg for " + variant + " at seed " + seed);
+        }
+        if (matches.size() > 1) {
+            throw new AssertionError("ambiguous leg for " + variant + " at seed " + seed + ": "
+                    + matches.stream().map(Leg::keyspace).toList()
+                    + " — look one keyspace's legs up, not a concatenated table's");
+        }
+        return matches.getFirst();
     }
 
     // ---- running one leg ----------------------------------------------------------------

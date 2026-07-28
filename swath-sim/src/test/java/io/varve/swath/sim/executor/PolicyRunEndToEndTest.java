@@ -86,15 +86,15 @@ class PolicyRunEndToEndTest {
         // Parenthesised text is removed before the scan, innermost first: a store's own name and a cost
         // term's provenance label are free-form, and a label that happened to contain `x=` would
         // otherwise be counted as a field this record states.
-        String record = result.describe();
-        for (String previous = ""; !record.equals(previous); ) {
-            previous = record;
-            record = record.replaceAll("\\([^()]*\\)", "");
+        String runRecord = result.describe();
+        for (String previous = ""; !runRecord.equals(previous); ) {
+            previous = runRecord;
+            runRecord = runRecord.replaceAll("\\([^()]*\\)", "");
         }
         Set<String> fields = new TreeSet<>();
         // Anchored at a line start or a space, so only a field NAME can match: `idle_park=5ms..50ms`
         // contributes one field, not one per token in its value.
-        Matcher matcher = Pattern.compile("(?m)(?:^|(?<= ))([a-z_]+)=").matcher(record);
+        Matcher matcher = Pattern.compile("(?m)(?:^|(?<= ))([a-z_]+)=").matcher(runRecord);
         while (matcher.find()) {
             fields.add(matcher.group(1));
         }
