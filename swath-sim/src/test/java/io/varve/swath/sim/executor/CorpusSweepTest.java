@@ -343,39 +343,6 @@ class CorpusSweepTest {
     }
 
     /**
-     * The candidate set the screen reads is the <em>invocation's</em>, not a list fixed to the default
-     * four — a custom {@link CorpusSweep.Race} whose arms include one outside {@link CorpusSweep#ARMS}
-     * gets its own divergence rule read over it too. Before {@link CorpusSweep.Race#candidateArms()}
-     * existed, {@code divergent} read only the default four's candidates, so a fixture divergent solely
-     * at a custom race's fifth arm would never earn its confirmation seeds — this is that fixture.
-     */
-    @Test
-    void aGapAtAnArmOutsideTheDefaultFourEscalatesWhenThatArmIsInTheInvocationsRace() {
-        List<CorpusSweep.Screen> screening = List.of(
-                screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
-                screen(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, SEED_A, 0.02, 60, 0.1));
-        CorpusSweep.Race race = new CorpusSweep.Race(
-                List.of(SensingVariant.CURRENT, SensingVariant.RATE_ANCHORED_FLOOR_QUARTER), false);
-
-        assertThat(CorpusSweep.divergent(screening, race.candidateArms()))
-                .as("the fifth arm's own 40%% gap, read against its own race's candidate set").isTrue();
-        assertThat(CorpusSweep.divergent(screening, CANDIDATE_ARMS))
-                .as("the default screen's candidate arms don't name this arm at all").isFalse();
-    }
-
-    /**
-     * {@link CorpusSweep#SCREEN}'s candidate set must be exactly what the pre-refactor
-     * {@code CANDIDATE_ARMS} constant was — every {@link CorpusSweep#ARMS} entry but the control — so
-     * the default sweep's escalation rule is byte-identical to before {@code candidateArms()} existed.
-     */
-    @Test
-    void theDefaultScreensCandidateArmsAreExactlyEveryArmBesidesTheControl() {
-        assertThat(CorpusSweep.SCREEN.candidateArms())
-                .containsExactlyElementsOf(CorpusSweep.ARMS.stream()
-                        .filter(arm -> arm != SensingVariant.CURRENT).toList());
-    }
-
-    /**
      * And at a single seed, not only over their mean. What a collapse-prone fixture does is bimodal,
      * so a mean over two screening seeds is the reading least able to see it: one leg far down and one
      * level average to a gap that clears no threshold, and the fixture reads as uninteresting exactly
@@ -420,6 +387,39 @@ class CorpusSweepTest {
                 screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
                 screen(SensingVariant.CURRENT, SEED_B, 0.02, 100, 0.1)), CANDIDATE_ARMS))
                 .isFalse();
+    }
+
+    /**
+     * The candidate set the screen reads is the <em>invocation's</em>, not a list fixed to the default
+     * four — a custom {@link CorpusSweep.Race} whose arms include one outside {@link CorpusSweep#ARMS}
+     * gets its own divergence rule read over it too. Before {@link CorpusSweep.Race#candidateArms()}
+     * existed, {@code divergent} read only the default four's candidates, so a fixture divergent solely
+     * at a custom race's fifth arm would never earn its confirmation seeds — this is that fixture.
+     */
+    @Test
+    void aGapAtAnArmOutsideTheDefaultFourEscalatesWhenThatArmIsInTheInvocationsRace() {
+        List<CorpusSweep.Screen> screening = List.of(
+                screen(SensingVariant.CURRENT, SEED_A, 0.02, 100, 0.1),
+                screen(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, SEED_A, 0.02, 60, 0.1));
+        CorpusSweep.Race race = new CorpusSweep.Race(
+                List.of(SensingVariant.CURRENT, SensingVariant.RATE_ANCHORED_FLOOR_QUARTER), false);
+
+        assertThat(CorpusSweep.divergent(screening, race.candidateArms()))
+                .as("the fifth arm's own 40%% gap, read against its own race's candidate set").isTrue();
+        assertThat(CorpusSweep.divergent(screening, CANDIDATE_ARMS))
+                .as("the default screen's candidate arms don't name this arm at all").isFalse();
+    }
+
+    /**
+     * {@link CorpusSweep#SCREEN}'s candidate set must be exactly what the pre-refactor
+     * {@code CANDIDATE_ARMS} constant was — every {@link CorpusSweep#ARMS} entry but the control — so
+     * the default sweep's escalation rule is byte-identical to before {@code candidateArms()} existed.
+     */
+    @Test
+    void theDefaultScreensCandidateArmsAreExactlyEveryArmBesidesTheControl() {
+        assertThat(CorpusSweep.SCREEN.candidateArms())
+                .containsExactlyElementsOf(CorpusSweep.ARMS.stream()
+                        .filter(arm -> arm != SensingVariant.CURRENT).toList());
     }
 
     @Test

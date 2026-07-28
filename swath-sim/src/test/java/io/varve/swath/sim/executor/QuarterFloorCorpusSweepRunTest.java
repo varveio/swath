@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -26,41 +27,50 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The quarter floor sits outside {@link CorpusSweep#ARMS} — {@code CorpusSweep.ARMS} names the
  * campaign's own four, and the geometry ladder's interior floors are extended in per invocation
- * rather than folded into the default; see {@code CorpusSweep} class javadoc. This round is the
- * extension: {@link SensingVariant#CURRENT}, {@link SensingVariant#CURSOR_ANCHORED},
- * {@link SensingVariant#RATE_CURSOR_ANCHORED}, {@link SensingVariant#RATE_ANCHORED_LIFT_ONLY} and
- * {@link SensingVariant#RATE_ANCHORED_FLOOR_QUARTER}, in that table order, over its own custom
- * {@link CorpusSweep.Race}. What makes the screen correct over a fifth arm outside the default four is
- * {@link CorpusSweep.Race#candidateArms()} reading the invocation's own arms rather than a list fixed
- * to {@link CorpusSweep#ARMS} — a fixture divergent only at the quarter floor now earns its
- * confirmation seeds exactly as one divergent at any of the other four would.
+ * rather than folded into the default; see {@link CorpusSweep.Race}. This round is the extension:
+ * the default four plus {@link SensingVariant#RATE_ANCHORED_FLOOR_QUARTER}, in that table order,
+ * over its own custom {@link CorpusSweep.Race}. What makes the screen correct over a fifth arm
+ * outside the default four is {@link CorpusSweep.Race#candidateArms()} reading the invocation's own
+ * arms rather than a list fixed to {@link CorpusSweep#ARMS} — a fixture divergent only at the
+ * quarter floor now earns its confirmation seeds exactly as one divergent at any of the other four
+ * would.
  *
- * <pre>{@code ./gradlew :swath-sim:test -PonlyPerf \
+ * <pre>{@code ./gradlew :swath-sim:test -PonlyPerf -PsimTestTimeout=60 \
  *     -Dswath.sim.listing.corpus=/path/to/staged/captures \
  *     -Dswath.sim.listing.results=/path/to/quarter-floor.tsv}</pre>
+ *
+ * <p>{@code -PsimTestTimeout} because five arms over a whole corpus run well past the module's
+ * ten-minute default, and the task timeout kills the JVM mid-fixture — the results file then holds a
+ * covered prefix of the corpus, honestly, but the round it was for has to be re-run.
  *
  * <p>Opt-in and fixture-free on the same two properties and for the same reasons as every other round
  * in this package: the corpus is a local directory the operator supplies, the repo names none of it,
  * the results file must not already exist, and with the corpus property unset the run <em>skips</em>
  * rather than fails.
  *
- * <p><b>Nothing here asserts a magnitude.</b> The three verdict tables this prints — against the
- * shipped sensor, against the incumbent combination, and against the lift-only end the quarter floor
- * must beat to justify itself — are the readings a promotion decision is made from. A threshold
- * asserted here would be one fitted to the numbers it is judging. What is asserted is what every round
- * of this campaign asserts: that the sweep measured something, and that no leg in it produced a
- * number nobody may use.
+ * <p><b>Nothing here asserts a magnitude, and not every printed row is a verdict.</b> The three
+ * tables this prints — against the shipped sensor, against the incumbent combination, and against
+ * the lift-only end the quarter floor must beat to justify itself — mix escalated four-seed fixtures
+ * with two-seed screens, and only the former carry verdicts; a screened row prints as
+ * {@code partial} and may be quoted as a lead, never as a finding. Two limits are the screen's own,
+ * and a reading of this round has to carry both: escalation only ever measures a candidate against
+ * {@link SensingVariant#CURRENT}, so the lift-only table is conditioned on CURRENT-divergence — a
+ * fixture where the quarter floor and the lift-only end differ sharply while both track the shipped
+ * sensor is never escalated, and that comparison stays two-seed there. A threshold asserted here
+ * would be one fitted to the numbers it is judging. What is asserted is what every round of this
+ * campaign asserts: that the sweep measured something, and that no leg in it produced a number
+ * nobody may use.
  */
 @Tag("perf")
 class QuarterFloorCorpusSweepRunTest {
 
     /**
      * The four campaign arms plus the quarter floor, in table order, the control first — the order
-     * every reading this round reports.
+     * every reading this round reports. Derived from {@link CorpusSweep#ARMS} rather than restated,
+     * so there is one list of the campaign's own four to keep in step.
      */
-    static final List<SensingVariant> ARMS = List.of(SensingVariant.CURRENT,
-            SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED,
-            SensingVariant.RATE_ANCHORED_LIFT_ONLY, SensingVariant.RATE_ANCHORED_FLOOR_QUARTER);
+    static final List<SensingVariant> ARMS = Stream.concat(CorpusSweep.ARMS.stream(),
+            Stream.of(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER)).toList();
 
     @Test
     void theQuarterGeometryFloorScreenedOverTheCorpusAndEscalatedOnDivergence() throws IOException {
