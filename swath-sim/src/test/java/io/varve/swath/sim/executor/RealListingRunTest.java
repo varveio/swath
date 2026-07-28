@@ -6,6 +6,7 @@
 package io.varve.swath.sim.executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.varve.swath.replay.store.ListingStore;
@@ -23,9 +24,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
@@ -108,6 +111,15 @@ class RealListingRunTest {
      */
     private static final List<SimStoreBackend> ORDER_MASKED_BACKENDS =
             List.of(SimStoreBackend.ARENA, SimStoreBackend.PARQUET);
+
+    /** The two trace kinds that move occupancy, and so the whole of the reconstruction's input. */
+    private static final Set<String> CLAIM_KINDS = Set.of("range.claim", "range.complete");
+
+    /** The pseudo-range a serial span with nothing being drained at all is attributed to. */
+    private static final long FLEET_IDLE = -1L;
+
+    /** How many serial holders one arm's decomposition names — enough to see whether it is one. */
+    private static final int SERIAL_HOLDERS_REPORTED = 8;
 
     private static int workers;
     private static long traceSeed;
@@ -254,6 +266,195 @@ class RealListingRunTest {
             directoryShares(tailKeys).forEach((directory, share) -> System.out.printf(Locale.ROOT,
                     "real_listing phase=tail directory=%s share=%.4f%n", directory, share));
         }
+    }
+
+    /**
+     * <b>Where a losing arm's duration goes, per arm.</b> A duration table says one sensor is slower;
+     * it does not say what the extra seconds were spent doing, and on a fixture where every arm emits
+     * the same keys through the same fleet the answer is always one of two shapes — the run did more
+     * work, or it did the same work with fewer ranges alive. This leg separates them: it reports each
+     * arm's range-seconds (the integral of live ranges, i.e. the work) alongside its <b>serial</b>
+     * seconds (the span during which one range or none was being drained, i.e. the packing), and then
+     * names the ranges that held the fleet during those serial spans.
+     *
+     * <p>Naming them is the part a counter cannot do. A serial span is an address — one range nobody
+     * could steal from — so the trace is walked for {@code range.claim}/{@code range.complete} to
+     * rebuild occupancy exactly, and every span at occupancy ≤ 1 is attributed to whichever range was
+     * still draining, with that range's own committed keys and key extent printed beside it. An arm
+     * whose extra duration is one range's serial span has a straggler; an arm whose serial time is
+     * spread over dozens of short spans has a placement problem that keeps re-creating one.
+     *
+     * <p>Separate from the table for the same reason the tail leg is: the trace is this module's
+     * expensive artifact, and every arm here runs with it on.
+     */
+    @Test
+    void whereEachArmsDurationGoesOnTheRealListing() {
+        for (SensingVariant variant : VARIANTS) {
+            PolicyScenario scenario = PolicyRunFixtures
+                    .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
+                            PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
+                    .withSeed(traceSeed)
+                    .withEventLog(true);
+            PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, variant);
+            String arm = SensingRaceProtocol.label(variant);
+            SensingRaceProtocol.requireCompleted(result, arm + "/seed " + traceSeed + "/trace");
+            PolicyRunTimeline timeline = result.timeline();
+            double postSeedSeconds = (timeline.endNanos() - timeline.seedCompletedNanos()) / 1e9;
+            System.out.printf(Locale.ROOT,
+                    "real_listing phase=decomposition arm=%s seed=%d duration_s=%.3f seed_end_s=%.3f "
+                            + "post_seed_s=%.3f range_seconds=%.1f serial_s=%.3f occupancy=%.2f "
+                            + "calls=%d pages=%d%n",
+                    arm, traceSeed, timeline.endNanos() / 1e9, timeline.seedCompletedNanos() / 1e9,
+                    postSeedSeconds, timeline.rangeNanos() / 1e9, timeline.serialNanos() / 1e9,
+                    timeline.meanOccupancy(), result.storeCalls(), result.pages());
+
+            Map<Long, Long> serialNanosByNode = serialNanosByNode(result);
+            // The trace's own reconstruction has to agree with the timeline the run accumulated
+            // independently, or the addresses below belong to some other run than the one measured.
+            long tracedSerialNanos = serialNanosByNode.values().stream().mapToLong(Long::longValue).sum();
+            assertThat(tracedSerialNanos)
+                    .as("%s: the trace's serial spans reconstruct the timeline's own serial time", arm)
+                    .isCloseTo(timeline.serialNanos(), within(timeline.serialNanos() / 100 + 1_000_000L));
+            Map<Long, TracedRange> ranges = tracedRanges(result);
+            serialNanosByNode.entrySet().stream()
+                    .sorted(Map.Entry.<Long, Long>comparingByValue().reversed())
+                    .limit(SERIAL_HOLDERS_REPORTED)
+                    .forEach(held -> {
+                        System.out.printf(Locale.ROOT,
+                                "real_listing phase=decomposition arm=%s serial_holder=%d serial_s=%.3f %s%n",
+                                arm, held.getKey(), held.getValue() / 1e9,
+                                ranges.containsKey(held.getKey())
+                                        ? ranges.get(held.getKey()).row() : "no committed page");
+                        // Its ancestry, because a straggler's birth instant is the run's finish line and
+                        // "why so late" is a question about the range it was carved out of, not about it.
+                        for (long ancestor = parentOf(ranges, held.getKey()); ancestor >= 0;
+                                ancestor = parentOf(ranges, ancestor)) {
+                            System.out.printf(Locale.ROOT,
+                                    "real_listing phase=decomposition arm=%s ancestor_of=%d node=%d %s%n",
+                                    arm, held.getKey(), ancestor, ranges.get(ancestor).row());
+                        }
+                    });
+            result.counters().forEach((name, value) -> System.out.printf(Locale.ROOT,
+                    "real_listing phase=counters arm=%s %s=%d%n", arm, name, value));
+        }
+    }
+
+    /**
+     * Serial nanoseconds by the range that was holding the fleet, rebuilt from the trace's claim and
+     * complete records. A span counts when at most one range is being drained; a span at zero — every
+     * worker parked between a completion and the next claim — is attributed to {@link #FLEET_IDLE},
+     * because "nobody was working" and "one range was working alone" are different diagnoses and the
+     * timeline's own serial fraction merges them.
+     */
+    private static Map<Long, Long> serialNanosByNode(PolicyRunResult result) {
+        Map<Long, Long> serialNanos = new LinkedHashMap<>();
+        Set<Long> live = new LinkedHashSet<>();
+        long since = result.timeline().seedCompletedNanos();
+        for (SimEventLog.Entry entry : result.log().entries()) {
+            if (entry.atNanos() < since || !CLAIM_KINDS.contains(entry.kind())) {
+                continue;
+            }
+            if (live.size() <= 1) {
+                serialNanos.merge(live.isEmpty() ? FLEET_IDLE : live.iterator().next(),
+                        entry.atNanos() - since, Long::sum);
+            }
+            if ("range.claim".equals(entry.kind())) {
+                live.add(nodeOf(entry));
+            } else {
+                live.remove(nodeOf(entry));
+            }
+            since = entry.atNanos();
+        }
+        if (live.size() <= 1) {
+            serialNanos.merge(live.isEmpty() ? FLEET_IDLE : live.iterator().next(),
+                    result.timeline().endNanos() - since, Long::sum);
+        }
+        return serialNanos;
+    }
+
+    /**
+     * What the trace says about each range that committed a page: when it was born and by which
+     * mechanism, how long it drained, how much it held and over which keys. A serial span read without
+     * these is a number; read with them it says whether the range that held the fleet was a seed cut
+     * the planner made too coarse, or a child some split placed too late to be worth anything.
+     */
+    private static final class TracedRange {
+
+        private long bornNanos = -1L;
+        private String bornBy = "seed";
+        private long parent = -1L;
+        private long firstPageNanos = -1L;
+        private long lastPageNanos;
+        private long keys;
+        private long pages;
+        private byte[] firstKey;
+        private byte[] lastKey;
+        private final Map<String, Long> carvesRefused = new LinkedHashMap<>();
+
+        String row() {
+            return String.format(Locale.ROOT,
+                    "born_by=%s parent=%d born_s=%.3f first_page_s=%.3f last_page_s=%.3f keys=%d "
+                            + "pages=%d carves_refused=%s first_key=%s last_key=%s",
+                    bornBy, parent, bornNanos / 1e9, firstPageNanos / 1e9, lastPageNanos / 1e9, keys,
+                    pages, carvesRefused, printable(firstKey), printable(lastKey));
+        }
+    }
+
+    /** The node {@code child} was split out of, or {@code -1} once the chain reaches a seed range. */
+    private static long parentOf(Map<Long, TracedRange> ranges, long child) {
+        TracedRange range = ranges.get(child);
+        long parent = range == null ? -1L : range.parent;
+        return ranges.containsKey(parent) ? parent : -1L;
+    }
+
+    /** {@link TracedRange} per node, in the order the nodes first committed. */
+    private static Map<Long, TracedRange> tracedRanges(PolicyRunResult result) {
+        Map<Long, TracedRange> ranges = new LinkedHashMap<>();
+        for (SimEventLog.Entry entry : result.log().entries()) {
+            switch (entry.kind()) {
+                case "page.commit" -> {
+                    TracedRange range = ranges.computeIfAbsent(nodeOf(entry), node -> new TracedRange());
+                    range.keys += Long.parseLong(field(entry, "keys="));
+                    range.pages++;
+                    range.lastPageNanos = entry.atNanos();
+                    byte[] from = HexFormat.of().parseHex(field(entry, "from="));
+                    if (range.firstPageNanos < 0L) {
+                        range.firstPageNanos = entry.atNanos();
+                        range.firstKey = from;
+                    }
+                    range.lastKey = from;
+                }
+                case "owner_split.skip" -> ranges
+                        .computeIfAbsent(nodeOf(entry), node -> new TracedRange())
+                        .carvesRefused.merge(field(entry, "reason="), 1L, Long::sum);
+                case "owner_split", "steal.split" -> {
+                    TracedRange child = ranges.computeIfAbsent(
+                            Long.parseLong(field(entry, "child=")), node -> new TracedRange());
+                    child.bornNanos = entry.atNanos();
+                    child.bornBy = entry.kind();
+                    child.parent = Long.parseLong(
+                            field(entry, "owner_split".equals(entry.kind()) ? "node=" : "victim="));
+                }
+                default -> {
+                }
+            }
+        }
+        return ranges;
+    }
+
+    /** The {@code node=} (or {@code victim=}) id a trace entry carries. */
+    private static long nodeOf(SimEventLog.Entry entry) {
+        return Long.parseLong(field(entry, "node="));
+    }
+
+    private static String field(SimEventLog.Entry entry, String name) {
+        for (String field : entry.detail().split("\\|")) {
+            if (field.startsWith(name)) {
+                return field.substring(name.length());
+            }
+        }
+        throw new AssertionError("trace entry " + entry.kind() + " carries no " + name + ": "
+                + entry.detail());
     }
 
     /**

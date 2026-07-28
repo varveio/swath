@@ -707,7 +707,13 @@ public final class SimExecutor {
                     confettiFeedback.consumeProbeSlot();
                 }
             }
-            if (decision instanceof Skip) {
+            if (decision instanceof Skip skipped) {
+                if (log.isRecording()) {
+                    // Which gate refused, against WHICH range. The counter says a gate fired N times
+                    // over a run; a straggler holding the fleet alone is one range, and the question
+                    // its diagnosis turns on is which gate kept refusing to divide THAT one.
+                    at.record("owner_split.skip", "node=" + nodeId + "|reason=" + skipped.reason().code());
+                }
                 return;
             }
             byte[] pivot = ((Carve) decision).pivot();
