@@ -27,7 +27,15 @@ import org.junit.jupiter.api.Test;
  * <p>The results path is required rather than optional: a sweep over a corpus produces thousands of
  * numbers, its per-fixture tables scroll past on the way, and a run whose output existed only in a
  * console buffer would be a run that has to be repeated to be read. It is written as it goes, so the
- * file is complete for every fixture finished so far at any moment.
+ * file is complete for every fixture finished so far at any moment, and it <b>must not already
+ * exist</b> — the results of a sweep are cited raw, and a re-run that truncated them would destroy
+ * the evidence for a finding already published.
+ *
+ * <p>A third, optional property caps the size of capture the sweep will open
+ * ({@link CorpusSweep#MAX_KEYS_PROPERTY}): a staged corpus outlives the tier staged into it, and a
+ * leftover fixture an order of magnitude larger than the rest costs more than the other hundred put
+ * together while producing rows comparable with none of them. Every directory the sweep passes over,
+ * for that reason or for holding no capture at all, is named with its reason in the result.
  *
  * <p><b>Nothing here asserts a magnitude.</b> What a corpus of real buckets does is the measurement,
  * and a threshold invented here would be one fitted to it. What is asserted is what a table of numbers

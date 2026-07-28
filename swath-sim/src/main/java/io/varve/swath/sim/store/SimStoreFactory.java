@@ -128,11 +128,13 @@ public final class SimStoreFactory {
     /**
      * Opens {@code fixturePath} under the requested {@code backend} and an explicit {@code config}.
      *
-     * @throws IllegalArgumentException under {@link SimStoreBackend#ARENA} when the fixture's keys
-     *                                  do not fit {@link SimStoreConfig#arenaMaxEncodedBytes()}, or
-     *                                  under {@link SimStoreBackend#STREAMING} /
-     *                                  {@link SimStoreBackend#WINDOWED} when the fixture is not
-     *                                  sorted-eligible
+     * @throws IllegalArgumentException      under {@link SimStoreBackend#ARENA} when the fixture's
+     *                                       keys do not fit
+     *                                       {@link SimStoreConfig#arenaMaxEncodedBytes()}
+     * @throws IneligibleFixtureException    under {@link SimStoreBackend#STREAMING} /
+     *                                       {@link SimStoreBackend#WINDOWED} when the fixture is not
+     *                                       sorted-eligible — typed, so a corpus sweep can file it as
+     *                                       an exclusion without reading a message
      */
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
@@ -267,6 +269,9 @@ public final class SimStoreFactory {
      * The derived routing index of a sorted-eligible {@code files}, for the two forced backends that
      * require one. {@code recordFallbackOnFailure=false}: a forced backend that declines hard-fails,
      * so this is not a "fallback" any more than {@link SimStoreBackend#ARENA}'s forced decline is.
+     * The decline is raised as a typed {@link IneligibleFixtureException} carrying the eligibility
+     * reason and the file set, for the same reason the mid-decode disorder is typed: a sweep must be
+     * able to file it as corpus data without reading a message.
      */
     private static List<IndexEntry> requireSortedIndex(List<Path> files, FixtureMetrics fixtureMetrics,
                                                        SimStoreBackend backend) {
@@ -275,8 +280,7 @@ public final class SimStoreFactory {
             return eligible.index();
         }
         String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
-        throw new IllegalArgumentException("backend " + backend + " requires a sorted-eligible fixture ("
-                + reason + "), use " + SimStoreBackend.PARQUET + " instead: " + files);
+        throw new IneligibleFixtureException(backend, reason, files);
     }
 
     /**

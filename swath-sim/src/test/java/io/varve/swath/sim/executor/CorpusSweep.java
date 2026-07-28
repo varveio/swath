@@ -7,24 +7,32 @@ package io.varve.swath.sim.executor;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.replay.fixture.SortedFixtures;
 import io.varve.swath.replay.store.ListingStore;
+import io.varve.swath.sim.store.IneligibleFixtureException;
 import io.varve.swath.sim.store.SimStoreBackend;
 import io.varve.swath.sim.store.SimStoreConfig;
 import io.varve.swath.sim.store.SimStoreFactory;
 import io.varve.swath.sort.RowGroupOrderException;
+import io.varve.swath.sort.SortedFileIndex;
 import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.OptionalLong;
+import java.util.TreeMap;
+import java.util.function.LongPredicate;
 import java.util.stream.Stream;
 
 /**
@@ -44,6 +52,16 @@ import java.util.stream.Stream;
  * its directory name, and the repo names no corpus, bucket or location (the module README's "Fixtures"
  * rule).
  *
+ * <p>A directory the sweep passes over is <b>named and reasoned in the output</b> ({@link Skipped}),
+ * never silently dropped: a corpus is staged by hand, and a sweep whose covering set is invisible is a
+ * sweep whose missing bucket looks exactly like a bucket with nothing to say. Two things are passed
+ * over — a directory holding no {@code data/*.parquet} (not a staged capture at all), and a capture
+ * whose footers declare more rows than {@link #MAX_KEYS_PROPERTY} allows. The ceiling exists because a
+ * corpus directory outlives the tier that was staged into it: a leftover fixture an order of magnitude
+ * larger than the rest would be swept at the fallback fleet, for hours, and its rows would not be
+ * comparable with anything. Reading it costs one footer per part and no decode
+ * ({@link SortedFileIndex#rowCount}).
+ *
  * <h2>Three choices that decide what the numbers mean</h2>
  * <ol>
  *   <li><b>{@link SimStoreBackend#STREAMING}, forced.</b> Not {@code AUTO}: the arena tier declines by
@@ -56,7 +74,10 @@ import java.util.stream.Stream;
  *       alone — a collapse that is exact at the concurrency the capture actually ran at is invisible at
  *       eight workers — so a corpus comparison at one arbitrary fleet size would be a comparison of
  *       the wrong thing. A capture that carries no summary is swept at {@link #FALLBACK_WORKERS} and
- *       <b>says so in its row</b>, because that row is then not comparable with the rest.</li>
+ *       <b>says so in its row</b>, because that row is then not comparable with the rest. The same
+ *       goes for two captures that ran at <em>different</em> fleets, which is why the sweep closes by
+ *       printing the fleets it actually ran at and naming every fixture off the corpus's modal one
+ *       ({@link #fleets}) — comparability is a reading of the sweep, not an assumption of it.</li>
  *   <li><b>Two screening seeds, four where it matters.</b> Four seeds per arm per fixture is the
  *       verdict standard ({@link SensingRaceProtocol}), and a corpus of it costs twice what a screen
  *       does for fixtures that are uninteresting at both seeds. So the sweep screens at two and
@@ -64,13 +85,20 @@ import java.util.stream.Stream;
  *       {@code escalated} column says which, so no two-seed row can be quoted as a verdict.</li>
  * </ol>
  *
- * <h2>A fixture that cannot be read is data, not a failure</h2>
- * The streaming tier refuses a capture whose keys are not in order, either at index derive (disorder
- * across row groups makes it ineligible) or at the first row group a run faults in
+ * <h2>A fixture that cannot be read is data, not a failure — and nothing else is</h2>
+ * The streaming tier refuses a capture whose keys are not in order in two typed shapes, and the sweep
+ * files exactly those two as exclusions: at index derive, where disorder across row groups (or any
+ * other eligibility defect) refuses the whole file set ({@link IneligibleFixtureException}, which
+ * carries the reason and the files), and at the first row group a run faults in
  * ({@link RowGroupOrderException}, which carries the file, the row group and the row). Either way the
  * sweep records the exclusion with everything the report needs to locate it in the corpus and
  * continues to the next fixture: the exclusion list is an output of the sweep — corpus QA the operator
  * wants regardless — and one unreadable capture must not cost the other hundred.
+ *
+ * <p><b>Any other runtime failure is this program being wrong, and is filed as a {@link Problem}</b>
+ * — which fails the run. Catching it as an exclusion instead would turn every bug in the sweep, and
+ * every misconfigured invocation of it, into a quiet corpus-QA data point: a table with fifty fixtures
+ * missing and a plausible story about why.
  */
 final class CorpusSweep {
 
@@ -86,6 +114,16 @@ final class CorpusSweep {
     /** The three arms: the shipped sensor, and the two the sensing race left standing. */
     static final List<SensingVariant> ARMS = List.of(
             SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED);
+
+    /**
+     * The arms the screen reads <em>against</em> {@link SensingVariant#CURRENT} — every one but the
+     * shipped sensor. Both of them, not the first: a fixture the sweep is quiet about is one nobody
+     * looks at again, so a divergence only the second candidate shows must earn the same four seeds
+     * the first candidate's would. Screening against one arm and promoting on all of them is how a
+     * corpus of arms-in-agreement gets asserted from a corpus that was never asked.
+     */
+    static final List<SensingVariant> CANDIDATE_ARMS =
+            ARMS.stream().filter(arm -> arm != SensingVariant.CURRENT).toList();
 
     /** The two seeds every fixture is screened at — the first two of the protocol's four. */
     static final long[] SCREENING_SEEDS = {SensingRaceProtocol.SEEDS[0], SensingRaceProtocol.SEEDS[1]};
@@ -104,11 +142,39 @@ final class CorpusSweep {
      */
     static final double COLLAPSE_SERIAL_FRACTION = 0.5;
 
-    /** Screened {@code CURRENT}-vs-{@code E2} mean duration gap, either way, that earns four seeds. */
+    /**
+     * Screened {@code CURRENT}-vs-candidate duration gap, either way, that earns four seeds — read
+     * both over the screening seeds' mean and at each seed on its own; see {@link #divergent}.
+     */
     static final double DIVERGENT_DURATION_DELTA = 0.25;
 
-    /** Screened {@code CURRENT} steal attempts finding no victim, at any seed, that earns four seeds. */
+    /** Screened steal attempts finding no victim, at any arm and any seed, that earns four seeds. */
     static final double DIVERGENT_NO_VICTIM_SHARE = 0.4;
+
+    /**
+     * System property capping the fixture size the sweep will open, in rows the capture's footers
+     * declare. Default {@link #DEFAULT_MAX_KEYS}.
+     */
+    static final String MAX_KEYS_PROPERTY = "swath.sim.listing.corpus-max-keys";
+
+    /**
+     * The default ceiling: twenty million keys, an order of magnitude above the largest capture a
+     * comparable corpus tier holds and well below the size at which one fixture's legs cost more than
+     * the other hundred put together.
+     */
+    static final long DEFAULT_MAX_KEYS = 20_000_000L;
+
+    /** {@link Skipped#reason()}: the directory holds no {@code data/*.parquet}, so it is no capture. */
+    static final String NOT_A_CAPTURE = "not_a_capture";
+
+    /** {@link Skipped#reason()}: the capture's footers declare more rows than the ceiling allows. */
+    static final String OVER_KEY_CEILING = "over_key_ceiling";
+
+    /** {@link Problem#leg()} for a failure that is the whole fixture's rather than any one leg's. */
+    static final String WHOLE_FIXTURE = "fixture";
+
+    /** Every seed — the screen's own, when a reading is taken over all of them rather than one. */
+    private static final LongPredicate ANY_SEED = seed -> true;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -141,11 +207,25 @@ final class CorpusSweep {
     }
 
     /**
-     * A fixture the sweep did not measure, and everything needed to find it in the corpus. Classified
-     * from {@link RowGroupOrderException#reason()} and the exception's type rather than from a message,
-     * which is what the typed failure exists for.
+     * A fixture the sweep opened and could not read, and everything needed to find it in the corpus.
+     * Classified from the exception's type and its own {@code reason()} rather than from a message,
+     * which is what the typed failures exist for. {@code where} is the failure's <b>redacted</b>
+     * report — file names, no directories: this record is quoted into a report, and the operator's
+     * filesystem layout is not part of the finding. The full path stays in the console log.
      */
     record Exclusion(String fixture, String reason, String where) {
+    }
+
+    /**
+     * A directory under the root the sweep never opened, and why — see the class javadoc. Carried in
+     * the {@link Result} rather than only printed, because "which fixtures did this sweep actually
+     * cover" is a question its own output has to answer.
+     */
+    record Skipped(String fixture, String reason, String detail) {
+    }
+
+    /** What the root holds: the fixtures to sweep, in name order, and the directories passed over. */
+    record Corpus(List<Path> fixtures, List<Skipped> skipped) {
     }
 
     /**
@@ -157,32 +237,69 @@ final class CorpusSweep {
     }
 
     /** What a whole sweep produced. */
-    record Result(List<Row> rows, List<Exclusion> exclusions, List<Problem> problems) {
+    record Result(List<Row> rows, List<Exclusion> exclusions, List<Skipped> skipped,
+                  List<Problem> problems) {
     }
 
     /**
-     * Every fixture directory under {@code root}, in name order — a directory holding a
-     * {@link #DATA_DIRECTORY} with at least one Parquet part. Name order because a sweep interrupted
-     * halfway and resumed by hand must have covered a prefix of the corpus, not an arbitrary subset.
+     * Every directory under {@code root}, split into the fixtures the sweep will open — a directory
+     * holding a {@link #DATA_DIRECTORY} with at least one Parquet part, whose footers declare no more
+     * rows than the ceiling — and the ones it will not, each with its reason. Name order because a
+     * sweep interrupted halfway and resumed by hand must have covered a prefix of the corpus, not an
+     * arbitrary subset.
      */
-    static List<Path> fixtures(Path root) throws IOException {
-        try (Stream<Path> children = Files.list(root)) {
-            return children.filter(Files::isDirectory)
-                    .filter(CorpusSweep::hasParquet)
+    static Corpus fixtures(Path root) throws IOException {
+        long ceiling = maxKeys();
+        List<Path> children;
+        try (Stream<Path> stream = Files.list(root)) {
+            children = stream.filter(Files::isDirectory)
                     .sorted(Comparator.comparing(path -> path.getFileName().toString()))
                     .toList();
         }
+        List<Path> fixtures = new ArrayList<>();
+        List<Skipped> skipped = new ArrayList<>();
+        for (Path child : children) {
+            String name = child.getFileName().toString();
+            List<Path> parts = parquetParts(child);
+            if (parts.isEmpty()) {
+                skipped.add(new Skipped(name, NOT_A_CAPTURE, "no " + DATA_DIRECTORY + "/*.parquet"));
+                continue;
+            }
+            long rows = 0;
+            for (Path part : parts) {
+                rows += SortedFileIndex.rowCount(part);
+            }
+            if (rows > ceiling) {
+                skipped.add(new Skipped(name, OVER_KEY_CEILING, rows + " rows above the " + ceiling
+                        + "-row ceiling (-D" + MAX_KEYS_PROPERTY + ")"));
+                continue;
+            }
+            fixtures.add(child);
+        }
+        return new Corpus(List.copyOf(fixtures), List.copyOf(skipped));
     }
 
-    private static boolean hasParquet(Path fixture) {
+    /** The Parquet parts of a staged capture, in key order, or empty when the directory holds none. */
+    private static List<Path> parquetParts(Path fixture) throws IOException {
         Path data = fixture.resolve(DATA_DIRECTORY);
-        if (!Files.isDirectory(data)) {
-            return false;
+        return Files.isDirectory(data) ? SortedFixtures.resolveFiles(data) : List.of();
+    }
+
+    /**
+     * {@link #MAX_KEYS_PROPERTY}, parsed explicitly rather than through {@link Long#getLong}, which
+     * answers a malformed value with the default — a corpus silently swept at a ceiling nobody asked
+     * for is the exact failure this property exists to prevent.
+     */
+    private static long maxKeys() {
+        String raw = System.getProperty(MAX_KEYS_PROPERTY);
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_MAX_KEYS;
         }
-        try (Stream<Path> parts = Files.list(data)) {
-            return parts.anyMatch(part -> part.getFileName().toString().endsWith(".parquet"));
-        } catch (IOException e) {
-            throw new UncheckedIOException("failed to list " + data, e);
+        try {
+            return Long.parseLong(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("-D" + MAX_KEYS_PROPERTY
+                    + " must be a decimal row count, got: " + raw, e);
         }
     }
 
@@ -211,66 +328,98 @@ final class CorpusSweep {
      * — the escalation rule is about these, not about a whole run record, and stating them as a value
      * is what lets the rule be exercised at readings a two-fixture test cannot provoke.
      */
-    record Screen(String arm, double serialFraction, double durationNanos, double noVictimShare) {
+    record Screen(String arm, long seed, double serialFraction, double durationNanos,
+                  double noVictimShare) {
 
         static Screen of(SensingRaceProtocol.Leg leg) {
-            return new Screen(leg.variant(), leg.serialFraction(), leg.result().virtualNanos(),
+            return new Screen(leg.variant(), leg.seed(), leg.serialFraction(), leg.result().virtualNanos(),
                     leg.noVictimShare());
         }
     }
 
     /**
-     * Whether a fixture's two-seed screen has earned the other two seeds. Any one of three readings is
+     * Whether a fixture's two-seed screen has earned the other two seeds. Any one of four readings is
      * enough, and they are deliberately different kinds of interesting:
      * <ul>
      *   <li><b>a collapsed leg at any arm or seed</b> — the pathology itself, and the reading a
      *       two-seed screen is least able to trust, since it is bimodal at a fixed configuration;</li>
-     *   <li><b>a mean {@code CURRENT}-vs-{@code E2} duration gap either way</b> — a cure worth
-     *       confirming, and equally a <em>regression</em> worth confirming;</li>
-     *   <li><b>{@code CURRENT} steal attempts mostly finding no victim, at either seed</b> — the
-     *       mechanism upstream of a collapse, which can be present at a seed where the duration is
-     *       not yet.</li>
+     *   <li><b>steal attempts mostly finding no victim, at any arm and either seed</b> — the mechanism
+     *       upstream of a collapse, which can be present at a seed where the duration is not yet.
+     *       Read at <em>every</em> arm and not only the shipped one, because a candidate that starves
+     *       its own thieves is a regression the screen exists to catch;</li>
+     *   <li><b>a mean {@code CURRENT}-vs-candidate duration gap either way, at any candidate arm</b>
+     *       — a cure worth confirming, and equally a <em>regression</em> worth confirming;</li>
+     *   <li><b>the same gap at a <em>single</em> screening seed</b>. Not redundant with the mean, and
+     *       this is the reading a mean is structurally worst at: what a collapse-prone fixture does is
+     *       bimodal, so one leg 55% down and one leg level average to a 23% gap that clears no
+     *       threshold — the fixture then reads as uninteresting precisely because it is unstable. A
+     *       mean over two seeds is a summary of two numbers; the sweep has both.</li>
      * </ul>
      */
     static boolean divergent(List<Screen> screening) {
         for (Screen screen : screening) {
-            if (screen.serialFraction() > COLLAPSE_SERIAL_FRACTION) {
+            if (screen.serialFraction() > COLLAPSE_SERIAL_FRACTION
+                    || screen.noVictimShare() > DIVERGENT_NO_VICTIM_SHARE) {
                 return true;
             }
         }
-        double current = meanDurationNanos(screening, SensingVariant.CURRENT);
-        double anchored = meanDurationNanos(screening, SensingVariant.CURSOR_ANCHORED);
-        if (current > 0 && Math.abs(current - anchored) / current > DIVERGENT_DURATION_DELTA) {
-            return true;
-        }
-        for (Screen screen : screening) {
-            if (screen.arm().equals(SensingRaceProtocol.label(SensingVariant.CURRENT))
-                    && screen.noVictimShare() > DIVERGENT_NO_VICTIM_SHARE) {
+        long[] seeds = screening.stream().mapToLong(Screen::seed).distinct().toArray();
+        for (SensingVariant candidate : CANDIDATE_ARMS) {
+            if (gap(screening, candidate, ANY_SEED) > DIVERGENT_DURATION_DELTA) {
                 return true;
+            }
+            for (long seed : seeds) {
+                if (gap(screening, candidate, screened -> screened == seed) > DIVERGENT_DURATION_DELTA) {
+                    return true;
+                }
             }
         }
         return false;
     }
 
-    private static double meanDurationNanos(List<Screen> screening, SensingVariant variant) {
+    /**
+     * How far {@code candidate} sits from {@link SensingVariant#CURRENT} over {@code seeds}, as a
+     * fraction of the shipped sensor's own duration — <b>0 when either side has no reading there</b>,
+     * because an arm that did not run is not a divergence, and an absent arm read as a zero duration
+     * would escalate every fixture in the corpus.
+     */
+    private static double gap(List<Screen> screening, SensingVariant candidate, LongPredicate seeds) {
+        OptionalDouble current = meanDurationNanos(screening, SensingVariant.CURRENT, seeds);
+        OptionalDouble measured = meanDurationNanos(screening, candidate, seeds);
+        if (current.isEmpty() || measured.isEmpty() || current.getAsDouble() <= 0) {
+            return 0;
+        }
+        return Math.abs(current.getAsDouble() - measured.getAsDouble()) / current.getAsDouble();
+    }
+
+    private static OptionalDouble meanDurationNanos(List<Screen> screening, SensingVariant variant,
+                                                    LongPredicate seeds) {
         String arm = SensingRaceProtocol.label(variant);
         return screening.stream()
-                .filter(screen -> screen.arm().equals(arm))
+                .filter(screen -> screen.arm().equals(arm) && seeds.test(screen.seed()))
                 .mapToDouble(Screen::durationNanos)
-                .average().orElse(0);
+                .average();
     }
 
     /**
      * Sweeps every fixture under {@code root}, appending each fixture's rows to {@code results} as they
-     * are produced and printing its table as it goes.
+     * are produced and printing its table as it goes. {@code results} must not already exist: the file
+     * is the run's only durable record, and a sweep that truncated the one before it would destroy the
+     * raw data a published finding cites.
      */
     static Result sweep(Path root, Path results) throws IOException {
-        List<Path> fixtures = fixtures(root);
+        Corpus corpus = fixtures(root);
+        List<Path> fixtures = corpus.fixtures();
+        for (Skipped skipped : corpus.skipped()) {
+            System.out.printf(Locale.ROOT, "corpus_sweep phase=skipped fixture=%s reason=%s detail=%s%n",
+                    skipped.fixture(), skipped.reason(), skipped.detail());
+        }
         List<Row> rows = new ArrayList<>();
         List<Exclusion> exclusions = new ArrayList<>();
         List<Problem> problems = new ArrayList<>();
         Instant sweepStarted = Instant.now();
-        try (BufferedWriter out = Files.newBufferedWriter(results, StandardCharsets.UTF_8)) {
+        try (BufferedWriter out = Files.newBufferedWriter(results, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             out.write(HEADER);
             out.newLine();
             out.flush();
@@ -282,14 +431,21 @@ final class CorpusSweep {
                 List<Row> swept;
                 try {
                     swept = sweepOne(fixture, name, problems);
-                } catch (RowGroupOrderException disordered) {
-                    exclusions.add(excluded(name, disordered));
-                    continue;
-                } catch (RuntimeException refused) {
-                    exclusions.add(new Exclusion(name, refused.getClass().getSimpleName(),
-                            String.valueOf(refused.getMessage())));
+                } catch (RuntimeException failure) {
+                    Optional<Exclusion> refused = refusal(name, failure);
+                    if (refused.isEmpty()) {
+                        problems.add(new Problem(name, WHOLE_FIXTURE, "failed: " + failure));
+                        System.out.printf(Locale.ROOT, "corpus_sweep phase=failed fixture=%s %s%n",
+                                name, failure);
+                        continue;
+                    }
+                    // The legs that ran before the refusal reached its first bad row group belong to a
+                    // fixture the sweep is now not measuring at all, so whatever they reported is a
+                    // symptom of the exclusion rather than a defect the run must fail on.
+                    problems.removeIf(problem -> problem.fixture().equals(name));
+                    exclusions.add(refused.get());
                     System.out.printf(Locale.ROOT, "corpus_sweep phase=excluded fixture=%s reason=%s %s%n",
-                            name, refused.getClass().getSimpleName(), refused.getMessage());
+                            name, refused.get().reason(), failure.getMessage());
                     continue;
                 }
                 rows.addAll(swept);
@@ -302,23 +458,74 @@ final class CorpusSweep {
                         swept.stream().map(Row::leg).toList());
             }
         }
-        System.out.printf(Locale.ROOT,
-                "corpus_sweep phase=done fixtures=%d swept=%d excluded=%d legs=%d problems=%d wall_s=%.1f%n",
-                fixtures.size(), fixtures.size() - exclusions.size(), exclusions.size(), rows.size(),
-                problems.size(), Duration.between(sweepStarted, Instant.now()).toMillis() / 1000.0);
+        System.out.printf(Locale.ROOT, "corpus_sweep phase=done fixtures=%d swept=%d excluded=%d "
+                        + "skipped=%d legs=%d problems=%d wall_s=%.1f%n",
+                fixtures.size(), rows.stream().map(Row::fixture).distinct().count(), exclusions.size(),
+                corpus.skipped().size(), rows.size(), problems.size(),
+                Duration.between(sweepStarted, Instant.now()).toMillis() / 1000.0);
         for (Exclusion exclusion : exclusions) {
             System.out.printf(Locale.ROOT, "corpus_sweep phase=exclusion fixture=%s reason=%s where=%s%n",
                     exclusion.fixture(), exclusion.reason(), exclusion.where());
         }
-        return new Result(List.copyOf(rows), List.copyOf(exclusions), List.copyOf(problems));
+        printFleets(rows);
+        return new Result(List.copyOf(rows), List.copyOf(exclusions), corpus.skipped(),
+                List.copyOf(problems));
     }
 
-    private static Exclusion excluded(String fixture, RowGroupOrderException disordered) {
-        String where = String.format(Locale.ROOT, "file=%s row_group=%d row=%d", disordered.file(),
-                disordered.rowGroup(), disordered.row());
-        System.out.printf(Locale.ROOT, "corpus_sweep phase=excluded fixture=%s reason=%s %s%n",
-                fixture, disordered.reason(), where);
-        return new Exclusion(fixture, disordered.reason(), where);
+    /**
+     * The exclusion {@code failure} is, or empty when it is not one. Only the two typed refusals the
+     * streaming tier raises are corpus data; a bare {@link IllegalStateException} or
+     * {@link IllegalArgumentException} — a bug here, a malformed {@code swath.sim.*} property — is
+     * this program failing, and filing it as an exclusion would publish it as a fact about a bucket.
+     */
+    static Optional<Exclusion> refusal(String fixture, RuntimeException failure) {
+        return switch (failure) {
+            case RowGroupOrderException disordered ->
+                    Optional.of(new Exclusion(fixture, disordered.reason(), disordered.redactedMessage()));
+            case IneligibleFixtureException ineligible ->
+                    Optional.of(new Exclusion(fixture, ineligible.reason(), ineligible.redactedMessage()));
+            default -> Optional.empty();
+        };
+    }
+
+    /**
+     * The fixtures the sweep measured, by the fleet it measured them at — see the class javadoc's
+     * second choice. A corpus swept at one fleet compares across itself; one swept at several does
+     * not, and this is the reading that says which of the two the operator has.
+     */
+    static Map<Integer, List<String>> fleets(List<Row> rows) {
+        Map<Integer, List<String>> byFleet = new TreeMap<>();
+        for (Row row : rows) {
+            List<String> fixtures = byFleet.computeIfAbsent(row.fleet().workers(), workers -> new ArrayList<>());
+            if (!fixtures.contains(row.fixture())) {
+                fixtures.add(row.fixture());
+            }
+        }
+        return byFleet;
+    }
+
+    private static void printFleets(List<Row> rows) {
+        Map<Integer, List<String>> byFleet = fleets(rows);
+        if (byFleet.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<Integer, List<String>> fleet : byFleet.entrySet()) {
+            System.out.printf(Locale.ROOT, "corpus_sweep phase=fleet workers=%d fixtures=%d%n",
+                    fleet.getKey(), fleet.getValue().size());
+        }
+        int modal = byFleet.entrySet().stream()
+                .max(Comparator.comparingInt(fleet -> fleet.getValue().size()))
+                .orElseThrow().getKey();
+        for (Map.Entry<Integer, List<String>> fleet : byFleet.entrySet()) {
+            if (fleet.getKey() == modal) {
+                continue;
+            }
+            for (String fixture : fleet.getValue()) {
+                System.out.printf(Locale.ROOT,
+                        "corpus_sweep phase=fleet_mismatch fixture=%s workers=%d modal=%d%n",
+                        fixture, fleet.getKey(), modal);
+            }
+        }
     }
 
     /**

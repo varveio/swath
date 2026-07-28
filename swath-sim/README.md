@@ -106,7 +106,9 @@ regression.
 `STREAMING` and `WINDOWED` both require a **sorted-eligible** fixture: a stamped, `mode=objects`,
 strictly-sorted, pure-`OBJECT` capture, the same eligibility the replay server's own
 `--serving-mode sorted` checks (`SortedEligibility`, shared code). A fixture that is not
-sorted-eligible fails fast under either forced request, and `AUTO` falls back to `PARQUET`.
+sorted-eligible fails fast under either forced request — as a typed `IneligibleFixtureException`
+carrying the eligibility reason and the file set, so a sweep over a corpus classifies the refusal
+without reading a message — and `AUTO` falls back to `PARQUET`.
 
 ### An unsorted fixture is a corrupt input, and where that is caught
 
@@ -535,7 +537,18 @@ results path is required, not optional: a corpus produces thousands of numbers a
 tables scroll past on the way, so a run whose output lived only in a console buffer would have to be
 repeated to be read. Rows are appended and flushed per fixture, so the file is complete for every
 fixture finished so far at any moment — an hour-long sweep that dies at the ninetieth fixture still
-yields the eighty-nine before it.
+yields the eighty-nine before it. **The results file must not already exist**, and a sweep pointed at
+one fails before it opens a fixture: a sweep's rows are cited raw, and a re-run that truncated the
+previous run's file would destroy the evidence for a finding already published.
+
+**Which directories the sweep covered is itself an output.** A corpus is staged by hand, so a fixture
+silently dropped reads exactly like a fixture with nothing to say. Two kinds are passed over, and each
+is named with its reason in the result and on the console (`phase=skipped`): a directory holding no
+`data/*.parquet`, and a capture whose footers declare more rows than
+`-Dswath.sim.listing.corpus-max-keys` allows (default 20M). That ceiling is there because a staged
+corpus outlives the tier staged into it: a leftover fixture an order of magnitude larger than the rest
+would be swept at whatever fleet it could name, for hours, and its rows would be comparable with
+nothing. Reading it costs one Parquet footer per part and no decode at all.
 
 Three choices decide what its numbers mean, and all three are visible in the output:
 
@@ -550,17 +563,37 @@ Three choices decide what its numbers mean, and all three are visible in the out
   and its rows say `fleet_source=fallback`, because those rows are then not comparable with the rest.
 - **Two screening seeds, four where it matters.** Four seeds is the verdict standard; the sweep
   screens at two and escalates to all four on any fixture whose screen *diverged* — a collapsed leg
-  (serial fraction above ½) at any arm or seed, a mean shipped-vs-candidate duration gap either way,
-  or the shipped sensor's steals mostly finding no victim. The `escalated` column says which fixtures
-  got the full four, so **no two-seed row can be quoted as a verdict**.
+  (serial fraction above ½) at any arm or seed, steals mostly finding no victim at any arm and either
+  seed, or a duration gap either way between the shipped sensor and **any** candidate arm, read both
+  over the two screening seeds' mean **and at each seed on its own**. Both halves of that last one
+  matter: screening against a single candidate leaves a divergence only the other candidate shows
+  unexamined, and a mean over two seeds is the reading least able to see a bimodal fixture — one leg
+  55% down and one leg level average to a 23% gap that clears no threshold, so the fixture reads as
+  uninteresting exactly because it is unstable. The `escalated` column says which fixtures got the
+  full four, so **no two-seed row can be quoted as a verdict**.
 
-A capture the streaming tier **refuses** — disorder across row groups makes it ineligible at open, and
-disorder inside one fails the first run that faults that group in — is recorded with its file, row
-group and row, and the sweep continues to the next fixture. That exclusion list is an output, not a
-failure: it is corpus QA data, and one unreadable capture must not cost the other hundred. What *does*
-fail the run is a leg that produced a number nobody may use — one that stalled, or one that did not
-emit its fixture's own key total — and those are collected across the whole sweep and raised at the
-end, so a single bad fixture costs no measurements either.
+A capture the streaming tier **refuses** is recorded and the sweep continues to the next fixture.
+There are two typed refusals and the exclusion carries what each of them knows: an eligibility failure
+at open — disorder across row groups, a missing stamp, an incomplete multi-file set — carries the
+eligibility reason and the file set, and a disorder *inside* a row group, which fails the first run
+that faults that group in, carries its file, row group and row. Neither carries the operator's
+directory tree: the exclusion's `where` is the failure's redacted report, and the full path stays in
+the console log. That exclusion list is an output, not a failure: it is corpus QA data, and one
+unreadable capture must not cost the other hundred.
+
+**Nothing else is corpus data.** Any other runtime failure — a bug in the sweep, a malformed
+`swath.sim.*` property — is recorded as a *problem* against that fixture, and problems fail the run.
+So does a leg that produced a number nobody may use: one that stalled, or one that did not emit its
+fixture's own key total. Both are collected across the whole sweep and raised at the end, so a single
+bad fixture costs no measurements either. (A fixture that is then excluded mid-run drops the problems
+its earlier legs recorded: those describe the exclusion, not a defect the run must fail on.)
+
+**Reading the table: check the fleet before comparing two rows.** The sweep closes by printing the
+fleets it actually ran at (`phase=fleet`) and naming every fixture off the corpus's modal one
+(`phase=fleet_mismatch`), because a `workers` column that varies is a comparability limit and not a
+measurement. A row at `fleet_source=fallback`, or at a capture fleet the rest of the corpus did not
+run at, is a reading about that bucket at that concurrency — quotable on its own, not against its
+neighbours in the same table.
 
 ### Keyspace shapes, generated
 

@@ -74,10 +74,13 @@ tasks.test {
     System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
     System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
     // Same forwarding, same reason, for the corpus sweep (CorpusSweepRunTest, @Tag("perf")): a root
-    // directory of staged captures, and the TSV it writes its per-leg rows to. Both are the
-    // operator's paths, supplied per invocation, and the sweep skips itself without the first.
+    // directory of staged captures, the TSV it writes its per-leg rows to, and the ceiling above
+    // which a staged capture is passed over rather than swept. The first two are the operator's
+    // paths, supplied per invocation, and the sweep skips itself without the first.
     System.getProperty("swath.sim.listing.corpus")?.let { systemProperty("swath.sim.listing.corpus", it) }
     System.getProperty("swath.sim.listing.results")?.let { systemProperty("swath.sim.listing.results", it) }
+    System.getProperty("swath.sim.listing.corpus-max-keys")
+        ?.let { systemProperty("swath.sim.listing.corpus-max-keys", it) }
     // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.
