@@ -81,6 +81,10 @@ tasks.test {
     System.getProperty("swath.sim.listing.results")?.let { systemProperty("swath.sim.listing.results", it) }
     System.getProperty("swath.sim.listing.corpus-max-keys")
         ?.let { systemProperty("swath.sim.listing.corpus-max-keys", it) }
+    // Same forwarding, same reason, for the per-decision gate dump (`SimGateDump`): the TSV a single
+    // run writes its owner-split and victim-scan gate inputs to, for diffing against a replay trace.
+    // Absent (the common case), no run dumps anything.
+    System.getProperty("swath.sim.gate-dump")?.let { systemProperty("swath.sim.gate-dump", it) }
     // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.

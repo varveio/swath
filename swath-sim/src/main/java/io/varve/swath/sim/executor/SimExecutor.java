@@ -299,6 +299,12 @@ public final class SimExecutor {
     private final Set<Long> ownerSplitTaggedChildren = new HashSet<>();
     private final ConfettiFeedbackGate confettiFeedback = new ConfettiFeedbackGate();
     private final PolicyRunTimeline.Recorder timeline = new PolicyRunTimeline.Recorder();
+    /**
+     * The opt-in per-decision dump, or {@code null} when {@link SimGateDump#DUMP_PATH_PROPERTY} names
+     * nothing. Null rather than a disabled instance, and every call site guarded on it: a run that is
+     * not dumping must not format a row or render a key for one.
+     */
+    private final SimGateDump gateDump = SimGateDump.fromSystemProperties();
     private final OwnerSplitPolicy governor;
     private final SeedPlanner seedPlanner;
     private final SimConcurrencyPolicy gauge;
@@ -393,7 +399,16 @@ public final class SimExecutor {
         log = scenario.recordEventLog() ? SimEventLog.recording() : SimEventLog.disabled();
         SimKernel kernel = new SimKernel(scenario.seed(), scenario.budgets(), log, scenario.maxEvents());
         kernel.scheduleBootstrap(0, 0, "seed.start", this::startSeedPhase);
-        SimRunResult result = kernel.run();
+        SimRunResult result;
+        try {
+            result = kernel.run();
+        } finally {
+            // Closed on the failing path too: a run that died holding half its dump is the run whose
+            // dump is most worth reading.
+            if (gateDump != null) {
+                gateDump.close();
+            }
+        }
         return PolicyRunResult.of(result, scenario, storeLabel, gauge.counters(), gauge.effectiveT(),
                 ledger.nodesCreated(), ledger.splitsAborted(), view.storeReads(), runStuck,
                 timeline.finish(result.wallNanos()), sensing);
@@ -719,6 +734,10 @@ public final class SimExecutor {
                     new ConfettiObservation(confetti.taggedTotal(), confetti.taggedConfetti(),
                             confetti.probeSeq()));
             OwnerSplitDecision decision = governor.decide(splitView);
+            if (gateDump != null) {
+                gateDump.ownerDecision(at.nowNanos(), nodeId, decision.gateInputs(), state.lo(),
+                        cursorTo, hi);
+            }
             // A claimed probe slot resolves BEFORE any engagement is recorded: every owner that
             // snapshotted the same sequence decides to probe, and the run-scoped gate admits exactly
             // one, so recording first would credit carves that never happened.
@@ -838,10 +857,18 @@ public final class SimExecutor {
             recordEngagements(ctx, selection.engagements());
             applyVictimMutations(selection.mutations(), null);
             if (selection instanceof NoVictim noVictim) {
+                if (gateDump != null) {
+                    gateDump.victimScan(ctx.nowNanos(), selection.scan(), SimGateDump.NO_CHOSEN_VICTIM,
+                            noVictim.reason().code(), null, null, null);
+                }
                 finishSteal(NO_VICTIM_OUTCOME, noVictim.reason().code(), false);
                 return;
             }
             victim = livePool.get(((Selected) selection).victimNodeId());
+            if (gateDump != null) {
+                gateDump.victimScan(ctx.nowNanos(), selection.scan(), victim.nodeId(), null,
+                        victim.lo(), victim.cursor(), victim.hi());
+            }
             // The coherent snapshot: read here, in this body, and used to propose a split several
             // bodies later. Everything the victim does in between is exactly the race the proposal has
             // to survive.

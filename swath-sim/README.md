@@ -367,6 +367,31 @@ Two parts of that record are worth naming, because a counter total cannot expres
   *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
   would report the disease while the cure was running.
 
+### Dumping what the gates read
+
+A counter says a gate fired *n* times; it cannot say which reading made it fire, and when a simulated
+run and a real one disagree that is the only question worth asking. `-Dswath.sim.gate-dump=<path>`
+turns on a per-decision dump: one TSV row per `OwnerSplitGovernor.decide` past the open-frontier
+early-out, and — at `<path>.scans.tsv` — one per `ThiefPolicy.selectVictim` pass. The columns are the
+engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which are also what the engine emits
+as its `owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7), so the two
+sides diff **row for row against a replay-server trace of the same listing** and a divergence lands on
+the gate and the reading that produced it. The decision file carries `virtual_time_ns`, `node_id`,
+`reason`, `est`, `pages_since_last_self_split`, `outstanding`, `far_ahead_fraction`, `density_ratio`,
+`keys_emitted`, then the decided range's own `lo`, `cursor_to` and `hi` — the bounds, because sim node
+ids and a replay run's node ids are different id spaces and a tail range is matched by *keys*. The scan
+file carries `virtual_time_ns`, `seen`, `skipped_paced`, `skipped_unsplittable`, `skipped_no_span`,
+`chosen_node_id`, `best_est`, `reason`, and the chosen victim's `chosen_lo`/`chosen_cursor`/`chosen_hi`.
+A double the short-circuiting gate chain never computed is written as `NaN`, and an unseeded argmax as
+`-Infinity`: a TSV carries what the run held, without JSON's ban on a non-finite number.
+
+The dump is a **write-only observer** — a run dumping takes exactly the decisions it takes not
+dumping, and with the property unset no row is formatted and no key is rendered. Its instants are the
+run's own virtual clock, never the host's. It is **one run per dump**: both files are created
+`CREATE_NEW` and every IO failure fails the run, because an artifact that silently truncates would
+have its missing rows read as a finding — so point a multi-leg harness at a fresh path per invocation
+rather than at one it has already written.
+
 ### Swapping the position sensor
 
 Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
