@@ -81,7 +81,7 @@ final class EngineTogglesParseTest {
     void malformedNoEqualsSignIsRejected() {
         assertThatThrownBy(() -> EngineToggles.parse(List.of("owner_split"), false))
                 .isInstanceOf(InvalidArgsException.class)
-                .hasMessageContaining("NAME=on|off");
+                .hasMessageContaining("NAME=VALUE");
     }
 
     @Test

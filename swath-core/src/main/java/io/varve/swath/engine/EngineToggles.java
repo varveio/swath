@@ -247,7 +247,7 @@ public record EngineToggles(
             for (String entry : raw) {
                 int eq = entry.indexOf('=');
                 if (eq < 0) {
-                    throw new InvalidArgsException("--engine-toggle must be NAME=on|off (got '" + entry + "')");
+                    throw new InvalidArgsException("--engine-toggle must be NAME=VALUE (got '" + entry + "')");
                 }
                 String name = entry.substring(0, eq).trim();
                 String rawValue = entry.substring(eq + 1).trim();

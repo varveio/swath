@@ -556,8 +556,9 @@ alongside `max_duration_ms`) both echo the effective state whenever any toggle i
 
 #### New-mechanism performance toggles — defaults and cost profile
 
-Unlike the ablation namespace above (default `on` = the shipped behavior), four toggles are
-**new mechanisms outside that namespace**, and are the only knobs a perf-focused user needs
+Unlike the ablation toggles above (default `on` = the shipped behavior), four toggles are
+**new mechanisms** — all passed through the same `--engine-toggle` option, but distinct from
+the on/off ablation list — and are the only knobs a perf-focused user needs
 to consider. `mass_aware_seed` is **default `on`** — opt-*out*
 (`--engine-toggle mass_aware_seed=off`), not opt-in; `readahead` and `rate_anchored_sensing`
 remain **opt-in**, default `off`; `tail_floor` selects a *mode* rather than on/off, default
