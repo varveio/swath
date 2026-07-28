@@ -105,7 +105,7 @@ These settings feed the same resolved fields as the engine, Parquet, report,
 and sort paths; the umbrella changes their CLI spelling, not their behavior.
 `swath resume` restores persisted run context and accepts only tune keys whose
 applicability includes `resume`; run-shape keys are rejected.
-The diagnostic `--engine-toggle NAME=on|off` (below) remains available for the
+The diagnostic `--engine-toggle NAME=VALUE` (below) remains available for the
 other engine ablations that don't fit the `--tune` registry.
 
 #### Output

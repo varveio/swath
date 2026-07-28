@@ -485,7 +485,7 @@ taxonomy so the signal set stays comparable:
   network health vs treat as a transient S3-side incident).
 
   **`--engine-toggle` ablation marks.** `swath` exposes a diagnostic-tier `--engine-toggle
-  NAME=on|off` namespace (`docs/usage.md` §Diagnostic-tier ablation; NOT a supported configuration —
+  NAME=VALUE` namespace (`docs/usage.md` §Diagnostic-tier ablation; NOT a supported configuration —
   the defaults are) for per-mechanism A/B measurement of the engine. Turning a mechanism off mostly
   proves itself *inherently* — its own engagement counters above go quiet (e.g. `structure_probes=off`
   silences `swath.probe.structure_fetches` and every
