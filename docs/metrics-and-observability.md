@@ -316,7 +316,8 @@ downstream parser should key off, not "does `meters[]` exist".
   "engine_flags": { "owner_split": true, "density_ewma": true, "radix_bands": true,
     "structure_probes": true, "far_ahead": true, "alphabet_pivots": true, "reflect": true,
     "confetti_feedback": true, "reflect_lift": true, "fanout_tiling": true,
-    "mass_aware_seed": true, "readahead": false, "max_duration_ms": null },
+    "mass_aware_seed": true, "readahead": false, "rate_anchored_sensing": false,
+    "max_duration_ms": null },
   "output": { "format": "parquet", "files": 4, "compressed_size_bytes": 1234567 },
   "cost": { "api_calls": 118, "cost_usd": 0.00059,
     "basis": { "rate_per_1k_usd": 0.005, "source": "aws-list-reference-rate" } },
@@ -451,10 +452,10 @@ the JSON.
 `cpu_seconds`, `cpu_efficiency`) render as JSON `null` — not the `-1` log-line sentinel — as does a
 `NaN` gauge in `meters[]`.
 
-`argv` (top-level array) and `engine_flags` (all 12 `--engine-toggle` names — `owner_split`,
+`argv` (top-level array) and `engine_flags` (all 13 `--engine-toggle` names — `owner_split`,
 `density_ewma`, `radix_bands`, `structure_probes`, `far_ahead`, `alphabet_pivots`, `reflect`,
-`confetti_feedback`, `reflect_lift`, `fanout_tiling`, `mass_aware_seed`, `readahead` — plus
-`max_duration_ms`) round out
+`confetti_feedback`, `reflect_lift`, `fanout_tiling`, `mass_aware_seed`, `readahead`,
+`rate_anchored_sensing` — plus `max_duration_ms`) round out
 identifiability: `args_hash` is deliberately the narrow
 resume-safety fingerprint (bucket/prefix/recursive/all_versions/strategy/hints/inventory — it
 excludes progress/diagnostic-only flags like `--max-duration` and ablation toggles like

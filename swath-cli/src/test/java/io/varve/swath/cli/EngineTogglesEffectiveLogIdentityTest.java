@@ -31,6 +31,7 @@ class EngineTogglesEffectiveLogIdentityTest {
             "engine_toggles_effective owner_split={} density_ewma={} radix_bands={} "
                     + "structure_probes={} far_ahead={} alphabet_pivots={} reflect={} confetti_feedback={} "
                     + "reflect_lift={} fanout_tiling={} mass_aware_seed={} readahead={} "
+                    + "rate_anchored_sensing={} "
                     + "(EXPERIMENTAL/DIAGNOSTIC ablation surface — measurement only, not a supported "
                     + "configuration)";
 
@@ -38,10 +39,41 @@ class EngineTogglesEffectiveLogIdentityTest {
     void engineTogglesEffectiveEmitsUnderTheListCommandLoggerWithUnchangedMessageAndArgs() throws Exception {
         ListCommand cmd = new ListCommand();
         // owner_split=off is the canonical non-default toggle; everything else stays at its default
-        // (readahead defaults off, mass_aware_seed on) so this exercises the non-silent branch.
+        // (readahead and rate_anchored_sensing default off, mass_aware_seed on) so this exercises the
+        // non-silent branch.
         cmd.engine.toggles = EngineToggles.parse(List.of("owner_split=off"), false);
         assertThat(cmd.engine.toggles.isDefault()).isFalse();
 
+        ILoggingEvent event = captureEngineTogglesLine(cmd);
+
+        assertThat(event.getLoggerName()).isEqualTo("io.varve.swath.cli.ListCommand");
+        assertThat(event.getLevel()).isEqualTo(Level.INFO);
+        assertThat(event.getMessage()).isEqualTo(EXPECTED_TEMPLATE);
+        assertThat(event.getArgumentArray()).containsExactly(
+                false, true, true, true, true, true, true, true, true, true, true, false, false);
+    }
+
+    /**
+     * The line's own promise: {@link EngineToggles#isDefault()} fires it on ANY of the thirteen
+     * components deviating, so a run that deviates in ONE of them must print that one's real state.
+     * A toggle omitted from the format string would fire the line and then print every field at its
+     * default, which is the failure this pins — read off the FORMATTED message, since a missing
+     * field is exactly what a template-only assertion cannot see.
+     */
+    @Test
+    void aRunDeviatingOnlyInRateAnchoredSensingPrintsThatToggleAsEnabled() throws Exception {
+        ListCommand cmd = new ListCommand();
+        cmd.engine.toggles = EngineToggles.parse(List.of("rate_anchored_sensing=on"), false);
+        assertThat(cmd.engine.toggles.isDefault()).isFalse();
+
+        // The line renders each toggle's effective boolean, so an ON opt-in reads `=true`; a toggle
+        // missing from the format string prints nothing at all, which is what this catches.
+        assertThat(captureEngineTogglesLine(cmd).getFormattedMessage())
+                .contains("rate_anchored_sensing=true");
+    }
+
+    /** Run {@code cmd}'s startup echo and return the {@code engine_toggles_effective} event it emitted. */
+    private static ILoggingEvent captureEngineTogglesLine(ListCommand cmd) {
         Logger logger =
                 (Logger) LoggerFactory.getLogger(ListCommand.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -56,16 +88,10 @@ class EngineTogglesEffectiveLogIdentityTest {
             logger.setLevel(previous);
         }
 
-        ILoggingEvent event = appender.list.stream()
+        return appender.list.stream()
                 .filter(e -> e.getMessage().startsWith("engine_toggles_effective"))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(
                         "no engine_toggles_effective event captured on the io.varve.swath.cli.ListCommand logger"));
-
-        assertThat(event.getLoggerName()).isEqualTo("io.varve.swath.cli.ListCommand");
-        assertThat(event.getLevel()).isEqualTo(Level.INFO);
-        assertThat(event.getMessage()).isEqualTo(EXPECTED_TEMPLATE);
-        assertThat(event.getArgumentArray()).containsExactly(
-                false, true, true, true, true, true, true, true, true, true, true, false);
     }
 }
