@@ -7,6 +7,8 @@
 // (`/src/swath-cli/build/libs/swath.jar`), so a module ships iff swath-cli depends on it —
 // nothing here does, and nothing here may. This is a `java-library`, not an `application`:
 // it produces no start scripts, no dist, and no image layer.
+import java.time.Duration
+
 plugins {
     id("swath.java-conventions")
     `java-library`
@@ -80,4 +82,9 @@ tasks.test {
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.
     (project.findProperty("simTestHeap") as String?)?.let { maxHeapSize = it }
+    // A corpus sweep is one task that runs for as long as the corpus is large, and the conventions'
+    // ten-minute cap is sized for the per-commit suite; without this the sweep is killed mid-corpus
+    // and its results file simply stops. Same shape and same reason as the heap knob above: minutes,
+    // for one invocation (`-PsimTestTimeout=180`), rather than lifting the cap for every module.
+    (project.findProperty("simTestTimeout") as String?)?.let { timeout.set(Duration.ofMinutes(it.toLong())) }
 }
