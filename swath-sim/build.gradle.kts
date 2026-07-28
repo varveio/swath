@@ -43,6 +43,12 @@ dependencies {
     // output, built the same way SortedParquetStoreTest builds its own.
     testImplementation(testFixtures(project(":swath-core")))
     testImplementation(project(":swath-model"))
+    // The corpus sweep reads each staged capture's own run record (its `summary.json`) for the one
+    // input it cannot invent -- the concurrency that capture ran at. Declared here rather than leaned
+    // on transitively: jackson-databind is `implementation`-scoped inside swath-core, so it reaches
+    // this module's runtime classpath but not its compile one, and a test that imports a type needs
+    // it named.
+    testImplementation(libs.jackson.databind)
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj)
@@ -65,6 +71,11 @@ tasks.test {
     System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
     System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
     System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
+    // Same forwarding, same reason, for the corpus sweep (CorpusSweepRunTest, @Tag("perf")): a root
+    // directory of staged captures, and the TSV it writes its per-leg rows to. Both are the
+    // operator's paths, supplied per invocation, and the sweep skips itself without the first.
+    System.getProperty("swath.sim.listing.corpus")?.let { systemProperty("swath.sim.listing.corpus", it) }
+    System.getProperty("swath.sim.listing.results")?.let { systemProperty("swath.sim.listing.results", it) }
     // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.

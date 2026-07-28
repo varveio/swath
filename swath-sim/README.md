@@ -515,6 +515,53 @@ imposed), so a run on either proves nothing about whether the capture is in orde
 a `WARNING` line next to the resolved backend when it lands on one. To exercise the guarded tier,
 give the run a smaller heap so the arena declines by budget.
 
+### Sweeping a whole corpus of captured listings
+
+`CorpusSweepRunTest` (`@Tag("perf")`, mechanics in `CorpusSweep`) is the same three arms over a
+*directory* of staged captures, in one JVM. One process, because the fixed costs are what decide
+whether a corpus sweep is affordable at all: a JVM start plus a Gradle invocation dominates a small
+fixture, and each fixture's own open dominates every run over it.
+
+```shell
+./gradlew :swath-sim:test -PonlyPerf -PsimTestHeap=6g \
+  -Dswath.sim.listing.corpus=/path/to/staged/captures \
+  -Dswath.sim.listing.results=/path/to/sweep.tsv
+```
+
+A fixture is a subdirectory holding a `data/` directory of capture Parquet; its sibling `summary.json`
+is the capture's own run record. Both paths are the operator's, supplied per invocation — **the repo
+names no corpus, bucket or location**, and with the first property unset the sweep skips itself. The
+results path is required, not optional: a corpus produces thousands of numbers and its per-fixture
+tables scroll past on the way, so a run whose output lived only in a console buffer would have to be
+repeated to be read. Rows are appended and flushed per fixture, so the file is complete for every
+fixture finished so far at any moment — an hour-long sweep that dies at the ninetieth fixture still
+yields the eighty-nine before it.
+
+Three choices decide what its numbers mean, and all three are visible in the output:
+
+- **`STREAMING`, forced** rather than `AUTO`. The arena declines by budget on a corpus-scale fixture
+  anyway, and `AUTO` pays a DuckDB materialization to find that out once per fixture; forcing also
+  fixes the tier across the corpus, and it is the tier whose decode is order-guarded. Note what this
+  moves rather than removes: a forced-streaming open reads footers only, so it is near-instant, and
+  the decode is paid lazily by the runs — which then amortizes across the legs sharing the handle.
+- **Each fixture at its own capture's `max_parallel_listings`.** How hard a keyspace is to divide is a
+  statement about a fleet size, not about the bucket alone, so a corpus comparison at one arbitrary
+  fleet size compares the wrong thing. A capture with no usable summary is swept at the race's eight
+  and its rows say `fleet_source=fallback`, because those rows are then not comparable with the rest.
+- **Two screening seeds, four where it matters.** Four seeds is the verdict standard; the sweep
+  screens at two and escalates to all four on any fixture whose screen *diverged* — a collapsed leg
+  (serial fraction above ½) at any arm or seed, a mean shipped-vs-candidate duration gap either way,
+  or the shipped sensor's steals mostly finding no victim. The `escalated` column says which fixtures
+  got the full four, so **no two-seed row can be quoted as a verdict**.
+
+A capture the streaming tier **refuses** — disorder across row groups makes it ineligible at open, and
+disorder inside one fails the first run that faults that group in — is recorded with its file, row
+group and row, and the sweep continues to the next fixture. That exclusion list is an output, not a
+failure: it is corpus QA data, and one unreadable capture must not cost the other hundred. What *does*
+fail the run is a leg that produced a number nobody may use — one that stalled, or one that did not
+emit its fixture's own key total — and those are collected across the whole sweep and raised at the
+end, so a single bad fixture costs no measurements either.
+
 ### Keyspace shapes, generated
 
 A policy's behaviour is decided almost entirely by *shape* — where the directories are, whether mass

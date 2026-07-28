@@ -14,10 +14,6 @@ import io.varve.swath.sim.model.LatencyModel;
 import io.varve.swath.sim.store.SimStoreBackend;
 import io.varve.swath.sim.store.SimStoreConfig;
 import io.varve.swath.sim.store.SimStoreFactory;
-import java.lang.management.ManagementFactory;
-import java.lang.management.MemoryPoolMXBean;
-import java.lang.management.MemoryType;
-import java.lang.management.MemoryUsage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -142,7 +138,8 @@ class RealListingRunTest {
         System.out.printf(Locale.ROOT,
                 "real_listing phase=open backend=%s open_ms=%d arena_budget_mb=%d heap_used_mb=%.1f "
                         + "workers=%d fixture_keys=%s%n",
-                opened.resolvedBackend(), open.toMillis(), config.arenaMaxEncodedBytes() >> 20, heapUsedMb(),
+                opened.resolvedBackend(), open.toMillis(), config.arenaMaxEncodedBytes() >> 20,
+                HeapPeak.liveMbAfterCollection(),
                 workers, opened.keyCount().isPresent() ? opened.keyCount().getAsLong() : "unknown");
         // Which tier AUTO picked is a function of the arena budget, i.e. of the heap this JVM was
         // given -- and the harness's own documented invocation raises it (-PsimTestHeap). A run at a
@@ -300,11 +297,11 @@ class RealListingRunTest {
         PolicyScenario scenario = PolicyRunFixtures
                 .scenario(workers, pageSize, latency, PolicyRunFixtures.measuredCost())
                 .withSeed(seed);
-        resetHeapPeaks();
+        HeapPeak.reset();
         Instant startedAt = Instant.now();
         PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, variant);
         Duration wall = Duration.between(startedAt, Instant.now());
-        double heapPeakMb = heapPeakMb();
+        double heapPeakMb = HeapPeak.peakMb();
         String label = SensingRaceProtocol.label(variant);
         SensingRaceProtocol.requireCompleted(result, label + "/seed " + seed + "/page " + pageSize);
         costs.add(new Cost(label, seed, pageSize, wall, heapPeakMb, result));
@@ -395,41 +392,6 @@ class RealListingRunTest {
             }
         }
         return out.toString();
-    }
-
-    /**
-     * Live heap after a collection — the on-heap half of "what did the fixture cost to hold". Called
-     * once, at open, where a single forced collection buys a figure worth having; the per-leg column
-     * uses {@link #heapPeakMb()} instead, which needs no collection at all.
-     */
-    private static double heapUsedMb() {
-        System.gc();
-        Runtime runtime = Runtime.getRuntime();
-        return (runtime.totalMemory() - runtime.freeMemory()) / (double) (1 << 20);
-    }
-
-    /** The heap pools, whose peak-usage marks are per-leg resettable — unlike {@link Runtime}'s totals. */
-    private static List<MemoryPoolMXBean> heapPools() {
-        return ManagementFactory.getMemoryPoolMXBeans().stream()
-                .filter(pool -> pool.getType() == MemoryType.HEAP)
-                .toList();
-    }
-
-    /** Drops every heap pool's peak mark, so the next read measures one leg and not the run so far. */
-    private static void resetHeapPeaks() {
-        heapPools().forEach(MemoryPoolMXBean::resetPeakUsage);
-    }
-
-    /** The heap high-water mark since the last {@link #resetHeapPeaks()} — see {@link Cost}. */
-    private static double heapPeakMb() {
-        long peak = 0;
-        for (MemoryPoolMXBean pool : heapPools()) {
-            MemoryUsage usage = pool.getPeakUsage();
-            if (usage != null) {
-                peak += usage.getUsed();
-            }
-        }
-        return peak / (double) (1 << 20);
     }
 
     /**
