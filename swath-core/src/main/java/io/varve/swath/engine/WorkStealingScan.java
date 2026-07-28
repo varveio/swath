@@ -336,12 +336,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
             metrics.recordStealReason("TOGGLE", "rate_anchored_sensing_on");
         }
         // Same polarity again for the value-taking tail-floor arm, with the SELECTED mode in the
-        // mark's own name (the single derivation of that string): "which floor arithmetic refused
-        // this run's owner carves" is otherwise unrecoverable from the OWNER_SPLIT.* counters, which
-        // report the same reason code under every mode.
-        if (toggles.tailFloor() != TailFloorMode.CURRENT) {
-            metrics.recordStealReason("TOGGLE",
-                    EngineToggles.TAIL_FLOOR_NAME + "_" + toggles.tailFloor().code() + "_on");
+        // mark's own name: "which floor arithmetic refused this run's owner carves" is otherwise
+        // unrecoverable from the OWNER_SPLIT.* counters, which report the same reason code under
+        // every mode. One literal per arm — the §5 drift guard matches emitted names statically.
+        switch (toggles.tailFloor()) {
+            case EST_DIRECT -> metrics.recordStealReason("TOGGLE", "tail_floor_est_direct_on");
+            case REACH_FLOORED -> metrics.recordStealReason("TOGGLE", "tail_floor_reach_floored_on");
+            case CURRENT -> { /* default arm: unmarked, like every other off-by-default toggle */ }
         }
     }
 

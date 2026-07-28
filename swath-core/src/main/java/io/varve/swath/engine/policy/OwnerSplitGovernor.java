@@ -265,7 +265,11 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         if (mode != TailFloorMode.CURRENT) {
             boolean blockedUnderCurrent = StealMath.childTailBelowObservedMassFloor(
                     est, f, densityRatio, maxKeys, TailFloorMode.CURRENT);
-            noteTailFloorDivergence("gate", !blocked, !blockedUnderCurrent, engagements);
+            if (blocked != blockedUnderCurrent) {
+                engagements.add(!blocked
+                        ? new Engagement("TAIL_FLOOR", "gate_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "gate_would_block_current_admits"));
+            }
         }
         return blocked;
     }
@@ -284,7 +288,11 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         if (mode != TailFloorMode.CURRENT) {
             boolean clampsUnderCurrent = StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, H, est,
                     densityRatio, maxKeys, TailFloorMode.CURRENT);
-            noteTailFloorDivergence("clamp", clamps, clampsUnderCurrent, engagements);
+            if (clamps != clampsUnderCurrent) {
+                engagements.add(clamps
+                        ? new Engagement("TAIL_FLOOR", "clamp_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "clamp_would_block_current_admits"));
+            }
         }
         return clamps;
     }
@@ -302,30 +310,15 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         if (mode != TailFloorMode.CURRENT) {
             boolean liftsUnderCurrent = StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est,
                     densityRatio, maxKeys, TailFloorMode.CURRENT);
-            noteTailFloorDivergence("lift", lifts, liftsUnderCurrent, engagements);
+            if (lifts != liftsUnderCurrent) {
+                engagements.add(lifts
+                        ? new Engagement("TAIL_FLOOR", "lift_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "lift_would_block_current_admits"));
+            }
         }
         return lifts;
     }
 
-    /**
-     * Record that a non-{@code current} {@code tail_floor} mode CHANGED this consult's verdict
-     * (§5 discipline): {@code TAIL_FLOOR.<site>_admit_current_blocks} when the arm admits a carve the
-     * shipped floor refuses — the cure's intended direction, and the count that attributes any
-     * split-rate difference in a live A/B to this toggle rather than to the run — and {@code
-     * TAIL_FLOOR.<site>_would_block_current_admits} for the opposite direction. Both arms are
-     * monotonically more permissive than {@code current}, so the second reason is expected to stay
-     * at zero; it is recorded anyway, because an assumption that costs one counter to falsify should
-     * not be left as a comment. Agreement is silent (nothing happened), and a {@code current} run
-     * never reaches here at all — one extra pure-arithmetic evaluation on the arms only.
-     */
-    private static void noteTailFloorDivergence(String site, boolean admitsUnderMode, boolean admitsUnderCurrent,
-                                                List<Engagement> engagements) {
-        if (admitsUnderMode == admitsUnderCurrent) {
-            return;
-        }
-        engagements.add(new Engagement("TAIL_FLOOR",
-                site + (admitsUnderMode ? "_admit_current_blocks" : "_would_block_current_admits")));
-    }
 
     /**
      * The {@link OwnerSplitGateInputs} one {@link #decide} outcome reports: {@code reason} is the
