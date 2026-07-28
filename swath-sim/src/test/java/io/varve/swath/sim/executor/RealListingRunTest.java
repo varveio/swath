@@ -99,9 +99,13 @@ class RealListingRunTest {
      */
     static final String TRACE_SEED_PROPERTY = "swath.sim.listing.trace-seed";
 
-    /** The variants raced on this fixture: the shipped sensor, and the two the sensing race left standing. */
+    /**
+     * The variants raced on this fixture: the shipped sensor, the two the sensing race left standing,
+     * and the carve-admission candidate raced against those two.
+     */
     private static final List<SensingVariant> VARIANTS = List.of(
-            SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED);
+            SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED,
+            SensingVariant.RATE_ANCHORED_LIFT_ONLY);
 
     /**
      * The tiers that serve a fixture in an order they imposed rather than the order it holds, so a
