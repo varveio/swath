@@ -78,6 +78,7 @@ final class RateAnchoredSensingWiringTest {
         distinctKeyspace.addAll(keyspace);
         TreeSet<byte[]> distinctEmitted = new TreeSet<>(Arrays::compareUnsigned);
         distinctEmitted.addAll(emitted);
+        assertThat(emitted).as("no duplicate emissions").hasSize(distinctEmitted.size());
         assertThat(distinctEmitted).as("full byte-exact coverage, no duplicates").isEqualTo(distinctKeyspace);
     }
 

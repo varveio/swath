@@ -224,6 +224,35 @@ class RateAnchoredEstimatorTest {
                 .isPositive();
     }
 
+    /**
+     * A {@code minGeometry} outside the ladder's own {@code (0, 1]} range would make estimates
+     * either {@code NaN} (a range's own arithmetic breaking selection for every other range too) or
+     * would contradict the documented "cut floor" semantics ({@code minGeometry > 1.0} would mean
+     * geometry may inflate a range past what a lift is defined to do).
+     */
+    @Test
+    void aMinGeometryOutsideTheLaddersOwnRangeIsRefusedRatherThanCorruptingEveryEstimate() {
+        assertThatThrownBy(() -> new RateAnchoredEstimator(PAGE, Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minGeometry");
+        assertThatThrownBy(() -> new RateAnchoredEstimator(PAGE, Double.POSITIVE_INFINITY))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minGeometry");
+        assertThatThrownBy(() -> new RateAnchoredEstimator(PAGE, 0.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minGeometry");
+        assertThatThrownBy(() -> new RateAnchoredEstimator(PAGE, -0.5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minGeometry");
+        assertThatThrownBy(() -> new RateAnchoredEstimator(PAGE, 1.5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minGeometry");
+        assertThat(new RateAnchoredEstimator(PAGE, 1.0)
+                .estRemaining(CURSOR_DEEP, LO, HI, 0L))
+                .as("the lift-only end of the ladder, minGeometry == 1.0, stays a valid construction")
+                .isPositive();
+    }
+
     /** {@code QUARTER}'s classification of {@code cursor} in {@code [LO, HI]}, as {@code category.reason}. */
     private static List<String> classify(String category, byte[] cursor, long keysEmitted) {
         List<Engagement> collected = new ArrayList<>();

@@ -81,6 +81,10 @@ public final class RateAnchoredEstimator implements RemainingWorkEstimator {
         if (pageSize < 1) {
             throw new IllegalArgumentException("pageSize must be >= 1 (got " + pageSize + ")");
         }
+        if (!Double.isFinite(minGeometry) || minGeometry <= 0.0 || minGeometry > 1.0) {
+            throw new IllegalArgumentException(
+                    "minGeometry must be finite and in (0, 1] (got " + minGeometry + ")");
+        }
         this.pageSize = pageSize;
         this.minGeometry = minGeometry;
     }
