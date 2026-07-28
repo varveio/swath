@@ -11,9 +11,12 @@ package io.varve.swath.sim.executor;
  * blindness on deep-nested keyspaces, raced against it under the protocol in
  * {@code SensingRaceProtocol}.
  *
- * <p>Nothing here changes the engine. Each variant is an estimator installed into the engine's own
- * thief and owner-split policies through the seam they already have, so what a race compares is one
- * quantity, measured differently, driving identical decision logic.
+ * <p>Running a variant here changes nothing about the engine: each is an estimator installed into the
+ * engine's own thief and owner-split policies through the seam they already have, so what a race
+ * compares is one quantity, measured differently, driving identical decision logic. The arm a race
+ * promoted is a different matter — {@link #RATE_ANCHORED_FLOOR_QUARTER}'s composition now lives in
+ * {@code swath-core} and this arm delegates to it, so the engine and the simulator cannot hold two
+ * versions of the reading that was measured.
  */
 public enum SensingVariant {
 
@@ -32,7 +35,11 @@ public enum SensingVariant {
      * cures are bought with.
      */
     RATE_ANCHORED_FLOOR_EIGHTH,
-    /** E4b: the lower half shortened to a quarter. @see #RATE_ANCHORED_FLOOR_EIGHTH */
+    /**
+     * E4b: the lower half shortened to a quarter — <b>the arm the corpus race promoted</b>, and the one
+     * whose reading is the engine's own {@code RateAnchoredEstimator} rather than a copy of it.
+     * @see #RATE_ANCHORED_FLOOR_EIGHTH
+     */
     RATE_ANCHORED_FLOOR_QUARTER,
     /** E4b: the lower half shortened to a half. @see #RATE_ANCHORED_FLOOR_EIGHTH */
     RATE_ANCHORED_FLOOR_HALF,
@@ -51,15 +58,15 @@ public enum SensingVariant {
             case RATE -> new RateEstimator(pageSize);
             case CURSOR_ANCHORED -> new CursorAnchoredEstimator();
             case RATE_CURSOR_ANCHORED ->
-                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+                    new RateAnchoredArm(pageSize, RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
             case RATE_ANCHORED_FLOOR_EIGHTH ->
-                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.EIGHTH_MIN_GEOMETRY);
+                    new RateAnchoredArm(pageSize, RateAnchoredArm.EIGHTH_MIN_GEOMETRY);
             case RATE_ANCHORED_FLOOR_QUARTER ->
-                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY);
+                    new RateAnchoredArm(pageSize, RateAnchoredArm.QUARTER_MIN_GEOMETRY);
             case RATE_ANCHORED_FLOOR_HALF ->
-                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.HALF_MIN_GEOMETRY);
+                    new RateAnchoredArm(pageSize, RateAnchoredArm.HALF_MIN_GEOMETRY);
             case RATE_ANCHORED_LIFT_ONLY ->
-                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+                    new RateAnchoredArm(pageSize, RateAnchoredArm.LIFT_ONLY_MIN_GEOMETRY);
         };
     }
 }

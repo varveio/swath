@@ -381,10 +381,14 @@ and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes
 | `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
 | `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
 | `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
+| `RATE_ANCHORED_FLOOR_QUARTER` | the same, with the band's lower half cut short at a quarter — **the arm the corpus race promoted**. Its composition lives in the engine (`io.varve.swath.engine.RateAnchoredEstimator`, selectable on a real run with `--engine-toggle rate_anchored_sensing=on`) and this arm delegates to it, exactly as `CURRENT` delegates to `StealMath`, so neither side can drift from the reading that was measured |
 | `RATE_ANCHORED_LIFT_ONLY` | the same, with the band's lower half removed: geometry may **lift** a range's proven mass and never cut it. A factor below one asserts that less remains than has already come out, which is the inference the rate reading exists to refuse — and it is what refused a straggler's carve at the owner's remaining-work floor until the range had emitted 64 pages (`CarveAdmissionRaceProtocol`) |
 
 `SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
-the shipped sensor and reads exactly what it read before. Victim selection and the owner-split gate
+the shipped sensor and reads exactly what it read before. The rungs of the geometry-floor ladder the
+sweep rejected (`..._EIGHTH`, `..._HALF`, the symmetric `RATE_CURSOR_ANCHORED` and lift-only ends) are
+kept so those races stay reproducible; they run through the promoted arm's engine object at their own
+floor rather than through a second implementation of it. Victim selection and the owner-split gate
 chain are mirrored in this module with one substitution — where the estimate comes from — and the whole
 pivot cascade is the engine's own object, called through the seam it already has. `SensingVariantParityTest`
 drives both mirrors against the engine's own policies with `CURRENT` installed and requires identical

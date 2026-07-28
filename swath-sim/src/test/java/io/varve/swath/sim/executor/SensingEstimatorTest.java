@@ -129,9 +129,9 @@ class SensingEstimatorTest {
 
     @Test
     void theCombinedEstimateLetsGeometryAdjustTheRateWithinItsBand() {
-        RateAnchoredEstimator combined =
-                new RateAnchoredEstimator(100, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
-        double band = RateAnchoredEstimator.GEOMETRY_BAND;
+        RateAnchoredArm combined =
+                new RateAnchoredArm(100, RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
+        double band = RateAnchoredArm.GEOMETRY_BAND;
         for (byte[] cursor : new byte[][] {CURSOR_EARLY, CURSOR_LATER, key("species/Bat")}) {
             assertThat(combined.estRemaining(cursor, LO, HI, 400_000L))
                     .as("cursor %s stays inside the band", new String(cursor, StandardCharsets.UTF_8))
@@ -145,8 +145,8 @@ class SensingEstimatorTest {
     /**
      * <b>The promoted arm reads exactly what the engine reads.</b> {@code RATE_ANCHORED_FLOOR_QUARTER}
      * is the arm the corpus race promoted, and the composition it is made of now lives in the engine
-     * ({@code io.varve.swath.engine.RateAnchoredEstimator}) with this arm delegating to it. Every value
-     * below is pinned digit for digit in swath-core's own {@code RateAnchoredEstimatorTest}, and both
+     * ({@code io.varve.swath.engine.RateAnchoredArm}) with this arm delegating to it. Every value
+     * below is pinned digit for digit in swath-core's own {@code RateAnchoredArmTest}, and both
      * sides were green on these numbers before the delegation existed — so a port that drifted from
      * the implementation this race measured fails here, on the arm, rather than quietly becoming a
      * different algorithm with the same race table attached to it.
@@ -181,18 +181,18 @@ class SensingEstimatorTest {
     @Test
     void theLiftOnlyBandNeverScoresARangeBelowTheMassItHasProduced() {
         byte[] mostlyDrained = key("species/Bat");
-        assertThat(CursorAnchoredEstimator.geometricFactor(mostlyDrained, LO, HI))
+        assertThat(StealMath.anchoredGeometricFactor(mostlyDrained, LO, HI))
                 .as("the worked example's geometry is a cut past the band's lower bound")
-                .isLessThan(RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+                .isLessThan(RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
 
-        RateAnchoredEstimator symmetric =
-                new RateAnchoredEstimator(1_000, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
-        RateAnchoredEstimator liftOnly =
-                new RateAnchoredEstimator(1_000, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+        RateAnchoredArm symmetric =
+                new RateAnchoredArm(1_000, RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredArm liftOnly =
+                new RateAnchoredArm(1_000, RateAnchoredArm.LIFT_ONLY_MIN_GEOMETRY);
 
         assertThat(symmetric.estRemaining(mostlyDrained, LO, HI, 64_000L))
                 .as("the symmetric band scores sixty-four pages of proven mass as four")
-                .isEqualTo(64_000.0 / RateAnchoredEstimator.GEOMETRY_BAND);
+                .isEqualTo(64_000.0 / RateAnchoredArm.GEOMETRY_BAND);
         assertThat(liftOnly.estRemaining(mostlyDrained, LO, HI, 64_000L))
                 .as("the lift-only band scores it as the mass it has produced").isEqualTo(64_000.0);
 
@@ -202,7 +202,7 @@ class SensingEstimatorTest {
         assertThat(liftOnly.estRemaining(CURSOR_LATER, LO, null, 400_000L))
                 .isEqualTo(Double.POSITIVE_INFINITY);
         assertThat(liftOnly.estRemaining(mostlyDrained, LO, HI, 0L)).isEqualTo(1_000.0);
-        assertThat(CursorAnchoredEstimator.geometricFactor(CURSOR_LATER, LO, HI))
+        assertThat(StealMath.anchoredGeometricFactor(CURSOR_LATER, LO, HI))
                 .as("a cursor still inside lo's own subtree is a lift").isGreaterThan(1.0);
         assertThat(liftOnly.estRemaining(CURSOR_LATER, LO, HI, 5_000L))
                 .isEqualTo(symmetric.estRemaining(CURSOR_LATER, LO, HI, 5_000L));
@@ -227,10 +227,10 @@ class SensingEstimatorTest {
         byte[] mostlyDrained = key("species/Bat");
         int page = 1_000;
         double floor = (double) OwnerSplitGovernor.SELF_SPLIT_MIN_REMAINING_PAGES * page;
-        RateAnchoredEstimator symmetric =
-                new RateAnchoredEstimator(page, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
-        RateAnchoredEstimator liftOnly =
-                new RateAnchoredEstimator(page, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+        RateAnchoredArm symmetric =
+                new RateAnchoredArm(page, RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredArm liftOnly =
+                new RateAnchoredArm(page, RateAnchoredArm.LIFT_ONLY_MIN_GEOMETRY);
 
         assertThat(symmetric.estRemaining(mostlyDrained, LO, HI, 64L * page))
                 .as("sixty-four pages, cut by sixteen, does not clear the floor — the carve is refused")
@@ -303,21 +303,21 @@ class SensingEstimatorTest {
     void theDeeperFrameOnlyLiftsAtTheByteValuesObjectKeysDivergeOn() {
         int page = 1_000;
         int d0 = RemainingWorkEstimator.commonPrefixLen(LO, HI);
-        RateAnchoredEstimator symmetric =
-                new RateAnchoredEstimator(page, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
-        RateAnchoredEstimator liftOnly =
-                new RateAnchoredEstimator(page, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
-        RateAnchoredEstimator quarter =
-                new RateAnchoredEstimator(page, RateAnchoredEstimator.QUARTER_MIN_GEOMETRY);
+        RateAnchoredArm symmetric =
+                new RateAnchoredArm(page, RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredArm liftOnly =
+                new RateAnchoredArm(page, RateAnchoredArm.LIFT_ONLY_MIN_GEOMETRY);
+        RateAnchoredArm quarter =
+                new RateAnchoredArm(page, RateAnchoredArm.QUARTER_MIN_GEOMETRY);
 
         for (int b = 0x20; b < 0x80; b++) {
             byte[] cursor = deeper((byte) b);
             String at = "a cursor diverging from lo on byte 0x" + Integer.toHexString(b);
             assertThat(RemainingWorkEstimator.commonPrefixLen(LO, cursor))
                     .as("%s is in the deeper frame", at).isGreaterThan(d0);
-            assertThat(CursorAnchoredEstimator.geometricFactor(cursor, LO, HI))
+            assertThat(StealMath.anchoredGeometricFactor(cursor, LO, HI))
                     .as("%s reads as a lift, so no floor of any height binds", at)
-                    .isGreaterThanOrEqualTo(RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+                    .isGreaterThanOrEqualTo(RateAnchoredArm.LIFT_ONLY_MIN_GEOMETRY);
             assertThat(liftOnly.estRemaining(cursor, LO, HI, 64L * page))
                     .as("%s: conditioning the floor on this frame returns the symmetric estimate", at)
                     .isEqualTo(symmetric.estRemaining(cursor, LO, HI, 64L * page));
@@ -329,7 +329,7 @@ class SensingEstimatorTest {
         // The bound is the byte range and not the frame: past 0x80 the deeper frame does cut, and there
         // the two floors part company. Keyspaces are what make the branch empty, so it is measured.
         byte[] highByte = deeper((byte) 0xC0);
-        assertThat(CursorAnchoredEstimator.geometricFactor(highByte, LO, HI)).isLessThan(1.0);
+        assertThat(StealMath.anchoredGeometricFactor(highByte, LO, HI)).isLessThan(1.0);
         assertThat(liftOnly.estRemaining(highByte, LO, HI, 64L * page))
                 .isGreaterThan(symmetric.estRemaining(highByte, LO, HI, 64L * page));
 
@@ -338,8 +338,8 @@ class SensingEstimatorTest {
         byte[] mostlyDrained = key("species/Bat");
         assertThat(RemainingWorkEstimator.commonPrefixLen(LO, mostlyDrained))
                 .as("the cut population sits in the frame the candidate leaves symmetric").isEqualTo(d0);
-        assertThat(CursorAnchoredEstimator.geometricFactor(mostlyDrained, LO, HI))
-                .isLessThan(RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+        assertThat(StealMath.anchoredGeometricFactor(mostlyDrained, LO, HI))
+                .isLessThan(RateAnchoredArm.SYMMETRIC_MIN_GEOMETRY);
     }
 
     /** A cursor inside {@code lo}'s own subtree, diverging from it on {@code first} — the deeper frame. */
