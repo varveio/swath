@@ -118,8 +118,8 @@ final class OwnerSelfSplit {
     private final OwnerSplitPolicy governor;
 
     OwnerSelfSplit(long runId, int workerCount, int maxKeys, CheckpointStore store, EngineToggles toggles,
-                   RunMetrics metrics, TraceSink trace, LongSupplier outstanding, IntSupplier effectiveT,
-                   Thief.ChildSink enqueueChild) {
+                   RunMetrics metrics, TraceSink trace, RemainingWorkEstimator estimator,
+                   LongSupplier outstanding, IntSupplier effectiveT, Thief.ChildSink enqueueChild) {
         this.runId = runId;
         this.workerCount = workerCount;
         this.maxKeys = maxKeys;
@@ -130,7 +130,7 @@ final class OwnerSelfSplit {
         this.outstanding = outstanding;
         this.effectiveT = effectiveT;
         this.enqueueChild = enqueueChild;
-        this.governor = new OwnerSplitGovernor(toggles, workerCount, maxKeys);
+        this.governor = new OwnerSplitGovernor(toggles, workerCount, maxKeys, estimator);
     }
 
     /**

@@ -521,7 +521,7 @@ final class DecisionTraceGoldenTest {
         // rawFetcher's backing keyspace isn't reachable from here to rebuild with an interceptor
         // baked in, so wrap it in a probe-logging delegate instead.
         Thief thief = new Thief(store, new LoggingFetcher(rawFetcher, probes), RUN_ID, scanPrefix,
-                ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace);
+                ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace, null);
         recordStealAttempt(fx, thief, pool, store, metrics, probes, trace);
     }
 
@@ -538,7 +538,7 @@ final class DecisionTraceGoldenTest {
         RecordingTraceSink trace = new RecordingTraceSink();
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         Thief thief = new Thief(store, new LoggingFetcher(rawFetcher, probes), RUN_ID, new byte[0],
-                ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace, rng);
+                ListingMode.OBJECTS, (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace, null, rng);
         recordStealAttempt(fx, thief, pool, store, metrics, probes, trace);
     }
 
@@ -560,7 +560,7 @@ final class DecisionTraceGoldenTest {
                 });
         StubCheckpointStore store = StubCheckpointStore.returning(1L);
         Thief thief = new Thief(store, builder.build(), RUN_ID, new byte[0], ListingMode.OBJECTS,
-                (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace);
+                (childId, lo, hi) -> { }, metrics, EngineToggles.DEFAULT, trace, null);
         recordStealAttempt(fx, thief, List.of(victim), store, metrics, probes, trace);
     }
 
@@ -778,7 +778,7 @@ final class DecisionTraceGoldenTest {
             int maxKeys, LongSupplier outstanding, IntSupplier effectiveT) {
         StubCheckpointStore store = StubCheckpointStore.returning(999L);
         return new OwnerSelfSplit(RUN_ID, workerCount, maxKeys, store, EngineToggles.DEFAULT, metrics, trace,
-                outstanding, effectiveT, (childId, lo, hi) -> { });
+                null, outstanding, effectiveT, (childId, lo, hi) -> { });
     }
 
     private void recordOwnerSplitAttempt(GoldenTrace.Fixture fx, OwnerSelfSplit gov, WorkerState ws,
@@ -947,7 +947,7 @@ final class DecisionTraceGoldenTest {
         StubCheckpointStore store = new StubCheckpointStore(s -> nextChildId.getAndIncrement());
         Thief.ChildSink sink = (childId, lo, childHi) -> pool.add(WorkerStates.of(childId, lo, lo, childHi));
         Thief thief = new Thief(store, fetcher, RUN_ID, scanPrefix, ListingMode.OBJECTS, sink, metrics,
-                EngineToggles.DEFAULT, trace);
+                EngineToggles.DEFAULT, trace, null);
 
         for (int i = 0; i < attempts; i++) {
             // Drain BEFORE every attempt, including the first: production only ever presents a

@@ -322,7 +322,7 @@ public final class SimExecutor {
         this.storeLabel = storeLabel;
         this.view = new SimListingView(store, scenario.scanPrefix());
         this.governor = sensing == SensingVariant.CURRENT
-                ? new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(), scenario.pageSize())
+                ? new OwnerSplitGovernor(scenario.toggles(), scenario.workerCount(), scenario.pageSize(), null)
                 : new EstimatorOwnerSplitPolicy(estimator, scenario.toggles(), scenario.workerCount(),
                         scenario.pageSize());
         this.seedPlanner = new HybridSeedPlanner(scenario.scanPrefix(), scenario.workerCount(),
@@ -509,7 +509,7 @@ public final class SimExecutor {
             // of the interleaving -- the property a comparison between two simulated variants needs to
             // not have.
             DecisionRng rng = bound -> ctx.rng(SimRngStream.STEAL_DECISION).nextInt(bound);
-            StealPolicy cascade = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng);
+            StealPolicy cascade = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng, null);
             this.thief = sensing == SensingVariant.CURRENT
                     ? cascade
                     : new EstimatorStealPolicy(estimator, cascade);

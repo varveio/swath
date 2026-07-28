@@ -7,6 +7,7 @@ package io.varve.swath.engine.policy;
 
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.RemainingWorkEstimator;
 import io.varve.swath.engine.StealMath;
 import io.varve.swath.model.KeyBytes;
 import java.util.ArrayList;
@@ -60,16 +61,22 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
     private final EngineToggles toggles;
     private final int workerCount;
     private final int maxKeys;
+    private final RemainingWorkEstimator estimator;
 
     /**
      * @param toggles     the {@code --engine-toggle} ablation namespace this run was constructed with
      * @param workerCount the fixed configured worker count {@code Tmax} (the demand gate's threshold)
      * @param maxKeys     the page size (the remaining-est floor's and the observed-mass floor's unit)
+     * @param estimator   the position sensor the remaining-work gates read; {@code null}-defaults to
+     *                    {@link RemainingWorkEstimator#WINDOW}, the shipped reading, so a caller that
+     *                    does not steer this seam gets exactly the arithmetic it always had
      */
-    public OwnerSplitGovernor(EngineToggles toggles, int workerCount, int maxKeys) {
+    public OwnerSplitGovernor(EngineToggles toggles, int workerCount, int maxKeys,
+                              RemainingWorkEstimator estimator) {
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.workerCount = workerCount;
         this.maxKeys = maxKeys;
+        this.estimator = estimator == null ? RemainingWorkEstimator.WINDOW : estimator;
     }
 
     @Override
@@ -85,19 +92,21 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // costlier thief structure-probes on the un-split tail — strictly worse. The rank-space
         // deflation belongs only to the pivot synthesis below (interpolate(..., alphabetDigest())),
         // which needs no estRemaining change to land on a populated value.
-        double est = StealMath.estRemaining(cursorTo, lo, H, view.keysEmitted());
+        double est = estimator.estRemaining(cursorTo, lo, H, view.keysEmitted());
+        // What the sensor's reading did (§5 discipline), collected before the gates it feeds so a
+        // refusal carries its own reading's classification. Inert for the shipped reading.
+        List<Engagement> engagements = new ArrayList<>();
+        estimator.classify(cursorTo, lo, H, view.keysEmitted(), engagements);
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             // Remaining work too small to be worth a proactive carve — issue #16.
-            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code())),
-                    List.of());
+            engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code()));
+            return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR, engagements, List.of());
         }
         if (view.committed() - view.lastSelfSplitPage() < SELF_SPLIT_MIN_PAGES_BETWEEN) {
             // Rate-limit: O(1) self-splits per drain, not one per page.
-            return new Skip(OwnerSplitSkipReason.RATE_LIMITED,
-                    List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code())), List.of());
+            engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code()));
+            return new Skip(OwnerSplitSkipReason.RATE_LIMITED, engagements, List.of());
         }
-        List<Engagement> engagements = new ArrayList<>();
         // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live
         // nodes to keep every worker busy, so an extra child buys ZERO parallelism and only costs a
         // wasted page (its bounded final page is fetched full, then trimmed per key). Suppress the

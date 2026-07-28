@@ -46,7 +46,7 @@ class ThiefPolicyAdaptiveStructureCappedTest {
 
         // consecutiveZeroFanoutStructureProbes/consecutiveTimedOutStructureProbes are both 0 above,
         // so structureProbingEnabled's escape hatch is never reached -- this stub is never drawn from.
-        ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0);
+        ThiefPolicy policy = new ThiefPolicy(EngineToggles.DEFAULT, new byte[0], bound -> 0, null);
         StealAttempt attempt = policy.beginAttempt(view);
 
         // 1. The placed pivot (the cursor-adjacent sliver "2022/03/05/abc ") hits.

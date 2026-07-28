@@ -127,13 +127,15 @@ public final class Thief {
      * (see {@link EngineToggles}'s javadoc for the exact mechanical effect of each) — and
      * null-defaults to {@link EngineToggles#DEFAULT}. {@code trace} is the opt-in {@code --trace}
      * JSONL flight recorder seam, threaded from {@link WorkStealingScan} (see {@link TraceSink}), and
-     * null-defaults to {@link TraceSink#NONE}. A testkit object-mother supplies these same defaults
-     * explicitly for the many unit tests that don't care about them.
+     * null-defaults to {@link TraceSink#NONE}. {@code estimator} is the run's position sensor (see
+     * {@link RemainingWorkEstimator}), which victim selection scores on, and null-defaults to the
+     * shipped {@link RemainingWorkEstimator#WINDOW} reading. A testkit object-mother supplies these
+     * same defaults explicitly for the many unit tests that don't care about them.
      */
     public Thief(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                  ListingMode mode, ChildSink childSink, RunMetrics metrics, EngineToggles toggles,
-                 TraceSink trace) {
-        this(store, fetcher, runId, prefix, mode, childSink, metrics, toggles, trace,
+                 TraceSink trace, RemainingWorkEstimator estimator) {
+        this(store, fetcher, runId, prefix, mode, childSink, metrics, toggles, trace, estimator,
                 bound -> ThreadLocalRandom.current().nextInt(bound));
     }
 
@@ -148,7 +150,7 @@ public final class Thief {
      */
     public Thief(CheckpointStore store, PageFetcher fetcher, long runId, byte[] prefix,
                  ListingMode mode, ChildSink childSink, RunMetrics metrics, EngineToggles toggles,
-                 TraceSink trace, DecisionRng rng) {
+                 TraceSink trace, RemainingWorkEstimator estimator, DecisionRng rng) {
         this.store = store;
         this.fetcher = fetcher;
         this.runId = runId;
@@ -158,7 +160,7 @@ public final class Thief {
         this.metrics = metrics;
         this.toggles = toggles == null ? EngineToggles.DEFAULT : toggles;
         this.trace = trace == null ? TraceSink.NONE : trace;
-        this.policy = new ThiefPolicy(this.toggles, prefix, rng);
+        this.policy = new ThiefPolicy(this.toggles, prefix, rng, estimator);
         recordDisabledToggleMarks(this.toggles, this.metrics);
     }
 
