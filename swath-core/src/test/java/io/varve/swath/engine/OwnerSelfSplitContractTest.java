@@ -52,6 +52,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Adversarial guard for owner-side proactive self-split at page-commit
@@ -254,9 +256,17 @@ final class OwnerSelfSplitContractTest {
     // (3) Partition invariant under owner-split (I2/I3): the disjoint cover holds throughout.
     // -------------------------------------------------------------------------
 
-    @Test
+    /**
+     * Run on BOTH position sensors ({@code --engine-toggle rate_anchored_sensing}): the sensor only
+     * RANKS candidates and gates carves — pivot synthesis and the split CAS are untouched by it — so
+     * the tiling is not allowed to depend on which arm a run is on. Cheap insurance that the A/B arm
+     * cannot buy throughput with a gap.
+     */
+    @ParameterizedTest(name = "rate_anchored_sensing={0}")
+    @ValueSource(booleans = {false, true})
     @Timeout(60)
-    void ownerSplitsTileTheKeyspaceWithNoGapNoOverlap(@TempDir Path dir) throws Exception {
+    void ownerSplitsTileTheKeyspaceWithNoGapNoOverlap(boolean rateAnchoredSensing, @TempDir Path dir)
+            throws Exception {
         // Three seeds tile (⊥, ⊤]: an empty (⊥, LO], the dense (LO, HI] that self-splits, and an
         // empty (HI, ⊤]. Replaying every recorded split (owner AND thief) from this seed frame must
         // reconstruct a gap-free, overlap-free tiling of (⊥, ⊤] — the structural I2/I3 proof under
@@ -267,7 +277,8 @@ final class OwnerSelfSplitContractTest {
                 new RangePartition.Interval(LO, HI),
                 new RangePartition.Interval(HI, null));
 
-        Run run = run(dir, "tiling", keyspace, seeds, 8, 100, Duration.ZERO);
+        Run run = run(dir, "tiling", keyspace, seeds, 8, 100, Duration.ZERO,
+                EngineToggles.DEFAULT.withRateAnchoredSensing(rateAnchoredSensing));
 
         EngineHarness.assertExactlyOnce(run.emitted(), keyspace);
         assertThat(run.ownerSplits()).as("owner-splits fired in the tiling run").isGreaterThanOrEqualTo(2L);
