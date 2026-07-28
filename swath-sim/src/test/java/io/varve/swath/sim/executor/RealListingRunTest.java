@@ -74,10 +74,28 @@ class RealListingRunTest {
     /** System property naming a local sorted, stamped listing fixture (a file or a directory of them). */
     static final String FIXTURE_PROPERTY = "swath.sim.listing.fixture";
 
+    /**
+     * System property overriding the modelled fleet size. Defaults to the sensing race's eight, so a
+     * result is comparable with the synthetic benches by default; set it to the concurrency the
+     * listing's own capture ran at when the question is why <em>that</em> run behaved as it did, since
+     * how hard a keyspace is to divide is a statement about a fleet size, not about the bucket alone.
+     */
+    static final String WORKERS_PROPERTY = "swath.sim.listing.workers";
+
+    /**
+     * System property choosing which of the protocol's seeds the traced leg re-runs. Defaults to the
+     * first, and exists because the seed worth tracing is whichever one the table above misbehaved at
+     * — a run that collapses at one seed and not another is asking exactly the question the trace
+     * answers, and tracing every seed would retain a trace per run for no reason.
+     */
+    static final String TRACE_SEED_PROPERTY = "swath.sim.listing.trace-seed";
+
     /** The variants raced on this fixture: the shipped sensor, and the two the sensing race left standing. */
     private static final List<SensingVariant> VARIANTS = List.of(
             SensingVariant.CURRENT, SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED);
 
+    private static int workers;
+    private static long traceSeed;
     private static Path fixture;
     private static SimStoreFactory.Result opened;
     private static ListingStore store;
@@ -90,6 +108,8 @@ class RealListingRunTest {
                 "-D" + FIXTURE_PROPERTY + " is unset; no real listing to run");
         fixture = Path.of(configured);
         assertThat(Files.exists(fixture)).as("fixture at %s", fixture).isTrue();
+        workers = Integer.getInteger(WORKERS_PROPERTY, SensingRaceProtocol.WORKERS);
+        traceSeed = Long.getLong(TRACE_SEED_PROPERTY, SensingRaceProtocol.SEEDS[0]);
 
         // A third of the heap, not the whole of it: an arena sized to the heap OOMs before its own
         // budget check can decline, and declining is the outcome a giant listing is supposed to have.
@@ -101,8 +121,10 @@ class RealListingRunTest {
         store = opened.store();
         storeLabel = "real listing fixture (" + opened.resolvedBackend() + ")";
         System.out.printf(Locale.ROOT,
-                "real_listing phase=open backend=%s open_ms=%d arena_budget_mb=%d heap_used_mb=%.1f%n",
-                opened.resolvedBackend(), open.toMillis(), config.arenaMaxEncodedBytes() >> 20, heapUsedMb());
+                "real_listing phase=open backend=%s open_ms=%d arena_budget_mb=%d heap_used_mb=%.1f "
+                        + "workers=%d%n",
+                opened.resolvedBackend(), open.toMillis(), config.arenaMaxEncodedBytes() >> 20, heapUsedMb(),
+                workers);
     }
 
     @AfterAll
@@ -165,18 +187,18 @@ class RealListingRunTest {
     @Test
     void whereTheTailLivesOnTheRealListing() {
         PolicyScenario scenario = PolicyRunFixtures
-                .scenario(SensingRaceProtocol.WORKERS, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
+                .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
                         PolicyRunFixtures.MEASURED_TAIL_LATENCY, PolicyRunFixtures.measuredCost())
-                .withSeed(SensingRaceProtocol.SEEDS[0])
+                .withSeed(traceSeed)
                 .withEventLog(true);
         PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, SensingVariant.CURRENT);
         assertThat(result.completed()).as("the traced leg completed").isTrue();
 
         List<byte[]> tailKeys = committedKeysAfter(result, result.timeline().lastSplitNanos());
         System.out.printf(Locale.ROOT,
-                "real_listing phase=tail page=%d tail_fraction=%.4f serial_fraction=%.4f "
+                "real_listing phase=tail page=%d seed=%d tail_fraction=%.4f serial_fraction=%.4f "
                         + "keys_in_tail=%d traced_pages_in_tail=%d%n",
-                PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE, result.timeline().tailFraction(),
+                PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE, traceSeed, result.timeline().tailFraction(),
                 result.timeline().serialFraction(), result.timeline().keysInTail(), tailKeys.size());
         if (!tailKeys.isEmpty()) {
             System.out.printf(Locale.ROOT, "real_listing phase=tail common_prefix=%s%n",
@@ -221,7 +243,7 @@ class RealListingRunTest {
     private static SensingRaceProtocol.Leg runLeg(SensingVariant variant, long seed, int pageSize,
                                                   LatencyModel latency, List<Cost> costs) {
         PolicyScenario scenario = PolicyRunFixtures
-                .scenario(SensingRaceProtocol.WORKERS, pageSize, latency, PolicyRunFixtures.measuredCost())
+                .scenario(workers, pageSize, latency, PolicyRunFixtures.measuredCost())
                 .withSeed(seed);
         Instant startedAt = Instant.now();
         PolicyRunResult result = SimExecutor.run(scenario, store, storeLabel, variant);

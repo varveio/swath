@@ -63,6 +63,8 @@ tasks.test {
     // `-Dswath.sim.listing.fixture=<local sorted capture>`. The repo never names a fixture -- the
     // path is the operator's, supplied per invocation, and the test skips itself without one.
     System.getProperty("swath.sim.listing.fixture")?.let { systemProperty("swath.sim.listing.fixture", it) }
+    System.getProperty("swath.sim.listing.workers")?.let { systemProperty("swath.sim.listing.workers", it) }
+    System.getProperty("swath.sim.listing.trace-seed")?.let { systemProperty("swath.sim.listing.trace-seed", it) }
     // A real listing runs to tens of millions of keys, and the perf tier's 2 GB is sized for the
     // synthetic benches; raise the forked JVM's heap for one invocation with
     // `-PsimTestHeap=6g` rather than lifting it for every module's perf run.

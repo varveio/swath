@@ -472,6 +472,9 @@ the tail live" leg that reports the longest common prefix of the keys committed 
 ./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=/path/to/sorted-fixture
 # a listing of tens of millions of keys wants more than the perf tier's 2 GB:
 ./gradlew :swath-sim:test -PonlyPerf -PsimTestHeap=6g -Dswath.sim.listing.fixture=...
+# eight workers by default (comparable with the synthetic benches); model the fleet the
+# listing's own capture ran at when the question is why THAT run behaved as it did:
+./gradlew :swath-sim:test -PonlyPerf -Dswath.sim.listing.fixture=... -Dswath.sim.listing.workers=64
 ```
 
 The path is the operator's, supplied per invocation: **the repo never names a fixture, a bucket or a
