@@ -26,6 +26,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
@@ -139,6 +140,29 @@ class CorpusSweepTest {
                 .containsAll(CorpusSweep.ARMS.stream().map(SensingRaceProtocol::label).toList());
         assertThat(swept.rows()).extracting(row -> row.leg().seed())
                 .contains(CorpusSweep.SCREENING_SEEDS[0], CorpusSweep.SCREENING_SEEDS[1]);
+    }
+
+    /**
+     * A round convened to resolve verdicts asks for the arms it names, at all four seeds, and never
+     * screens — so its rows are four per arm whatever the divergence rule would have said about them,
+     * and its {@code escalated} column reads true for the same reason.
+     */
+    @Test
+    void aRaceThatConfirmsEverySeedRunsItsOwnArmsAtFourWithoutScreening() throws IOException {
+        fixture("one", capture(4), keys(60));
+        List<SensingVariant> arms =
+                List.of(SensingVariant.CURRENT, SensingVariant.RATE_ANCHORED_LIFT_ONLY);
+
+        CorpusSweep.Result raced = CorpusSweep.sweep(root, root.resolve("race.tsv"),
+                new CorpusSweep.Race(arms, true));
+
+        assertThat(raced.rows()).hasSize(arms.size() * SensingRaceProtocol.SEEDS.length);
+        assertThat(raced.rows()).extracting(row -> row.leg().variant())
+                .containsOnly(arms.stream().map(SensingRaceProtocol::label).toArray(String[]::new));
+        assertThat(raced.rows()).extracting(row -> row.leg().seed())
+                .containsAll(Arrays.stream(SensingRaceProtocol.SEEDS).boxed().toList());
+        assertThat(raced.rows()).allSatisfy(row -> assertThat(row.escalated())
+                .as("no row of a four-seed race is a screen").isTrue());
     }
 
     @Test

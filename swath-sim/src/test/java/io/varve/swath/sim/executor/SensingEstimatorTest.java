@@ -128,7 +128,8 @@ class SensingEstimatorTest {
 
     @Test
     void theCombinedEstimateLetsGeometryAdjustTheRateWithinItsBand() {
-        RateAnchoredEstimator combined = new RateAnchoredEstimator(100);
+        RateAnchoredEstimator combined =
+                new RateAnchoredEstimator(100, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
         double band = RateAnchoredEstimator.GEOMETRY_BAND;
         for (byte[] cursor : new byte[][] {CURSOR_EARLY, CURSOR_LATER, key("species/Bat")}) {
             assertThat(combined.estRemaining(cursor, LO, HI, 400_000L))
@@ -138,5 +139,46 @@ class SensingEstimatorTest {
         assertThat(combined.estRemaining(HI, LO, HI, 400_000L)).isZero();
         assertThat(combined.estRemaining(CURSOR_LATER, LO, null, 400_000L))
                 .isEqualTo(Double.POSITIVE_INFINITY);
+    }
+
+    /**
+     * The lift-only band, pinned against the reading it exists to remove. The cursor here has crossed
+     * nearly the whole byte-window from {@code lo} to {@code hi} — the shape a range takes while
+     * draining a dated directory towards its bound, and the shape the diagnosed straggler had — so the
+     * geometric factor is below the band's lower bound and the symmetric band cuts a range's proven
+     * mass by the full sixteen: a range that has emitted sixty-four pages scores four, and is then
+     * refused at an admission floor of four pages. Both halves are asserted: the cut is exact under the
+     * symmetric band, and it is gone under the lift-only one with nothing else the estimate had lost.
+     */
+    @Test
+    void theLiftOnlyBandNeverScoresARangeBelowTheMassItHasProduced() {
+        byte[] mostlyDrained = key("species/Bat");
+        assertThat(CursorAnchoredEstimator.geometricFactor(mostlyDrained, LO, HI))
+                .as("the worked example's geometry is a cut past the band's lower bound")
+                .isLessThan(RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+
+        RateAnchoredEstimator symmetric =
+                new RateAnchoredEstimator(1_000, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+        RateAnchoredEstimator liftOnly =
+                new RateAnchoredEstimator(1_000, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
+
+        assertThat(symmetric.estRemaining(mostlyDrained, LO, HI, 64_000L))
+                .as("the symmetric band scores sixty-four pages of proven mass as four")
+                .isEqualTo(64_000.0 / RateAnchoredEstimator.GEOMETRY_BAND);
+        assertThat(liftOnly.estRemaining(mostlyDrained, LO, HI, 64_000L))
+                .as("the lift-only band scores it as the mass it has produced").isEqualTo(64_000.0);
+
+        // What it keeps: the exact bound test, the open frontier, the no-evidence page floor, and the
+        // whole upward half of the band -- a lifted estimate is identical under both.
+        assertThat(liftOnly.estRemaining(HI, LO, HI, 400_000L)).isZero();
+        assertThat(liftOnly.estRemaining(CURSOR_LATER, LO, null, 400_000L))
+                .isEqualTo(Double.POSITIVE_INFINITY);
+        assertThat(liftOnly.estRemaining(mostlyDrained, LO, HI, 0L)).isEqualTo(1_000.0);
+        assertThat(CursorAnchoredEstimator.geometricFactor(CURSOR_LATER, LO, HI))
+                .as("a cursor still inside lo's own subtree is a lift").isGreaterThan(1.0);
+        assertThat(liftOnly.estRemaining(CURSOR_LATER, LO, HI, 5_000L))
+                .isEqualTo(symmetric.estRemaining(CURSOR_LATER, LO, HI, 5_000L));
+        assertThat(liftOnly.ignoresEmittedKeys(mostlyDrained, LO, HI)).isFalse();
+        assertThat(liftOnly.advanceVisible(LO, CURSOR_EARLY, CURSOR_LATER, HI)).isTrue();
     }
 }

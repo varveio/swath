@@ -24,7 +24,14 @@ public enum SensingVariant {
     /** E2: the same density-times-span reading, in a window anchored at the cursor's own divergence. */
     CURSOR_ANCHORED,
     /** E1 and E2 together: the rate estimate, modulated by the anchored geometry within a band. */
-    RATE_CURSOR_ANCHORED;
+    RATE_CURSOR_ANCHORED,
+    /**
+     * E4: the same combination with the band's lower half removed, so the anchored geometry may lift a
+     * range's proven mass but never cut it. Raced under {@code CarveAdmissionRaceProtocol}, against the
+     * finding that a proven-mass estimate cut by the band is what refuses the owner's carve on the one
+     * range holding a fleet.
+     */
+    RATE_ANCHORED_LIFT_ONLY;
 
     /** This variant's estimator, sized to the run's page. */
     RemainingWorkEstimator estimator(int pageSize) {
@@ -32,7 +39,10 @@ public enum SensingVariant {
             case CURRENT -> new WindowEstimator();
             case RATE -> new RateEstimator(pageSize);
             case CURSOR_ANCHORED -> new CursorAnchoredEstimator();
-            case RATE_CURSOR_ANCHORED -> new RateAnchoredEstimator(pageSize);
+            case RATE_CURSOR_ANCHORED ->
+                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.SYMMETRIC_MIN_GEOMETRY);
+            case RATE_ANCHORED_LIFT_ONLY ->
+                    new RateAnchoredEstimator(pageSize, RateAnchoredEstimator.LIFT_ONLY_MIN_GEOMETRY);
         };
     }
 }

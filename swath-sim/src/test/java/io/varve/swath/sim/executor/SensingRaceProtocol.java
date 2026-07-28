@@ -318,6 +318,7 @@ final class SensingRaceProtocol {
             case RATE -> "E1-rate";
             case CURSOR_ANCHORED -> "E2-anchored";
             case RATE_CURSOR_ANCHORED -> "E1+E2";
+            case RATE_ANCHORED_LIFT_ONLY -> "E1+E2+E4";
         };
     }
 }

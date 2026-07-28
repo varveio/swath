@@ -236,6 +236,25 @@ final class CorpusSweep {
     record Problem(String fixture, String leg, String what) {
     }
 
+    /**
+     * Which arms a sweep races and whether it screens before confirming — the two choices that decide
+     * what a sweep <em>is</em>, rather than what it finds.
+     *
+     * <p>{@link #SCREEN} is the corpus sweep's own: three arms, two seeds, four where the screen
+     * diverges. A round convened to resolve verdicts rather than to find them sets
+     * {@code confirmEverySeed}, and then no row it writes is a screen — which is what lets its
+     * {@code escalated} column be read as "every leg here is one of four" instead of as a filter.
+     *
+     * @param arms             the arms to race, in table order, the control included
+     * @param confirmEverySeed run all four of {@code SensingRaceProtocol.SEEDS} on every fixture,
+     *                         skipping the screening tier and its divergence rule entirely
+     */
+    record Race(List<SensingVariant> arms, boolean confirmEverySeed) {
+    }
+
+    /** The corpus sweep's own race: the three sensing arms, screened at two seeds and escalated. */
+    static final Race SCREEN = new Race(ARMS, false);
+
     /** What a whole sweep produced. */
     record Result(List<Row> rows, List<Exclusion> exclusions, List<Skipped> skipped,
                   List<Problem> problems) {
@@ -408,6 +427,11 @@ final class CorpusSweep {
      * raw data a published finding cites.
      */
     static Result sweep(Path root, Path results) throws IOException {
+        return sweep(root, results, SCREEN);
+    }
+
+    /** @see #sweep(Path, Path) */
+    static Result sweep(Path root, Path results, Race race) throws IOException {
         Corpus corpus = fixtures(root);
         List<Path> fixtures = corpus.fixtures();
         for (Skipped skipped : corpus.skipped()) {
@@ -430,7 +454,7 @@ final class CorpusSweep {
                         i + 1, fixtures.size(), name);
                 List<Row> swept;
                 try {
-                    swept = sweepOne(fixture, name, problems);
+                    swept = sweepOne(fixture, name, race, problems);
                 } catch (RuntimeException failure) {
                     Optional<Exclusion> refused = refusal(name, failure);
                     if (refused.isEmpty()) {
@@ -534,7 +558,8 @@ final class CorpusSweep {
      * decoded segments are off-heap and bounded per handle, so a sweep that kept every fixture open
      * would hold the whole corpus's working set at once.
      */
-    private static List<Row> sweepOne(Path fixture, String name, List<Problem> problems) throws IOException {
+    private static List<Row> sweepOne(Path fixture, String name, Race race, List<Problem> problems)
+            throws IOException {
         Fleet fleet = fleetOf(fixture);
         Instant openStarted = Instant.now();
         SimStoreFactory.Result opened = SimStoreFactory.open(fixture.resolve(DATA_DIRECTORY),
@@ -546,12 +571,14 @@ final class CorpusSweep {
                 name, opened.resolvedBackend(), keys, fleet.workers(), fleet.source(), open.toMillis());
         try (ListingStore store = opened.store()) {
             String label = "corpus fixture (" + opened.resolvedBackend() + ")";
-            List<Measured> measured =
-                    legs(store, label, fleet.workers(), SCREENING_SEEDS, name, opened.keyCount(), problems);
-            boolean escalated = divergent(measured.stream().map(leg -> Screen.of(leg.leg())).toList());
-            if (escalated) {
+            List<Measured> measured = legs(store, label, fleet.workers(),
+                    race.confirmEverySeed() ? SensingRaceProtocol.SEEDS : SCREENING_SEEDS, race.arms(),
+                    name, opened.keyCount(), problems);
+            boolean escalated = race.confirmEverySeed()
+                    || divergent(measured.stream().map(leg -> Screen.of(leg.leg())).toList());
+            if (escalated && !race.confirmEverySeed()) {
                 measured = new ArrayList<>(measured);
-                measured.addAll(legs(store, label, fleet.workers(), CONFIRMATION_SEEDS, name,
+                measured.addAll(legs(store, label, fleet.workers(), CONFIRMATION_SEEDS, race.arms(), name,
                         opened.keyCount(), problems));
             }
             List<Row> rows = new ArrayList<>(measured.size());
@@ -573,9 +600,10 @@ final class CorpusSweep {
      * campaign was taken at.
      */
     private static List<Measured> legs(ListingStore store, String label, int workers, long[] seeds,
-                                       String fixture, OptionalLong keys, List<Problem> problems) {
+                                       List<SensingVariant> arms, String fixture, OptionalLong keys,
+                                       List<Problem> problems) {
         List<Measured> measured = new ArrayList<>();
-        for (SensingVariant arm : ARMS) {
+        for (SensingVariant arm : arms) {
             for (long seed : seeds) {
                 PolicyScenario scenario = PolicyRunFixtures
                         .scenario(workers, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
