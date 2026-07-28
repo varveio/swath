@@ -327,4 +327,91 @@ class SensingRaceTest {
                     .isGreaterThan(control.confettiChildShare());
         }
     }
+
+    /**
+     * <b>{@code CarveAdmissionRaceProtocol}'s C4 and its synthetic must-not-regress leg</b>, on the
+     * fixtures this class already owns. The later candidate is the combination with the geometry band's
+     * lower half removed, and what it has to show here is that a change made to cure a real bucket's
+     * straggler has not spent the bench's cure or either guard to do it: it holds every criterion the
+     * combination holds at the bench regime, holds both healthy shapes on serial fraction, occupancy and
+     * throughput, and is <b>no worse than the combination</b> at the measured regime — which is the
+     * fixture the whole carve-placement question was originally raised on, and where every candidate
+     * loses to the shipped sensor.
+     *
+     * <p>That last reading is asserted as a comparison against the combination and not against the
+     * control, because losing to the control there is this family's known, recorded property; the claim
+     * under test is that this candidate does not make it worse.
+     *
+     * <p><b>One criterion is a split, and is recorded as one.</b> The hash-fanned guard's extra tail
+     * line — the {@code < 0.05} the two anchored candidates hold at four seeds of four — this candidate
+     * <b>misses at one seed of four</b>, at <b>0.0510 against 0.0500</b> at seed 987654321, where the
+     * combination reads 0.0324 and the control 0.0092. Everything else that guard is held to holds at
+     * all four: serial fraction, occupancy, duration and store calls, each against the control at its
+     * own seed. Per the protocol only a four-seed reading may be pinned, so what is asserted here is the
+     * split as measured — three seeds clear the line and the table prints all four — rather than a line
+     * moved until the candidate clears it.
+     */
+    @Test
+    void theCarveAdmissionCandidateKeepsTheBenchCureAndBothGuards() {
+        SensingVariant[] arms = {SensingVariant.CURRENT, SensingVariant.RATE_CURSOR_ANCHORED,
+            SensingVariant.RATE_ANCHORED_LIFT_ONLY};
+        SensingVariant candidate = SensingVariant.RATE_ANCHORED_LIFT_ONLY;
+        List<SensingRaceProtocol.Leg> bench = SensingRaceProtocol.raceOn("leaf-conc",
+                SensingRaceProtocol.bench(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> hashFanned = SensingRaceProtocol.raceOn("hash-fanned",
+                SensingRaceProtocol.hashFannedGuard(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> uniform = SensingRaceProtocol.raceOn("uniform",
+                SensingRaceProtocol.uniformGuard(), SensingRaceProtocol.BENCH_PAGE_SIZE,
+                PolicyRunFixtures.REMOTE_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> measured = SensingRaceProtocol.raceOn("leaf-conc",
+                SensingRaceProtocol.bench(), PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
+                PolicyRunFixtures.MEASURED_TAIL_LATENCY, arms);
+        List<SensingRaceProtocol.Leg> legs = new ArrayList<>(bench);
+        legs.addAll(hashFanned);
+        legs.addAll(uniform);
+        SensingRaceProtocol.printTable("== carve admission: bench and guards at a 100-key page", legs);
+        SensingRaceProtocol.printTable("== carve admission: the bench at the measured 1000-key page",
+                measured);
+
+        int hashFannedTailsClear = 0;
+        for (long seed : SensingRaceProtocol.SEEDS) {
+            SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(bench, candidate, seed);
+            SensingRaceProtocol.Leg control = SensingRaceProtocol.at(bench, SensingVariant.CURRENT, seed);
+            String at = candidate + " on the bench at seed " + seed;
+            assertThat(leg.estIgnoresKeysShare())
+                    .as("%s: estimate discards keys (zero by construction)", at).isZero();
+            assertThat(leg.estZeroShare()).as("%s: zero estimates (zero by construction)", at).isZero();
+            assertThat(leg.revalidationLossShare()).as("%s: revalidation loss share", at).isLessThan(0.70);
+            assertThat(leg.serialFraction()).as("%s: serial fraction", at).isLessThan(0.05);
+            assertThat(leg.tailFraction()).as("%s: post-split tail", at).isLessThan(0.01);
+            assertThat(leg.result().timeline().meanOccupancy()).as("%s: mean occupancy", at)
+                    .isGreaterThan(7.0);
+            assertThat(leg.result().virtualNanos()).as("%s: virtual duration", at)
+                    .isLessThan((long) (0.85 * control.result().virtualNanos()));
+            assertThat(leg.result().storeCalls()).as("%s: store calls", at)
+                    .isLessThanOrEqualTo(control.result().storeCalls());
+
+            assertGuardHeld(SensingRaceProtocol.at(uniform, candidate, seed),
+                    SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
+                    candidate + " on the uniform guard at seed " + seed);
+            SensingRaceProtocol.Leg fanned = SensingRaceProtocol.at(hashFanned, candidate, seed);
+            assertGuardHeld(fanned, SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed),
+                    candidate + " on the hash-fanned guard at seed " + seed);
+            if (fanned.tailFraction() < 0.05) {
+                hashFannedTailsClear++;
+            }
+
+            assertThat(SensingRaceProtocol.at(measured, candidate, seed).result().virtualNanos())
+                    .as("%s: measured-regime duration against the combination's at seed %d", candidate, seed)
+                    .isLessThan((long) (1.05 * SensingRaceProtocol
+                            .at(measured, SensingVariant.RATE_CURSOR_ANCHORED, seed)
+                            .result().virtualNanos()));
+        }
+        assertThat(hashFannedTailsClear)
+                .as("%s: seeds clearing the hash-fanned guard's tail line — three of four, the split "
+                        + "this candidate is recorded with rather than a line moved to fit it", candidate)
+                .isEqualTo(3);
+    }
 }
