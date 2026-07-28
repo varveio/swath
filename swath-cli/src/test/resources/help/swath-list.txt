@@ -17,8 +17,8 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--progress-interval=DURATION] [--region=REGION]
                   [--report=PATH] [--request-rate=N]
                   [--requester-pays=requester] [--trace=PATH]
-                  [--engine-toggle=NAME=on|off]... [--storage-class=CLASS[,
-                  CLASS][,CLASS[,CLASS]...]]... [--tune=KEY=VALUE]... [<s3-uri>]
+                  [--engine-toggle=NAME=VALUE]... [--storage-class=CLASS[,CLASS]
+                  [,CLASS[,CLASS]...]]... [--tune=KEY=VALUE]... [<s3-uri>]
 List a bucket or prefix.
       [<s3-uri>]             Source URI, e.g. s3://bucket/prefix (required
                                unless requesting tune help)
@@ -119,7 +119,7 @@ Resume:
 Diagnostics:
       --color=MODE           Color the progress line and end-of-run summary:
                                auto, always, or never (default: auto).
-      --engine-toggle=NAME=on|off
+      --engine-toggle=NAME=VALUE
                              Set a diagnostic engine ablation (repeatable; see
                                docs/usage.md).
       --metrics-endpoint=URL Export OTLP metrics to URL (overrides

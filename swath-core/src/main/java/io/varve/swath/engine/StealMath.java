@@ -47,6 +47,18 @@ public final class StealMath {
      */
     private static final byte[] EMPTY = new byte[0];
 
+    /**
+     * The reachable-tail floor {@link TailFloorMode#REACH_FLOORED} substitutes for the child-tail
+     * floor's {@code max(0, min(1, densityRatio) − f)} term: a sixteenth of the estimate is assumed
+     * reachable even when trailing density reads far thinner than the far-ahead fraction. A
+     * sixteenth is the smallest share that keeps the floor's own unit meaningful — it admits a carve
+     * exactly when the estimate is above 32 pages ({@code est/16 > 2·maxKeys}), i.e. when the sensor
+     * says the range still holds an order of magnitude more than the two pages the floor protects,
+     * and it still refuses everything below that. A compile-time constant, not a knob: it is the
+     * mode's definition, and a run steers by picking the mode.
+     */
+    static final double TAIL_REACH_MIN = 1.0 / 16.0;
+
     private StealMath() {}
 
     // -------------------------------------------------------------------------
@@ -360,11 +372,51 @@ public final class StealMath {
      * boundary without driving the whole engine to a precise input combination, and
      * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly (source-agnostic
      * — no engine type crosses the package boundary).
+     *
+     * <p>This arity is the shipped {@link TailFloorMode#CURRENT} reading. Every engine decision site
+     * passes the run's own mode ({@link #childTailBelowObservedMassFloor(double, double, double, int,
+     * TailFloorMode)}); this one exists for the callers that mean the shipped formula specifically —
+     * the same two-overload shape {@link #interpolate} uses for its digest consult.
      */
     public static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys) {
-        double reach = Math.min(1.0, densityRatio);       // thinning (ratio < 1) shrinks the reachable tail
-        double realizedChildMass = est * Math.max(0.0, reach - f);
-        return realizedChildMass <= 2.0 * (double) maxKeys;
+        return childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys, TailFloorMode.CURRENT);
+    }
+
+    /**
+     * {@link #childTailBelowObservedMassFloor(double, double, double, int)} under the run's selected
+     * {@link TailFloorMode} — the ONE implementation of the floor, with the mode choosing which term
+     * reads the tail's realized mass.
+     *
+     * <p>The window term above is honest where trailing density genuinely predicts a thin reachable
+     * tail, and blind on a <b>wide-flat</b> one: measured on the `nara` tail (5,326 of 5,326 owner
+     * attempts refused), {@code densityRatio} reads ~3e-4 against {@code f}≈0.5, so {@code max(0,
+     * reach − f)} is exactly {@code 0} and the promoted sensor's honest 322k–1.65M-key {@code est} is
+     * multiplied away before the comparison ever sees it. The two non-default modes are the raced
+     * cures for that structural zero:
+     *
+     * <ul>
+     *   <li>{@link TailFloorMode#EST_DIRECT} — {@code est <= 2·maxKeys}: the estimator's own reading,
+     *       no window product at all.</li>
+     *   <li>{@link TailFloorMode#REACH_FLOORED} — the same product with the reach term floored at
+     *       {@link #TAIL_REACH_MIN}, so a thin trailing density shrinks the child's share instead of
+     *       erasing it.</li>
+     * </ul>
+     *
+     * <p>Both are monotonically MORE permissive than {@code CURRENT} (their reach term is never
+     * smaller), so neither can block a carve the shipped floor admits — the governor's {@code
+     * TAIL_FLOOR.*_would_block_current_admits} counters exist to make that claim falsifiable on a
+     * live run rather than merely asserted here.
+     */
+    public static boolean childTailBelowObservedMassFloor(double est, double f, double densityRatio, int maxKeys,
+                                                          TailFloorMode mode) {
+        double floor = 2.0 * (double) maxKeys;
+        if (mode == TailFloorMode.EST_DIRECT) {
+            return est <= floor;
+        }
+        double reach = Math.min(1.0, densityRatio) - f;   // thinning (ratio < 1) shrinks the reachable tail
+        double minReach = (mode == TailFloorMode.REACH_FLOORED) ? TAIL_REACH_MIN : 0.0;
+        double realizedChildMass = est * Math.max(minReach, reach);
+        return realizedChildMass <= floor;
     }
 
     /**
@@ -378,9 +430,25 @@ public final class StealMath {
      * (pure arithmetic + byte compares, no engine state): the exact decision is unit-testable without
      * driving the whole engine to a precise pivot/density combination, and
      * {@code io.varve.swath.engine.policy}'s owner-split governor calls this directly.
+     *
+     * <p>This arity reads the floor at its shipped {@link TailFloorMode#CURRENT} mode; the governor
+     * passes the run's own mode through the overload below.
      */
     public static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                           double est, double densityRatio, int maxKeys) {
+        return shouldClampToReflected(cursor, m, mReflect, lo, H, est, densityRatio, maxKeys,
+                TailFloorMode.CURRENT);
+    }
+
+    /**
+     * {@link #shouldClampToReflected(byte[], byte[], byte[], byte[], byte[], double, double, int)}
+     * with the child-tail floor read under {@code mode}. Only condition (b) — the floor — depends on
+     * the mode; the overshoot test above it is pure byte ordering, so a clamp verdict that differs
+     * between two modes differs for exactly one reason, which is what lets the governor attribute the
+     * difference to the floor.
+     */
+    public static boolean shouldClampToReflected(byte[] cursor, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+                                          double est, double densityRatio, int maxKeys, TailFloorMode mode) {
         if (mReflect == null
                 || KeyBytes.compareUnsigned(cursor, mReflect) >= 0
                 || KeyBytes.compareUnsigned(mReflect, m) >= 0) {
@@ -390,7 +458,7 @@ public final class StealMath {
         double fReflect = (remainingFrac > 0.0)
                 ? spanIn(cursor, mReflect, lo, H) / remainingFrac
                 : 1.0;
-        return !childTailBelowObservedMassFloor(est, fReflect, densityRatio, maxKeys);
+        return !childTailBelowObservedMassFloor(est, fReflect, densityRatio, maxKeys, mode);
     }
 
     /**
@@ -416,6 +484,18 @@ public final class StealMath {
      */
     public static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
                                          double est, double densityRatio, int maxKeys) {
+        return shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, maxKeys,
+                TailFloorMode.CURRENT);
+    }
+
+    /**
+     * {@link #shouldLiftToReflected(byte[], byte[], byte[], byte[], byte[], double, double, int)}
+     * with the child-tail floor (condition 4) read under {@code mode}. Conditions 1–3 are
+     * mode-independent, so — as with the clamp — a lift verdict that differs between modes differs
+     * only because the floor did.
+     */
+    public static boolean shouldLiftToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+                                         double est, double densityRatio, int maxKeys, TailFloorMode mode) {
         double remSpan = spanIn(cursorTo, H, lo, H);
         double fKeptLo = spanIn(cursorTo, m, lo, H) / Math.max(1e-300, remSpan);
         if (est * fKeptLo > (double) maxKeys) {
@@ -427,7 +507,7 @@ public final class StealMath {
             return false;   // nothing to lift to, or mReflect doesn't actually move m up with room to spare
         }
         double fReflectLifted = (remSpan > 0.0) ? spanIn(cursorTo, mReflect, lo, H) / remSpan : 1.0;
-        return !childTailBelowObservedMassFloor(est, fReflectLifted, densityRatio, maxKeys);
+        return !childTailBelowObservedMassFloor(est, fReflectLifted, densityRatio, maxKeys, mode);
     }
 
     // -------------------------------------------------------------------------

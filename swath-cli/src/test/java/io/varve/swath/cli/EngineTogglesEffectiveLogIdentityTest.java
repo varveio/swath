@@ -31,7 +31,7 @@ class EngineTogglesEffectiveLogIdentityTest {
             "engine_toggles_effective owner_split={} density_ewma={} radix_bands={} "
                     + "structure_probes={} far_ahead={} alphabet_pivots={} reflect={} confetti_feedback={} "
                     + "reflect_lift={} fanout_tiling={} mass_aware_seed={} readahead={} "
-                    + "rate_anchored_sensing={} "
+                    + "rate_anchored_sensing={} tail_floor={} "
                     + "(EXPERIMENTAL/DIAGNOSTIC ablation surface — measurement only, not a supported "
                     + "configuration)";
 
@@ -50,11 +50,11 @@ class EngineTogglesEffectiveLogIdentityTest {
         assertThat(event.getLevel()).isEqualTo(Level.INFO);
         assertThat(event.getMessage()).isEqualTo(EXPECTED_TEMPLATE);
         assertThat(event.getArgumentArray()).containsExactly(
-                false, true, true, true, true, true, true, true, true, true, true, false, false);
+                false, true, true, true, true, true, true, true, true, true, true, false, false, "current");
     }
 
     /**
-     * The line's own promise: {@link EngineToggles#isDefault()} fires it on ANY of the thirteen
+     * The line's own promise: {@link EngineToggles#isDefault()} fires it on ANY of the fourteen
      * components deviating, so a run that deviates in ONE of them must print that one's real state.
      * A toggle omitted from the format string would fire the line and then print every field at its
      * default, which is the failure this pins — read off the FORMATTED message, since a missing
@@ -70,6 +70,17 @@ class EngineTogglesEffectiveLogIdentityTest {
         // missing from the format string prints nothing at all, which is what this catches.
         assertThat(captureEngineTogglesLine(cmd).getFormattedMessage())
                 .contains("rate_anchored_sensing=true");
+    }
+
+    /** The same promise for the one value-taking toggle: it prints its selected MODE, not a boolean. */
+    @Test
+    void aRunDeviatingOnlyInTailFloorPrintsTheSelectedMode() throws Exception {
+        ListCommand cmd = new ListCommand();
+        cmd.engine.toggles = EngineToggles.parse(List.of("tail_floor=reach_floored"), false);
+        assertThat(cmd.engine.toggles.isDefault()).isFalse();
+
+        assertThat(captureEngineTogglesLine(cmd).getFormattedMessage())
+                .contains("tail_floor=reach_floored");
     }
 
     /** Run {@code cmd}'s startup echo and return the {@code engine_toggles_effective} event it emitted. */

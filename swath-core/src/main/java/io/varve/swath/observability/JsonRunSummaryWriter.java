@@ -542,7 +542,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         rc.filters().forEach(filtersNode::add);
     }
 
-    /** The genuine engine on/off toggles, so a
+    /** The genuine engine toggles (on/off, plus the value-taking {@code tail_floor} mode), so a
      * run is self-identifying (e.g. --no-owner-split vs. the default) without re-deriving it
      * from args_hash, which deliberately excludes them. max_duration_ms is likewise excluded
      * from args_hash but must still be recognizable in the corpus. This block also carries
@@ -568,6 +568,9 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         engineFlagsNode.put("readahead", toggles.readahead());
         engineFlagsNode.put("mass_aware_seed", toggles.massAwareSeed());
         engineFlagsNode.put("rate_anchored_sensing", toggles.rateAnchoredSensing());
+        // tail_floor is the one value-taking toggle, so it renders as its mode's own code string
+        // rather than a boolean — same reproducibility reason as the two above.
+        engineFlagsNode.put("tail_floor", toggles.tailFloor().code());
         if (rc.maxDurationMs() == null) {
             engineFlagsNode.putNull("max_duration_ms");
         } else {

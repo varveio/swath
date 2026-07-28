@@ -9,6 +9,7 @@ import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.RemainingWorkEstimator;
 import io.varve.swath.engine.StealMath;
+import io.varve.swath.engine.TailFloorMode;
 import io.varve.swath.model.KeyBytes;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -138,7 +139,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // StealMath.childTailBelowObservedMassFloor's math).
         double f = toggles.farAheadFraction(view.densityFraction());
         double densityRatio = toggles.observedDensityRatio(view.observedDensityRatio());
-        if (StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys)) {
+        if (tailFloorBlocks(est, f, densityRatio, engagements)) {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code()));
             return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of(),
                     gateInputs(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(), view, est,
@@ -218,7 +219,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // cursor <_u m_r <_u H, and the executor's CAS re-validates under the lock.
         if (toggles.reflect()) {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, H);
-            if (StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, maxKeys)) {
+            if (clampsToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, engagements)) {
                 m = mReflect;
                 carveReason = "pivot_reflect_clamped";
                 engagements.add(new Engagement("OWNER_SPLIT", carveReason));
@@ -241,7 +242,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // only this lift.
         if (toggles.reflect() && toggles.reflectLift()) {
             byte[] mReflect = StealMath.extrapolate(lo, cursorTo, H);
-            if (StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, maxKeys)) {
+            if (liftsToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio, engagements)) {
                 m = mReflect;
                 carveReason = "pivot_reflect_lifted";
                 engagements.add(new Engagement("OWNER_SPLIT", carveReason));
@@ -250,6 +251,74 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         return new Carve(m, engagements, mutations,
                 gateInputs(carveReason, view, est, pagesSinceLastSelfSplit, f, densityRatio));
     }
+
+    /**
+     * The observed-mass child-tail floor at the run's {@code tail_floor} mode, with the mode's
+     * effect on THIS gate measured (see {@link #noteTailFloorDivergence}). The gate is the site the
+     * wide-flat blindness was measured at (algorithms.md §3.3: 5,326 of 5,326 tail refusals), so its
+     * divergence counters are the live A/B's primary reading; their denominator is this gate's own
+     * population — the qualifying page commits the {@code OWNER_SPLIT.*} skip reasons count against.
+     */
+    private boolean tailFloorBlocks(double est, double f, double densityRatio, List<Engagement> engagements) {
+        TailFloorMode mode = toggles.tailFloor();
+        boolean blocked = StealMath.childTailBelowObservedMassFloor(est, f, densityRatio, maxKeys, mode);
+        if (mode != TailFloorMode.CURRENT) {
+            boolean blockedUnderCurrent = StealMath.childTailBelowObservedMassFloor(
+                    est, f, densityRatio, maxKeys, TailFloorMode.CURRENT);
+            if (blocked != blockedUnderCurrent) {
+                engagements.add(!blocked
+                        ? new Engagement("TAIL_FLOOR", "gate_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "gate_would_block_current_admits"));
+            }
+        }
+        return blocked;
+    }
+
+    /**
+     * {@link StealMath#shouldClampToReflected} at the run's {@code tail_floor} mode, with the mode's
+     * effect on the CLAMP measured under its own reason prefix — a carve that reached pivot
+     * synthesis is a different population from the gate above, and pooling the two would make either
+     * ratio uninterpretable (metrics-internals.md §5's denominator rule).
+     */
+    private boolean clampsToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+                                      double est, double densityRatio, List<Engagement> engagements) {
+        TailFloorMode mode = toggles.tailFloor();
+        boolean clamps = StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio,
+                maxKeys, mode);
+        if (mode != TailFloorMode.CURRENT) {
+            boolean clampsUnderCurrent = StealMath.shouldClampToReflected(cursorTo, m, mReflect, lo, H, est,
+                    densityRatio, maxKeys, TailFloorMode.CURRENT);
+            if (clamps != clampsUnderCurrent) {
+                engagements.add(clamps
+                        ? new Engagement("TAIL_FLOOR", "clamp_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "clamp_would_block_current_admits"));
+            }
+        }
+        return clamps;
+    }
+
+    /**
+     * {@link StealMath#shouldLiftToReflected} at the run's {@code tail_floor} mode, instrumented as
+     * {@link #clampsToReflected} is — again its own population (post-clamp carves), so its own
+     * reason prefix.
+     */
+    private boolean liftsToReflected(byte[] cursorTo, byte[] m, byte[] mReflect, byte[] lo, byte[] H,
+                                     double est, double densityRatio, List<Engagement> engagements) {
+        TailFloorMode mode = toggles.tailFloor();
+        boolean lifts = StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est, densityRatio,
+                maxKeys, mode);
+        if (mode != TailFloorMode.CURRENT) {
+            boolean liftsUnderCurrent = StealMath.shouldLiftToReflected(cursorTo, m, mReflect, lo, H, est,
+                    densityRatio, maxKeys, TailFloorMode.CURRENT);
+            if (lifts != liftsUnderCurrent) {
+                engagements.add(lifts
+                        ? new Engagement("TAIL_FLOOR", "lift_admit_current_blocks")
+                        : new Engagement("TAIL_FLOOR", "lift_would_block_current_admits"));
+            }
+        }
+        return lifts;
+    }
+
 
     /**
      * The {@link OwnerSplitGateInputs} one {@link #decide} outcome reports: {@code reason} is the

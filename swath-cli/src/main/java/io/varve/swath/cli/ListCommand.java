@@ -1839,10 +1839,11 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * live where each toggle actually bears on the engine ({@code WorkStealingScan}/{@code Thief}/
      * {@code SeedStep} constructors), so an engine-level test can observe them without going through
      * the CLI, and a resumed run (which never re-constructs {@code SeedStep}) still gets the ones
-     * that apply to it. Covers all thirteen fields: the ten {@link io.varve.swath.engine.EngineToggles#NAMES}
-     * ablation toggles plus the three new-mechanism toggles outside that list ({@code readahead} and
-     * {@code rate_anchored_sensing}, opt-in; {@code mass_aware_seed}, opt-out) — {@link
-     * io.varve.swath.engine.EngineToggles#isDefault()} fires this line on ANY of the thirteen
+     * that apply to it. Covers all fourteen fields: the ten {@link io.varve.swath.engine.EngineToggles#NAMES}
+     * ablation toggles plus the four new-mechanism toggles outside that list ({@code readahead} and
+     * {@code rate_anchored_sensing}, opt-in; {@code mass_aware_seed}, opt-out; {@code tail_floor},
+     * value-taking, printed as its mode code) — {@link
+     * io.varve.swath.engine.EngineToggles#isDefault()} fires this line on ANY of the fourteen
      * deviating, so the printed fields must match, not just the ten ablation ones. Emitted under this facade's own logger identity ({@code ListCommand}) so the
      * {@code %logger{20}} production pattern renders the historical token.
      */
@@ -1853,14 +1854,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         log.info("engine_toggles_effective owner_split={} density_ewma={} radix_bands={} "
                         + "structure_probes={} far_ahead={} alphabet_pivots={} reflect={} confetti_feedback={} "
                         + "reflect_lift={} fanout_tiling={} mass_aware_seed={} readahead={} "
-                        + "rate_anchored_sensing={} "
+                        + "rate_anchored_sensing={} tail_floor={} "
                         + "(EXPERIMENTAL/DIAGNOSTIC ablation surface — measurement only, not a supported "
                         + "configuration)",
                 engine.toggles.ownerSplit(), engine.toggles.densityEwma(), engine.toggles.radixBands(),
                 engine.toggles.structureProbes(), engine.toggles.farAhead(), engine.toggles.alphabetPivots(),
                 engine.toggles.reflect(), engine.toggles.confettiFeedback(), engine.toggles.reflectLift(),
                 engine.toggles.fanoutTiling(), engine.toggles.massAwareSeed(), engine.toggles.readahead(),
-                engine.toggles.rateAnchoredSensing());
+                engine.toggles.rateAnchoredSensing(), engine.toggles.tailFloor().code());
     }
 
     private void restoreRunContext(RunMeta run, RunMetrics metrics) {

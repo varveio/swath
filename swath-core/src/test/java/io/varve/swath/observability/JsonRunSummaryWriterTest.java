@@ -19,6 +19,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.TailFloorMode;
 import io.varve.swath.error.ThrottleType;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -336,10 +337,14 @@ final class JsonRunSummaryWriterTest {
         expectedNames.add(EngineToggles.READAHEAD_NAME);
         expectedNames.add(EngineToggles.MASS_AWARE_SEED_NAME);
         expectedNames.add(EngineToggles.RATE_ANCHORED_SENSING_NAME);
-        assertThat(expectedNames).as("the 13 names EngineToggles.parse currently accepts").hasSize(13);
+        expectedNames.add(EngineToggles.TAIL_FLOOR_NAME);
+        assertThat(expectedNames).as("the 14 names EngineToggles.parse currently accepts").hasSize(14);
         for (String name : expectedNames) {
             assertThat(engineFlags.has(name)).as("engine_flags missing toggle '" + name + "'").isTrue();
         }
+        assertThat(engineFlags.get(EngineToggles.TAIL_FLOOR_NAME).asText())
+                .as("the one value-taking toggle renders as its mode code, not a boolean")
+                .isEqualTo(TailFloorMode.CURRENT.code());
     }
 
     /**

@@ -316,7 +316,9 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
      * per run without duplicating the mark here. {@code radix_bands} is {@link SeedStep}'s own toggle
      * (fired there — it has no bearing on this engine at all). The toggle-name → mark-string
      * derivation itself is single-sourced in {@link EngineToggles#recordOffMarks} — this method only
-     * lists which of the ten ablation toggles this engine owns.
+     * lists which of the ten ablation toggles this engine owns. The two opt-in marks below
+     * ({@code readahead_on}, {@code rate_anchored_sensing_on}) and the tail-floor arm mark are this
+     * engine's too, for the same reason.
      */
     private static void recordDisabledToggleMarks(EngineToggles toggles, RunMetrics metrics) {
         toggles.recordOffMarks(metrics, "owner_split", "confetti_feedback", "reflect_lift");
@@ -332,6 +334,15 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
         // silent on a keyspace that never reached the sensor at all.
         if (toggles.rateAnchoredSensing()) {
             metrics.recordStealReason("TOGGLE", "rate_anchored_sensing_on");
+        }
+        // Same polarity again for the value-taking tail-floor arm, with the SELECTED mode in the
+        // mark's own name: "which floor arithmetic refused this run's owner carves" is otherwise
+        // unrecoverable from the OWNER_SPLIT.* counters, which report the same reason code under
+        // every mode. One literal per arm — the §5 drift guard matches emitted names statically.
+        switch (toggles.tailFloor()) {
+            case EST_DIRECT -> metrics.recordStealReason("TOGGLE", "tail_floor_est_direct_on");
+            case REACH_FLOORED -> metrics.recordStealReason("TOGGLE", "tail_floor_reach_floored_on");
+            case CURRENT -> { /* default arm: unmarked, like every other off-by-default toggle */ }
         }
     }
 

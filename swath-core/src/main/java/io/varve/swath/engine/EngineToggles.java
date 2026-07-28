@@ -51,6 +51,11 @@ import java.util.Map;
  *   <li>{@code mass_aware_seed} — opt-out, default ON: lets {@link SeedStep} sample an ambiguous
  *       truncated cut's children to disambiguate a heavy subtree (banded to parallelize) from a
  *       1:1 tiny-leaf explosion (the INT-8 shape, left whole for work-stealing).</li>
+ *   <li>{@code tail_floor} — value-taking ({@link TailFloorMode}), default {@code current}: which
+ *       arithmetic the owner-split child-tail floor reads ({@link
+ *       StealMath#childTailBelowObservedMassFloor}). The two non-default modes are the raced cures
+ *       for the wide-flat blindness that erases an honest estimate; {@code current} is the shipped
+ *       formula.</li>
  * </ul>
  */
 public record EngineToggles(
@@ -66,92 +71,111 @@ public record EngineToggles(
         boolean fanoutTiling,
         boolean readahead,
         boolean massAwareSeed,
-        boolean rateAnchoredSensing) {
+        boolean rateAnchoredSensing,
+        TailFloorMode tailFloor) {
+
+    /**
+     * The one non-boolean component must exist: every consumer (the governor's gate consults, the
+     * effective-toggle log, the run-summary writer) dereferences it, so a null would surface as an
+     * NPE far from the construction that caused it. {@code parse} can never produce one (absent
+     * defaults to {@link TailFloorMode#CURRENT}); this guards the public constructor.
+     */
+    public EngineToggles {
+        java.util.Objects.requireNonNull(tailFloor, "tailFloor");
+    }
 
     public EngineToggles withOwnerSplit(boolean ownerSplit) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withDensityEwma(boolean densityEwma) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withRadixBands(boolean radixBands) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withStructureProbes(boolean structureProbes) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withFarAhead(boolean farAhead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withAlphabetPivots(boolean alphabetPivots) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withReflect(boolean reflect) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withConfettiFeedback(boolean confettiFeedback) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withReflectLift(boolean reflectLift) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withFanoutTiling(boolean fanoutTiling) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withReadahead(boolean readahead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withMassAwareSeed(boolean massAwareSeed) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
     }
 
     public EngineToggles withRateAnchoredSensing(boolean rateAnchoredSensing) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing);
+                rateAnchoredSensing, tailFloor);
+    }
+
+    public EngineToggles withTailFloor(TailFloorMode tailFloor) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing, tailFloor);
     }
 
     /**
      * The only supported configuration: every ablation toggle on, {@code readahead} and {@code
-     * rate_anchored_sensing} off, {@code mass_aware_seed} on.
+     * rate_anchored_sensing} off, {@code mass_aware_seed} on, {@code tail_floor} at {@link
+     * TailFloorMode#CURRENT}.
      */
     public static final EngineToggles DEFAULT =
-            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, false);
+            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, false,
+                    TailFloorMode.CURRENT);
 
     /**
      * Valid ablation {@code --engine-toggle} names (each {@code on} by default, {@code off} to
@@ -183,6 +207,16 @@ public record EngineToggles(
     public static final String RATE_ANCHORED_SENSING_NAME = "rate_anchored_sensing";
 
     /**
+     * The {@code --engine-toggle tail_floor=current|est_direct|reach_floored} name; the ONLY
+     * value-taking toggle (its values are {@link TailFloorMode#codes()}, not {@code on}/{@code off}),
+     * default {@link TailFloorMode#CURRENT} — the shipped floor arithmetic, bit-identical. Not in
+     * {@link #NAMES}: nothing is turned off, so a non-default mode fires an engagement mark on the
+     * selected arm ({@code TOGGLE.tail_floor_<mode>_on}) exactly as {@code readahead} and {@code
+     * rate_anchored_sensing} do on their ON side.
+     */
+    public static final String TAIL_FLOOR_NAME = "tail_floor";
+
+    /**
      * The far-ahead fraction substituted for {@link WorkerState#densityFraction()} when {@code
      * density_ewma} is off — {@link WorkerState#MAX_FAR_FRACTION}, the same ceiling the EWMA path
      * saturates at for a uniformly-dense drainer, so {@code density_ewma=off} behaves like "always
@@ -194,9 +228,10 @@ public record EngineToggles(
     static final double PLAIN_MIDPOINT_FRACTION = 0.5;
 
     /**
-     * Parse the repeatable {@code --engine-toggle NAME=on|off} occurrences plus the {@code
+     * Parse the repeatable {@code --engine-toggle NAME=VALUE} occurrences plus the {@code
      * --no-owner-split} alias into one {@link EngineToggles}. An unknown name, a malformed value
-     * (not {@code on}/{@code off}), or contradictory values for the same toggle (including a
+     * (not {@code on}/{@code off} — or, for the value-taking {@link #TAIL_FLOOR_NAME}, not one of
+     * {@link TailFloorMode#codes()}), or contradictory values for the same toggle (including a
      * conflict between {@code --no-owner-split} and an explicit {@code --engine-toggle
      * owner_split=on}) is a startup validation error (exit 2) listing the valid names.
      *
@@ -207,19 +242,35 @@ public record EngineToggles(
      */
     public static EngineToggles parse(List<String> raw, boolean noOwnerSplit) throws InvalidArgsException {
         Map<String, Boolean> values = new LinkedHashMap<>();
+        TailFloorMode tailFloor = null;
         if (raw != null) {
             for (String entry : raw) {
                 int eq = entry.indexOf('=');
                 if (eq < 0) {
-                    throw new InvalidArgsException("--engine-toggle must be NAME=on|off (got '" + entry + "')");
+                    throw new InvalidArgsException("--engine-toggle must be NAME=VALUE (got '" + entry + "')");
                 }
                 String name = entry.substring(0, eq).trim();
                 String rawValue = entry.substring(eq + 1).trim();
+                if (TAIL_FLOOR_NAME.equals(name)) {
+                    TailFloorMode mode = TailFloorMode.fromCode(rawValue);
+                    if (mode == null) {
+                        throw new InvalidArgsException("--engine-toggle " + TAIL_FLOOR_NAME
+                                + ": value must be " + String.join("|", TailFloorMode.codes())
+                                + " (got '" + rawValue + "')");
+                    }
+                    if (tailFloor != null && tailFloor != mode) {
+                        throw new InvalidArgsException("--engine-toggle " + TAIL_FLOOR_NAME
+                                + " given contradictory values");
+                    }
+                    tailFloor = mode;
+                    continue;
+                }
                 if (!NAMES.contains(name) && !READAHEAD_NAME.equals(name) && !MASS_AWARE_SEED_NAME.equals(name)
                         && !RATE_ANCHORED_SENSING_NAME.equals(name)) {
                     throw new InvalidArgsException("--engine-toggle: unknown name '" + name
                             + "' (valid names: " + String.join(", ", NAMES) + ", " + READAHEAD_NAME + ", "
-                            + MASS_AWARE_SEED_NAME + ", " + RATE_ANCHORED_SENSING_NAME + ")");
+                            + MASS_AWARE_SEED_NAME + ", " + RATE_ANCHORED_SENSING_NAME + ", "
+                            + TAIL_FLOOR_NAME + ")");
                 }
                 boolean on = parseOnOff(name, rawValue);
                 putConsistent(values, name, on, "--engine-toggle " + name + " given contradictory values");
@@ -242,7 +293,8 @@ public record EngineToggles(
                 values.getOrDefault("fanout_tiling", true),
                 values.getOrDefault(READAHEAD_NAME, false),
                 values.getOrDefault(MASS_AWARE_SEED_NAME, true),
-                values.getOrDefault(RATE_ANCHORED_SENSING_NAME, false));
+                values.getOrDefault(RATE_ANCHORED_SENSING_NAME, false),
+                tailFloor == null ? TailFloorMode.CURRENT : tailFloor);
     }
 
     private static void putConsistent(Map<String, Boolean> values, String name, boolean on, String conflictMessage)

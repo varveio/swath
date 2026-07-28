@@ -789,7 +789,8 @@ two buckets they were measured on**; per-mechanism status follows.
   only over-fetches its child's terminal page. It therefore skips the carve when
   `outstanding ≥ Tmax`, where `Tmax` is the fixed configured worker count
   (recording `OWNER_SPLIT.demand_gated`), and floors the child
-  mass at `(1−f)·est > 2·maxKeys`; the split transaction is unchanged (only
+  mass at two pages (the exact reading is the observed-density one below, not the
+  plain `(1−f)·est` span); the split transaction is unchanged (only
   *whether* to split, never *how*), so no-gap/no-overlap and ramp
   (`outstanding < Tmax`) are preserved. The threshold is `Tmax`, not `2·Tmax`: idle
   thieves drain owner-split children as fast as they are created, so
@@ -798,6 +799,43 @@ two buckets they were measured on**; per-mechanism status follows.
   gate is skipped when `workerCount == 1` (no thief exists there, so "buys zero
   parallelism" is moot rather than true). The adaptive concurrency gauge's
   effective `T` is recorded for diagnosis but does not change this gate.
+  **The child-tail floor's exact reading, and its wide-flat blindness
+  (`--engine-toggle tail_floor=MODE`, default `current`).** The floor is not
+  `(1−f)·est` but its observed-density correction
+  `est × max(0, min(1, densityRatio) − f) > 2·maxKeys`, where `densityRatio =
+  trailingEwmaDensity / averageDensity` (`StealMath.childTailBelowObservedMassFloor`;
+  `min(1, ·)` means a region *denser* than average never inflates the child's share,
+  and the no-signal fallback `+∞` reduces the whole thing to the plain span floor).
+  On a thinning tail this is the correction it was built for. On a **wide-flat**
+  tail it is structurally blind: measured on `nara`'s single tail range, the ratio
+  reads 0.0002–0.0008 (median 0.0003) against `f` pinned at ~0.5, so the reach term
+  is exactly `0` and the product is `0` **for any `est`** — all 5,326 owner-split
+  attempts over that tail ended `OWNER_SPLIT.floor_reflected_blocked` while the
+  position sensor was honestly reporting 322,500–1,653,750 keys remaining, and the
+  range drained serially to the end of the run. Because the term is right on some
+  shapes and blind on this one, the two candidate cures are **selectable arms**
+  rather than a replacement, raced from one binary:
+  - `tail_floor=est_direct` — block iff `est <= 2·maxKeys`; the window product is
+    dropped entirely. Under `rate_anchored_sensing` the estimate is already the
+    range's own realized mass, so multiplying it by a byte-geometry window
+    double-counts geometry (the same double-count removed one gate upstream at the
+    remaining-est floor). Its disclosed cost: a range whose *total* mass clears two
+    pages but whose far share honestly does not is now carved.
+  - `tail_floor=reach_floored` — keep the product, floor the reach term at
+    `TAIL_REACH_MIN = 1/16` (`est × max(1/16, min(1, densityRatio) − f)`). Geometry
+    still shrinks the child's share; it can no longer erase it. The 1/16 floor puts
+    the admit boundary at 32 pages of estimate, and wherever the real reach exceeds
+    1/16 the arm is byte-for-byte `current`.
+  Both arms are monotonically more permissive than `current` (they can only admit
+  carves it refuses), both leave pivot placement and the split CAS untouched
+  (I2/I3 unaffected — only *whether* an owner carves changes), and both compose with
+  `rate_anchored_sensing` without being coupled to it, so the race keeps its
+  factorial of controls. The mode is threaded through the governor to all three of
+  the floor's consult sites (the gate, the reflection clamp, the reflect-lift), and
+  at each one a non-default mode evaluates `current`'s verdict too and records the
+  difference (`TAIL_FLOOR.<site>_admit_current_blocks` /
+  `TAIL_FLOOR.<site>_would_block_current_admits`, metrics-internals §5) — which is
+  what makes a live A/B attributable to the toggle instead of to the run.
 - **Reactive far-ahead interpolated pivot** (`StealMath.interpolate(c, H, f)`
   over a bounded range, feeding a per-worker density estimate). The
   foundation the owner-side split reuses; same structural-win / no-speed-win
