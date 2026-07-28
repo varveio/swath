@@ -143,6 +143,33 @@ class SensingEstimatorTest {
     }
 
     /**
+     * <b>The promoted arm reads exactly what the engine reads.</b> {@code RATE_ANCHORED_FLOOR_QUARTER}
+     * is the arm the corpus race promoted, and the composition it is made of now lives in the engine
+     * ({@code io.varve.swath.engine.RateAnchoredEstimator}) with this arm delegating to it. Every value
+     * below is pinned digit for digit in swath-core's own {@code RateAnchoredEstimatorTest}, and both
+     * sides were green on these numbers before the delegation existed — so a port that drifted from
+     * the implementation this race measured fails here, on the arm, rather than quietly becoming a
+     * different algorithm with the same race table attached to it.
+     */
+    @Test
+    void thePromotedArmsReadingsAreTheEnginesToTheDigit() {
+        int page = 1_000;
+        RemainingWorkEstimator quarter = SensingVariant.RATE_ANCHORED_FLOOR_QUARTER.estimator(page);
+        assertThat(quarter.estRemaining(CURSOR_LATER, LO, HI, 5_000L)).isEqualTo(8134.808965781418);
+        assertThat(quarter.estRemaining(CURSOR_LATER, LO, HI, 0L)).isEqualTo(1626.9617931562836);
+        assertThat(quarter.estRemaining(key("species/Bat"), LO, HI, 64L * page)).isEqualTo(16_000.0);
+        assertThat(quarter.estRemaining(key("species/Bat"), LO, HI, 0L)).isEqualTo(250.0);
+        assertThat(quarter.estRemaining(key("species/Baq"), LO, HI, 5_000L)).isEqualTo(3701.256127880026);
+        assertThat(quarter.estRemaining(key("species/Balf"), LO, HI, 5_000L)).isEqualTo(80_000.0);
+        assertThat(quarter.estRemaining(LO, LO, HI, 5_000L)).isEqualTo(5_000.0);
+        assertThat(quarter.estRemaining(HI, LO, HI, 400_000L)).isZero();
+        assertThat(quarter.estRemaining(CURSOR_LATER, LO, null, 5_000L))
+                .isEqualTo(Double.POSITIVE_INFINITY);
+        assertThat(quarter.ignoresEmittedKeys(CURSOR_LATER, LO, HI)).isFalse();
+        assertThat(quarter.advanceVisible(LO, CURSOR_EARLY, CURSOR_LATER, HI)).isTrue();
+    }
+
+    /**
      * The lift-only band, pinned against the reading it exists to remove. The cursor here has crossed
      * nearly the whole byte-window from {@code lo} to {@code hi} — the shape a range takes while
      * draining a dated directory towards its bound, and the shape the diagnosed straggler had — so the

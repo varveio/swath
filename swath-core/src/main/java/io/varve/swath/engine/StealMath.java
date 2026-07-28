@@ -92,6 +92,39 @@ public final class StealMath {
         return ((double) keysEmitted / consumed) * remaining;
     }
 
+    /**
+     * The <b>cursor-anchored</b> geometric factor: remaining span over consumed span, both read in a
+     * window anchored at the cursor's OWN divergence from {@code lo} rather than at the divergence of
+     * {@code [lo, hi]} that {@link #fracIn} reads. The ratio {@link #estRemaining} multiplies its
+     * observed density by, measured where a deep-nested cursor actually moves.
+     *
+     * <p>Let {@code d = cpl(lo, cursor)} and {@code d0 = cpl(lo, hi)}; a cursor inside {@code (lo, hi]}
+     * always has {@code d >= d0}. Where {@code d == d0} the anchor did not move and every term is
+     * {@link #fracIn}'s own, digit for digit — the factor is exactly the shipped reading's
+     * {@code remaining / consumed}. Where {@code d > d0} the cursor has descended into a subtree it
+     * shares with {@code lo}: the window is read from byte {@code d} and its ceiling is the top of that
+     * shared prefix (the constant 1.0 in that frame), which is inside {@code [lo, hi]}, so the frame
+     * stays closed and both terms stay ordinary fractions. That deeper frame therefore reads
+     * "at the rate this range has consumed the subtree its cursor is in, how much of that subtree is
+     * left", and — its ceiling being 1.0 — drops below one only for a cursor diverging from {@code lo}
+     * on a byte at or above {@code 0x80}, which object keys do not do.
+     *
+     * <p>Returns the neutral {@code 1.0} where there is no consumed evidence to anchor (an open
+     * frontier, a cursor at or before {@code lo}, or a consumed span that underflows to zero), so a
+     * caller that wants only the geometry gets a neutral answer rather than a degenerate one.
+     */
+    public static double anchoredGeometricFactor(byte[] cursor, byte[] lo, byte[] hi) {
+        byte[] cur = (cursor == null) ? new byte[0] : cursor;
+        byte[] loKey = (lo == null) ? new byte[0] : lo;
+        if (hi == null || KeyBytes.compareUnsigned(cur, loKey) <= 0) return 1.0;
+        int d  = commonPrefixLen(loKey, cur);
+        int d0 = commonPrefixLen(loKey, hi);
+        double consumed = fracFromOffset(cur, d) - fracFromOffset(loKey, d);
+        if (consumed <= 0.0) return 1.0;
+        double top = (d <= d0) ? fracFromOffset(hi, d) : 1.0;
+        return Math.max(0.0, top - fracFromOffset(cur, d)) / consumed;
+    }
+
     // -------------------------------------------------------------------------
     // §3.1 — extrapolate / prefixCeil (open frontier pivot)
     // -------------------------------------------------------------------------
