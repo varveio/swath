@@ -35,6 +35,7 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -79,10 +80,48 @@ class JsonRunSummaryWiringTest {
         assertThat(root.get("stop_reason").asText()).isEqualTo("completed");
         assertThat(root.get("objects").asLong()).isEqualTo(n);
         assertThat(root.get("output").get("files").asLong()).isPositive();
-        assertThat(root.get("meters").isArray()).isTrue();
+        JsonNode meters = root.get("meters");
+        assertThat(meters.isArray()).isTrue();
+        // Tail-occupancy screen (last-5%/10% window avg-in-flight + wall-time share) -- both
+        // meter names, each tagged pct=5|10, must be present after any real scan, AND -- since
+        // these 4 gauges register unconditionally regardless of whether the sampler ever actually
+        // recorded a sample -- must carry a real (non-null) numeric value on a real completed run,
+        // not just a null placeholder.
+        List<JsonNode> avgInFlightMeters = tailOccupancyMeters(meters, "swath.tail_occupancy.avg_in_flight");
+        List<JsonNode> wallShareMeters = tailOccupancyMeters(meters, "swath.tail_occupancy.wall_share");
+        assertThat(tailOccupancyPcts(avgInFlightMeters)).containsExactlyInAnyOrder("5", "10");
+        assertThat(tailOccupancyPcts(wallShareMeters)).containsExactlyInAnyOrder("5", "10");
+        for (JsonNode m : avgInFlightMeters) {
+            assertThat(m.get("value").isNumber())
+                    .as(m.get("tags").toString() + " avg_in_flight must be a real value, not null").isTrue();
+        }
+        for (JsonNode m : wallShareMeters) {
+            assertThat(m.get("value").isNumber())
+                    .as(m.get("tags").toString() + " wall_share must be a real value, not null").isTrue();
+        }
         // A clean completed run attributes no cancel, so both are absent/null.
         assertThat(root.get("stop_source").isNull()).isTrue();
         assertThat(root.get("error_class").isNull()).isTrue();
+    }
+
+    /** Every {@code meters[]} entry whose {@code name} matches. */
+    private static List<JsonNode> tailOccupancyMeters(JsonNode meters, String name) {
+        List<JsonNode> matches = new ArrayList<>();
+        for (JsonNode m : meters) {
+            if (m.get("name").asText().equals(name)) {
+                matches.add(m);
+            }
+        }
+        return matches;
+    }
+
+    /** The {@code pct} tag value off each of the given {@code meters[]} entries. */
+    private static List<String> tailOccupancyPcts(List<JsonNode> meters) {
+        List<String> pcts = new ArrayList<>();
+        for (JsonNode m : meters) {
+            pcts.add(m.get("tags").get("pct").asText());
+        }
+        return pcts;
     }
 
     @Test
