@@ -89,6 +89,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.errors|{type=throttle}",
             "COUNTER|swath.idle_backoff.resets|{}",
             "COUNTER|swath.idle_backoff.slot_denied|{}",
+            "COUNTER|swath.open_frontier.keys_emitted|{}",
             "COUNTER|swath.output.broken_pipe|{}",
             "COUNTER|swath.output.bytes|{format=jsonl}",
             "COUNTER|swath.output.bytes|{format=parquet}",
@@ -305,6 +306,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.idle_backoff.park_time{}=1",
             "swath.idle_backoff.resets{}=1",
             "swath.idle_backoff.slot_denied{}=1",
+            "swath.open_frontier.keys_emitted{}=0",
             "swath.output.broken_pipe{}=1",
             "swath.output.bytes{format=jsonl}=512",
             "swath.output.bytes{format=parquet}=4096",
@@ -370,7 +372,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 191;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 192;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

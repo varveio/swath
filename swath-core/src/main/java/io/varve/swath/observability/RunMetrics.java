@@ -125,6 +125,18 @@ public final class RunMetrics {
     private final AtomicBoolean diskGaugeRegistered = new AtomicBoolean();
 
     private final Counter entriesEmitted;
+    /**
+     * Keys durably committed AND kept post-filter while their node's upper bound was {@code null}
+     * (issue #76) — the share of {@link #entriesEmitted} the owner-split governor's un-carvable
+     * {@code OWNER_SPLIT.open_frontier} skip is structurally unable to peel off. Deliberately counted
+     * at the SAME contract {@link #entriesEmitted} is: past the durable page commit (never bumped on
+     * a commit that fails — a review caught an earlier draft that recorded before {@code
+     * awaitCommit}), and on the post-filter kept count (never the pre-filter page size a review also
+     * caught), so this counter can never read as a larger share than 1 of {@link #entriesEmitted}. So
+     * a run whose mass sits past the last seed cut shows this counter move alongside the aggregate
+     * {@link #entriesEmitted} it is a genuine subset of; an analyst divides the two for the share.
+     */
+    private final Counter openFrontierKeysEmitted;
     private final Counter bytesEstimated;
     private final Timer listObjectsLatency;
     private final Timer queueWait;
@@ -446,6 +458,7 @@ public final class RunMetrics {
         this.nanoClock = nanoClock;
         this.inFlightGauge = new InFlightGauge(nanoClock);
         entriesEmitted = Counter.builder("swath.entries.emitted").register(registry);
+        openFrontierKeysEmitted = Counter.builder("swath.open_frontier.keys_emitted").register(registry);
         bytesEstimated = Counter.builder("swath.bytes.estimated").register(registry);
         progressUnits = Counter.builder("swath.progress.units").register(registry);
         probeFetches = Counter.builder("swath.probe.fetches").register(registry);
@@ -1602,6 +1615,22 @@ public final class RunMetrics {
             // and "current in-flight" were observed together, consistently, once per page.
             tailOccupancy.record(Math.round(entriesEmitted.count()),
                     nanoClock.getAsLong() - runStartNanos.get(), (int) currentInFlight());
+        }
+    }
+
+    /**
+     * A page-commit's keys were durably committed and kept post-filter while their node's {@code hi}
+     * was {@code null} (issue #76) — called from {@code WorkStealingScan}'s page-commit callback
+     * AFTER {@code awaitCommit} returns normally (never on a commit that fails) and on {@code
+     * kept.size()}, the same post-{@code FilterChain} count the page's downstream {@code PageBatch}
+     * carries — never the pre-filter page size. Both {@code hi} and the kept count are values the
+     * caller already has for its own bookkeeping at that point, so this is still O(1): no extra read,
+     * no per-key work. See {@link #openFrontierKeysEmitted}'s javadoc for why this contract matters
+     * (it is what keeps this counter a genuine subset of {@link #entriesEmitted}).
+     */
+    public void recordOpenFrontierKeysEmitted(long keyCount) {
+        if (keyCount > 0) {
+            openFrontierKeysEmitted.increment(keyCount);
         }
     }
 

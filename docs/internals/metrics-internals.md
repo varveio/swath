@@ -406,6 +406,28 @@ taxonomy so the signal set stays comparable:
     engaging as designed. Diagnostic-tier `--engine-toggle confetti_feedback=off` (default **on**)
     restores exact pre-gate behavior (only the demand gate and the child-tail floor bound owner-split
     carving) — see the `--engine-toggle` ablation marks subsection below.
+  - **Open-frontier serial-tail attribution (issue #76).** `SeedStep` closes every seed plan with one
+    final open range `(lastCut, null]`, and `OwnerSplitGovernor.decide` early-outs on it before any
+    other gate — an owner carve interpolates a midpoint between `lo` and `hi`, and a `null` upper
+    bound has no midpoint, so the range structurally cannot be owner-split (thieves are not blocked
+    the same way: `ThiefPolicy`'s `OPEN_FRONTIER_BAND_WIDTH_FALLBACK` still splits it). That
+    interpolation argument is sound, but the corollary once drawn from it — "so there is nothing for
+    post-hoc analysis to learn from a rate here" — is not: `(lastCut, null]` can hold an arbitrary
+    share of a bucket's mass, and on a keyspace whose mass sits past the last seed cut it holds most
+    of it, draining as a serial tail no thief happens to find. Left uncounted, the metrics cannot tell
+    that shape apart from an ordinary gate-blocked tail. Two signals close the gap: the skip now
+    records `OWNER_SPLIT.open_frontier` like every other gate (its own population — qualifying page
+    commits against an unbounded range — is the diagnostic, not a ratio against a sibling reason), and
+    `swath.open_frontier.keys_emitted` counts the keys DURABLY committed AND kept post-filter while
+    `hi` was `null` — recorded at the SAME contract `swath.entries.emitted` is: past `awaitCommit`
+    (never bumped for a commit that fails) and on the post-`FilterChain` kept count (never the
+    pre-filter page size), so this counter can never read as a larger share than 1 of
+    `swath.entries.emitted` (a review of the first cut of this fix caught it recording pre-commit and
+    pre-filter; both `hi` and the kept count are already-computed values at that point, so the fix
+    stays O(1): no
+    extra read, no per-key work). Divide it by `swath.entries.emitted` for the share of the
+    run's mass the open frontier carried; a large share alongside a slow, low-parallelism tail is the
+    fingerprint this instrument exists to surface.
   - **Reflect-lift, the zero-page-per-carve fix (root cause of the fingerprint-B residual on skewed
     keyspaces; the confetti gate above is demoted to a backstop).** On an adjacent-scalar range
     `ByteMidpoint.between`'s NONE branch appends
@@ -653,6 +675,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `STRUCTURE` | `probe_timed_out` | a `delimiter=/` structure probe hit its attempt-timeout budget; recorded against the victim so the timeout streak can suppress further probing there (a timeout otherwise reports NOTHING, destroying the evidence that would stop the next probe) | |
 | `STRUCTURE` | `suppressed_probe_timeout` | per-victim structure-probe suppression driven by the TIMEOUT streak rather than zero fan-out — the region could not answer at all, vs. answered "flat" | |
 | `STRUCTURE` | `fanout_capped` | a structure probe's page truncated at `STRUCTURE_PROBE_MAX_KEYS` — its CommonPrefixes are a prefix of the directory's children, so any committed pivot is the furthest proved boundary (`PIVOT.{structure,adaptive_structure}_capped`), not the true median | |
+| `OWNER_SPLIT` | `open_frontier` | the range is unbounded (`hi == null`) — the owner can never self-split it (no midpoint to interpolate), so this is not a suppressed carve like its siblings but the diagnostic itself: paired with `swath.open_frontier.keys_emitted`, its own population (qualifying page commits against an unbounded range) tells whether a run's tail sat on the un-carvable open frontier (issue #76) | |
 | `OWNER_SPLIT` | `remaining_est_floor` | a proactive owner self-split was suppressed because the estimated remaining work does not clear `SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys` — the range is too close to finishing to be worth a proactive carve (issue #16) | |
 | `OWNER_SPLIT` | `rate_limited` | a proactive owner self-split was suppressed by the page-spacing rate limit — fewer than `SELF_SPLIT_MIN_PAGES_BETWEEN` committed pages have passed since this range's last published self-split | |
 | `OWNER_SPLIT` | `demand_gated` | a proactive owner self-split was suppressed by the saturation/demand gate | |

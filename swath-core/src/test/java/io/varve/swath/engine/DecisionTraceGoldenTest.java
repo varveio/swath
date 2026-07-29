@@ -129,17 +129,20 @@ import org.junit.jupiter.api.Test;
  * count exists to avoid: it says nothing about which of {@link OwnerSplitGovernor}'s gate chain
  * (algorithms.md §3.3) each event actually exercises. {@link OwnerSplitSkipReason} has SEVEN
  * constants: six genuine suppression gates (REMAINING_EST_FLOOR/RATE_LIMITED/DEMAND_GATED/
- * FLOOR_REFLECTED_BLOCKED/CONFETTI_SUPPRESSED/UNSPLITTABLE_PIVOT) plus OPEN_FRONTIER, which its own
- * javadoc says is deliberately NOT a gate declining a carve (a structural path an unbounded range
- * takes, uncounted by design) — an earlier version of this section said "SIX gates" and omitted
+ * FLOOR_REFLECTED_BLOCKED/CONFETTI_SUPPRESSED/UNSPLITTABLE_PIVOT) plus OPEN_FRONTIER, which is not
+ * a gate declining a carve — it is a path that structurally does not apply, since a {@code null}
+ * upper bound has no midpoint to interpolate — but is COUNTED all the same (issue #76: it is the
+ * diagnostic that tells a serial tail apart from a gate-blocked one, not a rate to compare against
+ * a sibling gate's) — an earlier version of this section said "SIX gates" and omitted
  * OPEN_FRONTIER/UNSPLITTABLE_PIVOT from that count, since corrected. The bullet list below covers
  * all seven {@code OwnerSplitSkipReason} values plus the two Carve-side outcomes
  * ({@code confetti_probe}, the successful-carve {@code self_published}) — nine bullets, not "gates"
  * uniformly, since two of them are outcomes of a carve succeeding, not a gate declining one. The
  * per-outcome count (grepping the committed goldens' {@code reason_deltas}, not hand-counted):
  * <ul>
- *   <li>{@code OPEN_FRONTIER} (silent by design, no counter — see {@code OwnerSplitSkipReason}'s
- *       javadoc): 1 event, 1 fixture (owner-split-gates)</li>
+ *   <li>{@code OPEN_FRONTIER} (structural, not a suppression, but counted like its siblings since
+ *       issue #76 — see {@code OwnerSplitSkipReason}'s javadoc): 1 event, 1 fixture
+ *       (owner-split-gates)</li>
  *   <li>{@code REMAINING_EST_FLOOR}: 2 events, 2 fixtures (owner-split-gates, explosion-1to1)</li>
  *   <li>{@code RATE_LIMITED}: 1 event, 1 fixture (owner-split-gates)</li>
  *   <li>{@code DEMAND_GATED}: 2 events, 2 fixtures (owner-split-gates, flat-wide)</li>
