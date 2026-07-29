@@ -32,8 +32,9 @@ class EngineTogglesEffectiveLogIdentityTest {
                     + "structure_probes={} far_ahead={} alphabet_pivots={} reflect={} confetti_feedback={} "
                     + "reflect_lift={} fanout_tiling={} mass_aware_seed={} readahead={} "
                     + "rate_anchored_sensing={} tail_floor={} "
-                    + "(EXPERIMENTAL/DIAGNOSTIC ablation surface — measurement only, not a supported "
-                    + "configuration)";
+                    + "(non-default engine configuration — the rate_anchored_sensing/tail_floor pair is a "
+                    + "documented, supported rollback; every other toggle is an EXPERIMENTAL/DIAGNOSTIC "
+                    + "ablation surface, measurement only)";
 
     @Test
     void engineTogglesEffectiveEmitsUnderTheListCommandLoggerWithUnchangedMessageAndArgs() throws Exception {

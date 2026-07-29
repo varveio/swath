@@ -86,6 +86,25 @@ final class GoldenTrace {
         }
     }
 
+    /**
+     * A numeric field, JSON <b>null</b> when non-finite — the same convention {@code JsonlTraceSink}
+     * writes with, so a golden fixture stays strictly parseable JSON (JSONL has no {@code NaN}/
+     * {@code Infinity} literal, and both occur here: a not-computed gate input, an open-frontier
+     * estimate).
+     *
+     * <p>{@code JsonlTraceSink} keeps its own private copy of this rule rather than calling here:
+     * it is production code and cannot depend on a test source set. The duplication is deliberate
+     * and the two must stay in step — a golden recorded under a different non-finite convention
+     * would no longer describe what the shipped sink writes.
+     */
+    static void putNum(ObjectNode node, String field, double v) {
+        if (Double.isFinite(v)) {
+            node.put(field, v);
+        } else {
+            node.putNull(field);
+        }
+    }
+
     // ---- probe log: every MockPageFetcher call issued during one decision-site invocation -----
 
     /** Ordered log of {@code (request, response)} pairs a single decision-site call issued. */

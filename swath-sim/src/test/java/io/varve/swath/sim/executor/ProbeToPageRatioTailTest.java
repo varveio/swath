@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.sim.fixture.ListingFixtureStore;
 import io.varve.swath.sim.kernel.SimEventLog;
+import io.varve.swath.sim.model.LatencyModel;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,7 +49,9 @@ import org.junit.jupiter.api.Test;
  * The arm is {@code RATE_ANCHORED_FLOOR_QUARTER}, the promoted sensor, at all four
  * {@link SensingRaceProtocol#SEEDS}. Each threshold is stated with the reading it holds at and the
  * reading the same fixture, seed and arm produce at the bench ratio — the falsification run, which
- * fails every one of them:
+ * fails every one of them. That run is not just recorded here: {@link
+ * #atTheBenchProbeToPageRatioTheSameFixtureHandsTheLeafToTheFleet} executes it and asserts each
+ * threshold inverts, so the table below is pinned rather than remembered.
  *
  * <table border="1">
  *   <caption>live 121/223 (asserted) against bench 35/110 (pre-fix), four seeds</caption>
@@ -155,10 +158,71 @@ class ProbeToPageRatioTailTest {
         rows.forEach(System.out::println);
     }
 
+    /**
+     * <b>The falsification run, asserted rather than described.</b> Same fixture, same four seeds, same
+     * arm, same fleet, same 1,000-key page — the only thing that moves is the probe:page ratio, from the
+     * live 121/223 to the bench 35/110. Every threshold the leg above holds at must fail here, and this
+     * pins that inversion mechanically so the table in this class's javadoc cannot quietly become
+     * folklore: a change that made the live thresholds pass for some reason other than the ratio would
+     * keep passing there and start failing here.
+     *
+     * <p>Asserted as the negation of each live threshold rather than against the recorded bench bands
+     * (0.402–0.572 share, 39–61 splits, and so on). The claim being protected is "these readings are a
+     * property of the ratio", which is a claim about which side of each threshold a run lands on; the
+     * bands themselves are one instrument's readings and would make this brittle against any
+     * scheduling-visible change without saying anything more.
+     */
+    @Test
+    void atTheBenchProbeToPageRatioTheSameFixtureHandsTheLeafToTheFleet() {
+        List<byte[]> keys = SensingRaceProtocol.bench().get();
+        List<String> rows = new ArrayList<>();
+        for (long seed : SensingRaceProtocol.SEEDS) {
+            PolicyRunResult result = run(keys, seed, PolicyRunFixtures.MEASURED_TAIL_LATENCY);
+            String leg = SensingRaceProtocol.label(ARM) + "/seed " + seed + " @bench";
+            SensingRaceProtocol.requireCompleted(result, leg);
+            assertThat(result.keysEmitted()).as("%s: every key emitted", leg).isEqualTo(keys.size());
+
+            long victim = tailVictim(result);
+            Map<Long, Long> keysByNode = keysCommittedByNode(result);
+            double victimShare = (double) keysByNode.getOrDefault(victim, 0L)
+                    / SensingRaceProtocol.BENCH_HEAVIEST_LEAF_FILES;
+            long stolenKeys = keysDrainedByThiefChildrenOf(result, victim, keysByNode);
+            long splits = result.ownerSplitChildren() + result.thiefChildren();
+            double lossShare = (double) result.splitsLostAtRevalidation()
+                    / (result.splitsLostAtRevalidation() + result.thiefChildren());
+
+            rows.add(String.format(Locale.ROOT,
+                    "probe_page_ratio_bench arm=%s seed=%d victim=%d victim_share=%.4f stolen_keys=%d "
+                            + "splits=%d loss_share=%.4f serial=%.4f",
+                    SensingRaceProtocol.label(ARM), seed, victim, victimShare, stolenKeys, splits,
+                    lossShare, result.timeline().serialFraction()));
+
+            assertThat(victimShare)
+                    .as("%s: the fleet took the heavy leaf off the victim", leg)
+                    .isLessThan(VICTIM_SHARE_FLOOR);
+            assertThat(stolenKeys)
+                    .as("%s: what the thief carved off it actually drained", leg)
+                    .isPositive();
+            assertThat(lossShare)
+                    .as("%s: proposals survive re-validation here", leg)
+                    .isLessThan(PROPOSAL_LOSS_FLOOR);
+            assertThat(splits).as("%s: the fleet published more than the live ceiling", leg)
+                    .isGreaterThan(SPLITS_CEILING);
+            assertThat(result.timeline().serialFraction())
+                    .as("%s: the tail is not spent as one worker", leg)
+                    .isLessThan(SERIAL_FRACTION_FLOOR);
+        }
+        rows.forEach(System.out::println);
+    }
+
     private static PolicyRunResult run(List<byte[]> keys, long seed) {
+        return run(keys, seed, PolicyRunFixtures.LIVE_S3_LATENCY);
+    }
+
+    private static PolicyRunResult run(List<byte[]> keys, long seed, LatencyModel latency) {
         PolicyScenario scenario = PolicyRunFixtures
                 .scenario(SensingRaceProtocol.WORKERS, PolicyRunFixtures.MEASURED_TAIL_PAGE_SIZE,
-                        PolicyRunFixtures.LIVE_S3_LATENCY, PolicyRunFixtures.measuredCost())
+                        latency, PolicyRunFixtures.measuredCost())
                 .withSeed(seed)
                 .withEventLog(true);
         return SimExecutor.run(scenario, new ListingFixtureStore(keys),

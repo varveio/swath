@@ -132,7 +132,7 @@ the managed co-located checkpoint and does not accept an arbitrary SQLite path.
 | `--metrics-endpoint` | unset (or `SWATH_OTLP_ENDPOINT`) |
 | `--no-metrics` | off |
 | `--trace` | off |
-| `--engine-toggle` | every toggle defaults `on` except `readahead` (`off`); see [`usage.md`](usage.md#diagnostic-tier-ablation---engine-toggle) — diagnostic tier, not a supported configuration |
+| `--engine-toggle` | every toggle defaults `on` except `readahead` (`off`); see [`usage.md`](usage.md#diagnostic-tier-ablation---engine-toggle) — diagnostic tier, not a supported configuration, except the documented `rate_anchored_sensing=off` + `tail_floor=current` rollback |
 
 `--trace` is available with every checkpoint mode, including `--checkpoint
 none`. Trace JSONL contains real key bounds and pivots; the JSON run summary can

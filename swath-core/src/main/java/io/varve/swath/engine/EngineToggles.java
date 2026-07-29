@@ -20,7 +20,9 @@ import java.util.Map;
  * runs from one binary instead of a bespoke flag per experiment.
  *
  * <p><b>EXPERIMENTAL / DIAGNOSTIC — not a supported configuration.</b> {@link #DEFAULT} is the
- * only supported configuration: the ten ablation toggles below default {@code true}, {@code
+ * only supported configuration, with one documented exception: {@code rate_anchored_sensing=off}
+ * together with {@code tail_floor=current} is the supported rollback to pre-0.2.0 engine behaviour
+ * ({@code docs/usage.md}). The ten ablation toggles below default {@code true}, {@code
  * readahead} is opt-in/default-off, and {@code mass_aware_seed} is opt-out/default-on. Turning a
  * mechanism off silences its own counters and fires an explicit {@code TOGGLE.<name>_off} mark
  * (§5 discipline, {@code docs/internals/metrics-internals.md}), so post-hoc analysis never has to
@@ -170,8 +172,9 @@ public record EngineToggles(
     }
 
     /**
-     * The only supported configuration: every ablation toggle on, {@code readahead} off, {@code
-     * mass_aware_seed} and {@code rate_anchored_sensing} on, {@code tail_floor} at {@link
+     * The only supported configuration — bar the documented {@code rate_anchored_sensing=off} +
+     * {@code tail_floor=current} rollback — every ablation toggle on, {@code readahead} off,
+     * {@code mass_aware_seed} and {@code rate_anchored_sensing} on, {@code tail_floor} at {@link
      * TailFloorMode#REACH_FLOORED}.
      *
      * <p>The sensing/tail-floor pair became the default in 0.2.0. Both had shipped opt-in so a

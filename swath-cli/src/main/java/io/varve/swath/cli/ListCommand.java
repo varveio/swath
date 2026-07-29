@@ -1855,8 +1855,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         + "structure_probes={} far_ahead={} alphabet_pivots={} reflect={} confetti_feedback={} "
                         + "reflect_lift={} fanout_tiling={} mass_aware_seed={} readahead={} "
                         + "rate_anchored_sensing={} tail_floor={} "
-                        + "(EXPERIMENTAL/DIAGNOSTIC ablation surface — measurement only, not a supported "
-                        + "configuration)",
+                        + "(non-default engine configuration — the rate_anchored_sensing/tail_floor pair is a "
+                        + "documented, supported rollback; every other toggle is an EXPERIMENTAL/DIAGNOSTIC "
+                        + "ablation surface, measurement only)",
                 engine.toggles.ownerSplit(), engine.toggles.densityEwma(), engine.toggles.radixBands(),
                 engine.toggles.structureProbes(), engine.toggles.farAhead(), engine.toggles.alphabetPivots(),
                 engine.toggles.reflect(), engine.toggles.confettiFeedback(), engine.toggles.reflectLift(),
