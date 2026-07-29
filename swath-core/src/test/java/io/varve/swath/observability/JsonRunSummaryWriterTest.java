@@ -19,7 +19,6 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.engine.EngineToggles;
-import io.varve.swath.engine.TailFloorMode;
 import io.varve.swath.error.ThrottleType;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -344,7 +343,7 @@ final class JsonRunSummaryWriterTest {
         }
         assertThat(engineFlags.get(EngineToggles.TAIL_FLOOR_NAME).asText())
                 .as("the one value-taking toggle renders as its mode code, not a boolean")
-                .isEqualTo(TailFloorMode.CURRENT.code());
+                .isEqualTo(EngineToggles.DEFAULT.tailFloor().code());
     }
 
     /**

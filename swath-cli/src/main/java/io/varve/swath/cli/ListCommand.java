@@ -1840,8 +1840,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * {@code SeedStep} constructors), so an engine-level test can observe them without going through
      * the CLI, and a resumed run (which never re-constructs {@code SeedStep}) still gets the ones
      * that apply to it. Covers all fourteen fields: the ten {@link io.varve.swath.engine.EngineToggles#NAMES}
-     * ablation toggles plus the four new-mechanism toggles outside that list ({@code readahead} and
-     * {@code rate_anchored_sensing}, opt-in; {@code mass_aware_seed}, opt-out; {@code tail_floor},
+     * ablation toggles plus the four new-mechanism toggles outside that list ({@code readahead},
+     * opt-in; {@code mass_aware_seed} and {@code rate_anchored_sensing}, opt-out; {@code tail_floor},
      * value-taking, printed as its mode code) — {@link
      * io.varve.swath.engine.EngineToggles#isDefault()} fires this line on ANY of the fourteen
      * deviating, so the printed fields must match, not just the ten ablation ones. Emitted under this facade's own logger identity ({@code ListCommand}) so the

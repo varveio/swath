@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.AlphabetDigest;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.TailFloorMode;
 import io.varve.swath.engine.WorkerState;
 import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.ConfettiObservation;
@@ -112,7 +113,10 @@ class SensingVariantParityTest {
      */
     @Test
     void theCurrentArmDecidesExactlyAsAnUnsteeredEngineChainDoes() {
-        OwnerSplitPolicy unsteered = new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, null);
+        // Same toggles on both sides — the comparison is sensor-vs-no-sensor, so the floor mode has
+        // to be held identical or the test would be measuring the 0.2.0 default flip instead.
+        OwnerSplitPolicy unsteered = new OwnerSplitGovernor(
+                EngineToggles.DEFAULT.withTailFloor(TailFloorMode.CURRENT), WORKERS, PAGE, null);
         OwnerSplitPolicy current = governor(SensingVariant.CURRENT);
         for (OwnerSplitView view : ownerSplitViews()) {
             assertSameDecision(unsteered.decide(view), current.decide(view), view);
@@ -182,9 +186,22 @@ class SensingVariantParityTest {
                         SimExecutor.THIEF_ROUTE_ESTIMATOR);
     }
 
-    /** The engine's governor with {@code arm}'s sensor installed through its seam. */
+    /**
+     * The engine's governor with {@code arm}'s sensor installed through its seam, reading the
+     * child-tail floor at {@code tail_floor=current}.
+     *
+     * <p>Pinned to the pre-0.2.0 floor deliberately. Both tests above are about what a SENSING arm
+     * exposes as it drives the gate chain, and they use the legacy floor's structural zero
+     * ({@code min(1, densityRatio) <= f} ⇒ zero reachable tail however large the estimate) as the
+     * observable. The 0.2.0 default, {@code reach_floored}, exists precisely to eliminate that
+     * structural zero — so leaving these on the default would delete the very branch they assert
+     * and turn both tests into tautologies. The floor's own arms are covered by
+     * {@code OwnerSplitTailFloorModeTest} and {@code OwnerSplitGovernorTest}; this file holds the
+     * sensor comparison steady by holding the floor fixed.
+     */
     private static OwnerSplitPolicy governor(SensingVariant arm) {
-        return new OwnerSplitGovernor(EngineToggles.DEFAULT, WORKERS, PAGE, arm.estimator(PAGE));
+        return new OwnerSplitGovernor(
+                EngineToggles.DEFAULT.withTailFloor(TailFloorMode.CURRENT), WORKERS, PAGE, arm.estimator(PAGE));
     }
 
     /** The engine's thief with {@code arm}'s sensor installed through its seam. */

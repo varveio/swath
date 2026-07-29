@@ -195,33 +195,38 @@ final class EngineTogglesParseTest {
         assertThat(toggles.readahead()).isTrue();
     }
 
-    // ---- rate_anchored_sensing: opt-in, default OFF, excluded from disabledNames() ---------------
+    // ---- rate_anchored_sensing: opt-OUT since 0.2.0, default ON, excluded from disabledNames() ---
 
     @Test
-    void rateAnchoredSensingDefaultsOffAndIsExcludedFromNames() throws InvalidArgsException {
-        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isFalse();
-        // Like readahead, an OPT-IN new mechanism rather than one of the ten ablation toggles:
-        // separately accepted, deliberately NOT in NAMES (which drives disabledNames()'s
-        // ablated-mechanism set) — nothing is turned OFF by leaving the shipped sensor installed.
+    void rateAnchoredSensingDefaultsOnAndIsExcludedFromNames() throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isTrue();
+        // Like mass_aware_seed, an opt-OUT new mechanism rather than one of the ten ablation
+        // toggles: separately accepted, deliberately NOT in NAMES (which drives disabledNames()'s
+        // ablated-mechanism set) — turning the promoted sensor off swaps a sensor, it does not
+        // ablate a mechanism, so it must not show up as an ablation.
         assertThat(EngineToggles.NAMES).doesNotContain(EngineToggles.RATE_ANCHORED_SENSING_NAME);
         assertThat(EngineToggles.parse(null, false).disabledNames()).isEmpty();
     }
 
     @Test
-    void rateAnchoredSensingOnParsesAndIsNotDefault() throws InvalidArgsException {
+    void rateAnchoredSensingOnExplicitlyIsTheDefaultConfiguration() throws InvalidArgsException {
         EngineToggles toggles = EngineToggles.parse(List.of("rate_anchored_sensing=on"), false);
         assertThat(toggles.rateAnchoredSensing()).isTrue();
-        assertThat(toggles.isDefault()).isFalse();
-        assertThat(toggles.disabledNames()).isEmpty();
+        assertThat(toggles).as("naming the default arm is identical to not naming it")
+                .isEqualTo(EngineToggles.DEFAULT);
+        assertThat(toggles.isDefault()).isTrue();
         assertThat(toggles.readahead()).as("and it disturbs no other opt-in mechanism").isFalse();
     }
 
     @Test
-    void rateAnchoredSensingOffExplicitlyParsesAndStaysExcludedFromDisabledNames() throws InvalidArgsException {
+    void rateAnchoredSensingOffParsesAsTheRollbackArmAndStaysExcludedFromDisabledNames()
+            throws InvalidArgsException {
         EngineToggles toggles = EngineToggles.parse(List.of("rate_anchored_sensing=off"), false);
         assertThat(toggles.rateAnchoredSensing()).isFalse();
-        assertThat(toggles).isEqualTo(EngineToggles.DEFAULT);
-        assertThat(toggles.disabledNames()).isEmpty();
+        assertThat(toggles.isDefault()).as("since 0.2.0 the OFF arm is the deviation").isFalse();
+        assertThat(toggles.disabledNames())
+                .as("swapping the sensor is not an ablation, so it stays out of disabledNames()")
+                .isEmpty();
     }
 
     @Test
@@ -263,36 +268,59 @@ final class EngineTogglesParseTest {
                 .hasMessageContaining(EngineToggles.RATE_ANCHORED_SENSING_NAME);
     }
 
-    // ---- tail_floor: value-taking (not on|off), default `current`, excluded from disabledNames() --
+    // ---- tail_floor: value-taking (not on|off), default `reach_floored` since 0.2.0 -------------
 
     @Test
-    void tailFloorDefaultsToTheShippedModeAndIsExcludedFromNames() throws InvalidArgsException {
-        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
-        // The only value-taking toggle: like the two opt-ins it turns nothing OFF, so it is
-        // deliberately outside NAMES (which drives disabledNames()'s ablated-mechanism set).
+    void tailFloorDefaultsToThePromotedCureAndIsExcludedFromNames() throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.REACH_FLOORED);
+        // The only value-taking toggle: like the opt-in/opt-out mechanisms it turns nothing OFF, so
+        // it is deliberately outside NAMES (which drives disabledNames()'s ablated-mechanism set).
         assertThat(EngineToggles.NAMES).doesNotContain(EngineToggles.TAIL_FLOOR_NAME);
         assertThat(EngineToggles.parse(null, false).disabledNames()).isEmpty();
     }
 
     @Test
-    void tailFloorCurrentExplicitlyIsTheDefaultConfiguration() throws InvalidArgsException {
-        EngineToggles toggles = EngineToggles.parse(List.of("tail_floor=current"), false);
-        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
-        assertThat(toggles).as("naming the shipped mode is bit-identical to not naming it")
+    void tailFloorReachFlooredExplicitlyIsTheDefaultConfiguration() throws InvalidArgsException {
+        EngineToggles toggles = EngineToggles.parse(List.of("tail_floor=reach_floored"), false);
+        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.REACH_FLOORED);
+        assertThat(toggles).as("naming the default mode is bit-identical to not naming it")
                 .isEqualTo(EngineToggles.DEFAULT);
         assertThat(toggles.isDefault()).isTrue();
     }
 
     @Test
-    void tailFloorArmsParseAndAreNotDefault() throws InvalidArgsException {
-        for (TailFloorMode arm : new TailFloorMode[] {TailFloorMode.EST_DIRECT, TailFloorMode.REACH_FLOORED}) {
+    void tailFloorNonDefaultArmsParseAndAreNotDefault() throws InvalidArgsException {
+        for (TailFloorMode arm : new TailFloorMode[] {TailFloorMode.EST_DIRECT, TailFloorMode.CURRENT}) {
             EngineToggles toggles = EngineToggles.parse(List.of("tail_floor=" + arm.code()), false);
             assertThat(toggles.tailFloor()).isEqualTo(arm);
             assertThat(toggles.isDefault()).isFalse();
             assertThat(toggles.disabledNames()).isEmpty();
             assertThat(toggles.rateAnchoredSensing())
-                    .as("%s disturbs no other mechanism -- the race wants the factorial", arm).isFalse();
+                    .as("%s disturbs no other mechanism -- the arms stay independently selectable", arm)
+                    .isTrue();
         }
+    }
+
+    /**
+     * The 0.2.0 default flip promoted the sensing/tail-floor pair together. Pin both halves in one
+     * place, and pin the documented rollback — {@code docs/usage.md} and {@code
+     * docs/performance.md} both promise that this exact pair of toggles restores pre-0.2.0 engine
+     * behaviour, so a future default change cannot silently break that promise.
+     */
+    @Test
+    void theZeroTwoZeroDefaultIsTheCurePairAndTheDocumentedRollbackRestoresThePreFlipArms()
+            throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isTrue();
+        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.REACH_FLOORED);
+
+        EngineToggles rolledBack = EngineToggles.parse(
+                List.of("rate_anchored_sensing=off", "tail_floor=current"), false);
+        assertThat(rolledBack.rateAnchoredSensing()).isFalse();
+        assertThat(rolledBack.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+        assertThat(rolledBack.isDefault()).isFalse();
+        assertThat(rolledBack.disabledNames())
+                .as("the rollback swaps two mechanisms' arms; it ablates nothing")
+                .isEmpty();
     }
 
     @Test

@@ -107,17 +107,41 @@ final class TailFloorWiringTest {
         }
     }
 
+    /**
+     * Since the 0.2.0 default flip the DEFAULT is {@code reach_floored}, so the default run is an
+     * arm and marks itself — post-hoc analysis reads which floor arithmetic ran rather than
+     * assuming it from the version.
+     */
     @Test
     @Timeout(60)
-    void theDefaultRunsTheShippedFloorAndIsSilentOnEveryTailFloorCounter(@TempDir Path dir) throws Exception {
+    void theDefaultRunsThePromotedCureAndMarksItsArm(@TempDir Path dir) throws Exception {
         List<byte[]> keyspace = Keyspaces.exactly(2000);
-        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+        assertThat(EngineToggles.DEFAULT.tailFloor()).isEqualTo(TailFloorMode.REACH_FLOORED);
 
-        ScanResult result = runBoundedRoot(dir, "tail-floor-current", keyspace, EngineToggles.DEFAULT);
+        ScanResult result = runBoundedRoot(dir, "tail-floor-default", keyspace, EngineToggles.DEFAULT);
+        assertExactlyOnce(result.emitted(), keyspace);
+
+        assertThat(result.stealReasons().getOrDefault("TOGGLE.tail_floor_reach_floored_on", 0L))
+                .as("the default arm marks itself exactly once").isEqualTo(1L);
+    }
+
+    /**
+     * The documented rollback ({@code tail_floor=current}) is the pre-0.2.0 arithmetic: it is not an
+     * arm, so it marks nothing and computes no second verdict. This is the assertion that used to
+     * cover the DEFAULT, moved onto the arm that now carries the legacy behaviour.
+     */
+    @Test
+    @Timeout(60)
+    void theRollbackArmRunsTheLegacyFloorAndIsSilentOnEveryTailFloorCounter(@TempDir Path dir)
+            throws Exception {
+        List<byte[]> keyspace = Keyspaces.exactly(2000);
+        EngineToggles legacy = EngineToggles.DEFAULT.withTailFloor(TailFloorMode.CURRENT);
+
+        ScanResult result = runBoundedRoot(dir, "tail-floor-current", keyspace, legacy);
         assertExactlyOnce(result.emitted(), keyspace);
 
         assertThat(result.stealReasons().keySet().stream().filter(k -> k.startsWith("TOGGLE.tail_floor")))
-                .as("the shipped mode is not an arm and marks nothing").isEmpty();
+                .as("the legacy mode is not an arm and marks nothing").isEmpty();
         assertThat(sumCategory(result.stealReasons(), "TAIL_FLOOR"))
                 .as("and it never computes a second verdict to compare against").isZero();
     }

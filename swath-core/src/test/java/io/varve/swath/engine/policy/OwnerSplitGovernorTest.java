@@ -58,6 +58,28 @@ class OwnerSplitGovernorTest {
     }
 
     /**
+     * A governor pinned to the pre-0.2.0 child-tail floor ({@code tail_floor=current}).
+     *
+     * <p>Two distinct groups of tests need it, and neither is "a test that broke when the default
+     * flipped". First, the tests of the legacy floor arithmetic itself: {@code current} still ships
+     * as the documented rollback arm, so its refusal semantics must stay pinned somewhere.
+     *
+     * <p>Second — and less obvious — the gate-ordering tests use the legacy floor's refusal as a
+     * <em>downstream sentinel</em>: "this decision reached {@code FLOOR_REFLECTED_BLOCKED}, which
+     * proves it passed through the gate actually under test". Under the 0.2.0 default that next
+     * gate admits, so the sentinel dissolves into a {@code Carve} and the test stops asserting
+     * anything about the gate it was written for. Pinning them here keeps the sentinel intact.
+     * Re-pointing them at the new default would have made them pass while testing less.
+     */
+    private static OwnerSplitGovernor legacyFloorGovernor(int workerCount) {
+        return governor(EngineToggles.DEFAULT.withTailFloor(TailFloorMode.CURRENT), workerCount);
+    }
+
+    private static OwnerSplitGovernor legacyFloorGovernor() {
+        return legacyFloorGovernor(WORKER_COUNT);
+    }
+
+    /**
      * A single-byte-key view: {@code lo="a"}, {@code hi="z"}, {@code cursorTo="n"} — chosen so
      * {@code est = keysEmitted * (12/13)} exactly (in double precision), letting {@link
      * #remainingEstFloorBlocksAtExactlyTheThreshold} straddle the {@code 4*maxKeys=400} floor with
@@ -210,11 +232,12 @@ class OwnerSplitGovernorTest {
     @Test
     void demandGateClearsOneBelowWorkerCount() {
         // outstanding = workerCount - 1: below the gate. Floor-reflected-blocked immediately after
-        // (densityRatio below f) proves it passed through.
+        // (densityRatio below f) proves it passed through -- see legacyFloorGovernor() on why the
+        // sentinel needs the pre-0.2.0 floor to stay a sentinel.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, WORKER_COUNT - 1,
                 0.5, 0.0);
 
-        OwnerSplitDecision decision = governor().decide(v);
+        OwnerSplitDecision decision = legacyFloorGovernor().decide(v);
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED);
@@ -224,7 +247,7 @@ class OwnerSplitGovernorTest {
     void demandGateNeverEngagesWithASingleWorker() {
         // workerCount == 1: "buys zero parallelism" is moot (no thief exists), so the gate is
         // skipped even at a saturated outstanding count.
-        OwnerSplitGovernor solo = governor(EngineToggles.DEFAULT, 1);
+        OwnerSplitGovernor solo = legacyFloorGovernor(1);
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 999L, 0.5, 0.0);
 
         OwnerSplitDecision decision = solo.decide(v);
@@ -239,12 +262,36 @@ class OwnerSplitGovernorTest {
     // Observed-mass child-tail floor (StealMath.childTailBelowObservedMassFloor).
     // -------------------------------------------------------------------------
 
+    /**
+     * The other side of {@link #observedMassFloorBlocksAThinningTail()}: on the identical view, the
+     * 0.2.0 default carves where the legacy floor refused. Without this the suite would pin only
+     * the rollback arm's behaviour and say nothing about what ships.
+     */
+    @Test
+    void theDefaultFloorCarvesTheThinningTailTheLegacyFloorBlocks() {
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0);
+
+        assertThat(legacyFloorGovernor().decide(v))
+                .as("precondition: the rollback arm still refuses this shape")
+                .isInstanceOf(Skip.class);
+
+        OwnerSplitDecision decision = governor().decide(v);
+
+        assertThat(decision).as("the shipped 0.2.0 floor admits it").isInstanceOf(Carve.class);
+        assertThat(decision.engagements())
+                .as("and the run records that the mode flipped this verdict")
+                .contains(new Engagement("TAIL_FLOOR", "gate_admit_current_blocks"));
+    }
+
     @Test
     void observedMassFloorBlocksAThinningTail() {
         // densityRatio (0.0) < f (0.5): reach clamps to 0, realized child mass collapses to 0.
+        // Pinned to the pre-0.2.0 floor: this IS the legacy arithmetic's refusal, and it still
+        // ships as the documented rollback arm, so it stays pinned. The 0.2.0 default's behaviour
+        // on the same shape is covered by tailFloorArmsCarveTheWideFlatTailTheLegacyFloorRefuses.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0);
 
-        OwnerSplitDecision decision = governor().decide(v);
+        OwnerSplitDecision decision = legacyFloorGovernor().decide(v);
 
         assertThat(decision).isInstanceOf(Skip.class);
         Skip skip = (Skip) decision;
@@ -273,20 +320,24 @@ class OwnerSplitGovernorTest {
 
     /**
      * The measured `nara` input profile, mirrored at this test's scale: an honest estimate (~92,307
-     * keys here, 322k-1.65M live) over a wide-flat trailing density (0.0003) at f=0.5. The shipped
-     * floor multiplies the estimate away and refuses; both arms carve. This is the governor-level
-     * half of {@code OwnerSplitTailFloorModeTest}'s regression pin -- it fails against the pre-cure
-     * engine because the toggle's admitting path did not exist.
+     * keys here, 322k-1.65M live) over a wide-flat trailing density (0.0003) at f=0.5. The
+     * pre-0.2.0 floor multiplies the estimate away and refuses; both cure arms carve. This is the
+     * governor-level half of {@code OwnerSplitTailFloorModeTest}'s regression pin -- it fails
+     * against the pre-cure engine because the toggle's admitting path did not exist.
+     *
+     * <p>Renamed at the 0.2.0 default flip: {@code reach_floored} is now the shipped floor, so
+     * "the shipped floor refuses" would name the opposite of what it once did. The legacy arm is
+     * still asserted here because it is the documented rollback.
      */
     @Test
-    void tailFloorArmsCarveTheWideFlatTailTheShippedFloorRefuses() {
+    void tailFloorArmsCarveTheWideFlatTailTheLegacyFloorRefuses() {
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0003);
 
-        OwnerSplitDecision current = governor().decide(v);
+        OwnerSplitDecision current = legacyFloorGovernor().decide(v);
         assertThat(current).isInstanceOf(Skip.class);
         assertThat(((Skip) current).reason()).isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED);
         assertThat(current.engagements())
-                .as("the default mode never computes a second verdict, so it never records one")
+                .as("the legacy mode never computes a second verdict, so it never records one")
                 .containsExactly(new Engagement("OWNER_SPLIT", "floor_reflected_blocked"));
 
         for (TailFloorMode arm : new TailFloorMode[] {TailFloorMode.EST_DIRECT, TailFloorMode.REACH_FLOORED}) {
@@ -313,9 +364,9 @@ class OwnerSplitGovernorTest {
                 OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 0.0003,
                 coldDigest(b("d/00"), b("d/09")), NO_CONFETTI_SIGNAL);
 
-        OwnerSplitDecision current = governor().decide(v);
+        OwnerSplitDecision current = legacyFloorGovernor().decide(v);
         assertThat(((Skip) current).reason())
-                .as("under the shipped floor the chain never gets past the gate on this shape")
+                .as("under the pre-0.2.0 floor the chain never gets past the gate on this shape")
                 .isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED);
 
         OwnerSplitDecision decision = governor(
@@ -577,7 +628,9 @@ class OwnerSplitGovernorTest {
         // how large est is, so its report has to carry both of those inputs, not just the reason.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 3, 0.5, 0.0);
 
-        OwnerSplitGateInputs inputs = governor().decide(v).gateInputs();
+        // Pinned to the pre-0.2.0 floor: this asserts that a BLOCKED gate reports its readings, so
+        // it needs a gate that blocks. Under the 0.2.0 default this shape carves.
+        OwnerSplitGateInputs inputs = legacyFloorGovernor().decide(v).gateInputs();
 
         assertThat(inputs.reason()).isEqualTo(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code());
         assertThat(inputs.est()).isEqualTo(StealMath.estRemaining(v.cursorTo(), v.lo(), v.hi(), v.keysEmitted()));

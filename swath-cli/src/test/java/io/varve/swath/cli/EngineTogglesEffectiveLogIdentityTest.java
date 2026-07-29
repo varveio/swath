@@ -39,8 +39,8 @@ class EngineTogglesEffectiveLogIdentityTest {
     void engineTogglesEffectiveEmitsUnderTheListCommandLoggerWithUnchangedMessageAndArgs() throws Exception {
         ListCommand cmd = new ListCommand();
         // owner_split=off is the canonical non-default toggle; everything else stays at its default
-        // (readahead and rate_anchored_sensing default off, mass_aware_seed on) so this exercises the
-        // non-silent branch.
+        // (readahead off; mass_aware_seed and rate_anchored_sensing on; tail_floor reach_floored)
+        // so this exercises the non-silent branch.
         cmd.engine.toggles = EngineToggles.parse(List.of("owner_split=off"), false);
         assertThat(cmd.engine.toggles.isDefault()).isFalse();
 
@@ -50,7 +50,7 @@ class EngineTogglesEffectiveLogIdentityTest {
         assertThat(event.getLevel()).isEqualTo(Level.INFO);
         assertThat(event.getMessage()).isEqualTo(EXPECTED_TEMPLATE);
         assertThat(event.getArgumentArray()).containsExactly(
-                false, true, true, true, true, true, true, true, true, true, true, false, false, "current");
+                false, true, true, true, true, true, true, true, true, true, true, false, true, "reach_floored");
     }
 
     /**
@@ -61,26 +61,32 @@ class EngineTogglesEffectiveLogIdentityTest {
      * field is exactly what a template-only assertion cannot see.
      */
     @Test
-    void aRunDeviatingOnlyInRateAnchoredSensingPrintsThatToggleAsEnabled() throws Exception {
+    void aRunDeviatingOnlyInRateAnchoredSensingPrintsThatToggleAsDisabled() throws Exception {
         ListCommand cmd = new ListCommand();
-        cmd.engine.toggles = EngineToggles.parse(List.of("rate_anchored_sensing=on"), false);
+        // Since the 0.2.0 default flip the sensor is ON by default, so the deviating run is the
+        // OFF one — i.e. the documented rollback arm. The property under test is unchanged: a run
+        // deviating in exactly one component must print that component's real state.
+        cmd.engine.toggles = EngineToggles.parse(List.of("rate_anchored_sensing=off"), false);
         assertThat(cmd.engine.toggles.isDefault()).isFalse();
 
-        // The line renders each toggle's effective boolean, so an ON opt-in reads `=true`; a toggle
-        // missing from the format string prints nothing at all, which is what this catches.
+        // The line renders each toggle's effective boolean, so an opted-OUT mechanism reads
+        // `=false`; a toggle missing from the format string prints nothing at all, which is what
+        // this catches.
         assertThat(captureEngineTogglesLine(cmd).getFormattedMessage())
-                .contains("rate_anchored_sensing=true");
+                .contains("rate_anchored_sensing=false");
     }
 
     /** The same promise for the one value-taking toggle: it prints its selected MODE, not a boolean. */
     @Test
     void aRunDeviatingOnlyInTailFloorPrintsTheSelectedMode() throws Exception {
         ListCommand cmd = new ListCommand();
-        cmd.engine.toggles = EngineToggles.parse(List.of("tail_floor=reach_floored"), false);
+        // `current` is the deviating mode since 0.2.0 (it is the rollback arm); `reach_floored` is
+        // now the default and would not fire the line at all.
+        cmd.engine.toggles = EngineToggles.parse(List.of("tail_floor=current"), false);
         assertThat(cmd.engine.toggles.isDefault()).isFalse();
 
         assertThat(captureEngineTogglesLine(cmd).getFormattedMessage())
-                .contains("tail_floor=reach_floored");
+                .contains("tail_floor=current");
     }
 
     /** Run {@code cmd}'s startup echo and return the {@code engine_toggles_effective} event it emitted. */

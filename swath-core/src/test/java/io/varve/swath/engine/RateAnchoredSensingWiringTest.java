@@ -106,20 +106,44 @@ final class RateAnchoredSensingWiringTest {
                 .isGreaterThan(0L);
     }
 
+    /**
+     * Since the 0.2.0 default flip the promoted sensor IS the default, so the default run installs
+     * it and marks itself — post-hoc analysis reads which sensor ran rather than assuming it.
+     */
     @Test
     @Timeout(60)
-    void theDefaultRunsTheShippedSensorAndIsSilentOnBothCounters(@TempDir Path dir) throws Exception {
+    void theDefaultInstallsThePromotedSensorAndMarksItsArm(@TempDir Path dir) throws Exception {
         List<byte[]> keyspace = Keyspaces.exactly(2000);
-        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isFalse();
+        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isTrue();
         assertThat(EngineToggles.DEFAULT.remainingWorkEstimator(20))
-                .isSameAs(RemainingWorkEstimator.WINDOW);
+                .as("the default no longer resolves to the pre-0.2.0 window reading")
+                .isNotSameAs(RemainingWorkEstimator.WINDOW);
 
-        ScanResult result = runBoundedRoot(dir, "sensing-off", keyspace, EngineToggles.DEFAULT);
+        ScanResult result = runBoundedRoot(dir, "sensing-default", keyspace, EngineToggles.DEFAULT);
+        assertExactlyOnce(result.emitted(), keyspace);
+
+        assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L))
+                .as("the default arm marks itself exactly once").isEqualTo(1L);
+    }
+
+    /**
+     * The documented rollback ({@code rate_anchored_sensing=off}) reinstates the pre-0.2.0 window
+     * reading, which is not an arm and so adds no counter. This is the assertion that used to cover
+     * the DEFAULT, moved onto the arm that now carries the legacy behaviour.
+     */
+    @Test
+    @Timeout(60)
+    void theRollbackArmRunsTheLegacySensorAndIsSilentOnBothCounters(@TempDir Path dir) throws Exception {
+        List<byte[]> keyspace = Keyspaces.exactly(2000);
+        EngineToggles legacy = EngineToggles.DEFAULT.withRateAnchoredSensing(false);
+        assertThat(legacy.remainingWorkEstimator(20)).isSameAs(RemainingWorkEstimator.WINDOW);
+
+        ScanResult result = runBoundedRoot(dir, "sensing-off", keyspace, legacy);
         assertExactlyOnce(result.emitted(), keyspace);
 
         assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L)).isZero();
         assertThat(sumCategory(result.stealReasons(), "SENSING_OWNER")
                 + sumCategory(result.stealReasons(), "SENSING_STEAL"))
-                .as("the shipped reading adds no counter to a run that has always existed").isZero();
+                .as("the legacy reading adds no counter to a run that has always existed").isZero();
     }
 }
