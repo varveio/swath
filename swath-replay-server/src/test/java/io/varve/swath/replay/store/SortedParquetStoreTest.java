@@ -225,16 +225,66 @@ class SortedParquetStoreTest {
         }
     }
 
+    /**
+     * The no-prefix root rollup's real shape — {@code toExclusive == null} and {@code prefix == null}
+     * (a genuinely open upper bound, {@link UpperBound.Open}) — must now be answered natively rather
+     * than declined (public issue #77: an open upper bound used to fall through to the pager's
+     * O(directories) range walk even on the sorted store). The only shape this store still declines is
+     * a delimiter it does not know how to skip-scan.
+     */
     @Test
-    void delimitedRollupDeclinesOutsideItsGatedShape(@TempDir Path dir) throws IOException {
+    void delimitedRollupAnswersAnOpenUpperBoundAndDeclinesOnlyNonSlashDelimiters(@TempDir Path dir)
+            throws IOException {
+        List<String> keys = List.of("a/1.txt", "b/1.txt");
         Fixture fixture = writeSorted(dir, manySmallGroups(), "a/1.txt", "b/1.txt");
 
         try (SortedParquetStore store = store(fixture)) {
+            List<ListingStore.DelimitedEntry> rootRollup =
+                    store.delimitedRollup(null, true, null, null, slash(), 1000, Projection.KEYS_ONLY);
+            assertThat(rootRollup).isNotNull();
+            assertThat(entryStrings(rootRollup)).isEqualTo(expectedRollup(keys, "", null, true, 1000));
+
             ByteKey upper = upperOf("");
-            assertThat(store.delimitedRollup(null, true, null, new byte[0], slash(), 1000, Projection.KEYS_ONLY))
-                    .isNull();   // open (unbounded) upper bound
             assertThat(store.delimitedRollup(null, true, upper, new byte[0], new byte[] {'/', '/'}, 1000,
-                    Projection.KEYS_ONLY)).isNull();   // multi-byte delimiter
+                    Projection.KEYS_ONLY)).isNull();   // multi-byte delimiter still declines
+        }
+    }
+
+    /**
+     * The regression this whole fast path exists to fix (public issue #77): a root {@code delimiter=/}
+     * rollup over a wide-flat keyspace must cost O(prefixes emitted), never O(keys under them). A
+     * dense fixture of 50 prefixes x 500 keys forces many row groups per prefix (tiny {@code
+     * manySmallGroups} row groups), so a naive per-row scan would open on the order of the fixture's
+     * row-group count once per key; the skip-scan's zero-I/O whole-group shortcut instead resolves most
+     * of each prefix's span without opening a single row group. No wall-clock assertion: the row-group-open
+     * counter pins the cost directly.
+     */
+    @Test
+    void delimitedRollupCostIsBoundedByPrefixesNotKeys(@TempDir Path dir) throws IOException {
+        int prefixCount = 50;
+        int keysPerPrefix = 500;
+        List<String> keys = new ArrayList<>(prefixCount * keysPerPrefix);
+        for (int p = 0; p < prefixCount; p++) {
+            for (int i = 0; i < keysPerPrefix; i++) {
+                keys.add(String.format("prefix-%03d/obj-%04d", p, i));
+            }
+        }
+        Fixture fixture = writeSorted(dir, manySmallGroups(), keys);
+        assertThat(fixture.index).hasSizeGreaterThan(prefixCount);   // many more row groups than prefixes
+
+        ReplayMetrics metrics = new ReplayMetrics();
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 2)) {
+            List<ListingStore.DelimitedEntry> rollup =
+                    store.delimitedRollup(null, true, null, null, slash(), prefixCount + 10, Projection.KEYS_ONLY);
+            assertThat(rollup).hasSize(prefixCount);   // every prefix rolls up to exactly one CommonPrefix
+
+            double rowGroupOpens = metrics.registry()
+                    .find("swath.replay.delimiter.skipscan.row_group_opens").counter().count();
+            assertThat(rowGroupOpens)
+                    .as("row-group opens must scale with prefixes (%d), not with keys (%d)",
+                            prefixCount, keys.size())
+                    .isLessThan(prefixCount * 4.0)
+                    .isLessThan(keys.size() / 10.0);
         }
     }
 
@@ -262,7 +312,7 @@ class SortedParquetStoreTest {
      * non-empty prefix uses the real {@link ByteKeys#prefixUpper} carry; the empty (root) prefix has
      * no finite carry, so tests that want to exercise the skip-scan's root-level behaviour directly
      * (bypassing the pager, which declines an open bound and range-walks instead — see {@link
-     * #delimitedRollupDeclinesOutsideItsGatedShape}) use a sentinel past every key this file's fixtures
+     * #delimitedRollupAnswersAnOpenUpperBoundAndDeclinesOnlyNonSlashDelimiters}) use a sentinel past every key this file's fixtures
      * ever write.
      */
     private static ByteKey upperOf(String prefix) {

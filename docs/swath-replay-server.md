@@ -382,11 +382,19 @@ fixed ~31 ms store-query cost per hop that multiplied into seconds on a wide
 directory) and an interim one-query `DISTINCT` rollup (fast constant, but
 O(subtree) and blind to `max-keys`).
 
-The skip-scan is gated to the single-byte `/` delimiter and a finite upper
-bound; everything else declines to the pager's range walk. It must return
-byte-identical results to that walk — the sorted-vs-DuckDB differential suite
-enforces this, and the DuckDB oracle deliberately does not take the skip-scan
-so the range walk stays the reference.
+The skip-scan is gated to the single-byte `/` delimiter only; an open upper
+bound (a no-prefix root rollup, or a prefix whose `0xFF`-carry has no finite
+bound) is scanned to the end of the fixture, same as a plain range read.
+Root rollups are exactly the wide structure probes an engine's seed phase
+issues, and before the open-bound case was admitted (issue #77) they fell to
+the range walk's seek-per-prefix cost — 70 s on a fixture with ~1,000 dense
+date prefixes, against a ~3 s engine probe budget. Every other delimiter shape
+declines to the pager's range walk. The skip-scan must return byte-identical
+results to that walk — the sorted-vs-DuckDB differential suite enforces this,
+and the DuckDB oracle deliberately does not take the skip-scan so the range
+walk stays the reference. Which path actually served a delimited request is
+visible in `swath.replay.delimiter.path` and a debug log line, so a stalled
+probe is attributable to the server without a bisecting session.
 
 On startup in the **DuckDB** path (unsorted fixtures, or `--serving-mode duckdb`),
 the server materializes the swath Parquet fixture into a temporary DuckDB database.
@@ -554,6 +562,8 @@ documents the replay-server-specific set.
 | `swath.replay.index.entries` | distribution | Row-group index entries produced by one derive pass. |
 | `swath.replay.serving.fallback{reason}` | counter | Auto serving-mode declined sorted serving. Reasons: `no_stamp` (a resolved file carries no recognized sortedness stamp), `unsupported_mode` (a resolved file is stamped a `versions` file — unsupported for serving in v1), `unknown_format_version` (a resolved file's stamp carries a `format_version` this reader doesn't recognize), `incomplete_multifile` (the resolved file set's `file_index`/`file_final` stamps don't prove completeness — e.g. a crash left only a prefix of a multi-file publish on disk), `mixed_row_types` (a row group's `row_type` footer stats do not prove every row is `OBJECT` — e.g. a legacy delimiter'd capture re-sorted by `sort-fixture`, which stamps `mode=objects` unconditionally without checking `row_type`), `sanity_failed` (the derived row-group first-key array was not strictly ascending — a corrupt/mis-stamped/mis-ordered fixture). Every resolved file is checked for the first four reasons, not just the first one. |
 | `swath.replay.serving.refused{reason}` | counter | A request the sorted path had to refuse outright, tagged with the typed reason from `io.varve.swath.sort.RowGroupOrderException`: `row_group_disorder` (a row group's own rows are not in strictly ascending key order, seen by the `delimiter=/` skip-scan's key cursor as it steps over them). NOT a `serving.fallback` reason: eligibility already passed (it proves the ascent of row-group *first* keys only), the serving path was chosen at startup, and nothing can take the request over — it fails `500`. Bumped BEFORE the throw, so the exclusion survives into a sweep's metrics; a corpus sweep classifies a disordered capture from this counter, never from the error body. |
+| `swath.replay.delimiter.path{path}` | counter | Which implementation served one `delimiter=/` list request: `rollup` (the store's native skip-scan) or `walk` (the pager's seek-per-prefix range walk, i.e. the store declined). A wide structure probe landing on `walk` is the #77 cost profile — attribute a stalled probe here first. |
+| `swath.replay.delimiter.skipscan.row_group_opens` | counter | Row groups the skip-scan actually opened a key cursor on (the zero-I/O whole-group skip does not count). Pinned by a regression test to stay O(prefixes emitted), never O(keys under them). |
 | `swath.replay.page.read.latency` | timer | One store-level range read (`ListingStore#rows`), excluding connection-pool wait. Emitted by both stores. |
 | `swath.replay.serving.path{mode}` | counter | Per-`list`-request engagement signal for the resolved serving path (`sorted` or `duckdb`), fixed once at server startup. |
 

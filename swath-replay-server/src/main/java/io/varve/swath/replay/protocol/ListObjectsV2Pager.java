@@ -8,9 +8,12 @@ package io.varve.swath.replay.protocol;
 import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.replay.store.ListingStore;
 import io.varve.swath.replay.store.Projection;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Owns every S3 ListObjectsV2 protocol rule once, driving a range-only {@link ListingStore}:
@@ -26,6 +29,8 @@ import java.util.List;
  * {@code successor(P)} inclusive ({@link ByteKeys#successor}).
  */
 public final class ListObjectsV2Pager implements ListingFixture {
+
+    private static final Logger log = LoggerFactory.getLogger(ListObjectsV2Pager.class);
 
     private static final int DELIMITER_BATCH = 4096;
 
@@ -111,16 +116,25 @@ public final class ListObjectsV2Pager implements ListingFixture {
         Lower cur = lowerBound(prefix, boundary);
 
         // Fast path: let the store answer the whole rollup in one set-oriented pass instead of a seek
-        // per common prefix. Only when the prefix has a finite upper bound (the all-0xFF prefix's open
-        // bound falls back); a store that declines returns null and the range walk below runs as before.
-        if (upper instanceof UpperBound.Bounded(ByteKey upperKey)) {
-            List<ListingStore.DelimitedEntry> rollup = store.delimitedRollup(
-                    cur.key(), cur.inclusive(), upperKey, prefix, delimiter, maxKeys,
-                    Projection.of(request.fetchOwner()));
-            if (rollup != null) {
-                return buildDelimitedPage(request, rollup, maxKeys);
-            }
+        // per common prefix — including an open upper bound (no prefix, or a prefix whose 0xFF-carry
+        // has no finite bound): a store that can serve that natively (SortedParquetStore) does; one
+        // that can't, or that declines the delimiter shape, returns null and the range walk below runs
+        // as before.
+        ByteKey upperKey = switch (upper) {
+            case UpperBound.Bounded(ByteKey bounded) -> bounded;
+            case UpperBound.Open() -> null;
+        };
+        List<ListingStore.DelimitedEntry> rollup = store.delimitedRollup(
+                cur.key(), cur.inclusive(), upperKey, prefix, delimiter, maxKeys,
+                Projection.of(request.fetchOwner()));
+        if (rollup != null) {
+            metrics.recordDelimiterPath(ReplayMetrics.DELIMITER_PATH_ROLLUP);
+            log.debug("delimited list served by store rollup: prefix={} maxKeys={}", prefixForLog(prefix), maxKeys);
+            return buildDelimitedPage(request, rollup, maxKeys);
         }
+        metrics.recordDelimiterPath(ReplayMetrics.DELIMITER_PATH_WALK);
+        log.debug("delimited list served by range walk (store declined the rollup): prefix={} maxKeys={}",
+                prefixForLog(prefix), maxKeys);
 
         List<S3ResultEntry> entries = new ArrayList<>(maxKeys);
 
@@ -284,6 +298,11 @@ public final class ListObjectsV2Pager implements ListingFixture {
             }
         }
         return null;
+    }
+
+    /** Best-effort display form of a scan prefix for the delimiter-path debug log — never load-bearing. */
+    private static String prefixForLog(byte[] prefix) {
+        return prefix == null || prefix.length == 0 ? "<root>" : new String(prefix, StandardCharsets.UTF_8);
     }
 
     private static boolean matchesAt(byte[] key, byte[] delimiter, int offset) {

@@ -159,15 +159,15 @@ public final class SortedParquetStore implements ListingStore {
 
     /**
      * The native {@code delimiter=/} skip-scan (the {@link ListingStore#delimitedRollup} fast path).
-     * Only the single {@code /} (0x2F) delimiter and a finite {@code toExclusive} are handled; every
-     * other shape (multi-byte delimiter, the all-{@code 0xFF} prefix whose upper bound is open)
-     * declines and the pager walks ranges instead.
+     * Only the single {@code /} (0x2F) delimiter is handled; every other shape (multi-byte delimiter)
+     * declines and the pager walks ranges instead. {@code toExclusive} and {@code prefix} may both be
+     * {@code null} — an open upper bound (no prefix, or the all-{@code 0xFF} prefix whose 0xFF-carry
+     * has no finite bound) is scanned to the end of the fixture, same as {@link #rows}.
      */
     @Override
     public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                                 byte[] prefix, byte[] delimiter, int limit, Projection projection) {
-        if (toExclusive == null || prefix == null
-                || delimiter == null || delimiter.length != 1 || delimiter[0] != (byte) '/') {
+        if (delimiter == null || delimiter.length != 1 || delimiter[0] != (byte) '/') {
             return null;
         }
         var sample = metrics.startParquetQueryTimer();
@@ -241,7 +241,7 @@ public final class SortedParquetStore implements ListingStore {
             return List.of();
         }
         byte[] fromBytes = from == null ? null : from.toByteArray();
-        byte[] upper = toExclusive.toByteArray();
+        byte[] upper = toExclusive == null ? null : toExclusive.toByteArray();
         List<DelimitedEntry> out = new ArrayList<>();
 
         byte[] cursor = fromBytes;
@@ -257,7 +257,7 @@ public final class SortedParquetStore implements ListingStore {
                 int rg = SortedRouting.startRowGroup(index, cursor == null ? null : ByteKey.copyOf(cursor));
                 IndexEntry entry = index.get(rg);
                 byte[] groupFirstKey = entry.firstKey().toByteArray();
-                if (ByteKeys.compareUnsigned(groupFirstKey, upper) >= 0) {
+                if (upper != null && ByteKeys.compareUnsigned(groupFirstKey, upper) >= 0) {
                     break;   // this group starts at/past the upper bound: nothing more in range
                 }
 
@@ -309,6 +309,11 @@ public final class SortedParquetStore implements ListingStore {
                     keyCursor = reader.openKeyCursor(entry.rowGroup());
                     cachedBlockIndex = entry.rowGroup();
                     cachedRows = null;   // decoded lazily below, only if a bare object actually needs it
+                    // A row-group open the zero-I/O shortcut above didn't catch (the group straddles a
+                    // prefix boundary, or is the fixture's last group). Counted so a test can pin the
+                    // skip-scan's cost to O(prefixes emitted) rather than O(keys under the prefix) —
+                    // the very regression this rollup exists to avoid.
+                    metrics.recordDelimiterSkipScanRowGroupOpen();
                 }
                 keyCursor.advanceTo(cursor, inclusive);
                 if (!keyCursor.hasCurrent()) {
@@ -322,7 +327,7 @@ public final class SortedParquetStore implements ListingStore {
                     continue;
                 }
                 byte[] key = keyCursor.currentKey();
-                if (ByteKeys.compareUnsigned(key, upper) >= 0) {
+                if (upper != null && ByteKeys.compareUnsigned(key, upper) >= 0) {
                     break;   // past the scan's upper bound: nothing more in range
                 }
                 byte[] commonPrefix = commonPrefixAfter(key, prefix);
@@ -363,10 +368,12 @@ public final class SortedParquetStore implements ListingStore {
      * {@code key}'s rolled-up common prefix under {@code prefix} for the single {@code '/'} delimiter —
      * {@code prefix} plus everything up to and including the first {@code '/'} found strictly after it
      * — or {@code null} when {@code key} is a bare object directly under {@code prefix} (no {@code '/'}
-     * appears past the scan prefix).
+     * appears past the scan prefix). {@code prefix == null} (a root, no-prefix rollup) scans from the
+     * start of the key, same as the pager's own {@code commonPrefix} treats an absent prefix.
      */
     private static byte[] commonPrefixAfter(byte[] key, byte[] prefix) {
-        for (int i = prefix.length; i < key.length; i++) {
+        int start = prefix == null ? 0 : prefix.length;
+        for (int i = start; i < key.length; i++) {
             if (key[i] == '/') {
                 return Arrays.copyOf(key, i + 1);
             }
