@@ -185,7 +185,17 @@ final class CarveAdmissionRaceProtocol {
      * pairing is the yardstick, so an unpaired leg is not a reading.
      */
     static List<Verdict> verdicts(List<CorpusSweep.Row> rows, SensingVariant control) {
-        String controlArm = SensingRaceProtocol.label(control);
+        return verdicts(rows, SensingRaceProtocol.label(control));
+    }
+
+    /**
+     * {@link #verdicts(List, SensingVariant)}, for a round whose arms are not {@link SensingVariant}s at
+     * all — {@code CarveBrakeSweepProtocol}'s {@code carve_brake} modes, which are read against the same
+     * yardstick over the same {@link CorpusSweep.Row} shape but carry their arm label as the mode's own
+     * {@code --engine-toggle} code rather than a sensing variant's. The two overloads share every line
+     * of the pairing logic below; only how the control's label is obtained differs.
+     */
+    static List<Verdict> verdicts(List<CorpusSweep.Row> rows, String controlArm) {
         Map<String, Map<String, Map<Long, Double>>> durations = new TreeMap<>();
         for (CorpusSweep.Row row : rows) {
             durations.computeIfAbsent(row.fixture(), fixture -> new TreeMap<>())
