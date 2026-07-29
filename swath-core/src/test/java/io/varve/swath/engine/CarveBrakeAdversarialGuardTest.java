@@ -18,7 +18,6 @@ import io.varve.swath.engine.policy.Carve;
 import io.varve.swath.engine.policy.ConfettiObservation;
 import io.varve.swath.engine.policy.OwnerSplitDecision;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
-import io.varve.swath.engine.policy.OwnerSplitMutation;
 import io.varve.swath.engine.policy.OwnerSplitSkipReason;
 import io.varve.swath.engine.policy.OwnerSplitView;
 import io.varve.swath.engine.policy.Skip;
