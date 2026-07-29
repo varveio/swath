@@ -232,6 +232,10 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
+            "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",
+            "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=5}",
+            "GAUGE|swath.tail_occupancy.wall_share|{pct=10}",
+            "GAUGE|swath.tail_occupancy.wall_share|{pct=5}",
             "GAUGE|swath.workers.active|{}",
             "TIMER|swath.api.latency|{op=listObjectsV2}",
             "TIMER|swath.checkpoint.commit.latency|{}",
@@ -366,7 +370,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 187;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 191;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code
