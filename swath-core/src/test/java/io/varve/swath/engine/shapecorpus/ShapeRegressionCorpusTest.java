@@ -422,9 +422,10 @@ final class ShapeRegressionCorpusTest {
         MockPageFetcher seedFetcher = MockPageFetcher.builder().keys(keyspace).build();
         List<NodeSpec> specs = SeedSteps.of(seedFetcher, NO_PREFIX, workers).seedSpecs(1L, SeedMode.SHALLOW);
         assertThat(specs.size())
-                .as("key=value 1:1 explosion tiles, W-capped")
+                .as("key=value 1:1 explosion tiles, W-capped (+1 for the seed's scope-closing "
+                        + "sentinel, whose final tile is empty by construction)")
                 .isGreaterThan(1)
-                .isLessThanOrEqualTo(workers + 2);
+                .isLessThanOrEqualTo(workers + 3);
 
         Run run = scan(dir, "kv-1to1", keyspace, workers, 1000, Duration.ZERO, EngineToggles.DEFAULT);
         assertExactlyOnce(run.emitted, keyspace);
