@@ -321,7 +321,7 @@ class SensingVariantParityTest {
                                                     0L, outstanding, density,
                                                     shape.observedDensityRatio(), shape.alphabet(),
                                                     new ConfettiObservation(confetti[0], confetti[1],
-                                                            confetti[2])));
+                                                            confetti[2], Double.NaN, 0)));
                                         }
                                     }
                                 }

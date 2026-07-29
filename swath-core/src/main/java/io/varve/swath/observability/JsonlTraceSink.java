@@ -104,7 +104,7 @@ final class JsonlTraceSink implements TraceSink {
     @Override
     public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
             long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
-            double densityRatio, long keysEmitted) {
+            double densityRatio, long keysEmitted, Double carveBrakeMassAvg) {
         ObjectNode e = newEvent("owner_split_decision", workerId, nodeId);
         e.put("reason", reason);
         putNum(e, "est", est);
@@ -114,6 +114,7 @@ final class JsonlTraceSink implements TraceSink {
         putNum(e, "far_ahead_fraction", farAheadFraction);
         putNum(e, "density_ratio", densityRatio);
         e.put("keys_emitted", keysEmitted);
+        putOptionalNum(e, "carve_brake_mass_avg", carveBrakeMassAvg);
         writeEvent(e, false);
     }
 
@@ -201,6 +202,20 @@ final class JsonlTraceSink implements TraceSink {
         } else {
             e.putNull(field);
         }
+    }
+
+    /**
+     * A THIRD "missing value" convention, for a field a run may never read at all (the carve
+     * brake's {@code carveBrakeMassAvg}): {@code null} omits the field from the event entirely
+     * (this run's {@code carve_brake} toggle is off), while a non-null {@code NaN} still writes it
+     * as JSON {@code null} exactly like {@link #putNum} (the brake is on, but pre-warmup). See
+     * {@code TraceSink#ownerSplitDecision}.
+     */
+    private static void putOptionalNum(ObjectNode e, String field, Double v) {
+        if (v == null) {
+            return;
+        }
+        putNum(e, field, v);
     }
 
     private void writeEvent(ObjectNode e, boolean flush) {

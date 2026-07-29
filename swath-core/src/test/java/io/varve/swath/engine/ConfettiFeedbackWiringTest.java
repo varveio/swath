@@ -44,6 +44,8 @@ final class ConfettiFeedbackWiringTest {
     private static final int MAX_KEYS = 100;
     private static final byte[] LO = "d/00".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HI = "d/02".getBytes(StandardCharsets.UTF_8);
+    /** See {@link #carveBrakeOnEngagesAndCompletesWithExactOnceEmissionOnTheDenseUniformShape}. */
+    private static final int MAX_BRAKE_ATTEMPTS = 8;
 
     private static List<byte[]> denseFlat(int n) {
         List<byte[]> keys = new ArrayList<>(n);
@@ -151,5 +153,57 @@ final class ConfettiFeedbackWiringTest {
                 .as("on a dense/uniform shape, intermediate nodes that split further must dominate "
                         + "the classification (confetti=%d, substantial=%d)", confetti, substantial)
                 .isGreaterThan(confetti);
+    }
+
+    /**
+     * The carve brake's bench, real-engine wiring case (campaign memo §5, the raced cure for the
+     * instability {@link #denseUniformShapeNeverEngagesTheGateAndSubstantialDominates}'s own javadoc
+     * names this brake as fixing): {@code carve_brake=mass_k8} ON TOP of the 0.2.0 default pair, on
+     * the SAME dense/uniform 20k-key fixture. Asserts only that the brake's own counters engage at
+     * least once and that every run that reaches it still completes with exact-once emission — NOT a
+     * deterministic-pass assertion on the confetti classification ratio, which is the race's own job
+     * (this commit ships the brake OFF by default; the race that flips the default and picks the
+     * winning K is a separate, later unit).
+     *
+     * <p><b>{@code mass_k8}, not {@code mass_k4}, and a bounded retry loop.</b> Measured directly
+     * against this fixture: {@code mass_k4} (threshold {@code 4*maxKeys=400}) never once engaged in
+     * repeated runs — this shape's realized owner-split child masses on the 0.2.0 default pair
+     * apparently never dip that low, even on the runs that land in the unstable branch documented at
+     * {@link #denseUniformShapeNeverEngagesTheGateAndSubstantialDominates}. {@code mass_k8} (threshold
+     * {@code 800}) engages on the large majority of runs (measured ~9/10) but not reliably every
+     * single one — the SAME inherent per-run instability the sibling test above discloses, not a new
+     * one this test introduces. Rather than assert on one draw (issue #18: don't let a test imply a
+     * certainty it can't deliver), this retries the identical scan up to {@link #MAX_BRAKE_ATTEMPTS}
+     * times and requires only that at least one attempt engages — at the measured ~90% single-attempt
+     * rate, all {@value #MAX_BRAKE_ATTEMPTS} attempts missing has negligible probability, while every
+     * attempt (hit or miss) still independently proves the run completes with exact-once emission.
+     */
+    @Test
+    @Timeout(60)
+    void carveBrakeOnEngagesAndCompletesWithExactOnceEmissionOnTheDenseUniformShape(@TempDir Path dir)
+            throws Exception {
+        boolean engaged = false;
+        for (int attempt = 0; attempt < MAX_BRAKE_ATTEMPTS && !engaged; attempt++) {
+            Map<String, Long> reasons = runScan(dir, "carve-brake-on-" + attempt, denseFlat(20_000),
+                    EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K8));
+
+            assertThat(reasons.getOrDefault("TOGGLE.carve_brake_mass_k8_on", 0L))
+                    .as("the once-per-scan engagement mark fired")
+                    .isEqualTo(1L);
+            long published = reasons.getOrDefault("OWNER_SPLIT.self_published", 0L);
+            long confetti = reasons.getOrDefault("OWNER_SPLIT_CHILD.confetti", 0L);
+            long substantial = reasons.getOrDefault("OWNER_SPLIT_CHILD.substantial", 0L);
+            assertThat(confetti + substantial)
+                    .as("every self-published owner-split child is still classified exactly once with "
+                            + "the brake on (attempt %d)", attempt)
+                    .isEqualTo(published);
+
+            long braked = reasons.getOrDefault("OWNER_SPLIT.carve_braked", 0L);
+            long probed = reasons.getOrDefault("OWNER_SPLIT.carve_brake_probe", 0L);
+            engaged = braked + probed > 0;
+        }
+        assertThat(engaged)
+                .as("mass_k8 must engage at least once within %d attempts on this shape", MAX_BRAKE_ATTEMPTS)
+                .isTrue();
     }
 }

@@ -732,7 +732,7 @@ public final class SimExecutor {
                     rawObservedDensityRatio(state),
                     state.alphabetDigest().snapshot(),
                     new ConfettiObservation(confetti.taggedTotal(), confetti.taggedConfetti(),
-                            confetti.probeSeq()));
+                            confetti.probeSeq(), confetti.windowAverageMass(), confetti.carveBrakeProbeSeq()));
             OwnerSplitDecision decision = governor.decide(splitView);
             if (gateDump != null) {
                 gateDump.ownerDecision(at.nowNanos(), nodeId, decision.gateInputs(), state.lo(),
@@ -810,7 +810,7 @@ public final class SimExecutor {
                 return;
             }
             boolean confetti = state.keysEmitted() <= 2L * scenario.pageSize() && !state.hasSplit();
-            confettiFeedback.recordCompletion(confetti);
+            confettiFeedback.recordCompletion(confetti, state.keysEmitted());
             at.count(confetti ? OWNER_SPLIT_CHILD_CONFETTI_COUNTER
                     : OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER, 1);
         }

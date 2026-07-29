@@ -87,7 +87,7 @@ final class RecordingTraceSink implements TraceSink {
     @Override
     public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
             long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
-            double densityRatio, long keysEmitted) {
+            double densityRatio, long keysEmitted, Double carveBrakeMassAvg) {
         ObjectNode e = GoldenTrace.newNode();
         e.put("event", "owner_split_decision");
         e.put("worker_id", workerId);
@@ -100,6 +100,7 @@ final class RecordingTraceSink implements TraceSink {
         putNum(e, "far_ahead_fraction", farAheadFraction);
         putNum(e, "density_ratio", densityRatio);
         e.put("keys_emitted", keysEmitted);
+        putOptionalNum(e, "carve_brake_mass_avg", carveBrakeMassAvg);
         events.add(e);
     }
 
@@ -131,6 +132,19 @@ final class RecordingTraceSink implements TraceSink {
         } else {
             e.putNull(field);
         }
+    }
+
+    /**
+     * As {@link #putNum}, but omits the field entirely on {@code null} — the carve brake's mass
+     * reading is {@code null} (not {@code NaN}) exactly when {@code carve_brake=off} for this run,
+     * so the field must not appear at all (see {@code TraceSink#ownerSplitDecision}) — mirrors
+     * {@code JsonlTraceSink}'s own {@code putOptionalNum}.
+     */
+    private static void putOptionalNum(ObjectNode e, String field, Double v) {
+        if (v == null) {
+            return;
+        }
+        putNum(e, field, v);
     }
 
     @Override

@@ -366,4 +366,82 @@ final class EngineTogglesParseTest {
                 .isInstanceOf(InvalidArgsException.class)
                 .hasMessageContaining(EngineToggles.TAIL_FLOOR_NAME);
     }
+
+    // ---- carve_brake: value-taking (not on|off), default `off` in this commit ---------------------
+
+    @Test
+    void carveBrakeDefaultsToOffAndIsExcludedFromNames() throws InvalidArgsException {
+        assertThat(EngineToggles.DEFAULT.carveBrake()).isEqualTo(CarveBrakeMode.OFF);
+        // The other value-taking toggle: like tail_floor, it turns nothing OFF, so it is
+        // deliberately outside NAMES (which drives disabledNames()'s ablated-mechanism set).
+        assertThat(EngineToggles.NAMES).doesNotContain(EngineToggles.CARVE_BRAKE_NAME);
+        assertThat(EngineToggles.parse(null, false).disabledNames()).isEmpty();
+    }
+
+    @Test
+    void carveBrakeOffExplicitlyIsTheDefaultConfiguration() throws InvalidArgsException {
+        EngineToggles toggles = EngineToggles.parse(List.of("carve_brake=off"), false);
+        assertThat(toggles.carveBrake()).isEqualTo(CarveBrakeMode.OFF);
+        assertThat(toggles).as("naming the default mode is bit-identical to not naming it")
+                .isEqualTo(EngineToggles.DEFAULT);
+        assertThat(toggles.isDefault()).isTrue();
+    }
+
+    @Test
+    void carveBrakeNonDefaultArmsParseAndAreNotDefault() throws InvalidArgsException {
+        for (CarveBrakeMode arm : new CarveBrakeMode[] {CarveBrakeMode.MASS_K2, CarveBrakeMode.MASS_K4,
+                CarveBrakeMode.MASS_K8}) {
+            EngineToggles toggles = EngineToggles.parse(List.of("carve_brake=" + arm.code()), false);
+            assertThat(toggles.carveBrake()).isEqualTo(arm);
+            assertThat(toggles.isDefault()).isFalse();
+            assertThat(toggles.disabledNames()).isEmpty();
+            assertThat(toggles.tailFloor())
+                    .as("%s disturbs no other mechanism -- the arms stay independently selectable", arm)
+                    .isEqualTo(TailFloorMode.REACH_FLOORED);
+        }
+    }
+
+    @Test
+    void carveBrakeIsCaseInsensitiveAndComposesWithTailFloor() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("carve_brake=MASS_K4", "tail_floor=current"), false);
+        assertThat(toggles.carveBrake()).isEqualTo(CarveBrakeMode.MASS_K4);
+        assertThat(toggles.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+    }
+
+    @Test
+    void carveBrakeUnknownValueIsRejectedListingTheModes() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("carve_brake=on"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("off|mass_k2|mass_k4|mass_k8");
+    }
+
+    @Test
+    void aNullCarveBrakeModeIsRejectedAtConstructionNotAtFirstDereference() {
+        assertThatThrownBy(() -> EngineToggles.DEFAULT.withCarveBrake(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("carveBrake");
+    }
+
+    @Test
+    void carveBrakeContradictoryValuesAreRejected() {
+        assertThatThrownBy(() ->
+                EngineToggles.parse(List.of("carve_brake=mass_k2", "carve_brake=mass_k4"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("contradictory");
+    }
+
+    @Test
+    void carveBrakeRepeatedIdenticalValuesAreFine() throws InvalidArgsException {
+        EngineToggles toggles =
+                EngineToggles.parse(List.of("carve_brake=mass_k4", "carve_brake=mass_k4"), false);
+        assertThat(toggles.carveBrake()).isEqualTo(CarveBrakeMode.MASS_K4);
+    }
+
+    @Test
+    void theUnknownNameErrorListsTheCarveBrakeToggleToo() {
+        assertThatThrownBy(() -> EngineToggles.parse(List.of("carve_brakes=mass_k4"), false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining(EngineToggles.CARVE_BRAKE_NAME);
+    }
 }

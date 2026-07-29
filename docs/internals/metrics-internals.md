@@ -663,6 +663,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `OWNER_SPLIT` | `self_published` | the owner's proactive self-split committed | |
 | `OWNER_SPLIT` | `confetti_suppressed` | a carve was suppressed by the realized-child-mass confetti feedback gate | |
 | `OWNER_SPLIT` | `confetti_probe` | a would-be-suppressed carve was let through as the periodic probe (every `PROBE_K`-th) | |
+| `OWNER_SPLIT` | `carve_braked` | the realized-child-mass carve brake suppressed the carve (`--engine-toggle carve_brake=MODE`, campaign memo §5): the recent window-average realized mass of tagged owner-split children dropped below `K * maxKeys`. Distinct from `confetti_suppressed` — this reads the recent MASS TREND, not confetti's binary degenerate/substantial RATE. Gated on `carve_brake != off` (default `off`) | |
+| `OWNER_SPLIT` | `carve_brake_probe` | a would-be-braked carve was let through as the periodic probe (every `CARVE_BRAKE_PROBE_K`-th, independent of confetti's own probe sequence) | |
 | `OWNER_SPLIT` | `unsplittable_pivot` | the synthesized owner-split pivot was `null`, or not strictly inside `(cursorTo, hi]`, THIS page-commit — transient and per-attempt (the range is reconsidered at its next qualifying commit), NOT the thief's permanently-cached `UNSPLITTABLE.no_pivot` | |
 | `OWNER_SPLIT_CHILD` | `confetti` | a tagged owner-split child completed with realized mass `<= 2*maxKeys` AND never itself split (no owner self-split, no successful thief steal) | |
 | `OWNER_SPLIT_CHILD` | `substantial` | a tagged owner-split child completed with realized mass `> 2*maxKeys`, OR it did itself split (regardless of its own final tally) | |
@@ -767,6 +769,9 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SENSING_STEAL` | `page_floor` | the winning candidate's magnitude was the no-evidence page floor rather than proven mass (it has emitted fewer keys than one page), so the attempt chose on an assumption about a barely-started range. Co-fires with whichever geometry row above applies | |
 | `TOGGLE` | `tail_floor_est_direct_on` | engagement mark, same polarity as `readahead_on`, with the SELECTED mode in the mark's own name (`tail_floor_est_direct_on` / `tail_floor_reach_floored_on`): the run read the owner-split child-tail floor through a cure arm instead of the shipped arithmetic (`--engine-toggle tail_floor=MODE`, algorithms.md §3.3). Fired once at engine construction. The mode is otherwise invisible in the counters — every mode refuses under the same `OWNER_SPLIT.floor_reflected_blocked` code — so without this mark an A/B could not tell its arms apart; the default `current` mode is deliberately unmarked (marking it would add a counter to every run that has ever existed) | |
 | `TOGGLE` | `tail_floor_reach_floored_on` | engagement mark for the `reach_floored` arm — see `tail_floor_est_direct_on`; one literal row per arm because the drift guard matches emitted names statically | |
+| `TOGGLE` | `carve_brake_mass_k2_on` | engagement mark, same shape as the `tail_floor_<mode>_on` marks: the run read the realized-child-mass carve brake at `K=2` (`--engine-toggle carve_brake=mass_k2`). Fired once at engine construction. Default `off` is deliberately unmarked | |
+| `TOGGLE` | `carve_brake_mass_k4_on` | as `carve_brake_mass_k2_on`, for `K=4` | |
+| `TOGGLE` | `carve_brake_mass_k8_on` | as `carve_brake_mass_k2_on`, for `K=8` | |
 | `TAIL_FLOOR` | `gate_admit_current_blocks` | a `tail_floor` arm CHANGED the child-tail floor's verdict at the owner-split GATE, in the cure's intended direction: the arm admitted a carve the shipped floor refuses. This is the counter a live A/B is read on — it attributes a split-rate difference to the toggle rather than to the run. **Denominator: qualifying page commits** (the same population the `OWNER_SPLIT.*` skip reasons are counted over, so it reads directly against `OWNER_SPLIT.floor_reflected_blocked`). Fires only under a non-default mode: agreement is silent, and the shipped mode never computes a second verdict to compare against | |
 | `TAIL_FLOOR` | `gate_would_block_current_admits` | the opposite direction at the same site — the arm refused a carve the shipped floor admits. Both shipped arms are monotonically more permissive than `current`, so this row is EXPECTED to stay at zero; it exists so that claim is falsifiable from a run instead of asserted in a javadoc. A non-zero value means a future arm broke the monotonicity the arms were promoted on | |
 | `TAIL_FLOOR` | `clamp_admit_current_blocks` | the same divergence at the owner-split REFLECTION CLAMP (the floor's second consult: whether an overshooting interpolated pivot may be clamped down onto the reflected mass horizon). **Denominator: carves that reached pivot synthesis**, NOT page commits — a different population from the `gate_*` rows above, which is why the two are not pooled | |
@@ -851,15 +856,16 @@ would-be event.
 | `page_committed` | `worker_id`, `node_id`, `keys`, `cursor`, `completed` | after every durable page commit (dominates volume, ~1/page) |
 | `steal_attempt` | `worker_id`, `outcome`, `reason` | every `Thief.steal` attempt (piggybacks the `recordStealReason` call site) |
 | `victim_scan` | `worker_id`, `seen`, `skipped_unsplittable`, `skipped_paced`, `skipped_no_span`, `chosen_node_id`, `best_est`, `reason` | every `ThiefPolicy.selectVictim` pass — one per steal attempt, immediately before that attempt's `steal_attempt`. Aggregate over the pool, never per candidate (the scan runs constantly). `chosen_node_id` is `-1` and `reason` the `NoVictimReason` discriminator when the scan refused; on a hit `reason` is `null` |
-| `owner_split_decision` | `worker_id`, `node_id`, `reason`, `est`, `pages_since_last_self_split`, `outstanding`, `worker_count`, `far_ahead_fraction`, `density_ratio`, `keys_emitted` | every `OwnerSplitGovernor.decide` past the open-frontier early-out — one per qualifying page commit, blocked OR carved (so ~1/page on a bounded range, `page_committed`'s order of volume). `reason` is the GATE CHAIN's terminal reason: an `OwnerSplitSkipReason` code, or `confetti_probe`/`pivot_reflect_clamped`/`pivot_reflect_lifted`/`self_published` on the carve side |
+| `owner_split_decision` | `worker_id`, `node_id`, `reason`, `est`, `pages_since_last_self_split`, `outstanding`, `worker_count`, `far_ahead_fraction`, `density_ratio`, `keys_emitted`, `carve_brake_mass_avg` | every `OwnerSplitGovernor.decide` past the open-frontier early-out — one per qualifying page commit, blocked OR carved (so ~1/page on a bounded range, `page_committed`'s order of volume). `reason` is the GATE CHAIN's terminal reason: an `OwnerSplitSkipReason` code, or `confetti_probe`/`carve_brake_probe`/`pivot_reflect_clamped`/`pivot_reflect_lifted`/`self_published` on the carve side. `carve_brake_mass_avg` is OMITTED entirely (not a null-valued field) when `carve_brake=off` for the run — see the THIRD "missing value" convention below |
 | `split` | `worker_id`, `node_id` (parent), `child_node_id`, `mechanism`, `pivot`, `hi` | a thief commits a split — `mechanism` is the same pivot-attribution tag as the `PIVOT.<mechanism>` counter (§5) |
 | `owner_split` | same shape as `split` | an owner-side proactive self-split — `mechanism` is always `self_published` |
 | `completed` | `worker_id`, `node_id` | a range drains to its `hi` bound |
 | `failed` | `worker_id`, `node_id`, `reason` | a range's scan ends without completing (exception; excludes the expected broken-pipe/cancel teardown) |
 
-**Numbers, and the two "missing value" conventions.** JSONL has no `NaN`/`Infinity` literal, so a
-non-finite numeric field is written as JSON **`null`** — the line stays strictly parseable. Two
-distinct things produce it, disambiguated by the event's own `reason`:
+**Numbers, and the THREE "missing value" conventions.** JSONL has no `NaN`/`Infinity` literal, so a
+non-finite numeric field is written as JSON **`null`** — the line stays strictly parseable. Three
+distinct things produce a missing value, disambiguated by the event's own `reason` (the first two
+by a `null` VALUE, the third by the field's ABSENCE):
 
 - **not computed** — the owner-split gate chain short-circuits, so a gate that terminated ABOVE
   where `far_ahead_fraction`/`density_ratio` are read reports them as `null` rather than a
@@ -869,6 +875,13 @@ distinct things produce it, disambiguated by the event's own `reason`:
 - **a genuinely non-finite reading** — `density_ratio` is `+∞` with `density_ewma=off` (the floor's
   own "no signal" fallback), `est`/`best_est` is `+∞` for an open frontier, and `best_est` is `-∞`
   when a `victim_scan` refused (the argmax's own seed, nothing ever scored).
+- **not applicable to this run at all** — `owner_split_decision.carve_brake_mass_avg` is `null`
+  (in the engine, a `null` `Double`, not `NaN`) exactly when `carve_brake=off`: this run never reads
+  the carve brake's signal, so the field is OMITTED from the event entirely rather than reported as
+  a not-computed `NaN` — the distinction that keeps every `carve_brake=off` decision-trace golden
+  byte-identical to a build that predates the field. When `carve_brake` is on, the field IS present
+  and follows the ordinary "not computed" convention above until warmup (`NaN` → JSON `null`), then
+  carries the real window-average reading.
 
 **Gate decision vs executor outcome.** `owner_split_decision.reason` reports what the *gate chain*
 decided. A carve the chain admitted can still fail to publish executor-side (a lost confetti

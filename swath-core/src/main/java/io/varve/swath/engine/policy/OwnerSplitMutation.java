@@ -41,5 +41,24 @@ public enum OwnerSplitMutation {
      * a slot), which is why the executor resolves it BEFORE recording any of the carve's engagements:
      * on the suppressed path none of them ever fired.
      */
-    CLAIM_CONFETTI_PROBE_SLOT
+    CLAIM_CONFETTI_PROBE_SLOT,
+
+    /**
+     * The carve brake's exact twin of {@link #CONSUME_CONFETTI_PROBE_SLOT}, against {@code
+     * ConfettiFeedbackGate#consumeCarveBrakeProbeSlot()} instead — the brake's own probe sequence
+     * is independent of confetti's, since the two gates' over-threshold populations are distinct
+     * (campaign memo §5). Carried by the {@code CARVE_BRAKED} {@link Skip}, and by a brake-probe
+     * consult the governor then abandoned on its own pivot checks.
+     */
+    CONSUME_CARVE_BRAKE_PROBE_SLOT,
+
+    /**
+     * The carve brake's exact twin of {@link #CLAIM_CONFETTI_PROBE_SLOT}, against {@code
+     * ConfettiFeedbackGate#claimCarveBrakeProbeSlot(long)} instead — issue #31's fix mirrored for
+     * the brake's own probe sequence: N owners sharing the same pre-increment snapshot would all
+     * decide {@code carve_brake_probe} and so all carve, multiplying exactly the confetti-sized
+     * carves the brake exists to suppress. Carried by the {@code carve_brake_probe}-engaged {@link
+     * Carve} in place of {@link #CONSUME_CARVE_BRAKE_PROBE_SLOT}.
+     */
+    CLAIM_CARVE_BRAKE_PROBE_SLOT
 }

@@ -37,6 +37,14 @@ package io.varve.swath.engine.policy;
  * @param farAheadFraction        the toggle-resolved far-ahead pivot fraction {@code f}
  * @param densityRatio            the toggle-resolved observed local-vs-average density ratio
  * @param keysEmitted             keys emitted so far on this range (the sensor's own input)
+ * @param carveBrakeMassAvg       the carve brake's window-average realized child mass reading
+ *                                (campaign memo §5), or {@code null} when {@code carve_brake=off}
+ *                                for this run — the run never reads this signal at all, so the
+ *                                {@code owner_split_decision} trace event omits the field entirely
+ *                                rather than reporting a not-applicable {@code NaN} (see {@code
+ *                                TraceSink#ownerSplitDecision}). Non-null but {@code NaN} means the
+ *                                brake is on but pre-warmup (fewer than {@code
+ *                                ConfettiFeedbackGate#MIN_SAMPLE} tagged completions so far).
  */
 public record OwnerSplitGateInputs(
         String reason,
@@ -46,7 +54,8 @@ public record OwnerSplitGateInputs(
         int workerCount,
         double farAheadFraction,
         double densityRatio,
-        long keysEmitted) {
+        long keysEmitted,
+        Double carveBrakeMassAvg) {
 
     /** The sentinel for a double input the short-circuiting chain never computed. */
     public static final double NOT_COMPUTED = Double.NaN;

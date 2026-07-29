@@ -8,6 +8,7 @@ package io.varve.swath.engine.policy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.engine.AlphabetDigest;
+import io.varve.swath.engine.CarveBrakeMode;
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
@@ -38,7 +39,7 @@ class OwnerSplitGovernorTest {
     private static final int WORKER_COUNT = 4;
 
     /** Warmup (below {@code MIN_SAMPLE}): the confetti check never engages. */
-    private static final ConfettiObservation NO_CONFETTI_SIGNAL = new ConfettiObservation(0, 0, 0);
+    private static final ConfettiObservation NO_CONFETTI_SIGNAL = new ConfettiObservation(0, 0, 0, Double.NaN, 0);
 
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
@@ -305,7 +306,7 @@ class OwnerSplitGovernorTest {
         // huge here. Confetti-suppressed immediately after (total>=MIN_SAMPLE, rate over threshold)
         // proves it passed through.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(8, 8, 0));
+                new ConfettiObservation(8, 8, 0, Double.NaN, 0));
 
         OwnerSplitDecision decision = governor().decide(v);
 
@@ -428,7 +429,7 @@ class OwnerSplitGovernorTest {
         // total=8=MIN_SAMPLE, confetti=8 -> rate=1.0>0.5 (over threshold); probeSeq=0 -> (0+1)%16=1
         // != 0 -> SUPPRESSED (the first-ever over-threshold consult, never a probe-boundary accident).
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(8, 8, 0));
+                new ConfettiObservation(8, 8, 0, Double.NaN, 0));
 
         OwnerSplitDecision decision = governor().decide(v);
 
@@ -445,7 +446,7 @@ class OwnerSplitGovernorTest {
     void confettiFeedbackOffNeverConsultsTheGateEvenWhenItWouldSuppress() {
         // Same over-threshold observation as the suppress test above, but the toggle is off.
         OwnerSplitGovernor g = governor(EngineToggles.DEFAULT.withConfettiFeedback(false), WORKER_COUNT);
-        OwnerSplitView v = unsplittablePivotView(new ConfettiObservation(8, 8, 0));
+        OwnerSplitView v = unsplittablePivotView(new ConfettiObservation(8, 8, 0, Double.NaN, 0));
 
         OwnerSplitDecision decision = g.decide(v);
 
@@ -460,7 +461,7 @@ class OwnerSplitGovernorTest {
     void confettiProbeSlotLetsTheCarveThroughAtTheProbeKBoundary() {
         // total=16, confetti=12 -> rate=0.75>0.5 (over threshold); probeSeq=15 -> (15+1)%16==0 -> PROBE.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(16, 12, 15));
+                new ConfettiObservation(16, 12, 15, Double.NaN, 0));
 
         OwnerSplitDecision decision = governor().decide(v);
 
@@ -476,7 +477,7 @@ class OwnerSplitGovernorTest {
     void confettiSuppressedOneShortOfTheProbeKBoundary() {
         // Same over-threshold rate, but probeSeq=14 -> (14+1)%16=15 != 0 -> SUPPRESSED.
         OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(16, 12, 14));
+                new ConfettiObservation(16, 12, 14, Double.NaN, 0));
 
         OwnerSplitDecision decision = governor().decide(v);
 
@@ -513,7 +514,7 @@ class OwnerSplitGovernorTest {
             gate.consumeProbeSlot();
         }
         for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE * 2; i++) {
-            gate.recordCompletion(i % 4 != 0);   // rate = 0.75 > SUPPRESS_THRESHOLD
+            gate.recordCompletion(i % 4 != 0, 1L);   // rate = 0.75 > SUPPRESS_THRESHOLD
         }
         ConfettiFeedbackGate.Snapshot snapshot = gate.snapshot();
         assertThat(snapshot.probeSeq()).as("fixture: every racer snapshots the same slot boundary")
@@ -524,7 +525,7 @@ class OwnerSplitGovernorTest {
             // Each racer decides from the snapshot it took BEFORE any of them advanced the sequence.
             OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
                     new ConfettiObservation(snapshot.taggedTotal(), snapshot.taggedConfetti(),
-                            snapshot.probeSeq()));
+                            snapshot.probeSeq(), Double.NaN, 0));
             OwnerSplitDecision decision = governor().decide(v);
 
             assertThat(decision).as("racer %s: every consult sharing the slot decides PROBE", i)
@@ -556,7 +557,7 @@ class OwnerSplitGovernorTest {
     void aProbeConsultThatLosesItsCarveDowngradesTheClaimToAnUnconditionalConsume() {
         // Over threshold (8/8 = 1.0) at the slot boundary, on the view whose pivot is unsplittable.
         OwnerSplitView v = unsplittablePivotView(
-                new ConfettiObservation(8, 8, OwnerSplitGovernor.PROBE_K - 1));
+                new ConfettiObservation(8, 8, OwnerSplitGovernor.PROBE_K - 1, Double.NaN, 0));
 
         OwnerSplitDecision decision = governor().decide(v);
 
@@ -565,6 +566,127 @@ class OwnerSplitGovernorTest {
         assertThat(decision.engagements()).contains(new Engagement("OWNER_SPLIT", "confetti_probe"));
         assertThat(decision.mutations())
                 .containsExactly(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT);
+    }
+
+    // -------------------------------------------------------------------------
+    // Carve brake (campaign memo §5): the recent window-average mass trend, distinct from
+    // confetti's binary rate. taggedConfetti=0 throughout so the confetti gate's own rate (0/8=0)
+    // never suppresses first and masks the brake -- these views are built to reach the brake gate.
+    // -------------------------------------------------------------------------
+
+    /** A view that clears every gate above the brake, with a chosen carve-brake observation. */
+    private static OwnerSplitView brakeView(double windowAverageMass, long carveBrakeProbeSeq) {
+        return view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(ConfettiFeedbackGate.MIN_SAMPLE, 0, 0, windowAverageMass,
+                        carveBrakeProbeSeq));
+    }
+
+    private static final CarveBrakeMode[] BRAKE_MODES =
+            {CarveBrakeMode.MASS_K2, CarveBrakeMode.MASS_K4, CarveBrakeMode.MASS_K8};
+
+    @Test
+    void carveBrakeSuppressesJustBelowTheKThresholdForEveryMode() {
+        for (CarveBrakeMode mode : BRAKE_MODES) {
+            double threshold = (double) mode.k() * MAX_KEYS;
+            OwnerSplitView v = brakeView(threshold - 1.0, 0L);   // probeSeq=0 -> (0+1)%16=1 != 0
+
+            OwnerSplitDecision decision = governor(EngineToggles.DEFAULT.withCarveBrake(mode), WORKER_COUNT)
+                    .decide(v);
+
+            assertThat(decision).as("%s just below its threshold", mode).isInstanceOf(Skip.class);
+            assertThat(((Skip) decision).reason()).as(mode.toString())
+                    .isEqualTo(OwnerSplitSkipReason.CARVE_BRAKED);
+            assertThat(decision.engagements()).as(mode.toString())
+                    .containsExactly(new Engagement("OWNER_SPLIT", "carve_braked"));
+            assertThat(decision.mutations()).as(mode.toString())
+                    .containsExactly(OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT);
+            assertThat(decision.gateInputs().carveBrakeMassAvg()).as(mode.toString())
+                    .isEqualTo(threshold - 1.0);
+        }
+    }
+
+    @Test
+    void carveBrakeAdmitsAtAndAboveTheKThresholdForEveryMode() {
+        for (CarveBrakeMode mode : BRAKE_MODES) {
+            double threshold = (double) mode.k() * MAX_KEYS;
+            OwnerSplitView v = brakeView(threshold, 0L);   // "< threshold" is strict: == admits
+
+            OwnerSplitDecision decision = governor(EngineToggles.DEFAULT.withCarveBrake(mode), WORKER_COUNT)
+                    .decide(v);
+
+            assertThat(decision).as("%s at its threshold (boundary admits)", mode).isInstanceOf(Carve.class);
+            assertThat(decision.gateInputs().carveBrakeMassAvg()).as(mode.toString()).isEqualTo(threshold);
+        }
+    }
+
+    @Test
+    void carveBrakeNeverEngagesBelowWarmup() {
+        // taggedTotal=7 < MIN_SAMPLE(8): never engages, however low the mass reading would otherwise be.
+        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
+                new ConfettiObservation(ConfettiFeedbackGate.MIN_SAMPLE - 1, 0, 0, 1.0, 0));
+
+        OwnerSplitDecision decision =
+                governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K8), WORKER_COUNT).decide(v);
+
+        assertThat(decision).as("below warmup, mass_k8 never engages even though 1.0 << 8*maxKeys")
+                .isInstanceOf(Carve.class);
+    }
+
+    @Test
+    void carveBrakeProbeEscapeLetsTheCarveThroughAtTheProbeKBoundary() {
+        // massAvg=0.0 is below every K's threshold; probeSeq=CARVE_BRAKE_PROBE_K-1 -> (15+1)%16==0 -> PROBE.
+        OwnerSplitView v = brakeView(0.0, OwnerSplitGovernor.CARVE_BRAKE_PROBE_K - 1);
+
+        OwnerSplitDecision decision =
+                governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K2), WORKER_COUNT).decide(v);
+
+        assertThat(decision).isInstanceOf(Carve.class);
+        Carve carve = (Carve) decision;
+        assertThat(carve.engagements()).contains(new Engagement("OWNER_SPLIT", "carve_brake_probe"));
+        // CLAIM, not CONSUME (issue #31, mirrored): the executor must serialize this carve against
+        // every other owner that decided carve_brake_probe from the same carveBrakeProbeSeq snapshot.
+        assertThat(carve.mutations()).containsExactly(OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT);
+        assertThat(carve.gateInputs().reason()).isEqualTo("carve_brake_probe");
+    }
+
+    @Test
+    void carveBrakeSuppressedOneShortOfTheProbeKBoundary() {
+        // Same over-threshold mass, but probeSeq=CARVE_BRAKE_PROBE_K-2 -> (14+1)%16=15 != 0.
+        OwnerSplitView v = brakeView(0.0, OwnerSplitGovernor.CARVE_BRAKE_PROBE_K - 2);
+
+        OwnerSplitDecision decision =
+                governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K2), WORKER_COUNT).decide(v);
+
+        assertThat(decision).isInstanceOf(Skip.class);
+        Skip skip = (Skip) decision;
+        assertThat(skip.reason()).isEqualTo(OwnerSplitSkipReason.CARVE_BRAKED);
+        assertThat(skip.mutations()).containsExactly(OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT);
+    }
+
+    /**
+     * OFF is inert regardless of the observation: a view engineered so every K mode AND the probe
+     * boundary would fire if the brake read either field is fed to a governor with {@code
+     * carve_brake=off} and to the plain (already-off-by-default) governor -- proving OFF never even
+     * consults {@code windowAverageMass}/{@code carveBrakeProbeSeq}, not merely that no mode happens
+     * to trip on this input.
+     */
+    @Test
+    void carveBrakeOffIsInertRegardlessOfTheMassObservation() {
+        OwnerSplitView v = brakeView(1.0, OwnerSplitGovernor.CARVE_BRAKE_PROBE_K - 1);
+
+        OwnerSplitDecision explicitOff =
+                governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.OFF), WORKER_COUNT).decide(v);
+        OwnerSplitDecision plainDefault = governor().decide(v);
+
+        assertThat(explicitOff).isInstanceOf(Carve.class);
+        assertThat(plainDefault).isInstanceOf(Carve.class);
+        assertThat(((Carve) explicitOff).pivot()).isEqualTo(((Carve) plainDefault).pivot());
+        assertThat(explicitOff.engagements()).isEqualTo(plainDefault.engagements());
+        assertThat(explicitOff.mutations()).isEqualTo(plainDefault.mutations());
+        assertThat(explicitOff.gateInputs()).isEqualTo(plainDefault.gateInputs());
+        assertThat(explicitOff.gateInputs().carveBrakeMassAvg())
+                .as("carve_brake=off omits the reading entirely rather than reporting a not-applicable NaN")
+                .isNull();
     }
 
     // -------------------------------------------------------------------------

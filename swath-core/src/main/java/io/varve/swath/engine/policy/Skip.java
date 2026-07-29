@@ -12,7 +12,9 @@ import java.util.List;
  * in the chain blocked it, or the range is unbounded. {@code engagements} may be empty even for a
  * genuine suppressed carve — some gates are deliberately silent; see
  * {@link OwnerSplitSkipReason}'s per-constant javadoc. {@code mutations} is non-empty only for
- * {@link OwnerSplitSkipReason#CONFETTI_SUPPRESSED}. {@code gateInputs} carries what the chain read
+ * {@link OwnerSplitSkipReason#CONFETTI_SUPPRESSED} and {@link OwnerSplitSkipReason#CARVE_BRAKED}
+ * (and any earlier probe claim either of them downgrades to an unconditional consume).
+ * {@code gateInputs} carries what the chain read
  * on its way to this gate (for the {@code owner_split_decision} trace event) — {@code null} only
  * for {@link OwnerSplitSkipReason#OPEN_FRONTIER}, which reads nothing.
  */

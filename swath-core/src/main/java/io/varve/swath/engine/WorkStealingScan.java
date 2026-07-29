@@ -317,8 +317,9 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
      * (fired there — it has no bearing on this engine at all). The toggle-name → mark-string
      * derivation itself is single-sourced in {@link EngineToggles#recordOffMarks} — this method only
      * lists which of the ten ablation toggles this engine owns. The two opt-in marks below
-     * ({@code readahead_on}, {@code rate_anchored_sensing_on}) and the tail-floor arm mark are this
-     * engine's too, for the same reason.
+     * ({@code readahead_on}, {@code rate_anchored_sensing_on}) and the two value-taking arm marks
+     * ({@code tail_floor_<mode>_on}, {@code carve_brake_<mode>_on}) are this engine's too, for the
+     * same reason.
      */
     private static void recordDisabledToggleMarks(EngineToggles toggles, RunMetrics metrics) {
         toggles.recordOffMarks(metrics, "owner_split", "confetti_feedback", "reflect_lift");
@@ -343,6 +344,14 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
             case EST_DIRECT -> metrics.recordStealReason("TOGGLE", "tail_floor_est_direct_on");
             case REACH_FLOORED -> metrics.recordStealReason("TOGGLE", "tail_floor_reach_floored_on");
             case CURRENT -> { /* default arm: unmarked, like every other off-by-default toggle */ }
+        }
+        // Same polarity again for the other value-taking toggle, the carve brake: default OFF in
+        // this commit, so only a non-default mode marks itself.
+        switch (toggles.carveBrake()) {
+            case MASS_K2 -> metrics.recordStealReason("TOGGLE", "carve_brake_mass_k2_on");
+            case MASS_K4 -> metrics.recordStealReason("TOGGLE", "carve_brake_mass_k4_on");
+            case MASS_K8 -> metrics.recordStealReason("TOGGLE", "carve_brake_mass_k8_on");
+            case OFF -> { /* default: unmarked */ }
         }
     }
 
@@ -707,7 +716,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                 trace.ownerSplitDecision(RunContext.workerIdOrNone(), ownerSplitTrace.nodeId(),
                                         gate.reason(), gate.est(), gate.pagesSinceLastSelfSplit(),
                                         gate.outstanding(), gate.workerCount(), gate.farAheadFraction(),
-                                        gate.densityRatio(), gate.keysEmitted());
+                                        gate.densityRatio(), gate.keysEmitted(), gate.carveBrakeMassAvg());
                                 if (ownerSplitTrace.split()) {
                                     trace.ownerSplit(RunContext.workerIdOrNone(), ownerSplitTrace.nodeId(),
                                             ownerSplitTrace.childId(), "self_published",

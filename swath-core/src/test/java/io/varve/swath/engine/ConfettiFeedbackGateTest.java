@@ -42,15 +42,15 @@ final class ConfettiFeedbackGateTest {
     @Test
     void freshGateSnapshotsAllZero() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0));
+        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0, Double.NaN, 0));
     }
 
     @Test
     void recordCompletionAccumulatesTotalAndConfettiSeparately() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true);
-        gate.recordCompletion(true);
-        gate.recordCompletion(false);
+        gate.recordCompletion(true, 1L);
+        gate.recordCompletion(true, 1L);
+        gate.recordCompletion(false, 1L);
         ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
         assertThat(snap.taggedTotal()).as("every completion counts toward the total").isEqualTo(3);
         assertThat(snap.taggedConfetti()).as("only the confetti-classified ones count here").isEqualTo(2);
@@ -60,11 +60,64 @@ final class ConfettiFeedbackGateTest {
     void recordCompletionNeverTouchesProbeSeq() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         for (int i = 0; i < 20; i++) {
-            gate.recordCompletion(i % 2 == 0);
+            gate.recordCompletion(i % 2 == 0, 1L);
         }
         assertThat(gate.snapshot().probeSeq())
                 .as("completions and the probe sequence are independent counters")
                 .isZero();
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // The carve brake's window-average mass: folded into the same recordCompletion call, exposed
+    // via the same Snapshot -- boundary/fill/wrap coverage of the ring itself lives in
+    // CarveMassRingTest; this only pins that ConfettiFeedbackGate wires it through.
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    void recordCompletionFeedsTheCarveBrakeWindowAverage() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        assertThat(gate.snapshot().windowAverageMass()).as("pre-warmup: no signal").isNaN();
+        for (long mass : new long[] {10, 20, 30, 40, 50, 60, 70, 80}) {
+            gate.recordCompletion(false, mass);
+        }
+        assertThat(gate.snapshot().windowAverageMass())
+                .as("the average of the last CarveMassRing.SIZE masses")
+                .isEqualTo(45.0);
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // The carve brake's OWN probe sequence: consumeCarveBrakeProbeSlot/claimCarveBrakeProbeSlot are
+    // exact twins of consumeProbeSlot/claimProbeSlot, over an independent counter.
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    void carveBrakeProbeSequenceIsIndependentOfConfettiProbeSequence() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.consumeProbeSlot();
+        gate.consumeProbeSlot();
+        gate.consumeCarveBrakeProbeSlot();
+
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.probeSeq()).isEqualTo(2);
+        assertThat(snap.carveBrakeProbeSeq()).isEqualTo(1);
+    }
+
+    @Test
+    void claimCarveBrakeProbeSlotAdmitsExactlyOneWinnerPerSlot() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        long shared = gate.snapshot().carveBrakeProbeSeq();
+
+        int winners = 0;
+        for (int i = 0; i < 4; i++) {
+            if (gate.claimCarveBrakeProbeSlot(shared)) {
+                winners++;
+            }
+        }
+
+        assertThat(winners).isEqualTo(1);
+        assertThat(gate.snapshot().carveBrakeProbeSeq())
+                .as("winner and losers alike consume a slot")
+                .isEqualTo(shared + 4);
     }
 
     // -------------------------------------------------------------------------------------------
@@ -135,8 +188,8 @@ final class ConfettiFeedbackGateTest {
     @Test
     void claimProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true);
-        gate.recordCompletion(false);
+        gate.recordCompletion(true, 1L);
+        gate.recordCompletion(false, 1L);
 
         gate.claimProbeSlot(0);
         gate.claimProbeSlot(0);   // loses
@@ -150,7 +203,7 @@ final class ConfettiFeedbackGateTest {
     @Test
     void consumeProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true);
+        gate.recordCompletion(true, 1L);
         for (int i = 0; i < 5; i++) {
             gate.consumeProbeSlot();
         }

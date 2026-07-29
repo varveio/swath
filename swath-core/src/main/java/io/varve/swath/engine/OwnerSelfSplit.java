@@ -172,7 +172,8 @@ final class OwnerSelfSplit {
         OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
                 selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
                 ws.alphabetDigest().snapshot(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
-                        confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq()));
+                        confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq(),
+                        confettiSnapshot.windowAverageMass(), confettiSnapshot.carveBrakeProbeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
         // The gate chain's own reading of this page-commit, captured for the CALLER to emit as the
         // owner_split_decision event AFTER ws.lock is released (same lock discipline as the split
@@ -196,8 +197,22 @@ final class OwnerSelfSplit {
                 return gateTrace(nodeId, gateInputs);
             }
         }
+        // The carve brake's exact mirror of the resolution above, against its OWN independent probe
+        // sequence — a decision can carry both claims at once (the two gates' probe sequences are
+        // independent, so a single consult can cross both thresholds on the same view), so this is a
+        // SEPARATE check, not an else-branch.
+        boolean carveBrakeProbeSlotClaimed = false;
+        if (decision instanceof Carve
+                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT)) {
+            if (confettiFeedback.claimCarveBrakeProbeSlot(confettiSnapshot.carveBrakeProbeSeq())) {
+                carveBrakeProbeSlotClaimed = true;
+            } else {
+                metrics.recordStealReason("OWNER_SPLIT", OwnerSplitSkipReason.CARVE_BRAKED.code());
+                return gateTrace(nodeId, gateInputs);
+            }
+        }
         applyEngagements(decision.engagements());
-        applyMutations(decision.mutations(), probeSlotClaimed);
+        applyMutations(decision.mutations(), probeSlotClaimed, carveBrakeProbeSlotClaimed);
         if (decision instanceof Skip skip) {
             if (skip.reason() == OwnerSplitSkipReason.DEMAND_GATED) {
                 ws.recordDemandGated();   // per-range tally for the slow-range dump
@@ -263,17 +278,26 @@ final class OwnerSelfSplit {
      * Apply every {@link OwnerSplitMutation} the governor returned to the real collaborator it
      * names — the policy never touches {@link ConfettiFeedbackGate} directly (issue #22).
      *
-     * @param probeSlotClaimed whether a {@code CLAIM_CONFETTI_PROBE_SLOT} was already resolved (and so
-     *                         the sequence already advanced) by the winning claim at the call site.
-     *                         A CLAIM that reaches here unresolved — the governor abandoned the probe
-     *                         carve on its own pivot checks — degrades to the unconditional advance,
-     *                         so a consult advances the sequence exactly once either way (issue #31).
+     * @param probeSlotClaimed          whether a {@code CLAIM_CONFETTI_PROBE_SLOT} was already
+     *                                  resolved (and so the sequence already advanced) by the
+     *                                  winning claim at the call site. A CLAIM that reaches here
+     *                                  unresolved — the governor abandoned the probe carve on its
+     *                                  own pivot checks — degrades to the unconditional advance, so
+     *                                  a consult advances the sequence exactly once either way
+     *                                  (issue #31).
+     * @param carveBrakeProbeSlotClaimed the carve brake's exact twin of {@code probeSlotClaimed},
+     *                                  against its own independent probe sequence.
      */
-    private void applyMutations(List<OwnerSplitMutation> mutations, boolean probeSlotClaimed) {
+    private void applyMutations(List<OwnerSplitMutation> mutations, boolean probeSlotClaimed,
+                                boolean carveBrakeProbeSlotClaimed) {
         for (OwnerSplitMutation m : mutations) {
             if (m == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT
                     || (m == OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT && !probeSlotClaimed)) {
                 confettiFeedback.consumeProbeSlot();
+            }
+            if (m == OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT
+                    || (m == OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT && !carveBrakeProbeSlotClaimed)) {
+                confettiFeedback.consumeCarveBrakeProbeSlot();
             }
         }
     }
@@ -291,7 +315,7 @@ final class OwnerSelfSplit {
         // its javadoc the rationale for why the never-split condition is load-bearing.
         if (toggles.confettiFeedback() && ownerSplitTaggedChildren.remove(nodeId)) {
             boolean confetti = isConfettiChild(ws.keysEmitted(), ws.hasSplit(), maxKeys);
-            confettiFeedback.recordCompletion(confetti);
+            confettiFeedback.recordCompletion(confetti, ws.keysEmitted());
             metrics.recordStealReason("OWNER_SPLIT_CHILD", confetti ? "confetti" : "substantial");
         }
     }

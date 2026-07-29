@@ -5,6 +5,7 @@
  */
 package io.varve.swath.engine.policy;
 
+import io.varve.swath.engine.CarveBrakeMode;
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.RemainingWorkEstimator;
@@ -58,6 +59,12 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
     static final double SUPPRESS_THRESHOLD = 0.5;
     /** Let every K-th would-be-suppressed carve through anyway, to keep the feedback alive. */
     static final long PROBE_K = 16;
+    /**
+     * The carve brake's own probe cadence — the same "let every K-th would-be-braked carve through"
+     * recovery confetti's {@link #PROBE_K} gives, over the brake's INDEPENDENT probe sequence (see
+     * {@code ConfettiObservation#carveBrakeProbeSeq}).
+     */
+    static final long CARVE_BRAKE_PROBE_K = 16;
 
     private final EngineToggles toggles;
     private final int workerCount;
@@ -103,19 +110,28 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // The rate limit's input, hoisted so every decision below can report it (§7's
         // owner_split_decision event) — read, not computed, so it is known at every gate.
         long pagesSinceLastSelfSplit = view.committed() - view.lastSelfSplitPage();
+        // The carve brake's window-average mass reading (§7's owner_split_decision event, cheap
+        // keyspace classification per AGENTS.md): read once, unconditionally of where the chain
+        // terminates, since — unlike f/densityRatio — it costs nothing and depends on no upstream
+        // gate. null (not NaN) exactly when carve_brake=off for this run: this run never reads the
+        // signal at all, so the trace event OMITS the field rather than reporting a not-applicable
+        // NaN, keeping every off-mode decision-trace golden byte-identical (see
+        // OwnerSplitGateInputs#carveBrakeMassAvg).
+        Double carveBrakeMassAvg =
+                toggles.carveBrake() == CarveBrakeMode.OFF ? null : view.confetti().windowAverageMass();
         if (est <= (double) SELF_SPLIT_MIN_REMAINING_PAGES * maxKeys) {
             // Remaining work too small to be worth a proactive carve — issue #16.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.REMAINING_EST_FLOOR.code()));
             return new Skip(OwnerSplitSkipReason.REMAINING_EST_FLOOR, engagements, List.of(),
                     gateInputs(OwnerSplitSkipReason.REMAINING_EST_FLOOR.code(), view, est, pagesSinceLastSelfSplit,
-                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED, carveBrakeMassAvg));
         }
         if (pagesSinceLastSelfSplit < SELF_SPLIT_MIN_PAGES_BETWEEN) {
             // Rate-limit: O(1) self-splits per drain, not one per page.
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.RATE_LIMITED.code()));
             return new Skip(OwnerSplitSkipReason.RATE_LIMITED, engagements, List.of(),
                     gateInputs(OwnerSplitSkipReason.RATE_LIMITED.code(), view, est, pagesSinceLastSelfSplit,
-                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED, carveBrakeMassAvg));
         }
         // Owner-split DEMAND GATE. On a SATURATED bucket the ready queue already holds enough live
         // nodes to keep every worker busy, so an extra child buys ZERO parallelism and only costs a
@@ -129,7 +145,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.DEMAND_GATED.code()));
             return new Skip(OwnerSplitSkipReason.DEMAND_GATED, engagements, List.of(),
                     gateInputs(OwnerSplitSkipReason.DEMAND_GATED.code(), view, est, pagesSinceLastSelfSplit,
-                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED));
+                            OwnerSplitGateInputs.NOT_COMPUTED, OwnerSplitGateInputs.NOT_COMPUTED, carveBrakeMassAvg));
         }
         // Far-ahead pivot fraction from the worker's own zero-cost density (>= 0.5 ⇒ >= byteMidpoint).
         // The child owns the far tail — so floor that tail above two pages: even below the demand gate an
@@ -143,7 +159,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code()));
             return new Skip(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED, engagements, List.of(),
                     gateInputs(OwnerSplitSkipReason.FLOOR_REFLECTED_BLOCKED.code(), view, est,
-                            pagesSinceLastSelfSplit, f, densityRatio));
+                            pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
         }
         // CONFETTI FEEDBACK GATE. The gates above reason from upstream estimates (est/densityRatio);
         // on a keyspace whose tail thins out over most of the observed span those estimates still
@@ -178,7 +194,43 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                         engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code()));
                         return new Skip(OwnerSplitSkipReason.CONFETTI_SUPPRESSED, engagements, probeSlot,
                                 gateInputs(OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), view, est,
-                                        pagesSinceLastSelfSplit, f, densityRatio));
+                                        pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
+                    }
+                }
+            }
+        }
+        // CARVE BRAKE (campaign memo §5). Distinct from the confetti gate just above: confetti reads
+        // a RATE of already-degenerate children (a binary threshold on taggedConfetti/taggedTotal);
+        // this reads the recent MASS TREND of realized children instead, and so catches an over-carve
+        // BEFORE its children turn confetti-sized (the pathology the confetti gate provably could not
+        // see: its own suppress/carve ratio kept rising while the wide-flat regressions kept splitting
+        // anyway). Same warmup (MIN_SAMPLE), same probe-recovery shape as confetti — but its own,
+        // INDEPENDENT probe sequence (ConfettiObservation#carveBrakeProbeSeq), since the two gates'
+        // over-threshold populations are distinct. Refuses SPLITS only: a braked range keeps draining
+        // by pages exactly as it would have if this gate did not exist.
+        if (toggles.carveBrake() != CarveBrakeMode.OFF) {
+            ConfettiObservation obs = view.confetti();
+            if (obs.taggedTotal() >= ConfettiFeedbackGate.MIN_SAMPLE) {
+                double massAvg = obs.windowAverageMass();
+                if (!Double.isNaN(massAvg) && massAvg < (double) toggles.carveBrake().k() * maxKeys) {
+                    if ((obs.carveBrakeProbeSeq() + 1) % CARVE_BRAKE_PROBE_K == 0) {
+                        carveReason = "carve_brake_probe";
+                        engagements.add(new Engagement("OWNER_SPLIT", carveReason));
+                        // CLAIM, not CONSUME (issue #31, mirrored): every owner sharing this
+                        // carveBrakeProbeSeq snapshot decides PROBE, so only a CAS-claimed carve may
+                        // actually publish; a pivot check below that then abandons this carve degrades
+                        // the claim to the unconditional CONSUME (consumeInsteadOfClaim).
+                        mutations = appendMutation(mutations, OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT);
+                    } else {
+                        engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CARVE_BRAKED.code()));
+                        // A pending CLAIM_CONFETTI_PROBE_SLOT (this consult's confetti check also
+                        // probed) has no carve left to serialize either, so it downgrades to CONSUME
+                        // right alongside the brake's own unconditional consume.
+                        List<OwnerSplitMutation> brakedMutations = appendMutation(
+                                consumeInsteadOfClaim(mutations), OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT);
+                        return new Skip(OwnerSplitSkipReason.CARVE_BRAKED, engagements, brakedMutations,
+                                gateInputs(OwnerSplitSkipReason.CARVE_BRAKED.code(), view, est,
+                                        pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
                     }
                 }
             }
@@ -200,7 +252,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             return new Skip(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT, engagements,
                     consumeInsteadOfClaim(mutations),
                     gateInputs(OwnerSplitSkipReason.UNSPLITTABLE_PIVOT.code(), view, est, pagesSinceLastSelfSplit,
-                            f, densityRatio));
+                            f, densityRatio, carveBrakeMassAvg));
         }
         // Engagement (§5): did the observed-alphabet chooser land the owner-split pivot on a
         // populated value (differs from the plain code-point interpolate at the same fraction)? Recorded
@@ -249,7 +301,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
             }
         }
         return new Carve(m, engagements, mutations,
-                gateInputs(carveReason, view, est, pagesSinceLastSelfSplit, f, densityRatio));
+                gateInputs(carveReason, view, est, pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
     }
 
     /**
@@ -328,20 +380,46 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
      * than emitting it here: the governor never holds the trace sink).
      */
     private OwnerSplitGateInputs gateInputs(String reason, OwnerSplitView view, double est,
-                                            long pagesSinceLastSelfSplit, double f, double densityRatio) {
+                                            long pagesSinceLastSelfSplit, double f, double densityRatio,
+                                            Double carveBrakeMassAvg) {
         return new OwnerSplitGateInputs(reason, est, pagesSinceLastSelfSplit, view.outstanding(), workerCount,
-                f, densityRatio, view.keysEmitted());
+                f, densityRatio, view.keysEmitted(), carveBrakeMassAvg);
     }
 
     /**
-     * Downgrade a probe-slot CLAIM to the unconditional CONSUME, for a probe consult that ends in a
-     * {@link Skip} rather than a {@link Carve} (issue #31). A claim only means anything when there is a
-     * carve to admit or exclude; a skip has spent its slot either way. Any other mutation list — the
-     * empty one, or the {@code CONFETTI_SUPPRESSED} skip's own CONSUME — passes through unchanged.
+     * Downgrade every probe-slot CLAIM in {@code mutations} to its unconditional CONSUME twin, for a
+     * probe consult that ends in a {@link Skip} rather than a {@link Carve} (issue #31, and the
+     * carve brake's own mirror of it). A claim only means anything when there is a carve to admit or
+     * exclude; a skip has spent its slot either way. {@code mutations} can hold BOTH a confetti claim
+     * and a carve-brake claim at once (their probe sequences are independent, so a single consult can
+     * cross both thresholds on the same view) — each present CLAIM_* is downgraded to its own
+     * CONSUME_*, and every other entry (the empty list, or a {@code CONFETTI_SUPPRESSED}/{@code
+     * CARVE_BRAKED} skip's own CONSUME) passes through unchanged.
      */
     private static List<OwnerSplitMutation> consumeInsteadOfClaim(List<OwnerSplitMutation> mutations) {
-        return mutations.contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)
-                ? List.of(OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT)
-                : mutations;
+        if (mutations.isEmpty()) {
+            return mutations;
+        }
+        List<OwnerSplitMutation> out = new ArrayList<>(mutations.size());
+        for (OwnerSplitMutation m : mutations) {
+            out.add(switch (m) {
+                case CLAIM_CONFETTI_PROBE_SLOT -> OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT;
+                case CLAIM_CARVE_BRAKE_PROBE_SLOT -> OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT;
+                default -> m;
+            });
+        }
+        return out;
+    }
+
+    /** Append one mutation to an existing (possibly empty/immutable) mutation list. */
+    private static List<OwnerSplitMutation> appendMutation(List<OwnerSplitMutation> mutations,
+                                                            OwnerSplitMutation extra) {
+        if (mutations.isEmpty()) {
+            return List.of(extra);
+        }
+        List<OwnerSplitMutation> out = new ArrayList<>(mutations.size() + 1);
+        out.addAll(mutations);
+        out.add(extra);
+        return out;
     }
 }

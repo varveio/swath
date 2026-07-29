@@ -56,6 +56,12 @@ import java.util.Map;
  *       StealMath#childTailBelowObservedMassFloor}). {@code reach_floored} is the shipped cure for
  *       the wide-flat blindness that erases an honest estimate; {@code current} is the pre-0.2.0
  *       formula, kept as the rollback arm, and {@code est_direct} is the other raced candidate.</li>
+ *   <li>{@code carve_brake} — value-taking ({@link CarveBrakeMode}), default {@link
+ *       CarveBrakeMode#OFF} in this commit (the race decides the shipped default): the
+ *       realized-child-mass carve brake in {@code io.varve.swath.engine.policy.OwnerSplitGovernor}
+ *       (campaign memo §5, the serial-tail over-carving cure). {@code mass_k2}/{@code mass_k4}/
+ *       {@code mass_k8} suppress a carve once the recent window-average realized child mass drops
+ *       below {@code K * maxKeys}.</li>
  * </ul>
  */
 public record EngineToggles(
@@ -72,101 +78,109 @@ public record EngineToggles(
         boolean readahead,
         boolean massAwareSeed,
         boolean rateAnchoredSensing,
-        TailFloorMode tailFloor) {
+        TailFloorMode tailFloor,
+        CarveBrakeMode carveBrake) {
 
     /**
-     * The one non-boolean component must exist: every consumer (the governor's gate consults, the
-     * effective-toggle log, the run-summary writer) dereferences it, so a null would surface as an
-     * NPE far from the construction that caused it. {@code parse} can never produce one (absent
-     * defaults to {@link TailFloorMode#REACH_FLOORED}, the 0.2.0 default); this guards the public
-     * constructor.
+     * The two non-boolean components must exist: every consumer (the governor's gate consults, the
+     * effective-toggle log, the run-summary writer) dereferences them, so a null would surface as an
+     * NPE far from the construction that caused it. {@code parse} can never produce either one null
+     * (absent defaults to {@link TailFloorMode#REACH_FLOORED} and {@link CarveBrakeMode#OFF}
+     * respectively); this guards the public constructor.
      */
     public EngineToggles {
         java.util.Objects.requireNonNull(tailFloor, "tailFloor");
+        java.util.Objects.requireNonNull(carveBrake, "carveBrake");
     }
 
     public EngineToggles withOwnerSplit(boolean ownerSplit) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withDensityEwma(boolean densityEwma) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withRadixBands(boolean radixBands) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withStructureProbes(boolean structureProbes) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withFarAhead(boolean farAhead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withAlphabetPivots(boolean alphabetPivots) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withReflect(boolean reflect) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withConfettiFeedback(boolean confettiFeedback) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withReflectLift(boolean reflectLift) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withFanoutTiling(boolean fanoutTiling) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withReadahead(boolean readahead) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withMassAwareSeed(boolean massAwareSeed) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withRateAnchoredSensing(boolean rateAnchoredSensing) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     public EngineToggles withTailFloor(TailFloorMode tailFloor) {
         return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
                 reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
-                rateAnchoredSensing, tailFloor);
+                rateAnchoredSensing, tailFloor, carveBrake);
+    }
+
+    public EngineToggles withCarveBrake(CarveBrakeMode carveBrake) {
+        return new EngineToggles(ownerSplit, densityEwma, radixBands, structureProbes, farAhead, alphabetPivots,
+                reflect, confettiFeedback, reflectLift, fanoutTiling, readahead, massAwareSeed,
+                rateAnchoredSensing, tailFloor, carveBrake);
     }
 
     /**
@@ -180,10 +194,14 @@ public record EngineToggles(
      * byte-identical across all 114 measurable fixtures of the cached corpus panel. The pre-0.2.0
      * behaviour remains reachable as {@code rate_anchored_sensing=off} plus {@code
      * tail_floor=current}, which is the supported rollback.
+     *
+     * <p>{@code carve_brake} defaults to {@link CarveBrakeMode#OFF} in this commit — the realized-
+     * child-mass carve brake ships as a raced candidate, not yet a promoted default; a later commit
+     * flips it once the race (campaign memo §5) picks a winning mode.
      */
     public static final EngineToggles DEFAULT =
             new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, true,
-                    TailFloorMode.REACH_FLOORED);
+                    TailFloorMode.REACH_FLOORED, CarveBrakeMode.OFF);
 
     /**
      * Valid ablation {@code --engine-toggle} names (each {@code on} by default, {@code off} to
@@ -228,6 +246,16 @@ public record EngineToggles(
     public static final String TAIL_FLOOR_NAME = "tail_floor";
 
     /**
+     * The {@code --engine-toggle carve_brake=off|mass_k2|mass_k4|mass_k8} name; the OTHER
+     * value-taking toggle (its values are {@link CarveBrakeMode#codes()}, not {@code on}/{@code
+     * off}), default {@link CarveBrakeMode#OFF} in this commit (see {@link #DEFAULT}). Not in
+     * {@link #NAMES}: like {@link #TAIL_FLOOR_NAME}, nothing is turned off by a mode name, so the
+     * selected mode fires an engagement mark ({@code TOGGLE.carve_brake_<mode>_on}) when non-{@code
+     * off} rather than a {@code TOGGLE.carve_brake_off} mark on every run.
+     */
+    public static final String CARVE_BRAKE_NAME = "carve_brake";
+
+    /**
      * The far-ahead fraction substituted for {@link WorkerState#densityFraction()} when {@code
      * density_ewma} is off — {@link WorkerState#MAX_FAR_FRACTION}, the same ceiling the EWMA path
      * saturates at for a uniformly-dense drainer, so {@code density_ewma=off} behaves like "always
@@ -254,6 +282,7 @@ public record EngineToggles(
     public static EngineToggles parse(List<String> raw, boolean noOwnerSplit) throws InvalidArgsException {
         Map<String, Boolean> values = new LinkedHashMap<>();
         TailFloorMode tailFloor = null;
+        CarveBrakeMode carveBrake = null;
         if (raw != null) {
             for (String entry : raw) {
                 int eq = entry.indexOf('=');
@@ -276,12 +305,26 @@ public record EngineToggles(
                     tailFloor = mode;
                     continue;
                 }
+                if (CARVE_BRAKE_NAME.equals(name)) {
+                    CarveBrakeMode mode = CarveBrakeMode.fromCode(rawValue);
+                    if (mode == null) {
+                        throw new InvalidArgsException("--engine-toggle " + CARVE_BRAKE_NAME
+                                + ": value must be " + String.join("|", CarveBrakeMode.codes())
+                                + " (got '" + rawValue + "')");
+                    }
+                    if (carveBrake != null && carveBrake != mode) {
+                        throw new InvalidArgsException("--engine-toggle " + CARVE_BRAKE_NAME
+                                + " given contradictory values");
+                    }
+                    carveBrake = mode;
+                    continue;
+                }
                 if (!NAMES.contains(name) && !READAHEAD_NAME.equals(name) && !MASS_AWARE_SEED_NAME.equals(name)
                         && !RATE_ANCHORED_SENSING_NAME.equals(name)) {
                     throw new InvalidArgsException("--engine-toggle: unknown name '" + name
                             + "' (valid names: " + String.join(", ", NAMES) + ", " + READAHEAD_NAME + ", "
                             + MASS_AWARE_SEED_NAME + ", " + RATE_ANCHORED_SENSING_NAME + ", "
-                            + TAIL_FLOOR_NAME + ")");
+                            + TAIL_FLOOR_NAME + ", " + CARVE_BRAKE_NAME + ")");
                 }
                 boolean on = parseOnOff(name, rawValue);
                 putConsistent(values, name, on, "--engine-toggle " + name + " given contradictory values");
@@ -305,7 +348,8 @@ public record EngineToggles(
                 values.getOrDefault(READAHEAD_NAME, false),
                 values.getOrDefault(MASS_AWARE_SEED_NAME, true),
                 values.getOrDefault(RATE_ANCHORED_SENSING_NAME, true),
-                tailFloor == null ? TailFloorMode.REACH_FLOORED : tailFloor);
+                tailFloor == null ? TailFloorMode.REACH_FLOORED : tailFloor,
+                carveBrake == null ? CarveBrakeMode.OFF : carveBrake);
     }
 
     private static void putConsistent(Map<String, Boolean> values, String name, boolean on, String conflictMessage)

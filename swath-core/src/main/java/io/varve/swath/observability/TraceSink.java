@@ -72,10 +72,18 @@ public interface TraceSink extends AutoCloseable {
      * of a following {@link #ownerSplit} event. A double input the short-circuiting chain never
      * computed is {@code NaN} ({@code OwnerSplitGateInputs.NOT_COMPUTED}); see
      * docs/internals/metrics-internals.md §7 for how non-finite numbers serialize.
+     *
+     * <p>{@code carveBrakeMassAvg} is the carve brake's window-average realized child mass reading
+     * (campaign memo §5) — a THIRD convention, distinct from the {@code NaN} above: {@code null}
+     * (not {@link Double#NaN}) omits the field from the event entirely, because {@code
+     * carve_brake=off} means this run never reads the signal at all (kept distinct from "not
+     * computed yet" so every {@code carve_brake=off} decision-trace golden stays byte-identical to
+     * a build that predates this field). Non-null but {@code NaN} means the brake is on but
+     * pre-warmup.
      */
     void ownerSplitDecision(long workerId, long nodeId, String reason, double est, long pagesSinceLastSelfSplit,
                             long outstanding, int workerCount, double farAheadFraction, double densityRatio,
-                            long keysEmitted);
+                            long keysEmitted, Double carveBrakeMassAvg);
 
     /**
      * One victim-selection pass over the live pool ({@code ThiefPolicy.selectVictim}, once per steal

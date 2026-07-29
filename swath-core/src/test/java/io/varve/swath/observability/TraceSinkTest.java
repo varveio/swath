@@ -34,7 +34,8 @@ final class TraceSinkTest {
             TraceSink.NONE.claimed(0L, 1L, null, null, null);
             TraceSink.NONE.pageCommitted(0L, 1L, 10, null, false);
             TraceSink.NONE.stealAttempt(0L, "RETRY", "cursor_passed_pivot");
-            TraceSink.NONE.ownerSplitDecision(0L, 1L, "demand_gated", 1.0, 4L, 8L, 8, Double.NaN, Double.NaN, 10L);
+            TraceSink.NONE.ownerSplitDecision(0L, 1L, "demand_gated", 1.0, 4L, 8L, 8, Double.NaN, Double.NaN, 10L,
+                    null);
             TraceSink.NONE.victimScan(0L, 3, 1, 2, 0, -1L, Double.NEGATIVE_INFINITY, "all_futility_paced");
             TraceSink.NONE.split(0L, 1L, 2L, "midpoint", null, null);
             TraceSink.NONE.ownerSplit(0L, 1L, 2L, "self_published", null, null);
@@ -80,8 +81,16 @@ final class TraceSinkTest {
         TraceSink sink = TraceSink.jsonl(file);
         try {
             // A gate that short-circuited above f/densityRatio: both carry the NaN not-computed sentinel.
+            // carveBrakeMassAvg is null: this run's carve_brake toggle is off, so the field is omitted
+            // entirely rather than reported as a not-applicable NaN.
             sink.ownerSplitDecision(7L, 42L, "remaining_est_floor", 399.5, 4L, 2L, 8,
-                    Double.NaN, Double.NaN, 5_500_000L);
+                    Double.NaN, Double.NaN, 5_500_000L, null);
+            // A second decision with carve_brake ON: pre-warmup (NaN, present as JSON null) and then a
+            // finite reading, so both non-null states are exercised on the wire.
+            sink.ownerSplitDecision(7L, 43L, "carve_braked", 500.0, 40L, 0L, 8,
+                    0.5, 1.0, 6_000_000L, Double.NaN);
+            sink.ownerSplitDecision(7L, 44L, "self_published", 500.0, 40L, 0L, 8,
+                    0.5, 1.0, 6_000_000L, 250.0);
             // A refusal: no victim, and the argmax seed (-Infinity) as best_est.
             sink.victimScan(7L, 3, 0, 3, 0, -1L, Double.NEGATIVE_INFINITY, "all_futility_paced");
         } finally {
@@ -103,8 +112,21 @@ final class TraceSinkTest {
                 .as("a not-computed gate input serializes as JSON null, never a plausible-looking 0")
                 .isTrue();
         assertThat(gate.get("density_ratio").isNull()).isTrue();
+        assertThat(gate.has("carve_brake_mass_avg"))
+                .as("carveBrakeMassAvg == null (carve_brake=off) omits the field entirely")
+                .isFalse();
 
-        JsonNode scan = MAPPER.readTree(lines.get(1));
+        JsonNode carveBrakedGate = MAPPER.readTree(lines.get(1));
+        assertThat(carveBrakedGate.get("carve_brake_mass_avg").isNull())
+                .as("carve_brake=on but pre-warmup: the field is present, as JSON null")
+                .isTrue();
+
+        JsonNode publishedGate = MAPPER.readTree(lines.get(2));
+        assertThat(publishedGate.get("carve_brake_mass_avg").asDouble())
+                .as("carve_brake=on, past warmup: the field carries the real reading")
+                .isEqualTo(250.0);
+
+        JsonNode scan = MAPPER.readTree(lines.get(3));
         assertThat(scan.get("event").asText()).isEqualTo("victim_scan");
         assertThat(scan.has("node_id")).as("a scan spans the whole pool, so it carries no node_id").isFalse();
         assertThat(scan.get("seen").asInt()).isEqualTo(3);

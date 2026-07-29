@@ -50,6 +50,20 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>One instance per {@link WorkStealingScan} (run-scoped); every method is safe for concurrent
  * callers (workers race to both complete tagged children and attempt owner-splits).
  *
+ * <p><b>The carve brake's window-average mass rides the same {@link #recordCompletion} call.</b>
+ * The campaign memo §5 carve brake (algorithms.md §3.3) reads the recent MASS TREND of tagged
+ * owner-split children rather than confetti's binary rate, so this class also folds each
+ * completion's realized mass into a {@link CarveMassRing} — no new callback, no new
+ * synchronization point. {@code OwnerSplitGovernor} reads the ring's {@link
+ * CarveMassRing#windowAverage()} off the same {@link #snapshot()} it already reads {@code
+ * taggedTotal}/{@code taggedConfetti}/{@code probeSeq} from. The brake's own periodic probe (every
+ * {@code CARVE_BRAKE_PROBE_K}-th would-be-braked consult) needs its OWN sequence — {@link
+ * #carveBrakeProbeSeq} — independent of confetti's {@link #probeSeq}, since the two gates'
+ * over-threshold populations are distinct; {@link #consumeCarveBrakeProbeSlot()}/{@link
+ * #claimCarveBrakeProbeSlot(long)} mirror {@link #consumeProbeSlot()}/{@link
+ * #claimProbeSlot(long)} exactly, for the identical issue #31 reason (N owners sharing a
+ * pre-increment snapshot all decide PROBE, so only a CAS-claimed carve may actually publish).
+ *
  * <p>Public so {@code io.varve.swath.engine.policy}'s owner-split governor package can read a
  * {@link #snapshot()} of this same run-scoped instance. The tagged-child lifecycle — {@link
  * #recordCompletion}, and {@link OwnerSelfSplit}'s claim/drain/remove-before-tag bookkeeping that
@@ -65,36 +79,48 @@ public final class ConfettiFeedbackGate {
     private final AtomicLong taggedTotal = new AtomicLong();
     private final AtomicLong taggedConfetti = new AtomicLong();
     private final AtomicLong probeSeq = new AtomicLong();
+    private final AtomicLong carveBrakeProbeSeq = new AtomicLong();
+    private final CarveMassRing carveMassRing = new CarveMassRing();
 
     /**
      * A coherent read of this gate's counters at one instant, in the same order {@code decide()}
      * used to read them (total, then confetti) before issue #22's fix moved the classification math
      * to {@code OwnerSplitGovernor}. {@code probeSeq} is the run's current probe sequence number —
      * the count of {@link #consumeProbeSlot()} calls so far, i.e. the number of PRIOR over-threshold
-     * consults, whatever their outcome. Three independent counters, not a single atomic snapshot: a
-     * torn read across them only nudges which page-commit sees the rate/probe-slot transition,
-     * never correctness (mirrors the density EWMA's own lock-free read tolerance).
+     * confetti consults, whatever their outcome. {@code windowAverageMass} is the carve brake's own
+     * signal ({@link CarveMassRing#windowAverage()}, {@code NaN} pre-warmup); {@code
+     * carveBrakeProbeSeq} is the brake's OWN probe sequence, independent of {@code probeSeq} (see
+     * this class's javadoc). Five independent counters, not a single atomic snapshot: a torn read
+     * across them only nudges which page-commit sees a rate/mass/probe-slot transition, never
+     * correctness (mirrors the density EWMA's own lock-free read tolerance).
      */
-    public record Snapshot(long taggedTotal, long taggedConfetti, long probeSeq) {
+    public record Snapshot(long taggedTotal, long taggedConfetti, long probeSeq, double windowAverageMass,
+                            long carveBrakeProbeSeq) {
     }
 
     /**
      * Fold one tagged owner-split child's completion classification (ground truth) into the
-     * run-level rate the NEXT {@link #snapshot()} reflects. Called at most once per tagged
-     * child (the caller removes it from the tagged set before calling, so double-completion is
-     * impossible). Public so a test outside {@code io.varve.swath.engine} can warm this
-     * collaborator up directly (e.g. the owner-split governor's own table-driven tests).
+     * run-level rate the NEXT {@link #snapshot()} reflects, and its realized mass into the carve
+     * brake's window. Called at most once per tagged child (the caller removes it from the tagged
+     * set before calling, so double-completion is impossible). Public so a test outside {@code
+     * io.varve.swath.engine} can warm this collaborator up directly (e.g. the owner-split
+     * governor's own table-driven tests).
+     *
+     * @param mass the child's realized emitted key count (keys emitted by completion) — the carve
+     *             brake's window sample
      */
-    public void recordCompletion(boolean confetti) {
+    public void recordCompletion(boolean confetti, long mass) {
         taggedTotal.incrementAndGet();
         if (confetti) {
             taggedConfetti.incrementAndGet();
         }
+        carveMassRing.record(mass);
     }
 
-    /** A coherent read of this run's tagged-completion tallies and current probe sequence. */
+    /** A coherent read of this run's tagged-completion tallies, mass window, and probe sequences. */
     public Snapshot snapshot() {
-        return new Snapshot(taggedTotal.get(), taggedConfetti.get(), probeSeq.get());
+        return new Snapshot(taggedTotal.get(), taggedConfetti.get(), probeSeq.get(), carveMassRing.windowAverage(),
+                carveBrakeProbeSeq.get());
     }
 
     /**
@@ -179,6 +205,37 @@ public final class ConfettiFeedbackGate {
             return true;
         }
         probeSeq.incrementAndGet();   // lost the slot, but this consult still consumed one
+        return false;
+    }
+
+    /**
+     * The carve brake's OWN unconditional probe-sequence advance — {@link #consumeProbeSlot()}'s
+     * exact twin, for the brake's independent sequence. Called by the executor whenever the
+     * governor's decision carries a carve-brake {@code CONSUME_CARVE_BRAKE_PROBE_SLOT} mutation:
+     * every consult that crossed into the brake's over-threshold branch, regardless of outcome.
+     */
+    public void consumeCarveBrakeProbeSlot() {
+        carveBrakeProbeSeq.incrementAndGet();
+    }
+
+    /**
+     * The carve brake's OWN probe-slot claim — {@link #claimProbeSlot(long)}'s exact twin, against
+     * {@link #carveBrakeProbeSeq} instead of {@link #probeSeq} (issue #31's fix, mirrored: N owners
+     * sharing the same pre-increment {@code carveBrakeProbeSeq} snapshot would all decide {@code
+     * carve_brake_probe} and so all carve, multiplying exactly the confetti-sized carves the brake
+     * exists to suppress). Exactly one concurrent caller wins a given {@code
+     * expectedCarveBrakeProbeSeq}; a loser still consumes a slot, so the sequence advances once per
+     * over-threshold consult, winner or loser — the same accounting {@link #claimProbeSlot(long)}
+     * gives confetti's sequence.
+     *
+     * @param expectedCarveBrakeProbeSeq the {@code carveBrakeProbeSeq} the deciding view was built from
+     * @return {@code true} iff this consult won the slot and its carve may proceed
+     */
+    public boolean claimCarveBrakeProbeSlot(long expectedCarveBrakeProbeSeq) {
+        if (carveBrakeProbeSeq.compareAndSet(expectedCarveBrakeProbeSeq, expectedCarveBrakeProbeSeq + 1)) {
+            return true;
+        }
+        carveBrakeProbeSeq.incrementAndGet();   // lost the slot, but this consult still consumed one
         return false;
     }
 }

@@ -523,12 +523,12 @@ slip — is rejected outright (exit 2) rather than silently signing with SigV4.
 NAME=VALUE` (repeatable) is a single ablation namespace so a per-mechanism A/B measurement of the
 `WorkStealingScan` engine runs from one binary instead of a bespoke flag per experiment. Every
 structure toggle defaults to `on` (`readahead` defaults to `off`; `mass_aware_seed` and
-`rate_anchored_sensing` are default ON, opt-out `NAME=off`; `tail_floor` is the one
-value-taking toggle, default `reach_floored`); **the defaults are the only supported
-configuration** —
+`rate_anchored_sensing` are default ON, opt-out `NAME=off`; `tail_floor` and `carve_brake` are the
+two value-taking toggles, default `reach_floored` and `off` respectively); **the defaults are the
+only supported configuration** —
 toggling never changes correctness (I2/I3 tiling holds either way), only which optimization
-mechanisms engage. An unknown name, a malformed value (not `on`/`off` — or, for `tail_floor`, not
-one of its modes), or a contradictory combination
+mechanisms engage. An unknown name, a malformed value (not `on`/`off` — or, for `tail_floor`/`carve_brake`,
+not one of their modes), or a contradictory combination
 (the same name repeated with both values) is a startup validation error (exit 2).
 
 | Name | Default | Effect when `off` |
@@ -557,12 +557,14 @@ alongside `max_duration_ms`) both echo the effective state whenever any toggle i
 
 #### New-mechanism performance toggles — defaults and cost profile
 
-Unlike the ablation toggles above (default `on` = the shipped behavior), four toggles are
+Unlike the ablation toggles above (default `on` = the shipped behavior), five toggles are
 **new mechanisms** — all passed through the same `--engine-toggle` option, but distinct from
 the on/off ablation list — and are the only knobs a perf-focused user needs
 to consider. `mass_aware_seed` and `rate_anchored_sensing` are **default `on`** — opt-*out*
 (`--engine-toggle NAME=off`), not opt-in; `readahead` remains **opt-in**, default `off`;
-`tail_floor` selects a *mode* rather than on/off, default `reach_floored`.
+`tail_floor` selects a *mode* rather than on/off, default `reach_floored`; `carve_brake` also
+selects a *mode* rather than on/off, default `off` (see its own row below — it is the one
+mechanism here that has not yet been promoted).
 
 **Changed in 0.2.0:** `rate_anchored_sensing` and `tail_floor` flipped from opt-in
 (`off` / `current`) to on-by-default as a pair, after the measurement described in their rows
@@ -582,6 +584,7 @@ unaffected either way — the pair changes scheduling, not the key set.
 | `rate_anchored_sensing` | **on** | You need the pre-0.2.0 position sensor exactly, for a diagnostic A/B or a rollback (`--engine-toggle rate_anchored_sensing=off`). On the default arm, remaining work is read as the range's own proven mass (`max(keysEmitted, page)`), which cursor-anchored geometry may lift by up to sixteen and cut by at most four. It replaces the pre-0.2.0 local-density-times-span reading at the two fleet-level sites that steer on it — victim choice and the owner-split gate chain (`readahead`'s own engage gate keeps the older reading either way: it scores one owner's local runway, not a fleet-wide ranking) — which matters on a deep-nested keyspace where the old window's consumed span underflows to zero and a range's emitted keys drop out of its own estimate. It changes which range is stolen from and when an owner carves, never what is emitted. A run marks itself `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own classification counters, one namespace per site (`SENSING_OWNER.*`, `SENSING_STEAL.*` — metrics-internals.md §5a). |
 | `tail_floor` | **`reach_floored`** | You need the pre-0.2.0 floor arithmetic exactly (`tail_floor=current`), for a diagnostic A/B or a rollback, or you are racing the other cure arm (`est_direct`). The default cures a **wide-flat** keyspace, where the pre-0.2.0 floor is measurably blind: it scores the child tail as `est × max(0, min(1, densityRatio) − f)`, and on a wide-flat tail the trailing-density ratio reads ~3e-4 against `f`≈0.5, so the product is **exactly zero regardless of `est`** — a range with 10^5–10^6 keys left is refused every time (measured: 5,326 of 5,326 owner attempts on one `nara` tail range, which then drained serially for the rest of the run). `tail_floor=est_direct` blocks iff `est <= 2×max-keys`, dropping the byte-geometry window entirely (under `rate_anchored_sensing` the estimate is already realized-mass-anchored, so multiplying it by geometry double-counts); `tail_floor=reach_floored` keeps the window product but floors the reach term at 1/16, so a thin trailing density shrinks the child's share instead of erasing it (it admits from ~32 pages of estimate up). Both are strictly more permissive than `current` and neither changes where a pivot lands, so tiling is untouched — they change **how often an owner carves**, never what is emitted. `reach_floored` was promoted to the default in 0.2.0 on the evidence in `docs/performance.md`; `est_direct` stays available as the other raced arm (composable with `rate_anchored_sensing`, deliberately not coupled to it). A run on an arm marks itself `TOGGLE.tail_floor_<mode>_on` and counts every decision the mode flipped, per consult site (`TAIL_FLOOR.gate_*`, `TAIL_FLOOR.clamp_*`, `TAIL_FLOOR.lift_*` — metrics-internals.md §5). |
 | `readahead` | **off** | You want the lowest wall-clock on a drain-heavy bucket (`encode` and `pmc` are the shapes it has been measured engaging on) and can pay for it: readahead trades materially more API calls and a materially higher peak RSS for less wall time. Leave it off when API cost or memory matters more than latency. |
+| `carve_brake` | **off** | **Not yet promoted — raced separately from the toggles above.** `mass_k2`/`mass_k4`/`mass_k8` add a realized-child-mass carve brake AFTER the confetti feedback gate: once a run has completed at least 8 tagged owner-split children, it refuses a further carve whenever the recent window-average REALIZED mass of those children drops below `K × max-keys` (`K` = 2/4/8), with every 16th would-be-braked carve let through anyway as a periodic probe (so a keyspace whose shape changes mid-run re-earns carving). Distinct from `confetti_feedback`: that gate reads a RATE of already-degenerate children; this reads the recent MASS TREND, catching an over-carve before its children turn confetti-sized — the intended fix for the dense/uniform instability `denseUniformShapeNeverEngagesTheGateAndSubstantialDominates` (`ConfettiFeedbackWiringTest`) discloses on the 0.2.0 default pair, and for a documented family of clean corpus regressions sharing the same over-carving signature. Refuses SPLITS only — never page work, never stealing, never any other gate's decision — so `carve_brake=off` is byte-identical to a build that predates this toggle (decision-trace goldens pin this). A run on a non-`off` arm marks itself `TOGGLE.carve_brake_<mode>_on` and counts `OWNER_SPLIT.carve_braked`/`OWNER_SPLIT.carve_brake_probe`; the `owner_split_decision` trace event additionally carries the window-average mass reading it decided on (`carve_brake_mass_avg`, omitted entirely when this toggle is `off` — metrics-internals.md §7). Rollback: `carve_brake=off` (the default in this commit). Which `K`, if any, ships as the promoted default is decided by a separate race, not this commit. |
 
 **When both apply to the same cut.** On a truncated cut that is BOTH a `key=value/` partition
 fan-out and would otherwise be mass-aware-sampled, `fanout_tiling` (when on) wins outright — the
@@ -592,17 +595,18 @@ NON-partition cut.
 Maximum-performance recipe (readahead on top of the now-default `mass_aware_seed`):
 `swath list s3://BUCKET ... --tune engine.readahead=on`
 
-Cost notes: none of the four performance toggles has an unbounded direct call-amplification mechanism —
+Cost notes: none of the five performance toggles has an unbounded direct call-amplification mechanism —
 readahead speculation is engage-gated and window-bounded (K=8 contiguous guesses per engaged range),
 mass-aware sampling is carved out of the fixed 256-probe seed budget (≤32 probes), and
-rate-anchored sensing and the tail-floor arms are local estimate arithmetic (a `tail_floor` arm's
-extra cost is one more owner-side split per admitted carve — bounded by the same
+rate-anchored sensing, the tail-floor arms, and the carve brake are local estimate arithmetic (a
+`tail_floor` arm's extra cost is one more owner-side split per admitted carve — bounded by the same
 one-carve-per-32-pages rate limit as any other, plus one duplicate floor evaluation per consult so
-the run can report what the arm changed).
+the run can report what the arm changed; the carve brake only ever REFUSES a carve the chain would
+otherwise have admitted, so it can only reduce API calls, never add any).
 The api multipliers only cost money on requester-pays/private buckets (public-bucket LIST
-is free); the RSS cost is real everywhere. Each of the four announces itself via a once-per-run
-`TOGGLE.<name>_on` engagement mark (`TOGGLE.tail_floor_<mode>_on` for the value-taking one), so a
-run's summary always shows what was enabled.
+is free); the RSS cost is real everywhere. Each of the five announces itself via a once-per-run
+`TOGGLE.<name>_on` engagement mark (`TOGGLE.tail_floor_<mode>_on`/`TOGGLE.carve_brake_<mode>_on` for
+the two value-taking ones), so a run's summary always shows what was enabled.
 
 #### Run trace (`--trace`, V1)
 

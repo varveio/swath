@@ -46,6 +46,14 @@ public enum OwnerSplitSkipReason {
      */
     CONFETTI_SUPPRESSED("confetti_suppressed"),
     /**
+     * The realized-child-mass carve brake suppressed the carve — distinct from {@link
+     * #CONFETTI_SUPPRESSED}: the brake reads the recent window-average MASS TREND of tagged
+     * children rather than confetti's binary degenerate/substantial rate (campaign memo §5, the
+     * serial-tail over-carving cure). {@code OWNER_SPLIT.carve_braked}. Gated on {@code
+     * --engine-toggle carve_brake=MODE} (default {@code off} in this commit).
+     */
+    CARVE_BRAKED("carve_braked"),
+    /**
      * The synthesized pivot was {@code null}, or not strictly inside {@code (cursorTo, hi]} — no
      * safe key exists strictly between {@code cursorTo} and {@code hi} THIS page, or the
      * interpolation didn't land in range. RECURS, unlike a one-off edge case: {@code

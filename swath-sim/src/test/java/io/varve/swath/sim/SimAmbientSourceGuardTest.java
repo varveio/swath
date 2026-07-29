@@ -400,7 +400,7 @@ class SimAmbientSourceGuardTest {
             sources.addAll(policySources.filter(p -> p.toString().endsWith(".java")).toList());
         }
         for (String name : List.of("StealMath.java", "AlphabetDigest.java", "ConfettiFeedbackGate.java",
-                "EngineToggles.java", "WorkerState.java")) {
+                "CarveMassRing.java", "CarveBrakeMode.java", "EngineToggles.java", "WorkerState.java")) {
             sources.add(engine.resolve(name));
         }
         for (String name : List.of("ByteMidpoint.java", "KeyBytes.java")) {

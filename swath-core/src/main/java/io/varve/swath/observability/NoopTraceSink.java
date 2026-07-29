@@ -37,7 +37,7 @@ final class NoopTraceSink implements TraceSink {
     @Override
     public void ownerSplitDecision(long workerId, long nodeId, String reason, double est,
             long pagesSinceLastSelfSplit, long outstanding, int workerCount, double farAheadFraction,
-            double densityRatio, long keysEmitted) {
+            double densityRatio, long keysEmitted, Double carveBrakeMassAvg) {
         // Intentionally empty: TraceSink.NONE discards trace events.
     }
 
