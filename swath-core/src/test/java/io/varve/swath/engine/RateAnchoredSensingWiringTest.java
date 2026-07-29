@@ -106,20 +106,56 @@ final class RateAnchoredSensingWiringTest {
                 .isGreaterThan(0L);
     }
 
+    /**
+     * Since the 0.2.0 default flip the promoted sensor IS the default, so the default run installs
+     * it and marks itself — post-hoc analysis reads which sensor ran rather than assuming it.
+     */
     @Test
     @Timeout(60)
-    void theDefaultRunsTheShippedSensorAndIsSilentOnBothCounters(@TempDir Path dir) throws Exception {
+    void theDefaultInstallsThePromotedSensorAndMarksItsArm(@TempDir Path dir) throws Exception {
         List<byte[]> keyspace = Keyspaces.exactly(2000);
-        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isFalse();
+        assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isTrue();
         assertThat(EngineToggles.DEFAULT.remainingWorkEstimator(20))
-                .isSameAs(RemainingWorkEstimator.WINDOW);
+                .as("the default resolves to the promoted rate-anchored estimator")
+                .isInstanceOf(RateAnchoredEstimator.class);
 
-        ScanResult result = runBoundedRoot(dir, "sensing-off", keyspace, EngineToggles.DEFAULT);
+        ScanResult result = runBoundedRoot(dir, "sensing-default", keyspace, EngineToggles.DEFAULT);
+        assertExactlyOnce(result.emitted(), keyspace);
+
+        assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L))
+                .as("the default arm marks itself exactly once").isEqualTo(1L);
+    }
+
+    /**
+     * The documented rollback, exercised end-to-end as the pair {@code docs/usage.md} actually
+     * tells a user to pass: {@code rate_anchored_sensing=off} AND {@code tail_floor=current}
+     * together, parsed from those strings and driven through a real bounded scan.
+     *
+     * <p>Asserting the sensor half alone would leave the promise half-tested — the pair is what the
+     * docs promise restores pre-0.2.0 behaviour. The dense/uniform carve instability tracked by
+     * {@code ConfettiFeedbackWiringTest} (#78) belongs to the promoted <em>default</em> pair, not
+     * this rollback configuration. So the rollback is verified as a pair or not at all.
+     */
+    @Test
+    @Timeout(60)
+    void theDocumentedRollbackPairRunsBothLegacyMechanismsAndIsSilentOnBothCounters(@TempDir Path dir)
+            throws Exception {
+        List<byte[]> keyspace = Keyspaces.exactly(2000);
+        EngineToggles rollback = EngineToggles.parse(
+                List.of("rate_anchored_sensing=off", "tail_floor=current"), false);
+        assertThat(rollback.remainingWorkEstimator(20)).isSameAs(RemainingWorkEstimator.WINDOW);
+        assertThat(rollback.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
+
+        ScanResult result = runBoundedRoot(dir, "rollback-pair", keyspace, rollback);
         assertExactlyOnce(result.emitted(), keyspace);
 
         assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L)).isZero();
         assertThat(sumCategory(result.stealReasons(), "SENSING_OWNER")
                 + sumCategory(result.stealReasons(), "SENSING_STEAL"))
-                .as("the shipped reading adds no counter to a run that has always existed").isZero();
+                .as("the legacy reading adds no counter to a run that has always existed").isZero();
+        assertThat(result.stealReasons().keySet().stream().filter(k -> k.startsWith("TOGGLE.tail_floor")))
+                .as("and the legacy floor is not an arm, so it marks nothing either").isEmpty();
+        assertThat(sumCategory(result.stealReasons(), "TAIL_FLOOR"))
+                .as("nor does it compute a second verdict to compare against").isZero();
     }
 }

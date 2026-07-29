@@ -51,11 +51,11 @@ import java.util.Map;
  *   <li>{@code mass_aware_seed} — opt-out, default ON: lets {@link SeedStep} sample an ambiguous
  *       truncated cut's children to disambiguate a heavy subtree (banded to parallelize) from a
  *       1:1 tiny-leaf explosion (the INT-8 shape, left whole for work-stealing).</li>
- *   <li>{@code tail_floor} — value-taking ({@link TailFloorMode}), default {@code current}: which
- *       arithmetic the owner-split child-tail floor reads ({@link
- *       StealMath#childTailBelowObservedMassFloor}). The two non-default modes are the raced cures
- *       for the wide-flat blindness that erases an honest estimate; {@code current} is the shipped
- *       formula.</li>
+ *   <li>{@code tail_floor} — value-taking ({@link TailFloorMode}), default {@code
+ *       reach_floored}: which arithmetic the owner-split child-tail floor reads ({@link
+ *       StealMath#childTailBelowObservedMassFloor}). {@code reach_floored} is the shipped cure for
+ *       the wide-flat blindness that erases an honest estimate; {@code current} is the pre-0.2.0
+ *       formula, kept as the rollback arm, and {@code est_direct} is the other raced candidate.</li>
  * </ul>
  */
 public record EngineToggles(
@@ -78,7 +78,8 @@ public record EngineToggles(
      * The one non-boolean component must exist: every consumer (the governor's gate consults, the
      * effective-toggle log, the run-summary writer) dereferences it, so a null would surface as an
      * NPE far from the construction that caused it. {@code parse} can never produce one (absent
-     * defaults to {@link TailFloorMode#CURRENT}); this guards the public constructor.
+     * defaults to {@link TailFloorMode#REACH_FLOORED}, the 0.2.0 default); this guards the public
+     * constructor.
      */
     public EngineToggles {
         java.util.Objects.requireNonNull(tailFloor, "tailFloor");
@@ -169,13 +170,20 @@ public record EngineToggles(
     }
 
     /**
-     * The only supported configuration: every ablation toggle on, {@code readahead} and {@code
-     * rate_anchored_sensing} off, {@code mass_aware_seed} on, {@code tail_floor} at {@link
-     * TailFloorMode#CURRENT}.
+     * The only supported configuration: every ablation toggle on, {@code readahead} off, {@code
+     * mass_aware_seed} and {@code rate_anchored_sensing} on, {@code tail_floor} at {@link
+     * TailFloorMode#REACH_FLOORED}.
+     *
+     * <p>The sensing/tail-floor pair became the default in 0.2.0. Both had shipped opt-in so a
+     * one-binary A/B could measure them: the pair cures the wide-flat serial tail (~11× end-to-end
+     * on a live 13.5M-key bucket, both reps, at slightly fewer API calls) and left key-set output
+     * byte-identical across all 114 measurable fixtures of the cached corpus panel. The pre-0.2.0
+     * behaviour remains reachable as {@code rate_anchored_sensing=off} plus {@code
+     * tail_floor=current}, which is the supported rollback.
      */
     public static final EngineToggles DEFAULT =
-            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, false,
-                    TailFloorMode.CURRENT);
+            new EngineToggles(true, true, true, true, true, true, true, true, true, true, false, true, true,
+                    TailFloorMode.REACH_FLOORED);
 
     /**
      * Valid ablation {@code --engine-toggle} names (each {@code on} by default, {@code off} to
@@ -198,21 +206,24 @@ public record EngineToggles(
     public static final String MASS_AWARE_SEED_NAME = "mass_aware_seed";
 
     /**
-     * The opt-in {@code --engine-toggle rate_anchored_sensing=on} name, default OFF; not in {@link
-     * #NAMES}. Selects {@link RateAnchoredEstimator} — the simulator's promoted position sensor — as
-     * the run's {@link RemainingWorkEstimator} in place of the shipped window reading, so a
-     * real-bucket A/B runs both arms from one binary. Not an ablation (nothing is turned off), so it
-     * fires an engagement mark on the ON side exactly as {@code readahead} does.
+     * The {@code --engine-toggle rate_anchored_sensing} name; opt-out, default ON since 0.2.0, so
+     * {@code rate_anchored_sensing=off} is the documented opt-out. Not in {@link #NAMES}. Selects
+     * {@link RateAnchoredEstimator} — the simulator's promoted position sensor — as the run's
+     * {@link RemainingWorkEstimator} in place of the pre-0.2.0 window reading. It shipped opt-in so
+     * a real-bucket A/B could run both arms from one binary; that A/B is what promoted it. Not an
+     * ablation in the {@link #NAMES} sense, so it keeps firing an engagement mark on the ON side —
+     * post-hoc analysis reads which arm ran rather than assuming the default.
      */
     public static final String RATE_ANCHORED_SENSING_NAME = "rate_anchored_sensing";
 
     /**
      * The {@code --engine-toggle tail_floor=current|est_direct|reach_floored} name; the ONLY
      * value-taking toggle (its values are {@link TailFloorMode#codes()}, not {@code on}/{@code off}),
-     * default {@link TailFloorMode#CURRENT} — the shipped floor arithmetic, bit-identical. Not in
-     * {@link #NAMES}: nothing is turned off, so a non-default mode fires an engagement mark on the
-     * selected arm ({@code TOGGLE.tail_floor_<mode>_on}) exactly as {@code readahead} and {@code
-     * rate_anchored_sensing} do on their ON side.
+     * default {@link TailFloorMode#REACH_FLOORED} since 0.2.0 — the promoted cure. {@code current}
+     * is the pre-0.2.0 floor arithmetic, bit-identical, and is the supported rollback. Not in
+     * {@link #NAMES}: nothing is turned off, so the selected mode fires an engagement mark ({@code
+     * TOGGLE.tail_floor_<mode>_on}) exactly as {@code readahead} and {@code rate_anchored_sensing}
+     * do on their ON side.
      */
     public static final String TAIL_FLOOR_NAME = "tail_floor";
 
@@ -293,8 +304,8 @@ public record EngineToggles(
                 values.getOrDefault("fanout_tiling", true),
                 values.getOrDefault(READAHEAD_NAME, false),
                 values.getOrDefault(MASS_AWARE_SEED_NAME, true),
-                values.getOrDefault(RATE_ANCHORED_SENSING_NAME, false),
-                tailFloor == null ? TailFloorMode.CURRENT : tailFloor);
+                values.getOrDefault(RATE_ANCHORED_SENSING_NAME, true),
+                tailFloor == null ? TailFloorMode.REACH_FLOORED : tailFloor);
     }
 
     private static void putConsistent(Map<String, Boolean> values, String name, boolean on, String conflictMessage)
@@ -431,7 +442,8 @@ public record EngineToggles(
 
     /**
      * The run's position sensor: {@link RateAnchoredEstimator} at its promoted floor when {@code
-     * rate_anchored_sensing} is on, else the shipped {@link RemainingWorkEstimator#WINDOW} reading —
+     * rate_anchored_sensing} is on (the default since 0.2.0), else the pre-0.2.0 {@link
+     * RemainingWorkEstimator#WINDOW} reading —
      * the same shape of substitution as {@link #interpolate} and {@link #farAheadFraction}, and the
      * ONLY place the choice is made. Called once per run (the estimator is stateless and pure, so one
      * instance serves the whole fleet).
