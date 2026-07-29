@@ -55,12 +55,18 @@ none of the other subtypes applied). (`scatter_scout` — the opt-in scout-place
 **`seed.decisions[]`**: the per-probed-level seed decision trace — one entry per `delimiter=/`
 structure probe `SeedStep` issued while building the tiling above (bounded by the same probe cap the
 `probes` field already reports, ≤ ~256; index `0` is always the top-level probe). Each entry is
-`{prefix, fanout, truncated, classification, cuts_kept, cuts_discarded}`: `prefix` is the probed
-directory (display-escaped/truncated, the same rendering every other byte-key field in this document
-gets); `fanout` is that level's raw `CommonPrefixes` count; `cuts_kept`/`cuts_discarded` are this
-level's OWN contribution to the global cut-point set (new distinct cut byte strings added vs.
-duplicates of a cut already present) — `0`/`0` for a level whose prefixes were never tiled.
-`classification` is one of:
+`{prefix, fanout, truncated, classification, cuts_kept, cuts_discarded, depth, quota_cut_off}`:
+`prefix` is the probed directory (display-escaped/truncated, the same rendering every other byte-key
+field in this document gets); `fanout` is that level's raw `CommonPrefixes` count; `cuts_kept`/
+`cuts_discarded` are this level's OWN contribution to the global cut-point set (new distinct cut byte
+strings added vs. duplicates of a cut already present) — `0`/`0` for a level whose prefixes were never
+tiled. `depth` is this probed prefix's delimiter-count depth (`0` for the top-level/
+`top_probe_paginated` entries, which precede the depth-ordered descent frontier). `quota_cut_off`
+(issue #15's per-depth yield quota) is whether this entry's own depth had ALREADY been marked cut
+off — its recent probes stopped averaging at least one new cut per probe — by the time this probe was
+issued, i.e. this decision only happened because the frontier fell back to a starved depth once
+nothing better remained; always `false` for the top-level entries and for a `mass_aware_seed=off` run
+(the plain FIFO frontier has no notion of depth). `classification` is one of:
 
 | value | meaning |
 |---|---|
@@ -690,6 +696,9 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SEED` | `frontier_continued_past_explosion` | a truncated (exploding) sub-level was classified and disposed of on its OWN — the descent then kept probing the REST of the frontier instead of abandoning it, AND the frontier still had an entry the descent's own remaining caps (probe budget, `maxProbes`) allow it to actually reach. Fires exactly where an unconditional stop-at-first-explosion descent would have stranded an unrelated, still-splittable sibling (e.g. a uniform child tree sitting next to an exploding one) at one giant near-serial range | |
 | `SEED_SCHED` | `distinct_seed_worker` | fired once the first time each distinct worker claims a SEED (initial worklist) node in `WorkStealingScan`, so the counter's total is the COUNT of distinct workers that consumed a seed range at runtime. The deterministic, structure-level replacement for the removed CI-flaky `avg_in_flight` uplift guard: `SeedMassAwareDescentTest.distinctSeedWorkers_concurrentHeavyTailSpreadsAcrossManyWorkers` and `distinctSeedWorkers_serialCollapseAblationDropsToOneAndFailsFloor` now guard the signal. A forced-serial run (`workerCount == 1`) reads exactly 1; a concurrent run that actually spreads a correctly-placed banded heavy tail's seed ranges across the pool reads many. Excludes thief/owner-split children (only initial seed ids are tracked), so a collapsed single-heavy-seed shape that only parallelizes via later child splits cannot inflate it. Pure observation — zero effect on scheduling/stealing | |
 | `SEED` | `banding_deferred_to_fanout` | the fanout-tiling-precedence rule: on a truncated sub-level cut that is BOTH a `key=value/` partition fan-out (`fanout_tiling` on) AND WOULD have been sampled by mass-aware banding (`mass_aware_seed` on, sample budget available) — the sharp, zero-probe partition signal took precedence and the sample was short-circuited entirely (no `heavy_cut_descended`/`explosion_confirmed`/`heavy_cut_banded` on this cut). Measures how often the precedence rule actually engages on a both-eligible cut, distinct from an ordinary `fanout_tiled` cut where `mass_aware_seed` was off or the sample budget was already exhausted | |
+| `SEED` | `yield_quota_cutoff` | issue #15's per-depth yield quota: a depth's last `YIELD_WINDOW` (4) descent-loop probes collectively produced at most `YIELD_WINDOW_MIN_CUTS` (2) new cuts — a floor on the WHOLE window's total, not a strict per-probe break-even, so one unlucky/lucky probe cannot tip the verdict on its own — so `SpanPriorityFrontier#poll` stops offering that depth's remaining entries ahead of any other depth that still has queued work — level order is still the starvation bound: if every depth with queued entries is cut off, `poll`'s fallback pass resumes strict shallowest-first exactly as before the quota existed. One increment per depth the FIRST time it crosses into cut-off (a sticky, one-way gate — never re-evaluated once tripped). Fires zero times on a bottomless narrow chain (one queued entry per depth is never enough probes to fill the judging window) — see `SeedDescentRightmostChainDoesNotStarveWideNonLastSiblingTest`, unaffected by this change | |
+| `SEED` | `yield_quota_cutoff_shallow` | co-fires with `yield_quota_cutoff` whenever the cut-off depth is `<= 2` — the cheap keyspace-classification signal distinguishing which half of the issue's pathology tripped the quota: a wide SHALLOW level (top level or one level in) that stops yielding cuts | |
+| `SEED` | `yield_quota_cutoff_deep` | as `yield_quota_cutoff_shallow`, for a cut-off depth `> 2` — a DEEP narrow chain that stops yielding cuts | |
 | `RESUME` | `nodes_reopened` | count of checkpointed nodes reopened on a genuine `swath resume` | |
 | `RESUME` | `durable_cursor_lag` | count of reopened nodes whose `durable_cursor` lagged `cursor` (a non-durable tail re-listed) | |
 | `RESUME` | `args_hash_refused` | a `swath resume` was refused because `args_hash` changed since the checkpointed run | |

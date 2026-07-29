@@ -162,9 +162,16 @@ public record RunSummary(
          * distinct cut byte strings added; discarded = duplicates of a cut already present) — 0/0 for
          * a level whose common prefixes were never tiled (a {@code tiny_leaf_explosion}/{@code
          * flat_wide} level, left to work-stealing instead), positive for a {@code fanout_tiled} level.
+         * {@code depth} is this probed prefix's delimiter-count depth (0 for the top-level/{@code
+         * top_probe_paginated} entries, which precede the depth-ordered descent frontier); {@code
+         * quotaCutOff} is whether the per-depth yield quota (issue #15) had already marked this
+         * level's own depth cut off -- its recent probes had stopped paying for themselves -- by the
+         * time this probe was issued, i.e. the frontier fell back to a starved depth once nothing
+         * better remained. Both are always {@code 0}/{@code false} for the top-level entries and for
+         * a {@code mass_aware_seed=off} run (the plain FIFO frontier has no notion of depth).
          */
         public record SeedDecision(String prefix, int fanout, boolean truncated, String classification,
-                                    int cutsKept, int cutsDiscarded) {
+                                    int cutsKept, int cutsDiscarded, int depth, boolean quotaCutOff) {
         }
     }
 

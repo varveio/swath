@@ -1182,6 +1182,8 @@ final class DecisionTraceGoldenTest {
             ln.put("classification", d.classification());
             ln.put("cuts_kept", d.cutsKept());
             ln.put("cuts_discarded", d.cutsDiscarded());
+            ln.put("depth", d.depth());
+            ln.put("quota_cut_off", d.quotaCutOff());
             levels.add(ln);
         }
 

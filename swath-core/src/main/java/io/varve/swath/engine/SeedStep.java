@@ -216,7 +216,7 @@ public final class SeedStep {
         List<RunMetrics.SeedProbeDecision> out = new ArrayList<>(decisions.size());
         for (SeedLevelDecision d : decisions) {
             out.add(new RunMetrics.SeedProbeDecision(d.prefix(), d.fanout(), d.truncated(), d.classification(),
-                    d.cutsKept(), d.cutsDiscarded()));
+                    d.cutsKept(), d.cutsDiscarded(), d.depth(), d.quotaCutOff()));
         }
         return out;
     }

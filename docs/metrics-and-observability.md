@@ -336,7 +336,7 @@ downstream parser should key off, not "does `meters[]` exist".
   "seed": { "mode": "shallow", "probes": 3, "cut_points": 41, "synthesized_cuts": 0, "ranges": 42,
     "decisions": [
       { "prefix": "", "fanout": 3, "truncated": false, "classification": "delimiter_seeded",
-        "cuts_kept": 3, "cuts_discarded": 0 }
+        "cuts_kept": 3, "cuts_discarded": 0, "depth": 0, "quota_cut_off": false }
     ] },
   "trajectory": {
     "in_flight": [4.0, 22.5, 58.0, 60.9, 12.0],

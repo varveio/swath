@@ -676,6 +676,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             dn.put("classification", d.classification());
             dn.put("cuts_kept", d.cutsKept());
             dn.put("cuts_discarded", d.cutsDiscarded());
+            dn.put("depth", d.depth());
+            dn.put("quota_cut_off", d.quotaCutOff());
         }
     }
 

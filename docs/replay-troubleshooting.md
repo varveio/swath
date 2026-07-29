@@ -205,7 +205,10 @@ every attempt is failing.
 
 **`seed.decisions[]`** — one entry per `delimiter=/` structure probe the seed
 step issued, `{prefix, fanout, truncated, classification, cuts_kept,
-cuts_discarded}`. This is a replayable record of every seed-time probe, and it
+cuts_discarded, depth, quota_cut_off}` (the last two are issue #15's per-depth
+yield quota: this probe's own depth, and whether that depth was already
+flagged low-yield/cut-off by the time this probe fired). This is a replayable
+record of every seed-time probe, and it
 answers questions no live rerun can, because it's exact and it's already
 there. Worked example from the reference profile: a seed variant that
 descends per-cut into dense subtrees probed `contrib/datacomp/DCLM-pool/`

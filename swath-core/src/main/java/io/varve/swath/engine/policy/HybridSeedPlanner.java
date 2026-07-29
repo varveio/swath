@@ -13,12 +13,14 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.PriorityQueue;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.IntPredicate;
 
 /**
  * The HYBRID seed descent (algorithms.md §8) as a {@link SeedPlanner}: the span-priority frontier,
@@ -74,6 +76,42 @@ public final class HybridSeedPlanner implements SeedPlanner {
      * slice left to spend here.
      */
     static final int MIN_WEIGHT_SAMPLES = SAMPLE_BUDGET / 4;
+
+    // ---- Per-depth yield quota (issue #15; mass-aware descent only) -----------
+    /**
+     * The recent-probe window a depth's yield is judged over, AND (since the window must be full
+     * before a verdict is trusted) the grace period every depth gets before the quota can cut it off —
+     * one constant serving both roles rather than two independently-tuned ones. Small on purpose: a
+     * depth that is genuinely productive clears the break-even floor (below) easily inside 4 probes,
+     * while a depth quietly grinding through dead leaves (the porotomo shape: 220 of 224 descent
+     * decisions at fanout ≤ 4, one 238-wide sibling never reached) does not get to spend a large
+     * multiple of the budget proving it before the frontier is allowed to look elsewhere.
+     */
+    static final int YIELD_WINDOW = 4;
+    /**
+     * A depth's last {@link #YIELD_WINDOW} probes must collectively have produced STRICTLY MORE than
+     * this many new cuts to stay alive — cut off otherwise. Deliberately a floor on the WHOLE window's
+     * total rather than a strict per-probe break-even (avg {@code >= 1} cut/probe): a single unlucky
+     * dead-end probe sitting amid otherwise-productive siblings (e.g. a lone near-empty directory
+     * ranked first purely because it has no successor yet, scoring the span-priority ceiling fallback)
+     * must not tip a whole depth into cutoff on one bad roll — {@code
+     * SeedFrontierLevelOrderTest}'s heavy cut sits behind exactly nine other depth-1 siblings whose
+     * probes mix kept-0 and kept-1 outcomes, and depth ordering alone (no quota help needed) already
+     * reaches it there since the whole level fits the descent's budget. The quota exists for the
+     * OPPOSITE shape: a depth that is genuinely, sustained-ly unproductive across its whole recent
+     * window (the porotomo shape: 220 of 224 descent decisions at fanout ≤ 4, one 238-wide sibling
+     * never reached) — set at "at most one cut total across 4 probes", i.e. an average no better than
+     * 1-in-4, clearly below what any single lucky/unlucky probe can produce or erase on its own.
+     */
+    static final int YIELD_WINDOW_MIN_CUTS = 2;
+    /**
+     * The depth threshold the cheap keyspace-classification signal buckets a cutoff into: at or below
+     * this depth is "shallow" (the wide-shallow-level half of the issue's pathology — a top-level or
+     * one-level-in fan-out that stops yielding), strictly deeper is "deep" (the narrow-chain half). A
+     * fixed, tiny bucket count (as {@code PIVOT_BYTE}'s four buckets) keeps the counter's cardinality
+     * bounded regardless of how deep a pathological descent goes.
+     */
+    static final int YIELD_QUOTA_SHALLOW_MAX_DEPTH = 2;
 
     /**
      * The smallest / largest SAFE ASCII code points a synthesized cut appends after a flat region's
@@ -203,6 +241,11 @@ public final class HybridSeedPlanner implements SeedPlanner {
         private byte[] currentDir;
         private int currentSubFanout;
         private List<byte[]> currentSubCps;
+        // -- currentDir's own depth + its quota state AT POLL TIME (issue #15), snapshotted once in
+        // continueDescentLoop() so both onDescentProbe/finishClassification's decision record and the
+        // frontier.recordProbeResult callback below use the SAME depth without recomputing it twice.
+        private int currentDirDepth;
+        private boolean currentDirWasCutOff;
 
         // -- sample-child sub-loop --
         private int sampleN;
@@ -252,6 +295,12 @@ public final class HybridSeedPlanner implements SeedPlanner {
             return new RequestSeedProbe(probePrefix, startAfter, drain());
         }
 
+        /** The scan prefix's own depth — the {@code decisions[]} depth for the TOP/TOP_EXTRA entries,
+         *  which precede the depth-ordered descent frontier (and its per-depth yield quota) entirely. */
+        private int topDepth() {
+            return depthOf(prefix == null ? new byte[0] : prefix);
+        }
+
         // ---- TOP / TOP_EXTRA ------------------------------------------------------------------
 
         private SeedAction onTop(SeedProbeOutcome outcome) {
@@ -295,7 +344,8 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 // this makes the root consistent with them rather than special-casing it.
                 decisions.add(new SeedLevelDecision(flatWideRegion != null ? flatWideRegion : prefix,
                         topFanout, topPageCapped,
-                        flatWideRegion != null ? "flat_wide" : "narrow", topCounts[0], topCounts[1]));
+                        flatWideRegion != null ? "flat_wide" : "narrow", topCounts[0], topCounts[1],
+                        topDepth(), false));
                 return finalizePlan();
             }
             // A page-capped top WITH common prefixes fans out into >1000 top-level directories -- a
@@ -304,13 +354,14 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 tinyLeafExplosion = true;
             }
             decisions.add(new SeedLevelDecision(prefix, topFanout, topPageCapped,
-                    topPageCapped ? "tiny_leaf_explosion" : "narrow", topCounts[0], topCounts[1]));
+                    topPageCapped ? "tiny_leaf_explosion" : "narrow", topCounts[0], topCounts[1],
+                    topDepth(), false));
             // The top-page pagination probe (mass_aware_seed=on only) is a second, distinct LIST
             // against the same top-level prefix -- its own decisions[] entry, classified
             // "top_probe_paginated", never folded into the top-level entry's counts.
             if (extraFired) {
                 decisions.add(new SeedLevelDecision(prefix, extraFanout, extraPageCapped,
-                        "top_probe_paginated", extraCounts[0], extraCounts[1]));
+                        "top_probe_paginated", extraCounts[0], extraCounts[1], topDepth(), false));
             }
             if (!topPageCapped) {
                 return enterDescent();
@@ -343,6 +394,8 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 frontierLevelOrderedFired = true;
             }
             currentDir = frontier.poll();
+            currentDirDepth = depthOf(currentDir);
+            currentDirWasCutOff = frontier.isCutOff(currentDirDepth);
             totalProbes++;
             return issueProbe(currentDir, null);
         }
@@ -354,9 +407,24 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 return classifyTruncatedLevel(outcome);
             }
             int[] counts = addCutsCounted(outcome.commonPrefixes(), cuts, frontier, scopeCeiling(currentDir));
+            recordYield(counts[0]);
             decisions.add(new SeedLevelDecision(currentDir, currentSubFanout, false, "narrow",
-                    counts[0], counts[1]));
+                    counts[0], counts[1], currentDirDepth, currentDirWasCutOff));
             return continueDescentLoop();
+        }
+
+        /**
+         * Rolls {@code currentDir}'s own kept-cuts count into its depth's yield-quota window (issue
+         * #15) and, the first time this crosses that depth into cut-off, records the engagement
+         * counter plus its cheap shallow/deep keyspace-classification bucket. A no-op on
+         * {@link FifoFrontier} ({@code mass_aware_seed=off}), which has no notion of depth.
+         */
+        private void recordYield(int kept) {
+            if (frontier.recordProbeResult(currentDirDepth, kept)) {
+                mark("yield_quota_cutoff");
+                mark(currentDirDepth <= YIELD_QUOTA_SHALLOW_MAX_DEPTH
+                        ? "yield_quota_cutoff_shallow" : "yield_quota_cutoff_deep");
+            }
         }
 
         private SeedAction classifyTruncatedLevel(SeedProbeOutcome outcome) {
@@ -391,8 +459,9 @@ public final class HybridSeedPlanner implements SeedPlanner {
         }
 
         private SeedAction finishClassification(String classification, int kept, int discarded) {
+            recordYield(kept);
             decisions.add(new SeedLevelDecision(currentDir, currentSubFanout, true, classification,
-                    kept, discarded));
+                    kept, discarded, currentDirDepth, currentDirWasCutOff));
             if (!frontier.isEmpty() && totalProbes < maxProbes) {
                 mark("frontier_continued_past_explosion");
             }
@@ -581,7 +650,7 @@ public final class HybridSeedPlanner implements SeedPlanner {
                 classification = "delimiter_seeded";
             }
             out.add(new SeedLevelDecision(d.prefix(), d.fanout(), d.truncated(), classification,
-                    d.cutsKept(), d.cutsDiscarded()));
+                    d.cutsKept(), d.cutsDiscarded(), d.depth(), d.quotaCutOff()));
         }
         return out;
     }
@@ -841,6 +910,20 @@ public final class HybridSeedPlanner implements SeedPlanner {
         return next.length - cut.length;
     }
 
+    /** Depth = the number of {@link #DELIMITER} bytes in {@code cut} (the top-level scan prefix, or
+     *  {@code new byte[0]}, is depth 0; each descended level adds one). Shared by the frontier
+     *  (level-order poll key) and the per-depth yield quota (issue #15) — both key on the identical
+     *  notion of depth, so this lives once at the planner level rather than duplicated per caller. */
+    private static int depthOf(byte[] cut) {
+        int d = 0;
+        for (byte b : cut) {
+            if (b == DELIMITER[0]) {
+                d++;
+            }
+        }
+        return d;
+    }
+
     /**
      * The descent frontier of not-yet-probed directory prefixes: {@link FifoFrontier} (mass-aware
      * OFF) or {@link SpanPriorityFrontier} (mass-aware ON, best-first by {@link #spanScore}).
@@ -859,6 +942,22 @@ public final class HybridSeedPlanner implements SeedPlanner {
 
         /** Whether cuts at more than one depth are currently queued. */
         default boolean spansMultipleDepths() {
+            return false;
+        }
+
+        /** Whether {@code depth}'s per-depth yield quota (issue #15) has cut it off. Always
+         *  {@code false} on a frontier with no notion of depth. */
+        default boolean isCutOff(int depth) {
+            return false;
+        }
+
+        /**
+         * Roll one just-probed level's outcome into {@code depth}'s yield-quota window; returns
+         * {@code true} the first time this call crosses that depth into cut-off (a one-shot signal
+         * for the engagement counter). A no-op returning {@code false} on a frontier with no notion
+         * of depth.
+         */
+        default boolean recordProbeResult(int depth, int cutsKept) {
             return false;
         }
     }
@@ -890,59 +989,127 @@ public final class HybridSeedPlanner implements SeedPlanner {
 
     /**
      * The mass-aware ON frontier (§3.1): a genuine best-first order maintained across insertions, not
-     * a one-shot pre-pass. Level-ordered first (depth primary), span-ordered within a level.
+     * a one-shot pre-pass. Level-ordered first (depth primary), span-ordered within a level, and
+     * (issue #15) a per-depth yield quota that reorders WITHIN that level-first bound rather than
+     * replacing it: a depth whose own recent probes stop paying for themselves ({@link
+     * #recordProbeResult}) is skipped by {@link #poll}'s first pass in favor of any other depth that
+     * still has queued work, however much deeper — but never abandoned outright. If every depth with
+     * queued entries is cut off (nothing better anywhere), {@link #poll}'s fallback pass resumes
+     * strict shallowest-first exactly as before the quota existed, so a depth can be deferred but never
+     * starved: this is the "strict shallow-first order is preserved as the starvation bound" the issue
+     * calls for, and it is why a bottomless narrow chain (one queued entry per depth, never enough
+     * probes at any single depth to fill the quota's own judging window) never trips the quota at all
+     * — {@link SeedDescentRightmostChainDoesNotStarveWideNonLastSiblingTest}-shaped fixtures see
+     * byte-identical poll order to the pre-quota frontier.
      */
     private static final class SpanPriorityFrontier implements Frontier {
-        private record Entry(byte[] cut, int depth, long score) {
+        private record Entry(byte[] cut, long score) {
         }
 
-        private final PriorityQueue<Entry> queue = new PriorityQueue<>(
-                Comparator.comparingInt(Entry::depth)
-                        .thenComparing(Comparator.comparingLong(Entry::score).reversed()));
+        /** Depth -> its still-queued entries, best-span-first; ascending key iteration order is
+         *  exactly the level-order poll's shallowest-first scan. A depth's bucket is removed the
+         *  instant it drains, so {@link #spansMultipleDepths}/{@link #poll} never see a hollow entry. */
+        private final NavigableMap<Integer, PriorityQueue<Entry>> byDepth = new TreeMap<>();
+        private int size;
 
-        /** Depth -> count of entries at that depth currently queued. */
-        private final Map<Integer, Integer> queuedDepths = new HashMap<>();
+        /** Depth -> its yield-quota window state (issue #15). */
+        private final Map<Integer, DepthYield> yields = new HashMap<>();
 
         @Override
         public boolean isEmpty() {
-            return queue.isEmpty();
+            return size == 0;
         }
 
         @Override
         public int size() {
-            return queue.size();
+            return size;
         }
 
         @Override
         public byte[] poll() {
-            Entry e = queue.poll();
-            if (e != null) {
-                queuedDepths.computeIfPresent(e.depth(), (depth, count) -> count == 1 ? null : count - 1);
+            byte[] cut = pollWhere(depth -> !isCutOff(depth));
+            return cut != null ? cut : pollWhere(depth -> true);   // fallback: the starvation bound
+        }
+
+        /** Shallowest depth whose bucket is non-empty AND satisfies {@code eligible}; {@code null} if
+         *  none does. */
+        private byte[] pollWhere(IntPredicate eligible) {
+            for (Iterator<Map.Entry<Integer, PriorityQueue<Entry>>> it = byDepth.entrySet().iterator();
+                    it.hasNext();) {
+                Map.Entry<Integer, PriorityQueue<Entry>> e = it.next();
+                if (!eligible.test(e.getKey())) {
+                    continue;
+                }
+                PriorityQueue<Entry> q = e.getValue();
+                Entry head = q.poll();
+                size--;
+                if (q.isEmpty()) {
+                    it.remove();
+                }
+                return head.cut();
             }
-            return e == null ? null : e.cut();
+            return null;
         }
 
         @Override
         public void offer(byte[] cut, TreeSet<byte[]> cuts, byte[] scopeUpper) {
             int depth = depthOf(cut);
-            queuedDepths.merge(depth, 1, Integer::sum);
-            queue.add(new Entry(cut, depth, spanScore(cut, cuts, scopeUpper)));
+            byDepth.computeIfAbsent(depth, d -> new PriorityQueue<>(Comparator.comparingLong(Entry::score).reversed()))
+                    .add(new Entry(cut, spanScore(cut, cuts, scopeUpper)));
+            size++;
         }
 
         @Override
         public boolean spansMultipleDepths() {
-            return queuedDepths.size() > 1;
+            return byDepth.size() > 1;
         }
 
-        /** Depth = the number of {@link #DELIMITER} bytes in the cut. */
-        private static int depthOf(byte[] cut) {
-            int d = 0;
-            for (byte b : cut) {
-                if (b == DELIMITER[0]) {
-                    d++;
+        @Override
+        public boolean isCutOff(int depth) {
+            DepthYield y = yields.get(depth);
+            return y != null && y.cutOff;
+        }
+
+        @Override
+        public boolean recordProbeResult(int depth, int cutsKept) {
+            return yields.computeIfAbsent(depth, d -> new DepthYield()).record(cutsKept);
+        }
+
+        /**
+         * One depth's yield-quota window (issue #15): the last {@link #YIELD_WINDOW} probes issued
+         * against THIS depth, judged once the window fills. O(1) per probe (a fixed-size ring buffer
+         * plus a running sum) and fully deterministic — no clock, no randomness.
+         */
+        private static final class DepthYield {
+            private final int[] window = new int[YIELD_WINDOW];
+            private int next;
+            private int filled;
+            private int sum;
+            private boolean cutOff;
+
+            /**
+             * Rolls {@code cutsKept} into the window; returns {@code true} the FIRST time the window
+             * fills with a total at or below {@link #YIELD_WINDOW_MIN_CUTS} — a one-way gate (once a
+             * depth stops paying for its own probes it never earns priority back over a shallower or
+             * still-productive depth), though {@link SpanPriorityFrontier#poll}'s fallback pass still
+             * drains it once nothing else remains.
+             */
+            boolean record(int cutsKept) {
+                if (cutOff) {
+                    return false;
                 }
+                sum += cutsKept - window[next];
+                window[next] = cutsKept;
+                next = (next + 1) % window.length;
+                if (filled < window.length) {
+                    filled++;
+                }
+                if (filled == window.length && sum <= YIELD_WINDOW_MIN_CUTS) {
+                    cutOff = true;
+                    return true;
+                }
+                return false;
             }
-            return d;
         }
     }
 }

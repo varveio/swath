@@ -23,7 +23,16 @@ package io.varve.swath.engine.policy;
  *                       the whole descent completes, since only then is the run's overall shape known
  * @param cutsKept       how many of this level's common prefixes were newly added to the global cut set
  * @param cutsDiscarded  how many were already present (e.g. two probed levels sharing a boundary)
+ * @param depth          this probed prefix's delimiter-count depth (issue #15's per-depth yield
+ *                       quota key) — {@code 0} for the top-level/{@code top_probe_paginated} entries,
+ *                       which precede the depth-ordered descent frontier entirely
+ * @param quotaCutOff    whether the per-depth yield quota (issue #15) had ALREADY marked this level's
+ *                       own depth cut off (its recent probes stopped paying for themselves) by the
+ *                       time THIS probe was issued — i.e. this decision only happened because the
+ *                       frontier fell back to a starved depth once nothing better remained. Always
+ *                       {@code false} for the top-level entries and for a {@code mass_aware_seed=off}
+ *                       run (the plain FIFO frontier has no notion of depth, let alone a quota)
  */
 public record SeedLevelDecision(byte[] prefix, int fanout, boolean truncated, String classification,
-                                int cutsKept, int cutsDiscarded) {
+                                int cutsKept, int cutsDiscarded, int depth, boolean quotaCutOff) {
 }

@@ -1208,7 +1208,7 @@ public final class RunMetrics {
             List<SeedProbeDecision> decisions) {
         List<RunSummary.SeedSummary.SeedDecision> rendered = decisions.stream()
                 .map(d -> new RunSummary.SeedSummary.SeedDecision(display(d.prefix()), d.fanout(), d.truncated(),
-                        d.classification(), d.cutsKept(), d.cutsDiscarded()))
+                        d.classification(), d.cutsKept(), d.cutsDiscarded(), d.depth(), d.quotaCutOff()))
                 .toList();
         seedSummary.set(new RunSummary.SeedSummary(mode, probes, cutPoints, synthesizedCuts, ranges, rendered));
     }
@@ -1219,7 +1219,7 @@ public final class RunMetrics {
      * pass. See {@code RunSummary.SeedSummary.SeedDecision} for what each field means.
      */
     public record SeedProbeDecision(byte[] prefix, int fanout, boolean truncated, String classification,
-                                     int cutsKept, int cutsDiscarded) {
+                                     int cutsKept, int cutsDiscarded, int depth, boolean quotaCutOff) {
     }
 
     /**
