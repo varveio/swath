@@ -42,7 +42,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * <b>Independent adversarial guard for the carve brake</b> (commit 3b06e0e, campaign memo §5;
- * {@link CarveMassRing}, {@link ConfettiFeedbackGate}'s carve-brake probe pair, {@link
+ * {@link CarveCompletionWindow}, {@link ConfettiFeedbackGate}'s carve-brake probe pair, {@link
  * OwnerSplitGovernor}'s {@code CARVE_BRAKED}/{@code carve_brake_probe} branch, {@link
  * OwnerSelfSplit}'s executor-claim resolution). Authored separately from the brake itself
  * (AGENTS.md's adversarial-guard-author rule for high-risk engine changes): every test here tries
@@ -201,53 +201,56 @@ final class CarveBrakeAdversarialGuardTest {
     }
 
     // =============================================================================================
-    // PROPERTY 4 (boundary half) — the REAL CarveMassRing + OwnerSplitGovernor together (not a
-    // hand-fed Double), at a window average exactly AT and exactly one unit below the K threshold.
+    // PROPERTY 4 (boundary half) — the REAL CarveCompletionWindow + OwnerSplitGovernor together (not
+    // a hand-fed Double), at a window average exactly AT and exactly one unit below the K threshold.
     // =============================================================================================
 
     private static final int MAX_KEYS = 100;
+    private static final long MASS_K2 = 2;
 
     /** A cold digest and a view that clears every gate above the brake, mirroring OwnerSplitGovernorTest. */
-    private static OwnerSplitView brakeViewWithRealGate(ConfettiFeedbackGate gate) {
+    private static OwnerSplitView brakeViewWithRealGate(ConfettiFeedbackGate gate, long k) {
         byte[] lo = b("a");
         byte[] hi = b("z");
         byte[] cursorTo = b("n");
         ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        double windowAverage = gate.carveBrakeWindowAverage(k, MAX_KEYS);
         return new OwnerSplitView(hi, lo, cursorTo, 100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0,
                 0.5, 1.0, new WorkerState(0, lo, lo, hi).alphabetDigest().snapshot(),
                 new ConfettiObservation(snap.taggedTotal(), snap.taggedConfetti(), snap.probeSeq(),
-                        snap.windowAverageMass(), snap.carveBrakeProbeSeq()));
+                        windowAverage, snap.carveBrakeProbeSeq()));
     }
 
     /**
      * <b>Attack:</b> feed the REAL {@link ConfettiFeedbackGate} (hence the real {@link
-     * CarveMassRing#windowAverage()} floating-point division) exactly 8 completions of mass 200
-     * each ({@code mass_k2}'s threshold is {@code 2 * MAX_KEYS = 200}), landing the window average
-     * EXACTLY at the K boundary — the shape #78's dense/uniform corpus fixture and the "sits exactly
-     * at the threshold" adversarial case both risk (a window average that lands on the boundary by
-     * genuine arithmetic, not by construction of a test double).
+     * CarveCompletionWindow#windowAverage(long, int)} floating-point division) exactly {@link
+     * CarveCompletionWindow#CAPACITY} completions of mass 200 each ({@code mass_k2}'s threshold is
+     * {@code 2 * MAX_KEYS = 200}), landing the window average EXACTLY at the K boundary — the shape
+     * #78's dense/uniform corpus fixture and the "sits exactly at the threshold" adversarial case
+     * both risk (a window average that lands on the boundary by genuine arithmetic, not by
+     * construction of a test double).
      *
      * <p><b>What a broken brake would show here:</b> the contract is "== threshold ADMITS" ({@code
      * massAvg < threshold} is the ONLY suppress condition — strict). A boundary bug (e.g. {@code <=}
-     * in place of {@code <}, or an off-by-one in {@link CarveMassRing}'s divisor) would suppress
-     * this exact-at-threshold carve; this test drives the real division (1600L / 8 as a double) so a
-     * floating rounding surprise in the real component — not a hand-set {@code Double} — would also
-     * surface here.
+     * in place of {@code <}, or an off-by-one in {@link CarveCompletionWindow}'s divisor) would
+     * suppress this exact-at-threshold carve; this test drives the real division (1600L / 8 as a
+     * double) so a floating rounding surprise in the real component — not a hand-set {@code Double}
+     * — would also surface here.
      */
     @Test
     void realGateWindowAverageExactlyAtThresholdAdmitsTheCarve() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < CarveMassRing.SIZE; i++) {
-            gate.recordCompletion(false, 200L);
+        for (int i = 0; i < CarveCompletionWindow.CAPACITY; i++) {
+            gate.recordWindowCompletion(200L, false);
         }
-        assertThat(gate.snapshot().windowAverageMass())
-                .as("the real ring's arithmetic actually lands exactly on mass_k2's threshold")
+        assertThat(gate.carveBrakeWindowAverage(MASS_K2, MAX_KEYS))
+                .as("the real window's arithmetic actually lands exactly on mass_k2's threshold")
                 .isEqualTo(200.0);
 
         OwnerSplitGovernor governor =
                 new OwnerSplitGovernor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K2),
                         4, MAX_KEYS, null);
-        OwnerSplitDecision decision = governor.decide(brakeViewWithRealGate(gate));
+        OwnerSplitDecision decision = governor.decide(brakeViewWithRealGate(gate, MASS_K2));
 
         assertThat(decision)
                 .as("window average == K * maxKeys admits the carve (strict '<' suppresses, not '<=')")
@@ -263,16 +266,16 @@ final class CarveBrakeAdversarialGuardTest {
     @Test
     void realGateWindowAverageJustBelowThresholdBrakesTheCarve() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        for (int i = 0; i < CarveMassRing.SIZE - 1; i++) {
-            gate.recordCompletion(false, 200L);
+        for (int i = 0; i < CarveCompletionWindow.CAPACITY - 1; i++) {
+            gate.recordWindowCompletion(200L, false);
         }
-        gate.recordCompletion(false, 199L);   // sum 1599, average 199.875 < 200
-        assertThat(gate.snapshot().windowAverageMass()).isEqualTo(199.875);
+        gate.recordWindowCompletion(199L, false);   // sum 1599, average 199.875 < 200
+        assertThat(gate.carveBrakeWindowAverage(MASS_K2, MAX_KEYS)).isEqualTo(199.875);
 
         OwnerSplitGovernor governor =
                 new OwnerSplitGovernor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K2),
                         4, MAX_KEYS, null);
-        OwnerSplitDecision decision = governor.decide(brakeViewWithRealGate(gate));
+        OwnerSplitDecision decision = governor.decide(brakeViewWithRealGate(gate, MASS_K2));
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.CARVE_BRAKED);

@@ -50,14 +50,17 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>One instance per {@link WorkStealingScan} (run-scoped); every method is safe for concurrent
  * callers (workers race to both complete tagged children and attempt owner-splits).
  *
- * <p><b>The carve brake's window-average mass rides the same {@link #recordCompletion} call.</b>
- * The campaign memo §5 carve brake (algorithms.md §3.3) reads the recent MASS TREND of tagged
- * owner-split children rather than confetti's binary rate, so this class also folds each
- * completion's realized mass into a {@link CarveMassRing} — no new callback, no new
- * synchronization point. {@code OwnerSplitGovernor} reads the ring's {@link
- * CarveMassRing#windowAverage()} off the same {@link #snapshot()} it already reads {@code
- * taggedTotal}/{@code taggedConfetti}/{@code probeSeq} from. The brake's own periodic probe (every
- * {@code CARVE_BRAKE_PROBE_K}-th would-be-braked consult) needs its OWN sequence — {@link
+ * <p><b>The carve brake's completion window is fed independently of confetti's own counters</b>
+ * (E-20's decoupling fix, punch-list row 26): {@link #recordConfettiClassification} touches ONLY
+ * {@link #taggedTotal}/{@link #taggedConfetti} (confetti's own rate signal, gated by the executor on
+ * {@code confetti_feedback}), and {@link #recordWindowCompletion} touches ONLY the {@link
+ * #completionWindow} (the brake's signal, gated by the executor on {@code carve_brake != off}) — a
+ * completed child can feed either, both, or (if neither toggle is on) neither, with no shared
+ * counter to couple them. {@code OwnerSplitGovernor} reads the window's {@link
+ * CarveCompletionWindow#windowAverage(long, int)} through {@link
+ * #carveBrakeWindowAverage(long, int)}, resolving the run's chosen K at that call, not at record
+ * time (one window instance serves every {@code carve_brake} mode). The brake's own periodic probe
+ * (every {@code CARVE_BRAKE_PROBE_K}-th would-be-braked consult) needs its OWN sequence — {@link
  * #carveBrakeProbeSeq} — independent of confetti's {@link #probeSeq}, since the two gates'
  * over-threshold populations are distinct; {@link #consumeCarveBrakeProbeSlot()}/{@link
  * #claimCarveBrakeProbeSlot(long)} mirror {@link #consumeProbeSlot()}/{@link
@@ -80,47 +83,73 @@ public final class ConfettiFeedbackGate {
     private final AtomicLong taggedConfetti = new AtomicLong();
     private final AtomicLong probeSeq = new AtomicLong();
     private final AtomicLong carveBrakeProbeSeq = new AtomicLong();
-    private final CarveMassRing carveMassRing = new CarveMassRing();
+    private final CarveCompletionWindow completionWindow = new CarveCompletionWindow();
 
     /**
      * A coherent read of this gate's counters at one instant, in the same order {@code decide()}
      * used to read them (total, then confetti) before issue #22's fix moved the classification math
      * to {@code OwnerSplitGovernor}. {@code probeSeq} is the run's current probe sequence number —
      * the count of {@link #consumeProbeSlot()} calls so far, i.e. the number of PRIOR over-threshold
-     * confetti consults, whatever their outcome. {@code windowAverageMass} is the carve brake's own
-     * signal ({@link CarveMassRing#windowAverage()}, {@code NaN} pre-warmup); {@code
-     * carveBrakeProbeSeq} is the brake's OWN probe sequence, independent of {@code probeSeq} (see
-     * this class's javadoc). Five independent counters, not a single atomic snapshot: a torn read
-     * across them only nudges which page-commit sees a rate/mass/probe-slot transition, never
-     * correctness (mirrors the density EWMA's own lock-free read tolerance).
+     * confetti consults, whatever their outcome. {@code carveBrakeProbeSeq} is the brake's OWN probe
+     * sequence, independent of {@code probeSeq} (see this class's javadoc). The carve brake's window
+     * average is deliberately NOT one of this snapshot's fields — see {@link
+     * #carveBrakeWindowAverage(long, int)}, whose {@code k}/{@code maxKeys} parameters this
+     * no-argument snapshot has no way to carry. Four independent counters, not a single atomic
+     * snapshot: a torn read across them only nudges which page-commit sees a rate/probe-slot
+     * transition, never correctness (mirrors the density EWMA's own lock-free read tolerance).
      */
-    public record Snapshot(long taggedTotal, long taggedConfetti, long probeSeq, double windowAverageMass,
-                            long carveBrakeProbeSeq) {
+    public record Snapshot(long taggedTotal, long taggedConfetti, long probeSeq, long carveBrakeProbeSeq) {
     }
 
     /**
      * Fold one tagged owner-split child's completion classification (ground truth) into the
-     * run-level rate the NEXT {@link #snapshot()} reflects, and its realized mass into the carve
-     * brake's window. Called at most once per tagged child (the caller removes it from the tagged
-     * set before calling, so double-completion is impossible). Public so a test outside {@code
-     * io.varve.swath.engine} can warm this collaborator up directly (e.g. the owner-split
-     * governor's own table-driven tests).
-     *
-     * @param mass the child's realized emitted key count (keys emitted by completion) — the carve
-     *             brake's window sample
+     * run-level confetti rate the NEXT {@link #snapshot()} reflects. Called at most once per tagged
+     * child (the caller removes it from the tagged set before calling, so double-completion is
+     * impossible), and ONLY when {@code confetti_feedback} is on — the carve brake's window is fed
+     * separately by {@link #recordWindowCompletion}, on its OWN gate ({@code carve_brake != off}),
+     * so a completed child can feed either counter, both, or neither (E-20's decoupling fix). Public
+     * so a test outside {@code io.varve.swath.engine} can warm this collaborator up directly (e.g.
+     * the owner-split governor's own table-driven tests).
      */
-    public void recordCompletion(boolean confetti, long mass) {
+    public void recordConfettiClassification(boolean confetti) {
         taggedTotal.incrementAndGet();
         if (confetti) {
             taggedConfetti.incrementAndGet();
         }
-        carveMassRing.record(mass);
     }
 
-    /** A coherent read of this run's tagged-completion tallies, mass window, and probe sequences. */
+    /**
+     * Fold one tagged owner-split child's realized mass and split status into the carve brake's
+     * completion window — independent of {@link #recordConfettiClassification} (E-20's decoupling
+     * fix): the executor calls this whenever {@code carve_brake != off}, regardless of whether
+     * {@code confetti_feedback} is also on. See {@link CarveCompletionWindow}'s javadoc for the
+     * window's own coherence/split-awareness/zero-warmup contract.
+     *
+     * @param mass  the child's realized emitted key count (keys emitted by completion)
+     * @param split whether the child itself split further (owner self-split or a successful thief
+     *              steal) during its own lifetime
+     */
+    public void recordWindowCompletion(long mass, boolean split) {
+        completionWindow.record(mass, split);
+    }
+
+    /** A coherent read of this run's tagged-completion tallies and probe sequences. */
     public Snapshot snapshot() {
-        return new Snapshot(taggedTotal.get(), taggedConfetti.get(), probeSeq.get(), carveMassRing.windowAverage(),
-                carveBrakeProbeSeq.get());
+        return new Snapshot(taggedTotal.get(), taggedConfetti.get(), probeSeq.get(), carveBrakeProbeSeq.get());
+    }
+
+    /**
+     * The carve brake's split-aware effective-mass window average, resolved at THIS call against
+     * {@code k}/{@code maxKeys} (not baked into storage — see {@link CarveCompletionWindow}'s
+     * javadoc) — {@link Double#NaN} iff no completion has fed the window yet (zero warmup).
+     *
+     * @param k       the run's {@code carve_brake} mode multiplier ({@code CarveBrakeMode#k()});
+     *                the caller passes {@code 0} when the mode is {@code off} (the window is empty
+     *                in that case regardless, since {@link #recordWindowCompletion} is never called)
+     * @param maxKeys the run's page size — the effective-mass floor's unit
+     */
+    public double carveBrakeWindowAverage(long k, int maxKeys) {
+        return completionWindow.windowAverage(k, maxKeys);
     }
 
     /**

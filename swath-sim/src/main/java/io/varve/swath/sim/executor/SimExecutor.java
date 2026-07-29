@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sim.executor;
 
+import io.varve.swath.engine.CarveBrakeMode;
 import io.varve.swath.engine.ConfettiFeedbackGate;
 import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.StealMath;
@@ -727,12 +728,17 @@ public final class SimExecutor {
             // has no far tail to carve, so it is not a suppressed carve and never consumes a page.
             long committed = hi == null ? committedPages : ++committedPages;
             ConfettiFeedbackGate.Snapshot confetti = confettiFeedback.snapshot();
+            // K resolved at THIS read, not baked into the window's storage (E-20) -- see the engine's
+            // own OwnerSelfSplit for the identical seam.
+            long carveBrakeK = scenario.toggles().carveBrake() == CarveBrakeMode.OFF ? 0
+                    : scenario.toggles().carveBrake().k();
+            double windowAverageMass = confettiFeedback.carveBrakeWindowAverage(carveBrakeK, scenario.pageSize());
             OwnerSplitView splitView = new OwnerSplitView(hi, state.lo(), cursorTo, state.keysEmitted(),
                     committed, lastSelfSplitPage, ledger.outstanding(), state.densityFraction(),
                     rawObservedDensityRatio(state),
                     state.alphabetDigest().snapshot(),
                     new ConfettiObservation(confetti.taggedTotal(), confetti.taggedConfetti(),
-                            confetti.probeSeq(), confetti.windowAverageMass(), confetti.carveBrakeProbeSeq()));
+                            confetti.probeSeq(), windowAverageMass, confetti.carveBrakeProbeSeq()));
             OwnerSplitDecision decision = governor.decide(splitView);
             if (gateDump != null) {
                 gateDump.ownerDecision(at.nowNanos(), nodeId, decision.gateInputs(), state.lo(),
@@ -815,7 +821,7 @@ public final class SimExecutor {
                 at.count(OWNER_SPLIT_CATEGORY + ".self_aborted", 1);
                 return;
             }
-            if (scenario.toggles().confettiFeedback()) {
+            if (scenario.toggles().confettiFeedback() || scenario.toggles().carveBrake() != CarveBrakeMode.OFF) {
                 ownerSplitTaggedChildren.add(childId);
             }
             ledger.enqueueChild(childId, pivot, hi);
@@ -842,19 +848,31 @@ public final class SimExecutor {
         }
 
         /**
-         * Folds a completed owner-split child's realized mass into the feedback the next carve reads.
-         * The classification mirrors the engine's own predicate: a small tally is only confetti if the
-         * child never itself split — a node that shed its own tail finished small because the carve
-         * worked, which is the opposite of the pathology this measures.
+         * Folds a completed owner-split child's ground truth into whichever of confetti's rate
+         * feedback / the carve brake's completion window (or both) is actually enabled -- each on
+         * its OWN toggle, never coupled to the other's (E-20's decoupling fix; mirrors the engine's
+         * own OwnerSelfSplit#onNodeCompleted). The confetti classification mirrors the engine's own
+         * predicate: a small tally is only confetti if the child never itself split — a node that
+         * shed its own tail finished small because the carve worked, which is the opposite of the
+         * pathology this measures.
          */
         private void classifyOwnerSplitChild(SimContext at) {
-            if (!scenario.toggles().confettiFeedback() || !ownerSplitTaggedChildren.remove(nodeId)) {
+            boolean confettiOn = scenario.toggles().confettiFeedback();
+            boolean brakeOn = scenario.toggles().carveBrake() != CarveBrakeMode.OFF;
+            if (!(confettiOn || brakeOn) || !ownerSplitTaggedChildren.remove(nodeId)) {
                 return;
             }
-            boolean confetti = state.keysEmitted() <= 2L * scenario.pageSize() && !state.hasSplit();
-            confettiFeedback.recordCompletion(confetti, state.keysEmitted());
-            at.count(confetti ? OWNER_SPLIT_CHILD_CONFETTI_COUNTER
-                    : OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER, 1);
+            long mass = state.keysEmitted();
+            boolean hasSplit = state.hasSplit();
+            if (confettiOn) {
+                boolean confetti = mass <= 2L * scenario.pageSize() && !hasSplit;
+                confettiFeedback.recordConfettiClassification(confetti);
+                at.count(confetti ? OWNER_SPLIT_CHILD_CONFETTI_COUNTER
+                        : OWNER_SPLIT_CHILD_SUBSTANTIAL_COUNTER, 1);
+            }
+            if (brakeOn) {
+                confettiFeedback.recordWindowCompletion(mass, hasSplit);
+            }
         }
 
         // ---- the thief ---------------------------------------------------------------------

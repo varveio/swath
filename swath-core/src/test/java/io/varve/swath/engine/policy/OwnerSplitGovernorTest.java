@@ -514,7 +514,7 @@ class OwnerSplitGovernorTest {
             gate.consumeProbeSlot();
         }
         for (int i = 0; i < ConfettiFeedbackGate.MIN_SAMPLE * 2; i++) {
-            gate.recordCompletion(i % 4 != 0, 1L);   // rate = 0.75 > SUPPRESS_THRESHOLD
+            gate.recordConfettiClassification(i % 4 != 0);   // rate = 0.75 > SUPPRESS_THRESHOLD
         }
         ConfettiFeedbackGate.Snapshot snapshot = gate.snapshot();
         assertThat(snapshot.probeSeq()).as("fixture: every racer snapshots the same slot boundary")
@@ -569,16 +569,24 @@ class OwnerSplitGovernorTest {
     }
 
     // -------------------------------------------------------------------------
-    // Carve brake (campaign memo §5): the recent window-average mass trend, distinct from
-    // confetti's binary rate. taggedConfetti=0 throughout so the confetti gate's own rate (0/8=0)
-    // never suppresses first and masks the brake -- these views are built to reach the brake gate.
+    // Carve brake (campaign memo §5, E-20 amendment): the recent split-aware window-average mass
+    // trend, distinct from confetti's binary rate. taggedConfetti=0 throughout so the confetti
+    // gate's own rate (0/8=0) never suppresses first and masks the brake -- these views are built
+    // to reach the brake gate. ZERO WARMUP (E-20): the brake reads NOTHING from
+    // ConfettiObservation#taggedTotal -- only the (already K-resolved, split-aware) window average
+    // and its own probe sequence -- so taggedTotal is set to an arbitrary/irrelevant value below
+    // (0) rather than MIN_SAMPLE, to prove the brake truly does not consult it.
     // -------------------------------------------------------------------------
 
-    /** A view that clears every gate above the brake, with a chosen carve-brake observation. */
+    /**
+     * A view that clears every gate above the brake, with a chosen carve-brake observation.
+     * {@code taggedTotal=0} deliberately (not {@code MIN_SAMPLE}) — the brake reads nothing from
+     * confetti's own tally (zero warmup, E-20), and 0 also keeps confetti's OWN gate under ITS
+     * warmup so it never suppresses first and masks the brake.
+     */
     private static OwnerSplitView brakeView(double windowAverageMass, long carveBrakeProbeSeq) {
         return view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(ConfettiFeedbackGate.MIN_SAMPLE, 0, 0, windowAverageMass,
-                        carveBrakeProbeSeq));
+                new ConfettiObservation(0, 0, 0, windowAverageMass, carveBrakeProbeSeq));
     }
 
     private static final CarveBrakeMode[] BRAKE_MODES =
@@ -620,16 +628,38 @@ class OwnerSplitGovernorTest {
     }
 
     @Test
-    void carveBrakeNeverEngagesBelowWarmup() {
-        // taggedTotal=7 < MIN_SAMPLE(8): never engages, however low the mass reading would otherwise be.
-        OwnerSplitView v = view(100_000L, OwnerSplitGovernor.SELF_SPLIT_MIN_PAGES_BETWEEN, 0L, 0, 0.5, 1.0,
-                new ConfettiObservation(ConfettiFeedbackGate.MIN_SAMPLE - 1, 0, 0, 1.0, 0));
+    void carveBrakeNeverEngagesWithNoCompletionsYet() {
+        // NaN: the window has recorded nothing at all (not "too few samples" -- there is no MIN_SAMPLE
+        // floor anymore, E-20). This is the ONLY "no signal" case left for the brake.
+        OwnerSplitView v = brakeView(Double.NaN, 0L);
 
         OwnerSplitDecision decision =
                 governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K8), WORKER_COUNT).decide(v);
 
-        assertThat(decision).as("below warmup, mass_k8 never engages even though 1.0 << 8*maxKeys")
+        assertThat(decision).as("NaN (nothing recorded yet) never brakes, regardless of K")
                 .isInstanceOf(Carve.class);
+    }
+
+    /**
+     * <b>Zero warmup (E-20's central fix).</b> A SINGLE thin completion's window average is enough
+     * to brake immediately — no {@code MIN_SAMPLE}-style floor gates this decision anymore (unlike
+     * the confetti gate just above it, whose OWN warmup is untouched). This is exactly the case the
+     * codex cross-read found missing: on a failing #78 rep, the first tagged completion was already
+     * thin (mass 0, never split) and reached this exact gate position, but the old MIN_SAMPLE-coupled
+     * warmup still read it as NaN — dropping the warmup (not moving the gate) closes that gap.
+     */
+    @Test
+    void carveBrakeEngagesFromASingleThinCompletionZeroWarmup() {
+        double thinAverage = 50.0;   // e.g. one completion of mass 50, well under mass_k8's 800
+        OwnerSplitView v = brakeView(thinAverage, 0L);
+
+        OwnerSplitDecision decision =
+                governor(EngineToggles.DEFAULT.withCarveBrake(CarveBrakeMode.MASS_K8), WORKER_COUNT).decide(v);
+
+        assertThat(decision)
+                .as("a single thin completion (avg 50 < 8*maxKeys=800) brakes immediately, no warmup")
+                .isInstanceOf(Skip.class);
+        assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.CARVE_BRAKED);
     }
 
     @Test

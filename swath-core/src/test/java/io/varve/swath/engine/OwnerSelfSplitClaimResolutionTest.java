@@ -47,7 +47,7 @@ final class OwnerSelfSplitClaimResolutionTest {
     void confettiClaimAlreadyTakenStillResolvesAndAdvancesTheBrakesOwnClaim() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         assertThat(gate.claimProbeSlot(0)).as("fixture: someone else wins the confetti slot first").isTrue();
-        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 50.0, 0);
+        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 0);
 
         OwnerSplitDecision decision = dualClaimCarve();
         OwnerSelfSplit.ClaimResolution result = OwnerSelfSplit.resolveProbeClaims(gate, decision, staleSnapshot);
@@ -75,7 +75,7 @@ final class OwnerSelfSplitClaimResolutionTest {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         assertThat(gate.claimCarveBrakeProbeSlot(0))
                 .as("fixture: someone else wins the carve-brake slot first").isTrue();
-        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 50.0, 0);
+        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 0);
 
         OwnerSplitDecision decision = dualClaimCarve();
         OwnerSelfSplit.ClaimResolution result = OwnerSelfSplit.resolveProbeClaims(gate, decision, staleSnapshot);
@@ -99,7 +99,7 @@ final class OwnerSelfSplitClaimResolutionTest {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         assertThat(gate.claimProbeSlot(0)).isTrue();
         assertThat(gate.claimCarveBrakeProbeSlot(0)).isTrue();
-        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 50.0, 0);
+        ConfettiFeedbackGate.Snapshot staleSnapshot = new ConfettiFeedbackGate.Snapshot(8, 8, 0, 0);
 
         OwnerSplitDecision decision = dualClaimCarve();
         OwnerSelfSplit.ClaimResolution result = OwnerSelfSplit.resolveProbeClaims(gate, decision, staleSnapshot);

@@ -199,39 +199,47 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
                 }
             }
         }
-        // CARVE BRAKE (campaign memo §5). Distinct from the confetti gate just above: confetti reads
-        // a RATE of already-degenerate children (a binary threshold on taggedConfetti/taggedTotal);
-        // this reads the recent MASS TREND of realized children instead, and so catches an over-carve
-        // BEFORE its children turn confetti-sized (the pathology the confetti gate provably could not
-        // see: its own suppress/carve ratio kept rising while the wide-flat regressions kept splitting
-        // anyway). Same warmup (MIN_SAMPLE), same probe-recovery shape as confetti — but its own,
-        // INDEPENDENT probe sequence (ConfettiObservation#carveBrakeProbeSeq), since the two gates'
-        // over-threshold populations are distinct. Refuses SPLITS only: a braked range keeps draining
-        // by pages exactly as it would have if this gate did not exist.
+        // CARVE BRAKE (campaign memo §5, redesigned per the codex consult's E-20 amendment). Distinct
+        // from the confetti gate just above: confetti reads a RATE of already-degenerate children (a
+        // binary threshold on taggedConfetti/taggedTotal); this reads the recent split-aware MASS
+        // TREND of realized children instead, and so catches an over-carve BEFORE its children turn
+        // confetti-sized (the pathology the confetti gate provably could not see: its own
+        // suppress/carve ratio kept rising while the wide-flat regressions kept splitting anyway).
+        //
+        // ZERO WARMUP (E-20): unlike confetti's own MIN_SAMPLE floor, the brake reads from the FIRST
+        // tagged completion onward — the codex cross-read on a failing #78 rep found six damaging
+        // carves that reached exactly this gate position with a thin-unsplit signal already present
+        // (the first tagged completion, well before any of them), passing ONLY because the window
+        // still read NaN under the old MIN_SAMPLE-coupled warmup. Dropping the warmup (not reordering
+        // the gate) closes that gap: `carveBrakeMassAvg` is already NaN-until-nonempty from {@link
+        // CarveCompletionWindow}, so the `!Double.isNaN` check alone is the only "no signal yet" guard
+        // needed here now.
+        //
+        // Same probe-recovery shape as confetti — but its own, INDEPENDENT probe sequence ({@code
+        // ConfettiObservation#carveBrakeProbeSeq}), since the two gates' over-threshold populations
+        // are distinct. Refuses SPLITS only: a braked range keeps draining by pages exactly as it
+        // would have if this gate did not exist.
         if (toggles.carveBrake() != CarveBrakeMode.OFF) {
             ConfettiObservation obs = view.confetti();
-            if (obs.taggedTotal() >= ConfettiFeedbackGate.MIN_SAMPLE) {
-                double massAvg = obs.windowAverageMass();
-                if (!Double.isNaN(massAvg) && massAvg < (double) toggles.carveBrake().k() * maxKeys) {
-                    if ((obs.carveBrakeProbeSeq() + 1) % CARVE_BRAKE_PROBE_K == 0) {
-                        carveReason = "carve_brake_probe";
-                        engagements.add(new Engagement("OWNER_SPLIT", carveReason));
-                        // CLAIM, not CONSUME (issue #31, mirrored): every owner sharing this
-                        // carveBrakeProbeSeq snapshot decides PROBE, so only a CAS-claimed carve may
-                        // actually publish; a pivot check below that then abandons this carve degrades
-                        // the claim to the unconditional CONSUME (consumeInsteadOfClaim).
-                        mutations = appendMutation(mutations, OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT);
-                    } else {
-                        engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CARVE_BRAKED.code()));
-                        // A pending CLAIM_CONFETTI_PROBE_SLOT (this consult's confetti check also
-                        // probed) has no carve left to serialize either, so it downgrades to CONSUME
-                        // right alongside the brake's own unconditional consume.
-                        List<OwnerSplitMutation> brakedMutations = appendMutation(
-                                consumeInsteadOfClaim(mutations), OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT);
-                        return new Skip(OwnerSplitSkipReason.CARVE_BRAKED, engagements, brakedMutations,
-                                gateInputs(OwnerSplitSkipReason.CARVE_BRAKED.code(), view, est,
-                                        pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
-                    }
+            if (!Double.isNaN(carveBrakeMassAvg) && carveBrakeMassAvg < (double) toggles.carveBrake().k() * maxKeys) {
+                if ((obs.carveBrakeProbeSeq() + 1) % CARVE_BRAKE_PROBE_K == 0) {
+                    carveReason = "carve_brake_probe";
+                    engagements.add(new Engagement("OWNER_SPLIT", carveReason));
+                    // CLAIM, not CONSUME (issue #31, mirrored): every owner sharing this
+                    // carveBrakeProbeSeq snapshot decides PROBE, so only a CAS-claimed carve may
+                    // actually publish; a pivot check below that then abandons this carve degrades
+                    // the claim to the unconditional CONSUME (consumeInsteadOfClaim).
+                    mutations = appendMutation(mutations, OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT);
+                } else {
+                    engagements.add(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.CARVE_BRAKED.code()));
+                    // A pending CLAIM_CONFETTI_PROBE_SLOT (this consult's confetti check also
+                    // probed) has no carve left to serialize either, so it downgrades to CONSUME
+                    // right alongside the brake's own unconditional consume.
+                    List<OwnerSplitMutation> brakedMutations = appendMutation(
+                            consumeInsteadOfClaim(mutations), OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT);
+                    return new Skip(OwnerSplitSkipReason.CARVE_BRAKED, engagements, brakedMutations,
+                            gateInputs(OwnerSplitSkipReason.CARVE_BRAKED.code(), view, est,
+                                    pagesSinceLastSelfSplit, f, densityRatio, carveBrakeMassAvg));
                 }
             }
         }

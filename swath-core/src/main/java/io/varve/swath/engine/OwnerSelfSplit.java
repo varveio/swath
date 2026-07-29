@@ -169,11 +169,16 @@ final class OwnerSelfSplit {
         // exactly while still letting the governor's decide() be the sole gate-chain decision point.
         long committed = (H == null) ? selfSplit[0] : ++selfSplit[0];
         ConfettiFeedbackGate.Snapshot confettiSnapshot = confettiFeedback.snapshot();
+        // K resolved at THIS read, not baked into the window's storage (E-20): 0 when the mode is
+        // off, which is moot either way since the window is never fed (recordWindowCompletion is
+        // gated on carve_brake != off below) so it reads NaN regardless of k.
+        long carveBrakeK = toggles.carveBrake() == CarveBrakeMode.OFF ? 0 : toggles.carveBrake().k();
+        double windowAverageMass = confettiFeedback.carveBrakeWindowAverage(carveBrakeK, maxKeys);
         OwnerSplitView view = new OwnerSplitView(H, ws.lo(), cursorTo, ws.keysEmitted(), committed,
                 selfSplit[1], outstanding.getAsLong(), ws.densityFraction(), ws.observedDensityRatio(),
                 ws.alphabetDigest().snapshot(), new ConfettiObservation(confettiSnapshot.taggedTotal(),
                         confettiSnapshot.taggedConfetti(), confettiSnapshot.probeSeq(),
-                        confettiSnapshot.windowAverageMass(), confettiSnapshot.carveBrakeProbeSeq()));
+                        windowAverageMass, confettiSnapshot.carveBrakeProbeSeq()));
         OwnerSplitDecision decision = governor.decide(view);
         // The gate chain's own reading of this page-commit, captured for the CALLER to emit as the
         // owner_split_decision event AFTER ws.lock is released (same lock discipline as the split
@@ -212,9 +217,12 @@ final class OwnerSelfSplit {
             metrics.recordStealReason("OWNER_SPLIT", "self_aborted");
             return gateTrace(nodeId, gateInputs);
         }
-        if (toggles.confettiFeedback()) {
+        if (toggles.confettiFeedback() || toggles.carveBrake() != CarveBrakeMode.OFF) {
             // Tag this child BEFORE enqueueChild publishes it — see ownerSplitTaggedChildren's
-            // javadoc for why tagging first (rather than after publish) is safe here.
+            // javadoc for why tagging first (rather than after publish) is safe here. Tagging is
+            // decoupled from confetti_feedback alone (E-20): either toggle wanting the completion's
+            // ground truth is enough to tag, and onNodeCompleted below folds it into whichever of
+            // the two counters (or both) their own gates admit.
             ownerSplitTaggedChildren.add(childId);
         }
         enqueueChild.accept(childId, m, H);   // same ready-queue + outstanding hand-off a thief uses
@@ -363,20 +371,30 @@ final class OwnerSelfSplit {
     }
 
     /**
-     * Classify a completed TAGGED owner-split child and fold its realized mass into the run-level
-     * confetti-rate feedback the next carve reads (ground truth, not the upstream estimate). Called
+     * Classify a completed TAGGED owner-split child and fold its ground truth into whichever of
+     * confetti's rate feedback / the carve brake's completion window (or both) is actually enabled
+     * (E-20's decoupling fix) — each fed on its OWN toggle, never coupled to the other's. Called
      * from the engine's node-completion site once, by whichever worker eventually claims and drains
      * the child — so classification happens exactly once per tagged child even under stealing. A
-     * non-tagged node (a seed, a thief child, or any node when confetti feedback is off) is a no-op.
+     * non-tagged node (a seed, a thief child, or any node when neither toggle is on) is a no-op.
      */
     void onNodeCompleted(long nodeId, WorkerState ws) {
         // Classify TAGGED children only; remove-once makes classification exactly-once even under
         // stealing. isConfettiChild carries the test (a small own tally AND ws.hasSplit() false) and
         // its javadoc the rationale for why the never-split condition is load-bearing.
-        if (toggles.confettiFeedback() && ownerSplitTaggedChildren.remove(nodeId)) {
-            boolean confetti = isConfettiChild(ws.keysEmitted(), ws.hasSplit(), maxKeys);
-            confettiFeedback.recordCompletion(confetti, ws.keysEmitted());
-            metrics.recordStealReason("OWNER_SPLIT_CHILD", confetti ? "confetti" : "substantial");
+        boolean confettiOn = toggles.confettiFeedback();
+        boolean brakeOn = toggles.carveBrake() != CarveBrakeMode.OFF;
+        if ((confettiOn || brakeOn) && ownerSplitTaggedChildren.remove(nodeId)) {
+            long mass = ws.keysEmitted();
+            boolean hasSplit = ws.hasSplit();
+            if (confettiOn) {
+                boolean confetti = isConfettiChild(mass, hasSplit, maxKeys);
+                confettiFeedback.recordConfettiClassification(confetti);
+                metrics.recordStealReason("OWNER_SPLIT_CHILD", confetti ? "confetti" : "substantial");
+            }
+            if (brakeOn) {
+                confettiFeedback.recordWindowCompletion(mass, hasSplit);
+            }
         }
     }
 

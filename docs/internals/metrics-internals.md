@@ -663,7 +663,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `OWNER_SPLIT` | `self_published` | the owner's proactive self-split committed | |
 | `OWNER_SPLIT` | `confetti_suppressed` | a carve was suppressed by the realized-child-mass confetti feedback gate | |
 | `OWNER_SPLIT` | `confetti_probe` | a would-be-suppressed carve was let through as the periodic probe (every `PROBE_K`-th) | |
-| `OWNER_SPLIT` | `carve_braked` | the realized-child-mass carve brake suppressed the carve (`--engine-toggle carve_brake=MODE`, campaign memo §5): the recent window-average realized mass of tagged owner-split children dropped below `K * maxKeys`. Distinct from `confetti_suppressed` — this reads the recent MASS TREND, not confetti's binary degenerate/substantial RATE. Gated on `carve_brake != off` (default `off`) | |
+| `OWNER_SPLIT` | `carve_braked` | the realized-child-mass carve brake suppressed the carve (`--engine-toggle carve_brake=MODE`, campaign memo §5, E-20 amendment): the recent window-average SPLIT-AWARE EFFECTIVE mass of the last up-to-8 tagged owner-split children (`effectiveMass = hasSplit ? max(mass, K*maxKeys) : mass`) dropped below `K * maxKeys`. Zero warmup — defined from the first tagged completion onward, no sample-count floor. Distinct from `confetti_suppressed` — this reads the recent MASS TREND, not confetti's binary degenerate/substantial RATE. Gated on `carve_brake != off` (default `off`); tagging (which completions feed this signal) is decoupled from `confetti_feedback` — either toggle being on is enough to tag and feed its own counter(s) | |
 | `OWNER_SPLIT` | `carve_brake_probe` | a would-be-braked carve was let through as the periodic probe (every `CARVE_BRAKE_PROBE_K`-th, independent of confetti's own probe sequence) | |
 | `OWNER_SPLIT` | `unsplittable_pivot` | the synthesized owner-split pivot was `null`, or not strictly inside `(cursorTo, hi]`, THIS page-commit — transient and per-attempt (the range is reconsidered at its next qualifying commit), NOT the thief's permanently-cached `UNSPLITTABLE.no_pivot` | |
 | `OWNER_SPLIT_CHILD` | `confetti` | a tagged owner-split child completed with realized mass `<= 2*maxKeys` AND never itself split (no owner self-split, no successful thief steal) | |
@@ -879,9 +879,10 @@ by a `null` VALUE, the third by the field's ABSENCE):
   (in the engine, a `null` `Double`, not `NaN`) exactly when `carve_brake=off`: this run never reads
   the carve brake's signal, so the field is OMITTED from the event entirely rather than reported as
   a not-computed `NaN` — the distinction that keeps every `carve_brake=off` decision-trace golden
-  byte-identical to a build that predates the field. When `carve_brake` is on, the field IS present
-  and follows the ordinary "not computed" convention above until warmup (`NaN` → JSON `null`), then
-  carries the real window-average reading.
+  byte-identical to a build that predates the field. When `carve_brake` is on, the field IS present:
+  `NaN` (JSON `null`) until the run's FIRST tagged owner-split child completes (zero warmup, E-20
+  amendment — there is no sample-count floor anymore, unlike `confetti_feedback`'s own), then the
+  real split-aware effective-mass window average from that first completion onward.
 
 **Gate decision vs executor outcome.** `owner_split_decision.reason` reports what the *gate chain*
 decided. A carve the chain admitted can still fail to publish executor-side (a lost confetti

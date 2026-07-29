@@ -12,14 +12,19 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Direct unit coverage of {@link ConfettiFeedbackGate}'s bookkeeping — {@link
- * ConfettiFeedbackGate#recordCompletion}/{@link ConfettiFeedbackGate#snapshot} and {@link
- * ConfettiFeedbackGate#consumeProbeSlot} — plus {@link OwnerSelfSplit#isConfettiChild}, the
+ * ConfettiFeedbackGate#recordConfettiClassification}/{@link ConfettiFeedbackGate#snapshot} and
+ * {@link ConfettiFeedbackGate#consumeProbeSlot} — plus {@link OwnerSelfSplit#isConfettiChild}, the
  * confetti-vs-substantial classification predicate the gate's realized-mass evidence is built
  * from: a tagged child is confetti only if it BOTH has a small own tally AND never itself split.
  * Exercised directly (pure counters, no engine machinery). Issue #22's fix moved the
  * warmup/threshold/probe-cycle DECISION logic out of this class entirely — that boundary coverage
  * now lives in {@code io.varve.swath.engine.policy.OwnerSplitGovernorTest}, which exercises it as
- * pure arithmetic over a {@code ConfettiObservation} view field, not against a live gate.
+ * pure arithmetic over a {@code ConfettiObservation} view field, not against a live gate. The
+ * carve brake's completion window ({@link ConfettiFeedbackGate#recordWindowCompletion}/{@link
+ * ConfettiFeedbackGate#carveBrakeWindowAverage}) is a SEPARATE signal fed on its own toggle
+ * (E-20's decoupling fix) — its own boundary/coherence coverage lives in {@code
+ * CarveCompletionWindowTest}; this class only pins that {@link ConfettiFeedbackGate} wires the two
+ * independent signals through correctly.
  */
 final class ConfettiFeedbackGateTest {
 
@@ -36,31 +41,31 @@ final class ConfettiFeedbackGateTest {
     }
 
     // -------------------------------------------------------------------------------------------
-    // recordCompletion / snapshot: the tagged-completion tallies accumulate correctly.
+    // recordConfettiClassification / snapshot: the tagged-completion tallies accumulate correctly.
     // -------------------------------------------------------------------------------------------
 
     @Test
     void freshGateSnapshotsAllZero() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0, Double.NaN, 0));
+        assertThat(gate.snapshot()).isEqualTo(new ConfettiFeedbackGate.Snapshot(0, 0, 0, 0));
     }
 
     @Test
-    void recordCompletionAccumulatesTotalAndConfettiSeparately() {
+    void recordConfettiClassificationAccumulatesTotalAndConfettiSeparately() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true, 1L);
-        gate.recordCompletion(true, 1L);
-        gate.recordCompletion(false, 1L);
+        gate.recordConfettiClassification(true);
+        gate.recordConfettiClassification(true);
+        gate.recordConfettiClassification(false);
         ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
         assertThat(snap.taggedTotal()).as("every completion counts toward the total").isEqualTo(3);
         assertThat(snap.taggedConfetti()).as("only the confetti-classified ones count here").isEqualTo(2);
     }
 
     @Test
-    void recordCompletionNeverTouchesProbeSeq() {
+    void recordConfettiClassificationNeverTouchesProbeSeq() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
         for (int i = 0; i < 20; i++) {
-            gate.recordCompletion(i % 2 == 0, 1L);
+            gate.recordConfettiClassification(i % 2 == 0);
         }
         assertThat(gate.snapshot().probeSeq())
                 .as("completions and the probe sequence are independent counters")
@@ -68,21 +73,47 @@ final class ConfettiFeedbackGateTest {
     }
 
     // -------------------------------------------------------------------------------------------
-    // The carve brake's window-average mass: folded into the same recordCompletion call, exposed
-    // via the same Snapshot -- boundary/fill/wrap coverage of the ring itself lives in
-    // CarveMassRingTest; this only pins that ConfettiFeedbackGate wires it through.
+    // The carve brake's completion window: a SEPARATE signal, fed on its OWN call
+    // (recordWindowCompletion, not recordConfettiClassification) and read through carveBrakeWindowAverage
+    // -- boundary/fill/wrap/coherence coverage of the window itself lives in
+    // CarveCompletionWindowTest; this only pins that ConfettiFeedbackGate wires it through and that
+    // the two signals are independent (E-20's decoupling fix).
     // -------------------------------------------------------------------------------------------
 
+    private static final int MAX_KEYS_FOR_WINDOW = 100;
+
     @Test
-    void recordCompletionFeedsTheCarveBrakeWindowAverage() {
+    void recordWindowCompletionFeedsTheCarveBrakeWindowAverage() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        assertThat(gate.snapshot().windowAverageMass()).as("pre-warmup: no signal").isNaN();
+        assertThat(gate.carveBrakeWindowAverage(2, MAX_KEYS_FOR_WINDOW))
+                .as("zero warmup: still NaN when nothing has completed")
+                .isNaN();
         for (long mass : new long[] {10, 20, 30, 40, 50, 60, 70, 80}) {
-            gate.recordCompletion(false, mass);
+            gate.recordWindowCompletion(mass, false);
         }
-        assertThat(gate.snapshot().windowAverageMass())
-                .as("the average of the last CarveMassRing.SIZE masses")
+        assertThat(gate.carveBrakeWindowAverage(2, MAX_KEYS_FOR_WINDOW))
+                .as("the average of the last CarveCompletionWindow.CAPACITY masses (none split, so K is inert)")
                 .isEqualTo(45.0);
+    }
+
+    @Test
+    void recordWindowCompletionNeverTouchesTheConfettiTallies() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.recordWindowCompletion(1L, false);
+        gate.recordWindowCompletion(1L, false);
+        ConfettiFeedbackGate.Snapshot snap = gate.snapshot();
+        assertThat(snap.taggedTotal()).as("the window's own feed never touches confetti's tallies").isZero();
+        assertThat(snap.taggedConfetti()).isZero();
+    }
+
+    @Test
+    void recordConfettiClassificationNeverTouchesTheWindow() {
+        ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
+        gate.recordConfettiClassification(true);
+        gate.recordConfettiClassification(false);
+        assertThat(gate.carveBrakeWindowAverage(2, MAX_KEYS_FOR_WINDOW))
+                .as("confetti's own feed never touches the brake's window")
+                .isNaN();
     }
 
     // -------------------------------------------------------------------------------------------
@@ -188,8 +219,8 @@ final class ConfettiFeedbackGateTest {
     @Test
     void claimProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true, 1L);
-        gate.recordCompletion(false, 1L);
+        gate.recordConfettiClassification(true);
+        gate.recordConfettiClassification(false);
 
         gate.claimProbeSlot(0);
         gate.claimProbeSlot(0);   // loses
@@ -203,7 +234,7 @@ final class ConfettiFeedbackGateTest {
     @Test
     void consumeProbeSlotNeverTouchesTheCompletionTallies() {
         ConfettiFeedbackGate gate = new ConfettiFeedbackGate();
-        gate.recordCompletion(true, 1L);
+        gate.recordConfettiClassification(true);
         for (int i = 0; i < 5; i++) {
             gate.consumeProbeSlot();
         }
