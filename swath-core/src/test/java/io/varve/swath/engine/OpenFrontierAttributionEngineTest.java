@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -47,10 +48,10 @@ final class OpenFrontierAttributionEngineTest {
     private static List<byte[]> keyspace() {
         List<byte[]> keys = new ArrayList<>(1000);
         for (int i = 0; i < 50; i++) {
-            keys.add(String.format("aaa%03d", i).getBytes(StandardCharsets.UTF_8));
+            keys.add(String.format(Locale.ROOT, "aaa%03d", i).getBytes(StandardCharsets.UTF_8));
         }
         for (int i = 0; i < 950; i++) {
-            keys.add(String.format("zzz%04d", i).getBytes(StandardCharsets.UTF_8));
+            keys.add(String.format(Locale.ROOT, "zzz%04d", i).getBytes(StandardCharsets.UTF_8));
         }
         return keys;
     }
@@ -88,6 +89,9 @@ final class OpenFrontierAttributionEngineTest {
         }
         EngineHarness.assertExactlyOnce(emitted, keyspace);
 
+        // The counter is recorded post-commit/post-filter (the same contract entries.emitted is), but
+        // that never changes this expectation: FilterChain.EMPTY keeps every key, and the mock store
+        // never fails a commit, so all 950 tail keys still clear both the durability and filter gates.
         Counter openFrontierKeys = metrics.registry().find("swath.open_frontier.keys_emitted").counter();
         assertThat(openFrontierKeys).as("the new keys-emitted gauge is registered").isNotNull();
         assertThat(openFrontierKeys.count())

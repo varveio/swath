@@ -665,6 +665,10 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             List<ListEntry> inRange;
                             byte[] cursorTo;
                             boolean madeProgress;
+                            // Read once under ws.lock (below), used AFTER the durable commit + filter
+                            // step (see the open-frontier recording past awaitCommit): whether the range
+                            // this page committed against was still unbounded AT commit time.
+                            byte[] hiAtCommit;
                             OwnerSelfSplit.OwnerSplitTrace ownerSplitTrace = null;
                             ws.lock().lock();
                             try {
@@ -676,7 +680,7 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                 // the trailing keys now above hi here closes that window; the dropped keys
                                 // are exactly the child's, and the next page (start_after past them) finds
                                 // the bound and completes the node.
-                                byte[] hiAtCommit = ws.hiSupplier().get();
+                                hiAtCommit = ws.hiSupplier().get();
                                 inRange = inRange(batch, hiAtCommit);
                                 cursorTo = inRange.isEmpty() ? null : inRange.getLast().key().rawUnsafe();
                                 if (!inRange.isEmpty()) {
@@ -685,13 +689,6 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                     ws.recordPage(inRange.getFirst().key().rawUnsafe(),
                                             cursorTo, inRange.size());   // density digest
                                     metrics.setCursor(cursorTo);
-                                    if (hiAtCommit == null) {
-                                        // The open-frontier attribution seam (issue #76): this node's hi
-                                        // was already read above to trim the batch, and inRange.size() is
-                                        // already the count folded into addKeysEmitted -- reusing both is
-                                        // O(1), no extra I/O and no per-key work.
-                                        metrics.recordOpenFrontierKeysEmitted(inRange.size());
-                                    }
                                 }
                                 madeProgress = !inRange.isEmpty();
                                 commit = store.commitPageAsync(new PageCommit(
@@ -742,6 +739,16 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             List<ListEntry> kept = filters.apply(inRange);
                             if (kept.isEmpty()) {
                                 return;
+                            }
+                            if (hiAtCommit == null) {
+                                // The open-frontier attribution seam (issue #76): recorded here, not
+                                // under ws.lock above, so it lands at the same durable, post-filter point
+                                // swath.entries.emitted is attributed at -- past the awaitCommit above (a
+                                // failed commit throws out of this lambda before reaching this line, so
+                                // it never bumps the counter) and on `kept.size()`, the post-filter count
+                                // (never inRange's pre-filter one), so the share against entries.emitted
+                                // can never exceed 1. O(1): kept.size() is already computed for packing.
+                                metrics.recordOpenFrontierKeysEmitted(kept.size());
                             }
                             // Pack on THIS fetch worker only in --sort mode (pagePacker
                             // non-null). Pack AFTER filters.apply so filtered-out entries are never packed;

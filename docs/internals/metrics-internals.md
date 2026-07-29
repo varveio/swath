@@ -418,9 +418,14 @@ taxonomy so the signal set stays comparable:
     that shape apart from an ordinary gate-blocked tail. Two signals close the gap: the skip now
     records `OWNER_SPLIT.open_frontier` like every other gate (its own population — qualifying page
     commits against an unbounded range — is the diagnostic, not a ratio against a sibling reason), and
-    `swath.open_frontier.keys_emitted` counts the keys actually committed while `hi` was `null` —
-    folded at the same already-serialized page-commit site that reads `hi` to trim the batch anyway
-    (O(1), no extra read, no per-key work). Divide it by `swath.entries.emitted` for the share of the
+    `swath.open_frontier.keys_emitted` counts the keys DURABLY committed AND kept post-filter while
+    `hi` was `null` — recorded at the SAME contract `swath.entries.emitted` is: past `awaitCommit`
+    (never bumped for a commit that fails) and on the post-`FilterChain` kept count (never the
+    pre-filter page size), so this counter can never read as a larger share than 1 of
+    `swath.entries.emitted` (a review of the first cut of this fix caught it recording pre-commit and
+    pre-filter; both `hi` and the kept count are already-computed values at that point, so the fix
+    stays O(1): no
+    extra read, no per-key work). Divide it by `swath.entries.emitted` for the share of the
     run's mass the open frontier carried; a large share alongside a slow, low-parallelism tail is the
     fingerprint this instrument exists to surface.
   - **Reflect-lift, the zero-page-per-carve fix (root cause of the fingerprint-B residual on skewed

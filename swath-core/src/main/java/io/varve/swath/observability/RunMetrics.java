@@ -126,12 +126,15 @@ public final class RunMetrics {
 
     private final Counter entriesEmitted;
     /**
-     * Keys committed while their node's upper bound was {@code null} (issue #76) — the share of
-     * {@link #entriesEmitted} the owner-split governor's un-carvable {@code OWNER_SPLIT.open_frontier}
-     * skip is structurally unable to peel off. Folded at the SAME already-serialized per-page commit
-     * site {@code WorkStealingScan} reads {@code hi} at anyway (O(1): no extra read, no per-key work),
-     * so a run whose mass sits past the last seed cut shows this counter move alongside the aggregate
-     * {@link #entriesEmitted} it is a subset of; an analyst divides the two for the share.
+     * Keys durably committed AND kept post-filter while their node's upper bound was {@code null}
+     * (issue #76) — the share of {@link #entriesEmitted} the owner-split governor's un-carvable
+     * {@code OWNER_SPLIT.open_frontier} skip is structurally unable to peel off. Deliberately counted
+     * at the SAME contract {@link #entriesEmitted} is: past the durable page commit (never bumped on
+     * a commit that fails — a review caught an earlier draft that recorded before {@code
+     * awaitCommit}), and on the post-filter kept count (never the pre-filter page size a review also
+     * caught), so this counter can never read as a larger share than 1 of {@link #entriesEmitted}. So
+     * a run whose mass sits past the last seed cut shows this counter move alongside the aggregate
+     * {@link #entriesEmitted} it is a genuine subset of; an analyst divides the two for the share.
      */
     private final Counter openFrontierKeysEmitted;
     private final Counter bytesEstimated;
@@ -1616,11 +1619,14 @@ public final class RunMetrics {
     }
 
     /**
-     * A page-commit's keys were emitted while their node's {@code hi} was {@code null} (issue #76) —
-     * called from {@code WorkStealingScan}'s page-commit callback with the SAME {@code hi} it already
-     * read to trim the batch and the SAME {@code inRange.size()} it already folded into {@code
-     * WorkerState#addKeysEmitted}, so this is O(1): no extra read, no per-key work. See {@link
-     * #openFrontierKeysEmitted}'s javadoc.
+     * A page-commit's keys were durably committed and kept post-filter while their node's {@code hi}
+     * was {@code null} (issue #76) — called from {@code WorkStealingScan}'s page-commit callback
+     * AFTER {@code awaitCommit} returns normally (never on a commit that fails) and on {@code
+     * kept.size()}, the same post-{@code FilterChain} count the page's downstream {@code PageBatch}
+     * carries — never the pre-filter page size. Both {@code hi} and the kept count are values the
+     * caller already has for its own bookkeeping at that point, so this is still O(1): no extra read,
+     * no per-key work. See {@link #openFrontierKeysEmitted}'s javadoc for why this contract matters
+     * (it is what keeps this counter a genuine subset of {@link #entriesEmitted}).
      */
     public void recordOpenFrontierKeysEmitted(long keyCount) {
         if (keyCount > 0) {
