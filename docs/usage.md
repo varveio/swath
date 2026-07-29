@@ -519,13 +519,15 @@ slip — is rejected outright (exit 2) rather than silently signing with SigV4.
 
 #### Diagnostic-tier ablation (`--engine-toggle`)
 
-**EXPERIMENTAL / DIAGNOSTIC — a measurement tool, not a supported configuration.** `--engine-toggle
+**EXPERIMENTAL / DIAGNOSTIC — a measurement tool, not a supported configuration, with one
+documented exception: the 0.2.0 rollback pair described below.** `--engine-toggle
 NAME=VALUE` (repeatable) is a single ablation namespace so a per-mechanism A/B measurement of the
 `WorkStealingScan` engine runs from one binary instead of a bespoke flag per experiment. Every
 structure toggle defaults to `on` (`readahead` defaults to `off`; `mass_aware_seed` and
 `rate_anchored_sensing` are default ON, opt-out `NAME=off`; `tail_floor` is the one
 value-taking toggle, default `reach_floored`); **the defaults are the only supported
-configuration** —
+configuration, except for the documented `rate_anchored_sensing=off` + `tail_floor=current`
+rollback below** —
 toggling never changes correctness (I2/I3 tiling holds either way), only which optimization
 mechanisms engage. An unknown name, a malformed value (not `on`/`off` — or, for `tail_floor`, not
 one of its modes), or a contradictory combination

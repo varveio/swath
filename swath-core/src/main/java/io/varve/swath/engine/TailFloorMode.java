@@ -18,7 +18,11 @@ import java.util.Locale;
  *
  * <p>An arm here changes only <em>whether</em> an owner carves, never how the split transaction
  * tiles (I2/I3 hold under every mode — the pivot math and the CAS are untouched), so this is a
- * measurement surface exactly like {@code rate_anchored_sensing}, not a supported configuration.
+ * measurement surface exactly like {@code rate_anchored_sensing}.
+ *
+ * <p>One exception to that framing, since 0.2.0: {@link #CURRENT} paired with {@code
+ * rate_anchored_sensing=off} is the <b>documented, supported rollback</b> to pre-0.2.0 engine
+ * behaviour ({@code docs/usage.md}). Every other mode here remains measurement-only.
  */
 public enum TailFloorMode {
 
