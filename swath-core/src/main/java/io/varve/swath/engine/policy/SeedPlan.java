@@ -26,9 +26,16 @@ import java.util.List;
  *                        exactly, whatever it contains, including empty (the flat-trivial case)
  * @param synthesizedCuts how many of {@code cuts} were synthesized (dense-root radix banding) rather
  *                        than observed from a probe
+ * @param cutsDiscovered  how many DISTINCT cut points the descent actually found via probing, BEFORE
+ *                        any over-cap subsample reduced that set toward {@code targetSeeds} (issue
+ *                        #83's instrumentation: a {@code cuts.size() > cutsDiscovered} reader alone
+ *                        cannot be sure whether a low final cut count means the descent found little,
+ *                        or found plenty and a subsample discarded most of it — this makes that
+ *                        distinction directly readable post-hoc rather than requiring a probe-log
+ *                        replay). Equal to {@code cuts.size()} whenever no subsample ran.
  * @param probes          the total number of probes this descent issued
  * @param decisions       the per-level decision trace, in probe order
  */
-public record SeedPlan(List<byte[]> cuts, int synthesizedCuts, int probes, List<SeedLevelDecision> decisions,
-                       List<Engagement> engagements) implements SeedAction {
+public record SeedPlan(List<byte[]> cuts, int synthesizedCuts, int cutsDiscovered, int probes,
+                       List<SeedLevelDecision> decisions, List<Engagement> engagements) implements SeedAction {
 }

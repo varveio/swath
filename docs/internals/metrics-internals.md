@@ -52,6 +52,17 @@ sequential/no-checkpoint run that never seeds. The companion classification coun
 none of the other subtypes applied). (`scatter_scout` — the opt-in scout-placed variant of
 `dense_root_radix_banded` — is no longer emitted: it had zero engagement in practice.)
 
+**`seed.cuts_discovered`** (issue #83): how many DISTINCT cut points the descent actually found via
+probing, BEFORE any over-cap subsample reduced that set toward `cut_points` (equal to `cut_points`
+whenever `cuts_discovered <= targetSeeds` and no subsample ran). Exists because `cut_points` alone
+cannot distinguish "the descent found little" from "the descent found plenty and a subsample
+discarded most of it" — the second shape hid a real collapse bug in `massWeightedSubsample` (a
+handful of heavy-weighted samples could starve the whole walk down to a small fraction of its
+budget even with `cut_points`/`SEED.mass_weighted_subsample` looking unremarkable) until this field
+made `cuts_discovered ≫ cut_points` directly readable post-hoc. A healthy subsampled run still shows
+`cuts_discovered > cut_points` (that is the subsample doing its intended job); the pathology is
+`cut_points` sitting far BELOW `targetSeeds` despite `cuts_discovered` clearing it comfortably.
+
 **`seed.decisions[]`**: the per-probed-level seed decision trace — one entry per `delimiter=/`
 structure probe `SeedStep` issued while building the tiling above (bounded by the same probe cap the
 `probes` field already reports, ≤ ~256; index `0` is always the top-level probe). Each entry is

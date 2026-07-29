@@ -1194,23 +1194,30 @@ public final class RunMetrics {
      * #summary} renders {@code seed: null} there.
      */
     public void recordSeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long ranges) {
-        recordSeedSummary(mode, probes, cutPoints, synthesizedCuts, ranges, List.of());
+        // No separately-tracked discovered count from this caller -- assume nothing was subsampled
+        // away (discovered == kept), the same default the record's own field doc calls out.
+        recordSeedSummary(mode, probes, cutPoints, synthesizedCuts, cutPoints, ranges, List.of());
     }
 
     /**
-     * As the 5-arg {@link #recordSeedSummary}, plus the per-probed-level seed decision trace
+     * As the 6-arg {@link #recordSeedSummary}, plus the per-probed-level seed decision trace
      * ({@code decisions}, bounded by {@code SeedStep}'s own probe cap ≤ ~256) promoted into the
      * {@code seed.decisions[]} block. {@code decisions} carries raw byte-key prefixes (never a
      * display string) so the ONE shared {@link #display(byte[])} escape/truncate pass happens here,
      * at JSON-model-build time — the same idiom every other byte-key rendering in this class uses.
+     *
+     * @param cutsDiscovered issue #83's instrumentation: how many distinct cut points the descent
+     *                       actually found BEFORE any over-cap subsample reduced that set toward
+     *                       {@code cutPoints} — see {@code RunSummary.SeedSummary}'s field doc
      */
-    public void recordSeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long ranges,
-            List<SeedProbeDecision> decisions) {
+    public void recordSeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts,
+            long cutsDiscovered, long ranges, List<SeedProbeDecision> decisions) {
         List<RunSummary.SeedSummary.SeedDecision> rendered = decisions.stream()
                 .map(d -> new RunSummary.SeedSummary.SeedDecision(display(d.prefix()), d.fanout(), d.truncated(),
                         d.classification(), d.cutsKept(), d.cutsDiscarded(), d.depth(), d.quotaCutOff()))
                 .toList();
-        seedSummary.set(new RunSummary.SeedSummary(mode, probes, cutPoints, synthesizedCuts, ranges, rendered));
+        seedSummary.set(new RunSummary.SeedSummary(mode, probes, cutPoints, synthesizedCuts, cutsDiscovered, ranges,
+                rendered));
     }
 
     /**

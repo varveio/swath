@@ -333,7 +333,8 @@ downstream parser should key off, not "does `meters[]` exist".
   "engine": { "pages": 112, "peak_in_flight": 61, "avg_in_flight": 16.4,
     "time_to_first_steal_ms": 180, "time_to_peak_in_flight_ms": 4200,
     "steals": 232602, "splits": 98, "errors": 0 },
-  "seed": { "mode": "shallow", "probes": 3, "cut_points": 41, "synthesized_cuts": 0, "ranges": 42,
+  "seed": { "mode": "shallow", "probes": 3, "cut_points": 41, "synthesized_cuts": 0,
+    "cuts_discovered": 41, "ranges": 42,
     "decisions": [
       { "prefix": "", "fanout": 3, "truncated": false, "classification": "delimiter_seeded",
         "cuts_kept": 3, "cuts_discarded": 0, "depth": 0, "quota_cut_off": false }

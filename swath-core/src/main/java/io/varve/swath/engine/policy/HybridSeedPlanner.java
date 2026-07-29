@@ -589,9 +589,10 @@ public final class HybridSeedPlanner implements SeedPlanner {
         private SeedAction finalizePlan() {
             if (cuts.isEmpty() && flatWideRegion == null) {
                 mark("flat_trivial");
-                return new SeedPlan(List.of(), 0, totalProbes, List.copyOf(decisions), drain());
+                return new SeedPlan(List.of(), 0, 0, totalProbes, List.copyOf(decisions), drain());
             }
 
+            int cutsDiscovered = cuts.size();
             TreeSet<byte[]> cutSet = new TreeSet<>(Arrays::compareUnsigned);
             if (cuts.size() > targetSeeds) {
                 mark("descent_cuts_subsampled");
@@ -629,7 +630,7 @@ public final class HybridSeedPlanner implements SeedPlanner {
             List<SeedLevelDecision> finalDecisions =
                     finalizeDecisions(decisions, flatWideRegion, synthesized > 0, genericDelimiterSeeded);
 
-            return new SeedPlan(finalCuts, synthesized, totalProbes, finalDecisions, drain());
+            return new SeedPlan(finalCuts, synthesized, cutsDiscovered, totalProbes, finalDecisions, drain());
         }
     }
 
@@ -844,12 +845,36 @@ public final class HybridSeedPlanner implements SeedPlanner {
     }
 
     /**
-     * Weight-proportional subsample: allocate the {@code max}-cut budget by walking the sorted cuts
-     * and emitting one each time the running weight crosses a {@code total/max} threshold, so a heavy
-     * (high-weight) region keeps proportionally more interior cuts than an empty one. A cut absent
-     * from {@code weights} counts as weight 1. Package-visible for
-     * {@code HybridSeedPlannerMassWeightedSubsampleTest}, which reconstructs the wide-sibling shape
-     * this guards against directly.
+     * Weight-proportional subsample: allocate the {@code max}-cut budget so a heavy (high-weight)
+     * region keeps proportionally more interior cuts than an empty one — mass-weighting is a
+     * PREFERENCE among candidates, never a mechanism that can starve the budget itself (issue #83). A
+     * cut absent from {@code weights} counts as weight 1.
+     *
+     * <p><b>Two passes, in order:</b>
+     * <ol>
+     *   <li><b>Certainty selection</b> ({@link #selectCertain}): a candidate whose weight ALREADY
+     *       claims its own full proportional share (or more) of what remains is picked with certainty
+     *       and removed from the running total/budget, heaviest first. This is the fix for issue #83's
+     *       collapse: the naive single threshold-walk below anchors its next threshold to the weight
+     *       actually accumulated at each pick ({@code next = acc + step}, the existing fix for the
+     *       CONVERSE {@code HybridSeedPlannerMassWeightedSubsampleTest} landslide, where a heavy cut's
+     *       credit must not spill onto its sorted neighbors as an unbroken run) — but a SET can only
+     *       pick one heavy candidate ONCE, so any credit beyond a single step that a heavy candidate
+     *       banks is credit the walk can never cash in elsewhere; on a shape with several such
+     *       candidates (issue #83's porotomo repro: a handful of page-capped samples among mostly
+     *       unsampled weight-1 cuts) that uncashable credit compounds until the walk collapses to a
+     *       small fraction of {@code max}. Certainty selection removes exactly the candidates that
+     *       would trigger this before the walk ever sees them, so what the walk sees afterward can
+     *       never overshoot by more than one step's worth again.
+     *   <li><b>Systematic walk over the residual</b> ({@link #systematicWalk}): once every remaining
+     *       candidate's weight is bounded by the (now-fixed) residual share, the threshold advances by
+     *       a plain {@code step} each pick (not re-anchored to {@code acc}) — safe here (no candidate
+     *       left can overshoot by more than one step, so no landslide risk), and it lands within one
+     *       pick of the exact residual budget instead of drifting low the way anchoring to {@code acc}
+     *       does at fine (near-1) granularity.
+     * </ol>
+     * Fully deterministic (ties break on original sort-order index, never on iteration/hash order) and
+     * O(n log n) (one sort, two linear passes) — this subsample runs once per seed, not per probe.
      */
     static List<byte[]> massWeightedSubsample(TreeSet<byte[]> cuts, int max, NavigableMap<byte[], Long> weights) {
         List<byte[]> all = new ArrayList<>(cuts);
@@ -864,21 +889,80 @@ public final class HybridSeedPlanner implements SeedPlanner {
             w[i] = (ww == null) ? 1L : ww;
             total += w[i];
         }
+
+        boolean[] selected = new boolean[n];
+        long[] residual = new long[1];   // {remainingTotal} — selectCertain's other out-param is the return value
+        int remainingBudget = selectCertain(w, total, max, selected, residual);
+        if (remainingBudget > 0 && residual[0] > 0) {
+            systematicWalk(w, selected, residual[0], remainingBudget);
+        }
+
         List<byte[]> picked = new ArrayList<>(max);
-        double step = (double) total / max;
-        double next = step;
-        double acc = 0;
-        for (int i = 0; i < n && picked.size() < max; i++) {
-            acc += w[i];
-            if (acc + 1e-9 >= next) {
+        for (int i = 0; i < n; i++) {
+            if (selected[i]) {
                 picked.add(all.get(i));
-                next = acc + step;
             }
         }
         if (picked.isEmpty()) {
             picked.add(all.get(n / 2));
         }
         return picked;
+    }
+
+    /**
+     * Marks every candidate that already claims its full share of the remaining budget as
+     * {@code selected[i] = true} (heaviest-first; stops at the first, and therefore every remaining,
+     * candidate that does NOT), returning the leftover budget and (via {@code residualTotalOut[0]})
+     * the leftover weight for {@link #systematicWalk} to spend on the rest.
+     */
+    private static int selectCertain(long[] w, long total, int max, boolean[] selected, long[] residualTotalOut) {
+        int n = w.length;
+        Integer[] byWeightDesc = new Integer[n];
+        for (int i = 0; i < n; i++) {
+            byWeightDesc[i] = i;
+        }
+        Arrays.sort(byWeightDesc, Comparator.<Integer>comparingLong(i -> w[i]).reversed());
+        long remainingTotal = total;
+        int remainingBudget = max;
+        for (int idx : byWeightDesc) {
+            if (remainingBudget <= 0) {
+                break;
+            }
+            double share = (double) remainingTotal / remainingBudget;
+            if (w[idx] < share - 1e-9) {
+                break;   // sorted heaviest-first: no lighter candidate can clear the share either
+            }
+            selected[idx] = true;
+            remainingTotal -= w[idx];
+            remainingBudget--;
+        }
+        residualTotalOut[0] = remainingTotal;
+        return remainingBudget;
+    }
+
+    /**
+     * Spends {@code remainingBudget} picks over the NOT-{@code selected} candidates in their original
+     * (sorted-cut) order, proportional to weight. Safe to advance the threshold by a plain fixed
+     * {@code step} per pick (never re-anchored to the running sum) precisely because {@link
+     * #selectCertain} has already removed every candidate that could otherwise overshoot by more than
+     * one step.
+     */
+    private static void systematicWalk(long[] w, boolean[] selected, long remainingTotal, int remainingBudget) {
+        double step = (double) remainingTotal / remainingBudget;
+        double next = step;
+        double acc = 0;
+        int picked = 0;
+        for (int i = 0; i < w.length && picked < remainingBudget; i++) {
+            if (selected[i]) {
+                continue;
+            }
+            acc += w[i];
+            if (acc + 1e-9 >= next) {
+                selected[i] = true;
+                picked++;
+                next += step;
+            }
+        }
     }
 
     /**

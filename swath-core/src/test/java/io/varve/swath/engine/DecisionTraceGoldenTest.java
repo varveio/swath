@@ -1192,6 +1192,7 @@ final class DecisionTraceGoldenTest {
         decision.put("probes", seed.probes());
         decision.put("cut_points", seed.cutPoints());
         decision.put("synthesized_cuts", seed.synthesizedCuts());
+        decision.put("cuts_discovered", seed.cutsDiscovered());
         ArrayNode ranges = decision.putArray("ranges");
         for (NodeSpec spec : specs) {
             ObjectNode r = GoldenTrace.newNode();

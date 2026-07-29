@@ -153,7 +153,7 @@ public final class SeedStep {
     public List<NodeSpec> seedSpecs(long runId, SeedMode mode) throws SwathException, InterruptedException {
         return switch (mode) {
             case NONE -> {
-                recordSeedSummary("none", 0, 0, 0, 1, List.of());
+                recordSeedSummary("none", 0, 0, 0, 0, 1, List.of());
                 yield List.of(NodeSpec.rootRange(runId));
             }
             case SHALLOW -> shallow(runId);
@@ -204,10 +204,12 @@ public final class SeedStep {
         if (plan.synthesizedCuts() > 0 && metrics != null) {
             metrics.recordSeedBands(plan.synthesizedCuts());
         }
-        recordSeedSummary("shallow", plan.probes(), plan.cuts().size(), plan.synthesizedCuts(), specs.size(),
-                toRunMetricsDecisions(plan.decisions()));
-        log.info("seed_shallow run_id={} probes={} cut_points={} synthesized_cuts={} seed_ranges={}",
-                runId, plan.probes(), plan.cuts().size(), plan.synthesizedCuts(), specs.size());
+        recordSeedSummary("shallow", plan.probes(), plan.cuts().size(), plan.synthesizedCuts(),
+                plan.cutsDiscovered(), specs.size(), toRunMetricsDecisions(plan.decisions()));
+        log.info("seed_shallow run_id={} probes={} cut_points={} synthesized_cuts={} cuts_discovered={} "
+                        + "seed_ranges={}",
+                runId, plan.probes(), plan.cuts().size(), plan.synthesizedCuts(), plan.cutsDiscovered(),
+                specs.size());
         return specs;
     }
 
@@ -226,10 +228,10 @@ public final class SeedStep {
      * the JSON run-summary's {@code seed} block ({@link RunMetrics#recordSeedSummary}). A no-op
      * when metrics are not wired (e.g. a unit test using the metrics-less constructor).
      */
-    private void recordSeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long ranges,
-            List<RunMetrics.SeedProbeDecision> decisions) {
+    private void recordSeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts,
+            long cutsDiscovered, long ranges, List<RunMetrics.SeedProbeDecision> decisions) {
         if (metrics != null) {
-            metrics.recordSeedSummary(mode, probes, cutPoints, synthesizedCuts, ranges, decisions);
+            metrics.recordSeedSummary(mode, probes, cutPoints, synthesizedCuts, cutsDiscovered, ranges, decisions);
         }
     }
 

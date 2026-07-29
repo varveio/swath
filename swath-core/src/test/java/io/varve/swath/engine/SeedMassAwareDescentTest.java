@@ -460,11 +460,26 @@ final class SeedMassAwareDescentTest {
     @Test
     void wideNonTruncatedTopFiresMassWeightedSubsample() throws Exception {
         int workers = 64;
+        int targetSeeds = 4 * workers;   // HybridSeedPlanner's own targetSeeds formula
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         SeedSteps.of(MockPageFetcher.builder().keys(wideNonTruncatedTopHeavyTail(600, 20, 6, 500)).build(),
                 NO_PREFIX, workers, metrics, massAware("on")).seedSpecs(1L, SeedMode.SHALLOW);
         assertReasonFired(metrics, MASS_WEIGHTED_SUBSAMPLE,
                 "wide non-truncated top: weight-proportional subsample of the over-cap cut set");
+
+        // Issue #83's instrumentation: cuts_discovered (the raw pre-subsample count) must be
+        // separately readable from cut_points (the post-subsample tiled count) — this shape's 600
+        // top-level regions comfortably clear targetSeeds, so a subsample genuinely ran.
+        RunSummary.SeedSummary seed = metrics.summary(Duration.ofMillis(1), "WORK_STEALING", 0L, 0L).seed();
+        assertThat(seed.cutsDiscovered())
+                .as("the descent found far more distinct cuts than targetSeeds before subsampling")
+                .isGreaterThan(targetSeeds);
+        // Issue #83's own regression: mass-weighting is a PREFERENCE, never a starvation mechanism --
+        // the post-subsample cut_points must land close to the full targetSeeds budget, not collapse
+        // to a small fraction of it despite cuts_discovered clearing it comfortably.
+        assertThat(seed.cutPoints())
+                .as("a generous targetSeeds=%d must still be spent close to in full, not collapsed", targetSeeds)
+                .isGreaterThan(targetSeeds - targetSeeds / 10);
     }
 
     @Test

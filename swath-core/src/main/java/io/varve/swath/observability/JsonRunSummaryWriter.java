@@ -665,6 +665,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         seedNode.put("probes", seed.probes());
         seedNode.put("cut_points", seed.cutPoints());
         seedNode.put("synthesized_cuts", seed.synthesizedCuts());
+        seedNode.put("cuts_discovered", seed.cutsDiscovered());
         seedNode.put("ranges", seed.ranges());
         // The per-probed-level seed decision trace (bounded — SeedStep caps probes ≤ ~256).
         ArrayNode decisionsNode = seedNode.putArray("decisions");

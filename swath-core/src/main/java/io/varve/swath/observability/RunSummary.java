@@ -133,16 +133,23 @@ public record RunSummary(
      * The seed-step's already-computed shape (§5, promoted from {@code SeedStep}'s log-only
      * {@code seed_shallow} line): {@code mode} is {@code "none"}/{@code "shallow"}/{@code "hints"};
      * {@code probes}/{@code cutPoints}/{@code synthesizedCuts}/{@code ranges} are {@code SeedStep}'s
-     * exact accounting for a fresh run's worklist tiling. {@code decisions} is the per-probed-
-     * level seed decision trace — one entry per structure probe the seed step issued (bounded by the
-     * same probe cap SeedStep already enforces, ≤ ~256).
+     * exact accounting for a fresh run's worklist tiling. {@code cutsDiscovered} (issue #83) is how
+     * many distinct cut points the descent actually found via probing BEFORE any over-cap subsample
+     * reduced that set toward {@code cutPoints} — equal to {@code cutPoints} whenever no subsample ran,
+     * so a reader can tell "the descent found little" (both fields low) apart from "the descent found
+     * plenty and a subsample discarded most of it" ({@code cutsDiscovered} ≫ {@code cutPoints}) without
+     * replaying the probe log. {@code decisions} is the per-probed-level seed decision trace — one
+     * entry per structure probe the seed step issued (bounded by the same probe cap SeedStep already
+     * enforces, ≤ ~256).
      */
-    public record SeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long ranges,
-                               List<SeedDecision> decisions) {
+    public record SeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long cutsDiscovered,
+                               long ranges, List<SeedDecision> decisions) {
 
-        /** Convenience constructor: no decision trace (an empty list, never {@code null}). */
+        /** Convenience constructor: no separately-tracked discovered count (defaults to {@code
+         *  cutPoints} — assumes nothing was subsampled away) and no decision trace (an empty list,
+         *  never {@code null}). */
         public SeedSummary(String mode, long probes, long cutPoints, long synthesizedCuts, long ranges) {
-            this(mode, probes, cutPoints, synthesizedCuts, ranges, List.of());
+            this(mode, probes, cutPoints, synthesizedCuts, cutPoints, ranges, List.of());
         }
 
         /**
