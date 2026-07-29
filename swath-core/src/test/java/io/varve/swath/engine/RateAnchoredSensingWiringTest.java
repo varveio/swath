@@ -116,8 +116,8 @@ final class RateAnchoredSensingWiringTest {
         List<byte[]> keyspace = Keyspaces.exactly(2000);
         assertThat(EngineToggles.DEFAULT.rateAnchoredSensing()).isTrue();
         assertThat(EngineToggles.DEFAULT.remainingWorkEstimator(20))
-                .as("the default no longer resolves to the pre-0.2.0 window reading")
-                .isNotSameAs(RemainingWorkEstimator.WINDOW);
+                .as("the default resolves to the promoted rate-anchored estimator")
+                .isInstanceOf(RateAnchoredEstimator.class);
 
         ScanResult result = runBoundedRoot(dir, "sensing-default", keyspace, EngineToggles.DEFAULT);
         assertExactlyOnce(result.emitted(), keyspace);
@@ -132,9 +132,9 @@ final class RateAnchoredSensingWiringTest {
      * together, parsed from those strings and driven through a real bounded scan.
      *
      * <p>Asserting the sensor half alone would leave the promise half-tested — the pair is what the
-     * docs promise restores pre-0.2.0 behaviour, and the two mechanisms are known to interact
-     * (their combination is what destabilises the dense/uniform carve, see
-     * {@code ConfettiFeedbackWiringTest}). So the rollback is verified as a pair or not at all.
+     * docs promise restores pre-0.2.0 behaviour. The dense/uniform carve instability tracked by
+     * {@code ConfettiFeedbackWiringTest} (#78) belongs to the promoted <em>default</em> pair, not
+     * this rollback configuration. So the rollback is verified as a pair or not at all.
      */
     @Test
     @Timeout(60)
