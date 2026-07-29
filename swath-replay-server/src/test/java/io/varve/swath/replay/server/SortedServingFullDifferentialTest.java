@@ -169,6 +169,54 @@ class SortedServingFullDifferentialTest {
         differential(dir, keys, manySmallGroups(), scenarios);
     }
 
+    /**
+     * The fast-path shape introduced for the O(prefixes) root rollup (public issue #77): a no-prefix
+     * request (the request shape whose open upper bound used to fall through to the O(prefixes)
+     * per-directory range walk even on the sorted store), many prefixes each spanning several row
+     * groups (tiny {@code manySmallGroups} row groups over 25 objects/prefix — the "prefix run spans
+     * row-group boundaries" case), small {@code max-keys} forcing a continuation-token resume mid the
+     * prefix sequence, and plain keys sorted after the very last delimiter-bearing prefix (no {@code /}
+     * at all — the "trailing plain keys" case). Also pins the fast path actually engaged for the
+     * no-prefix scenario, not merely that its output happens to match: a silent fallback to the range
+     * walk would still pass the byte-identical assertion below.
+     */
+    @Test
+    void wideNoPrefixRollupWithRowGroupSpanningPrefixesAndTrailingPlainKeysIsByteIdentical(@TempDir Path dir)
+            throws Exception {
+        List<byte[]> keys = new ArrayList<>();
+        for (int p = 0; p < 12; p++) {
+            for (int i = 0; i < 25; i++) {
+                keys.add(utf8(String.format("wide%02d/obj-%03d", p, i)));
+            }
+        }
+        for (int n = 0; n < 4; n++) {
+            keys.add(utf8("zzz-plain-" + n));   // sorts after every "wideNN/" prefix; no delimiter at all
+        }
+        Fixture fixture = writeSorted(dir, keys, manySmallGroups());
+        List<Scenario> scenarios = new ArrayList<>(projectionMatrix(null, utf8("/"), null, new int[]{1, 2, 3, 5}));
+        try (ReplayServer sorted = new ReplayServer(
+                "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.SORTED);
+             ReplayServer duck = new ReplayServer(
+                     "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.DUCKDB)) {
+            sorted.start();
+            duck.start();
+            assertThat(sorted.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
+            assertThat(duck.resolvedServingMode()).isEqualTo(ServingMode.DUCKDB);
+
+            HttpClient client = HttpClient.newHttpClient();
+            for (Scenario scenario : scenarios) {
+                assertThat(walk(sorted, client, scenario))
+                        .as("sorted vs duckdb differ for %s", describe(scenario))
+                        .isEqualTo(walk(duck, client, scenario));
+            }
+            assertThat(sorted.metrics().registry().find("swath.replay.delimiter.path")
+                    .tag("path", ReplayMetrics.DELIMITER_PATH_ROLLUP).counter().count())
+                    .as("no-prefix delimiter requests must be served by the store's native rollup, "
+                            + "not silently fall back to the range walk")
+                    .isGreaterThan(0.0);
+        }
+    }
+
     @Test
     void multiByteDelimiterIsByteIdentical(@TempDir Path dir) throws Exception {
         List<byte[]> keys = new ArrayList<>();

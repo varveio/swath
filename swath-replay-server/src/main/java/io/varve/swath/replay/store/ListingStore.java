@@ -69,9 +69,12 @@ public interface ListingStore extends AutoCloseable {
      * Returns {@code null} to decline — the caller then walks ranges via {@link #rows} (the default,
      * and the behaviour of every store that does not override this).
      *
+     * @param toExclusive exclusive upper bound; {@code null} = open (no prefix, or a prefix whose
+     *                    0xFF-carry has no finite bound — see {@code ByteKeys#prefixUpper})
+     * @param prefix      the scan prefix every returned key/common-prefix starts with; {@code null} or
+     *                    empty for a root (no-prefix) rollup
      * @param delimiter   the raw delimiter bytes; an implementation MAY restrict its fast path (e.g.
      *                    to a single {@code /}) and decline otherwise
-     * @param prefix      the scan prefix every returned key/common-prefix starts with
      * @return up to {@code limit + 1} entries, or {@code null} to decline
      */
     default List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,

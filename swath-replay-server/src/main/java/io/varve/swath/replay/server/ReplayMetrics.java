@@ -35,6 +35,12 @@ public final class ReplayMetrics {
     /** The sorted-Parquet role-2 serving path tag. */
     public static final String SERVING_MODE_SORTED = "sorted";
 
+    /** {@code swath.replay.delimiter.path} tag: the store answered the whole rollup in one set-oriented pass. */
+    public static final String DELIMITER_PATH_ROLLUP = "rollup";
+
+    /** {@code swath.replay.delimiter.path} tag: the store declined and the pager walked ranges instead. */
+    public static final String DELIMITER_PATH_WALK = "walk";
+
     private final MeterRegistry registry;
     private final String servingMode;
     private final Counter httpRequests;
@@ -49,6 +55,7 @@ public final class ReplayMetrics {
     private final Counter prefetchWindowHit;
     private final DistributionSummary prefetchFillRows;
     private final Timer prefetchWindowFill;
+    private final Counter delimiterSkipScanRowGroupOpens;
     private final AtomicLong parquetQueriesInFlight = new AtomicLong();
     private final long startedNanos = System.nanoTime();
 
@@ -87,6 +94,8 @@ public final class ReplayMetrics {
         prefetchFillRows = DistributionSummary.builder("swath.replay.prefetch.fill.rows").register(registry);
         prefetchWindowFill = Timer.builder("swath.replay.prefetch.window.fill")
                 .publishPercentiles(0.5, 0.99).register(registry);
+        delimiterSkipScanRowGroupOpens = Counter.builder("swath.replay.delimiter.skipscan.row_group_opens")
+                .register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
                 .register(registry);
@@ -176,6 +185,27 @@ public final class ReplayMetrics {
     public void recordServingRefused(String reason) {
         Counter.builder("swath.replay.serving.refused")
                 .tag("reason", reason).register(registry).increment();
+    }
+
+    /**
+     * Records which path served one {@code delimiter=/} listing request — {@link #DELIMITER_PATH_ROLLUP}
+     * (the store answered the whole rollup natively) or {@link #DELIMITER_PATH_WALK} (the store declined
+     * and the pager fell back to a seek per common prefix). Silent-until-someone-times-it was the whole
+     * complaint that motivated this counter: a stalled delimiter panel is now attributable to the
+     * fallback path from the metrics alone, without a wall-clock reproduction.
+     */
+    public void recordDelimiterPath(String path) {
+        Counter.builder("swath.replay.delimiter.path").tag("path", path).register(registry).increment();
+    }
+
+    /**
+     * Records one row-group open inside {@code SortedParquetStore}'s delimiter skip-scan (a group the
+     * zero-I/O whole-group shortcut couldn't resolve without decoding). A test asserting this stays
+     * bounded by the number of rolled-up prefixes — not by the number of keys under them — is the cost
+     * regression guard for the skip-scan itself.
+     */
+    public void recordDelimiterSkipScanRowGroupOpen() {
+        delimiterSkipScanRowGroupOpens.increment();
     }
 
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */
