@@ -124,11 +124,12 @@ class OwnerSplitGovernorTest {
     }
 
     // -------------------------------------------------------------------------
-    // Open frontier: structural, not a suppression -- never counted (see OwnerSplitSkipReason).
+    // Open frontier: structural, not a suppression -- but now COUNTED (issue #76), unlike every
+    // other gate below it never engages -- see OwnerSplitSkipReason#OPEN_FRONTIER's corrected javadoc.
     // -------------------------------------------------------------------------
 
     @Test
-    void openFrontierSkipsSilentlyRegardlessOfEveryOtherField() {
+    void openFrontierSkipsRegardlessOfEveryOtherFieldButRecordsItsOwnEngagement() {
         OwnerSplitView frontierView = new OwnerSplitView(null, b("a"), b("n"), 100_000L, 0, 0, 0, 0.5, 1.0,
                 coldDigest(b("a"), null), NO_CONFETTI_SIGNAL);
 
@@ -136,7 +137,9 @@ class OwnerSplitGovernorTest {
 
         assertThat(decision).isInstanceOf(Skip.class);
         assertThat(((Skip) decision).reason()).isEqualTo(OwnerSplitSkipReason.OPEN_FRONTIER);
-        assertThat(decision.engagements()).as("open frontier is silent").isEmpty();
+        assertThat(decision.engagements())
+                .as("issue #76: the open-frontier skip now records its own engagement")
+                .containsExactly(new Engagement("OWNER_SPLIT", "open_frontier"));
         assertThat(decision.mutations()).isEmpty();
     }
 

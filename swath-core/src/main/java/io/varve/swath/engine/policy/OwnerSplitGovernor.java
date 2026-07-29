@@ -84,7 +84,13 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
     public OwnerSplitDecision decide(OwnerSplitView view) {
         byte[] H = view.hi();
         if (H == null) {
-            return new Skip(OwnerSplitSkipReason.OPEN_FRONTIER, List.of(), List.of());
+            // Counted like every other gate (issue #76): the interpolation argument for
+            // "nothing to learn from a rate here" still holds, but the WORK argument does not — this
+            // range can hold an arbitrary share of the bucket's mass, and an uncounted skip cannot tell
+            // a serial tail that sat on the open frontier apart from one that was gate-blocked. See
+            // OwnerSplitSkipReason#OPEN_FRONTIER's corrected javadoc.
+            List<Engagement> engagements = List.of(new Engagement("OWNER_SPLIT", OwnerSplitSkipReason.OPEN_FRONTIER.code()));
+            return new Skip(OwnerSplitSkipReason.OPEN_FRONTIER, engagements, List.of());
         }
         byte[] cursorTo = view.cursorTo();
         byte[] lo = view.lo();
