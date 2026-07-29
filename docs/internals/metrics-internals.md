@@ -99,6 +99,27 @@ nothing extra on the healthy path beyond a few array writes per LIST call.
 Omitted entirely (not a null-valued object) on the same construction paths `shape` is (no page was
 ever fetched — a pre-run early-exit summary).
 
+**Why `trajectory` alone still isn't enough to screen for a serial tail, and what `swath.tail_occupancy.*`
+adds.** No WHOLE-RUN average — not `avg_in_flight`, not a coarse `serial_frac` — can reliably flag a
+run that stayed wide for most of its life and then collapsed onto one worker for its final stretch:
+a real run against `nara-1950-census` averaged **11.3** in-flight for its whole lifetime while its
+final ~45% of keys drained on a SINGLE worker, because the earlier wide majority of the run pulls the
+average up enough to hide the collapse; on the same day `ecmwf-forecasts` showed `avg_in_flight`
+falling 45.4 → 30.1 against a flat wall-clock, a shape `trajectory`'s per-bin view can surface but a
+single scalar cannot. `swath.tail_occupancy.{avg_in_flight,wall_share}{pct=5|10}` (§1) is measured
+specifically OVER the window in which the run's LAST 5%/10% of keys were emitted, deriving that
+window post-hoc from a bounded (`TailOccupancySampler`, ≤4096-slot) sample buffer of `(cumulative
+keys emitted, elapsed, in-flight)` triples taken on the same already-serialized `recordEntriesEmitted`
+seam the consumer stage's per-page key-count bump already uses (see that class's javadoc for the
+stride-gated decimation scheme once the buffer fills) — a small key share paired with a large wall-time
+share is the serial-tail signature these two gauges exist to make legible from `_swath_summary.json`
+alone, without needing the full `trajectory` bin array. **Resume semantics:** a `--sort --resume`
+reattach's pre-crash backfill (`recordRecoveredObjects`) is folded into the sampler's own baseline
+rather than left to pollute the emitted-keys count it derives the two windows from, so both windows
+stay scoped to THIS process's own relisted span — the same "this process's own view, not the
+checkpoint's" treatment §3's owner-split confetti gate and per-worker density EWMA already get on
+resume.
+
 **`slow_ranges[]`**: the top-10 slowest/remaining live ranges at the INSTANT this summary was
 built (by estimated remaining span, descending), each with its own per-range `steal_reasons` tally —
 a terminal (or mid-run periodic) snapshot of exactly which ranges are dragging and why, without

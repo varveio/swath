@@ -412,6 +412,13 @@ public final class RunMetrics {
     static final int TRAJECTORY_BINS = TrajectoryRollup.TRAJECTORY_BINS;
     private final TrajectoryRollup trajectory = new TrajectoryRollup(TrajectoryRollup.TRAJECTORY_BINS);
 
+    // Tail-occupancy sampler: bounded (DEFAULT_CAPACITY-slot) stride-gated samples of (keys
+    // emitted, elapsed, in-flight), folded on the SAME already-serialized recordEntriesEmitted
+    // seam (one consumer stage per run) -- see TailOccupancySampler's javadoc for why a whole-run
+    // avg_in_flight cannot screen for a serial tail, and swath.tail_occupancy.{avg_in_flight,
+    // wall_share}{pct=5|10} below for the reported gauges.
+    private final TailOccupancySampler tailOccupancy = new TailOccupancySampler(TailOccupancySampler.DEFAULT_CAPACITY);
+
     // Slow-range dump: a supplier the engine (WorkStealingScan) registers once at construction
     // so a terminal/mid-run summary can read a point-in-time snapshot of the live worklist without
     // this observability-layer class depending on the engine's worklist type. `null` (the default,
@@ -553,6 +560,17 @@ public final class RunMetrics {
         // Pull-based (evaluated on each read, same idiom as the swath.process.* gauges below) —
         // no background sampler thread; the accumulator is folded on every in-flight transition.
         Gauge.builder("swath.in_flight.avg", this, RunMetrics::avgInFlight).register(registry);
+        // Tail-occupancy screen: last-N% window avg in-flight + wall-time share, tagged pct=5|10
+        // rather than four separate meter names (see TailOccupancySampler's javadoc). Pull-based,
+        // same idiom as the gauge above -- no background sampler thread.
+        for (int pct : TailOccupancySampler.WINDOW_PERCENTS) {
+            Gauge.builder("swath.tail_occupancy.avg_in_flight", this,
+                            m -> m.tailOccupancyAvgInFlight(pct))
+                    .tag("pct", Integer.toString(pct)).register(registry);
+            Gauge.builder("swath.tail_occupancy.wall_share", this,
+                            m -> m.tailOccupancyWallShare(pct))
+                    .tag("pct", Integer.toString(pct)).register(registry);
+        }
 
         Gauge.builder("swath.process.memory.rss.bytes", this, m -> nanIfUnavailable(ResourceMetrics.currentRssBytes()))
                 .tag("kind", "current").baseUnit("bytes").register(registry);
@@ -927,11 +945,19 @@ public final class RunMetrics {
      * such: they land in one lump when the merge is already done, and a display that folded them
      * into this session's emitted count would sit at zero and then jump by the whole pre-crash
      * total (see {@link ProgressEvent.Listing}).
+     *
+     * <p>Also folds {@code rows} into {@link #tailOccupancy}'s baseline ({@link
+     * TailOccupancySampler#recordBaseline}) so the backfilled jump never pollutes the tail-occupancy
+     * windows: without it, this bump would land BEFORE any real sample from this process's relisted
+     * tail, making {@code totalEmitted} already near the checkpoint's whole-bucket total the instant
+     * the first sample lands — collapsing both {@code pct} windows onto this process's entire
+     * relisted span (see {@code TailOccupancySampler}'s resume-semantics note).
      */
     public void recordRecoveredObjects(long rows) {
         if (rows > 0) {
             entriesEmitted.increment(rows);
             recoveredObjects.addAndGet(rows);
+            tailOccupancy.recordBaseline(rows);
         }
     }
 
@@ -1550,6 +1576,17 @@ public final class RunMetrics {
         emitLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
+    /**
+     * The per-page entries-emitted bump: {@code swath.entries.emitted} plus universal progress
+     * (§3.2). Called from exactly ONE of {@link io.varve.swath.output.OutputStage} ("the single
+     * output stage" — its own class javadoc), {@link
+     * io.varve.swath.output.parquet.ParquetOutputStage} or {@code SortOutputStage} per run — the
+     * three are mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
+     * wires up exactly one depending on the sink, never more than one concurrently. That makes this
+     * call site THE already-serialized point for this run: no extra synchronization is needed for a
+     * caller (like the tail-occupancy sampler below) to treat "cumulative keys emitted" and "current
+     * in-flight" as observed together, consistently, once per page.
+     */
     public void recordEntriesEmitted(long keyCount) {
         if (keyCount > 0) {
             entriesEmitted.increment(keyCount);
@@ -1560,6 +1597,11 @@ public final class RunMetrics {
             progressUnits.increment(keyCount);
             progressUnitsTally.addAndGet(keyCount);   // monotonic mirror for progressSignal()
             stuckClassifier.snapshotAtProgress();
+            // Tail-occupancy sample: this call is THE already-serialized point (see this method's
+            // own javadoc), so no extra synchronization is needed to know "cumulative keys emitted"
+            // and "current in-flight" were observed together, consistently, once per page.
+            tailOccupancy.record(Math.round(entriesEmitted.count()),
+                    nanoClock.getAsLong() - runStartNanos.get(), (int) currentInFlight());
         }
     }
 
@@ -1751,6 +1793,23 @@ public final class RunMetrics {
      */
     public double avgInFlight() {
         return inFlightGauge.average(runStartNanos.get());
+    }
+
+    /**
+     * The {@code pct}% tail-occupancy avg-in-flight gauge supplier — reads the CURRENT cumulative
+     * emitted-keys/elapsed-wall totals (live, mid-run values are a valid — if still-growing —
+     * approximation, same as every other pull-based gauge here) and asks {@link #tailOccupancy} to
+     * derive the last-{@code pct}% window's mean in-flight over its bounded sample buffer.
+     */
+    private double tailOccupancyAvgInFlight(int pct) {
+        return tailOccupancy.avgInFlightForWindow(pct, Math.round(entriesEmitted.count()),
+                nanoClock.getAsLong() - runStartNanos.get());
+    }
+
+    /** Sibling of {@link #tailOccupancyAvgInFlight} for the window's wall-time SHARE. */
+    private double tailOccupancyWallShare(int pct) {
+        return tailOccupancy.wallShareForWindow(pct, Math.round(entriesEmitted.count()),
+                nanoClock.getAsLong() - runStartNanos.get());
     }
 
     public void setConcurrencyTarget(long value) {
