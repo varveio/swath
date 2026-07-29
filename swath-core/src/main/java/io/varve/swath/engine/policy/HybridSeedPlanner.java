@@ -176,6 +176,10 @@ public final class HybridSeedPlanner implements SeedPlanner {
 
         // -- top-level bookkeeping --
         private boolean topPageCapped;
+        /** Greatest sort key the TOP scope returned (direct objects and common prefixes combined). */
+        private byte[] topGreatestItem;
+        /** Greatest {@code CommonPrefix} the TOP scope returned, or {@code null} if it returned none. */
+        private byte[] topGreatestCommonPrefix;
         private int topObjectCount;
         private int topFanout;
         private int[] topCounts;
@@ -258,6 +262,7 @@ public final class HybridSeedPlanner implements SeedPlanner {
             topPageCapped = outcome.pageCapped();
             topObjectCount = outcome.objectCount();
             topFanout = outcome.commonPrefixes().size();
+            observeTopScopeExtent(outcome);
             topCounts = addCutsCounted(outcome.commonPrefixes(), cuts, frontier, topScopeCeiling);
             if (massAware && topPageCapped && !cuts.isEmpty() && totalProbes < maxProbes
                     && outcome.lastKey() != null) {
@@ -273,8 +278,32 @@ public final class HybridSeedPlanner implements SeedPlanner {
             extraFired = true;
             extraFanout = outcome.commonPrefixes().size();
             extraPageCapped = outcome.pageCapped();
+            observeTopScopeExtent(outcome);
             extraCounts = addCutsCounted(outcome.commonPrefixes(), cuts, frontier, topScopeCeiling);
             return afterTop();
+        }
+
+        /**
+         * Track the greatest item the TOP scope returned, and whether that item is a {@code
+         * CommonPrefix} — the two facts {@link #appendOpenTileSentinel} needs. Called for the top probe
+         * and for the {@code TOP_EXTRA} continuation, so a paginated top is accounted across both
+         * pages.
+         *
+         * <p>{@code lastKey} is already the combined maximum over direct objects AND common prefixes
+         * ({@code SeedStep#lastSeenKey}), which is exactly the comparison that decides whether a
+         * direct object sorts past the last rolled-up prefix.
+         */
+        private void observeTopScopeExtent(SeedProbeOutcome outcome) {
+            byte[] last = outcome.lastKey();
+            if (last != null && (topGreatestItem == null || Arrays.compareUnsigned(last, topGreatestItem) > 0)) {
+                topGreatestItem = last;
+            }
+            for (byte[] cp : outcome.commonPrefixes()) {
+                if (cp != null && (topGreatestCommonPrefix == null
+                        || Arrays.compareUnsigned(cp, topGreatestCommonPrefix) > 0)) {
+                    topGreatestCommonPrefix = cp;
+                }
+            }
         }
 
         private SeedAction afterTop() {
@@ -540,6 +569,7 @@ public final class HybridSeedPlanner implements SeedPlanner {
             }
 
             List<byte[]> finalCuts = new ArrayList<>(cutSet);
+            appendOpenTileSentinel(finalCuts);
 
             if (synthesized > 0) {
                 mark("dense_root_radix_banded");
@@ -561,6 +591,62 @@ public final class HybridSeedPlanner implements SeedPlanner {
                     finalizeDecisions(decisions, flatWideRegion, synthesized > 0, genericDelimiterSeeded);
 
             return new SeedPlan(finalCuts, synthesized, totalProbes, finalDecisions, drain());
+        }
+
+        /**
+         * <b>Close the top scope, so its rightmost mass stops being unsplittable.</b> {@code SeedStep}
+         * always tiles the cut set as {@code (⊥,c1], …, (c_last, null]}, and the owner-split governor
+         * refuses every range whose {@code hi} is {@code null} ({@code OwnerSplitSkipReason#OPEN_FRONTIER})
+         * — so whatever mass lands past the last cut is drained by one worker, serially, no matter how
+         * much of the bucket it is. On {@code nrel-pds-porotomo} that is 95.2% of 4.97M keys
+         * (measured: {@code open_frontier.keys_emitted} 4,735,963 of 4,973,335).
+         *
+         * <p>When the top scope was listed to completion and its greatest item is a {@code CommonPrefix
+         * p/}, every key in the scope is strictly below {@code prefixCeil(p/)} — a bound we already
+         * hold, for free, with no extra probe. Appending it as one more cut turns the final tile into
+         * {@code (c_last, u], (u, null]}: the open tile becomes EMPTY and the mass-bearing tile gains a
+         * finite {@code hi}, which makes it eligible for owner self-split and for the thief's
+         * delimiter-structure path. The static tiling is not enlarged — this hands the region to the
+         * DYNAMIC splitter, which is the mechanism a corpus smoke proved load-bearing when more static
+         * cuts regressed 6 of 10 fixtures.
+         *
+         * <p><b>Every precondition below is load-bearing:</b>
+         * <ul>
+         *   <li>{@code !topPageCapped} — a truncated top means unseen siblings may sort past what we
+         *       saw, so no bound is provable. Do nothing.</li>
+         *   <li>the greatest item IS the greatest common prefix — if a direct object sorts past the
+         *       last rolled-up prefix, {@code prefixCeil} of that prefix would NOT bound it, and the
+         *       sentinel would cut the keyspace short. This is the correctness guard; it is a
+         *       comparison, not an assumption.</li>
+         *   <li>a spare seed slot ({@code size() < targetSeeds}) — never evict a real boundary for a
+         *       sentinel. Replacing the maximal cut instead of appending would merge two useful
+         *       regions and spend the freed slot on an empty range: same cardinality, less initial
+         *       parallelism.</li>
+         *   <li>{@code u} strictly above the current last cut — otherwise it is a duplicate or would
+         *       break sort order, and it buys nothing.</li>
+         * </ul>
+         *
+         * <p>Marked either way so the outcome is attributable from counters rather than inferred: the
+         * declined case is as informative as the applied one when reading a slow run.
+         *
+         * @return {@code true} iff a sentinel was appended
+         */
+        private boolean appendOpenTileSentinel(List<byte[]> finalCuts) {
+            if (topPageCapped || topGreatestCommonPrefix == null || topGreatestItem == null
+                    || Arrays.compareUnsigned(topGreatestItem, topGreatestCommonPrefix) != 0
+                    || finalCuts.size() >= targetSeeds) {
+                mark("open_tile_sentinel_declined");
+                return false;
+            }
+            byte[] u = StealMath.prefixCeil(topGreatestCommonPrefix);
+            if (u == null || (!finalCuts.isEmpty()
+                    && Arrays.compareUnsigned(u, finalCuts.get(finalCuts.size() - 1)) <= 0)) {
+                mark("open_tile_sentinel_declined");
+                return false;
+            }
+            finalCuts.add(u);
+            mark("open_tile_sentinel_appended");
+            return true;
         }
     }
 
