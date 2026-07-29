@@ -1352,7 +1352,21 @@ component map for the package split.
 
 - **Default — `--tune seed.mode=shallow` (`delimiter=/` pass).** One (or, for very broad tops,
   1–2 levels of) `delimiter=/` listing returns top-level common prefixes
-  `p1 < p2 < … < pk`. Seed ranges `(⊥, p1], (p1, p2], …, (pk, null]`. Now
+  `p1 < p2 < … < pk`. Seed ranges `(⊥, p1], (p1, p2], …, (pk, null]`.
+
+  **Scope-closing sentinel.** That final `(pk, null]` range is the one the owner-split governor
+  refuses outright (`hi == null` ⇒ `OPEN_FRONTIER`), so any mass behind it drains on a single
+  worker however large it is — measured at 95.2% of one real bucket, whose mass sat under its
+  LAST top-level prefix. When the top scope was listed to completion AND its greatest returned
+  item is a `CommonPrefix pk`, every key in scope is provably `< prefixCeil(pk)`, so that bound
+  is appended as one further cut: `…, (pk, u], (u, null]` with `u = prefixCeil(pk)`. The final
+  range is then EMPTY by construction and the mass-bearing range has a finite `hi`, making it
+  eligible for owner self-split and for the thief's delimiter-structure path. Costs no probe and
+  adds exactly one cut, so the static tiling is not enlarged — the region is handed to the
+  dynamic splitter. Declined (with a per-reason counter, §5) when the top is truncated and
+  unrecovered, when a direct object sorts past `pk` so the ceiling would not bound it, when the
+  cut set already fills `targetSeeds`, or when the bound is not strictly above the last cut.
+  Note the empty final range is not free — see the open-tile follow-up issue. Now
   every range except the last has a finite `hi`, so exact byte-midpoint
   applies almost everywhere and only one range is ever open-ended. This is
   the old `RecursiveDiscovery`, demoted to a seed step (the
@@ -1436,7 +1450,9 @@ component map for the package split.
     over-cap wide top (below), so cut density stays proportional to each
     region's sampled mass regardless of probe order. **The
     seed pass uses only the `CommonPrefixes` as cut-points and discards its
-    `Contents`**
+    `Contents`** (the scope-closing sentinel above is the one cut-point NOT taken
+    verbatim from a `CommonPrefix` — it is `prefixCeil` of the greatest one, and its
+    derivation reads the greatest `Contents` key only to verify the bound holds)
     (the top-level objects it also returns): it is a structure probe, not an
     emitting pass. Every object — including top-level ones — is (re-)listed by
     a range worker, so there is no double-emit between the seed and the ranges.

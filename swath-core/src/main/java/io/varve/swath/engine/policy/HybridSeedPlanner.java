@@ -632,16 +632,46 @@ public final class HybridSeedPlanner implements SeedPlanner {
          * @return {@code true} iff a sentinel was appended
          */
         private boolean appendOpenTileSentinel(List<byte[]> finalCuts) {
-            if (topPageCapped || topGreatestCommonPrefix == null || topGreatestItem == null
-                    || Arrays.compareUnsigned(topGreatestItem, topGreatestCommonPrefix) != 0
-                    || finalCuts.size() >= targetSeeds) {
-                mark("open_tile_sentinel_declined");
+            // A top that was page-capped but then RECOVERED by the TOP_EXTRA continuation is complete:
+            // the +1-page pagination read the overflow prefixes, so what we hold is the whole top
+            // level. Gating on the first page's truncation alone would decline every paginated-top
+            // bucket for no reason.
+            boolean topComplete = !topPageCapped || (extraFired && !extraPageCapped);
+            if (!topComplete) {
+                mark("open_tile_sentinel_declined_top_truncated");
+                return false;
+            }
+            if (topGreatestCommonPrefix == null) {
+                mark("open_tile_sentinel_declined_no_prefix");
+                return false;
+            }
+            if (topGreatestItem == null) {
+                // No combined maximum was reported for the scope, so there is nothing to verify the
+                // bound against. Distinct from the direct-object case below: that one KNOWS a key
+                // sorts past the prefix; this one knows nothing at all.
+                mark("open_tile_sentinel_declined_no_greatest_item");
+                return false;
+            }
+            if (Arrays.compareUnsigned(topGreatestItem, topGreatestCommonPrefix) != 0) {
+                // A direct object sorts past the last rolled-up prefix, so that prefix's ceiling does
+                // not bound it. Declining keeps the bound honest; appending anyway would leave the
+                // mass-bearing tile cut short of the keys above it (they stay covered by the final
+                // open tile, so this is a parallelism loss, not a key loss).
+                mark("open_tile_sentinel_declined_direct_object_tail");
+                return false;
+            }
+            if (finalCuts.size() >= targetSeeds) {
+                mark("open_tile_sentinel_declined_no_spare_slot");
                 return false;
             }
             byte[] u = StealMath.prefixCeil(topGreatestCommonPrefix);
-            if (u == null || (!finalCuts.isEmpty()
-                    && Arrays.compareUnsigned(u, finalCuts.get(finalCuts.size() - 1)) <= 0)) {
-                mark("open_tile_sentinel_declined");
+            if (u == null) {
+                mark("open_tile_sentinel_declined_unbounded_ceiling");
+                return false;
+            }
+            if (!finalCuts.isEmpty()
+                    && Arrays.compareUnsigned(u, finalCuts.get(finalCuts.size() - 1)) <= 0) {
+                mark("open_tile_sentinel_declined_not_above_last_cut");
                 return false;
             }
             finalCuts.add(u);

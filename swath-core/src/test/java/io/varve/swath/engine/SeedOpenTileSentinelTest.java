@@ -33,10 +33,14 @@ import org.junit.jupiter.api.Test;
  * hand, costing no probe. Appending it as a cut empties the open tile and gives the mass-bearing
  * tile a finite {@code hi}, making it splittable at runtime.
  *
- * <p>These tests pin the mechanism AND every precondition that makes it safe. The preconditions are
- * the interesting part: a sentinel derived from a truncated top, or from a prefix that a direct
- * object sorts past, would cut the keyspace short — a correctness bug, not a performance one. The
- * tiling itself is verified to still cover {@code (⊥, null]} in every case.
+ * <p>These tests pin the mechanism AND every precondition. <b>Be precise about what the
+ * preconditions protect:</b> NOT key loss. {@code SeedStep.tile} always retains a final
+ * {@code (u, null]} range, so a bound that were too low would leave the keys above it covered by
+ * that open tile — I2/I3 hold either way. What the preconditions protect is the bound's
+ * <em>truth</em>, and therefore the EMPTINESS of that final tile: an unfounded sentinel cuts the
+ * mass-bearing tile short and dumps the remainder back into the serial open tile, which is a
+ * parallelism regression, not a correctness one. The tiling is asserted exactly in every case
+ * regardless.
  */
 final class SeedOpenTileSentinelTest {
 
@@ -78,9 +82,10 @@ final class SeedOpenTileSentinelTest {
     }
 
     /**
-     * A truncated top is the precondition that protects correctness: unseen siblings may sort past
-     * everything observed, so no upper bound is provable and the sentinel must not be invented. A
-     * bound derived here would silently truncate the listing.
+     * A truncated top proves nothing: unseen siblings may sort past everything observed, so no upper
+     * bound is derivable and the sentinel must not be invented. (Inventing one would not lose keys —
+     * the final open tile still covers them — it would strand them back on the serial tail, which is
+     * the very thing this mechanism exists to prevent.)
      */
     @Test
     void aTruncatedTopGetsNoSentinel() throws Exception {
@@ -97,15 +102,18 @@ final class SeedOpenTileSentinelTest {
         assertThat(run.appended())
                 .as("no bound is provable from a truncated top, so no sentinel may be appended")
                 .isZero();
-        assertThat(run.declined()).as("and the refusal is recorded, not silent").isEqualTo(1L);
+        assertThat(run.declined("top_truncated"))
+                .as("and the refusal names the precondition that refused, not a lumped 'declined'")
+                .isEqualTo(1L);
         assertTilesCoverKeyspace(run.tiles());
     }
 
     /**
-     * The correctness guard that is a comparison rather than an assumption: a direct object sorting
-     * AFTER the last common prefix is not bounded by that prefix's ceiling, so the sentinel must be
-     * declined. {@code zzz-tail.txt} sorts after {@code Nodal/} — a sentinel at {@code Nodal0} would
-     * drop it.
+     * A comparison rather than an assumption: a direct object sorting AFTER the last common prefix is
+     * not bounded by that prefix's ceiling, so the sentinel must be declined. {@code zzz-tail.txt}
+     * sorts after {@code Nodal/}; a sentinel at {@code Nodal0} would leave it in the open tile rather
+     * than inside the bounded one — no key lost, but the bound would be a lie and the tail would stay
+     * serial.
      */
     @Test
     void aDirectObjectSortingPastTheLastPrefixDeclinesTheSentinel() throws Exception {
@@ -121,12 +129,44 @@ final class SeedOpenTileSentinelTest {
 
         assertThat(run.appended())
                 .as("a direct object past the last prefix must veto the sentinel").isZero();
-        assertThat(run.declined()).as("and the veto is recorded").isEqualTo(1L);
+        assertThat(run.declined("direct_object_tail"))
+                .as("and the veto names the direct-object tail specifically — the shape an operator "
+                        + "reading a slow run needs to be able to grep for")
+                .isEqualTo(1L);
         for (NodeSpec t : tiles) {
             assertThat(t.rangeEnd()).as("no sentinel may be derived when a direct object sorts past "
-                    + "the last prefix — it would cut the keyspace short").isNotEqualTo(b("Nodal0"));
+                    + "the last prefix — the bound would not hold for it").isNotEqualTo(b("Nodal0"));
         }
         assertTilesCoverKeyspace(tiles);
+    }
+
+    /**
+     * <b>A truncated top that the {@code TOP_EXTRA} continuation RECOVERED is complete.</b> The +1-page
+     * pagination reads the overflow prefixes, so what the planner holds is the whole top level and the
+     * bound is derivable. Gating on the first page's truncation alone (which the first version of this
+     * mechanism did) declines every paginated-top bucket for no reason — and paginated tops are exactly
+     * the wide-shaped buckets whose tails are worth bounding.
+     *
+     * <p>Asserted through the counter rather than the tiling, because what is being pinned is which
+     * precondition the planner evaluated, not merely the outcome.
+     */
+    @Test
+    void aTruncatedTopRecoveredByPaginationStillGetsItsScopeClosed() throws Exception {
+        // >1000 top-level prefixes truncates the first page; the sorted tail is recovered by TOP_EXTRA.
+        List<byte[]> keys = new ArrayList<>();
+        for (int i = 0; i < 1400; i++) {
+            keys.add(b("p%05d/obj".formatted(i)));
+        }
+
+        Seeded run = seed(keys);
+
+        assertThat(run.reasons().getOrDefault("SEED.top_probe_paginated", 0L))
+                .as("the fixture must actually paginate the top for this test to mean anything")
+                .isEqualTo(1L);
+        assertThat(run.declined("top_truncated"))
+                .as("a RECOVERED top must not be refused as truncated — that was the original defect")
+                .isZero();
+        assertTilesCoverKeyspace(run.tiles());
     }
 
     /**
@@ -165,8 +205,9 @@ final class SeedOpenTileSentinelTest {
             return reasons.getOrDefault("SEED.open_tile_sentinel_appended", 0L);
         }
 
-        long declined() {
-            return reasons.getOrDefault("SEED.open_tile_sentinel_declined", 0L);
+        /** How many times the sentinel was refused for exactly {@code reason}. */
+        long declined(String reason) {
+            return reasons.getOrDefault("SEED.open_tile_sentinel_declined_" + reason, 0L);
         }
     }
 

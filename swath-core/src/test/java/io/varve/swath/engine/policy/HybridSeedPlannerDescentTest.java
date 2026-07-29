@@ -179,7 +179,7 @@ final class HybridSeedPlannerDescentTest {
                         describe(prefix, 1, false, "top_probe_paginated", 1, 0));
 
         assertThat(reasons(engagements))
-                .containsExactly("top_probe_paginated", "open_tile_sentinel_declined", "tiny_leaf_explosion", "top_truncated");
+                .containsExactly("top_probe_paginated", "open_tile_sentinel_declined_direct_object_tail", "tiny_leaf_explosion", "top_truncated");
     }
 
     /**

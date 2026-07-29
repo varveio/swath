@@ -270,7 +270,7 @@ final class SeedStepTest {
         // deliberately not.
         for (NodeSpec s : specs) {
             byte[] hi = s.rangeEnd();
-            if (hi != null && !isScopeCeiling(hi)) {
+            if (hi != null && !Arrays.equals(hi, scopeCeilingOf("crawl=2024/"))) {
                 assertThat(hi[hi.length - 1])
                         .as("tiled cut is a '/'-terminated directory prefix, not a synthesized ASCII scalar")
                         .isEqualTo((byte) '/');
@@ -1012,18 +1012,17 @@ final class SeedStepTest {
     }
 
     /**
-     * Whether {@code cut} is a {@link StealMath#prefixCeil} of a {@code '/'}-terminated prefix — i.e.
-     * the seed's scope-closing sentinel rather than an observed directory cut. Recognised structurally
-     * (last byte is the successor of {@code '/'}, and the value equals the ceiling of the same bytes
-     * with {@code '/'} restored) so the check need not be told which fixture it is running on.
+     * The ONE cut this fixture's scope-closing sentinel may be: {@code prefixCeil(topPrefix)}.
+     *
+     * <p>Deliberately derived from the fixture's own top-level prefix rather than recognised by
+     * shape. A structural test ("last byte is the successor of {@code '/'}, and re-ceiling the bytes
+     * with {@code '/'} restored reproduces it") is <b>tautologically true of every cut ending in
+     * {@code '0'}</b> — including a synthesized one-byte ASCII radix scalar like {@code shard/0},
+     * which is exactly what this test exists to reject. Naming the single legitimate value keeps the
+     * exemption from swallowing the regression it guards against.
      */
-    private static boolean isScopeCeiling(byte[] cut) {
-        if (cut.length == 0 || cut[cut.length - 1] != (byte) ('/' + 1)) {
-            return false;
-        }
-        byte[] asPrefix = cut.clone();
-        asPrefix[asPrefix.length - 1] = (byte) '/';
-        return Arrays.equals(cut, StealMath.prefixCeil(asPrefix));
+    private static byte[] scopeCeilingOf(String topPrefix) {
+        return StealMath.prefixCeil(topPrefix.getBytes(StandardCharsets.UTF_8));
     }
 
 }
