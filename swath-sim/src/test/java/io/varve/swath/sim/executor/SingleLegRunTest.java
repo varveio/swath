@@ -14,7 +14,9 @@ import io.varve.swath.sim.store.SimStoreConfig;
 import io.varve.swath.sim.store.SimStoreFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -61,7 +63,7 @@ class SingleLegRunTest {
 
         Path fixture = Path.of(configured);
         assertThat(Files.exists(fixture)).as("fixture at %s", fixture).isTrue();
-        SensingVariant arm = SensingVariant.valueOf(armName.trim().toUpperCase(Locale.ROOT));
+        SensingVariant arm = parseArm(armName);
         long seed = Long.parseLong(System.getProperty(SEED_PROPERTY, "1"));
         int workers = Integer.parseInt(
                 System.getProperty(RealListingRunTest.WORKERS_PROPERTY,
@@ -87,6 +89,24 @@ class SingleLegRunTest {
                     arm, seed, workers, opened.resolvedBackend(), result.describe());
         } finally {
             store.close();
+        }
+    }
+
+    /**
+     * {@link SensingVariant#valueOf} on a mistyped arm throws {@code "No enum constant ..."}, which
+     * names what was wrong but not what would have been right. This harness is driven entirely by
+     * hand-typed {@code -D} properties at a shell, so the arm name is the likeliest thing to get
+     * wrong and the alternatives are the only thing worth printing.
+     */
+    static SensingVariant parseArm(String raw) {
+        String name = raw.trim().toUpperCase(Locale.ROOT);
+        try {
+            return SensingVariant.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "unknown -D%s=%s; valid arms: %s".formatted(ARM_PROPERTY, raw.trim(),
+                            Arrays.stream(SensingVariant.values()).map(Enum::name).collect(Collectors.joining(", "))),
+                    e);
         }
     }
 }

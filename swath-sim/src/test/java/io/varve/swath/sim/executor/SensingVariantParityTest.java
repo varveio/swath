@@ -105,12 +105,20 @@ class SensingVariantParityTest {
     }
 
     /**
-     * <b>The control leg installs no estimator, and decides exactly as an unsteered chain does.</b>
-     * {@code CURRENT} installs no estimator at all — the executor passes {@code null} and the engine
-     * keeps its own {@code WINDOW} reading — and this is the pin that the convergence of the two
-     * construction paths changed nothing there: the chain steered by this module's incumbent
-     * delegate decides identically to the chain nobody steered, on every view and every pool of the
-     * battery, down to the gate inputs.
+     * <b>The incumbent delegate decides exactly as an unsteered chain does.</b> This is the pin that
+     * the convergence of the two construction paths changed nothing there: the chain steered by this
+     * module's incumbent delegate decides identically to the chain nobody steered, on every view and
+     * every pool of the battery, down to the gate inputs.
+     *
+     * <p>Precisely what is compared: {@link SensingVariant#CURRENT} resolves to a
+     * {@code WindowEstimator}, so the steered leg here holds that delegate, not a literal
+     * {@code null}. That is the equivalence worth pinning — {@code WindowEstimator} forwards every
+     * method to {@link io.varve.swath.engine.StealMath}, the same arithmetic the engine falls back to
+     * when its seam is empty, so a drift in either would surface as a decision difference here. The
+     * <em>wiring</em> claim — that a shipped run really does leave the seam {@code null} rather than
+     * installing the incumbent under another name — is a different claim, and belongs to
+     * {@link #aRunsCountersNameTheSensorItsDecisionsWereTakenThrough}, which reads it off the run's
+     * own route counters.
      *
      * <p>Both legs are held at {@code tail_floor=current}, which since the 0.2.0 default flip is the
      * rollback arm rather than the shipped one. This is therefore a fixed-legacy-floor control for

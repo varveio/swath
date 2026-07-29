@@ -93,12 +93,12 @@ final class RecordingTraceSink implements TraceSink {
         e.put("worker_id", workerId);
         e.put("node_id", nodeId);
         e.put("reason", reason);
-        putNum(e, "est", est);
+        GoldenTrace.putNum(e, "est", est);
         e.put("pages_since_last_self_split", pagesSinceLastSelfSplit);
         e.put("outstanding", outstanding);
         e.put("worker_count", workerCount);
-        putNum(e, "far_ahead_fraction", farAheadFraction);
-        putNum(e, "density_ratio", densityRatio);
+        GoldenTrace.putNum(e, "far_ahead_fraction", farAheadFraction);
+        GoldenTrace.putNum(e, "density_ratio", densityRatio);
         e.put("keys_emitted", keysEmitted);
         events.add(e);
     }
@@ -114,23 +114,9 @@ final class RecordingTraceSink implements TraceSink {
         e.put("skipped_paced", skippedPaced);
         e.put("skipped_no_span", skippedNoSpan);
         e.put("chosen_node_id", chosenNodeId);
-        putNum(e, "best_est", bestEst);
+        GoldenTrace.putNum(e, "best_est", bestEst);
         e.put("reason", reason);
         events.add(e);
-    }
-
-    /**
-     * A numeric field, JSON <b>null</b> when non-finite — the same convention {@code JsonlTraceSink}
-     * writes with, so a golden fixture stays strictly parseable JSON (JSONL has no {@code NaN}/
-     * {@code Infinity} literal, and both occur here: a not-computed gate input, an open-frontier
-     * estimate).
-     */
-    private static void putNum(ObjectNode e, String field, double v) {
-        if (Double.isFinite(v)) {
-            e.put(field, v);
-        } else {
-            e.putNull(field);
-        }
     }
 
     @Override
