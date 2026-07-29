@@ -113,14 +113,25 @@ final class SeedSampleBudgetExhaustionPriorTest {
     }
 
     /** Seed boundaries that fall strictly inside {@code state<NN>/} — i.e. the level was carved up. */
+    /**
+     * Cuts that SUBDIVIDE {@code stateNN/} — the banding this test is about.
+     *
+     * <p>A cut equal to the state's own {@link StealMath#prefixCeil} is excluded: that is the
+     * <em>closing boundary</em> of the scan scope (the seed's open-tile sentinel), not a subdivision
+     * of the subtree. It leaves the state's mass as one range {@code (stateNN/, stateNN0]} — exactly
+     * "left whole" — while giving that range a finite {@code hi} so the runtime can split it. Counting
+     * it here would read a scope bound as confetti banding and invert this test's meaning.
+     */
     private static long interiorCuts(List<NodeSpec> specs, int state) {
         byte[] lo = ("state%02d/".formatted(state)).getBytes(StandardCharsets.UTF_8);
         byte[] hi = ("state%02d/".formatted(state + 1)).getBytes(StandardCharsets.UTF_8);
+        byte[] scopeCeiling = StealMath.prefixCeil(lo);
         return specs.stream()
                 .map(NodeSpec::rangeStart)
                 .filter(s -> s != null
                         && Arrays.compareUnsigned(s, lo) > 0
-                        && Arrays.compareUnsigned(s, hi) < 0)
+                        && Arrays.compareUnsigned(s, hi) < 0
+                        && !Arrays.equals(s, scopeCeiling))
                 .count();
     }
 

@@ -184,8 +184,8 @@ final class SeedStepFanoutTilingContractTest {
         assertThat(tiled.reasons.getOrDefault("SEED.fanout_tiled", 0L))
                 .as("501/1000 partition-like → strict majority → tiled").isPositive();
         assertThat(tiled.reasons.getOrDefault("SEED.tiny_leaf_explosion", 0L)).isZero();
-        assertThat(tiled.specs.size()).as("tiled to >1 but W-capped ranges")
-                .isGreaterThan(1).isLessThanOrEqualTo(workers + 2);
+        assertThat(tiled.specs.size()).as("tiled to >1 but W-capped ranges (+1: scope-closing sentinel)")
+                .isGreaterThan(1).isLessThanOrEqualTo(workers + 3);
         assertExactTiling(tiled.specs);
 
         for (int equalsCount : new int[] {500, 499}) {
@@ -227,7 +227,7 @@ final class SeedStepFanoutTilingContractTest {
         SeedResult tiled = seed(unicodeAndMultiEqualsValues(1100), workers, EngineToggles.DEFAULT);
         assertThat(tiled.reasons.getOrDefault("SEED.fanout_tiled", 0L))
                 .as("unicode / multi-'=' partition values are still partition-like → tiled").isPositive();
-        assertThat(tiled.specs.size()).isGreaterThan(1).isLessThanOrEqualTo(workers + 2);
+        assertThat(tiled.specs.size()).isGreaterThan(1).isLessThanOrEqualTo(workers + 3);
         assertExactTiling(tiled.specs);
     }
 
@@ -250,8 +250,8 @@ final class SeedStepFanoutTilingContractTest {
         // Seed-time: partition-like, so it tiles — but W-capped, never one range per pid.
         SeedResult seeded = seed(keyspace, workers, EngineToggles.DEFAULT);
         assertThat(seeded.reasons.getOrDefault("SEED.fanout_tiled", 0L)).isPositive();
-        assertThat(seeded.specs.size()).as("1:1 key=value explosion tiled, W-capped")
-                .isGreaterThan(1).isLessThanOrEqualTo(workers + 2);
+        assertThat(seeded.specs.size()).as("1:1 key=value explosion tiled, W-capped (+1: scope-closing sentinel)")
+                .isGreaterThan(1).isLessThanOrEqualTo(workers + 3);
 
         // Engine-time: the W-cap keeps the flat-scan LIST budget inside the INT-8 bound.
         EngineResult run = runEngine(dir, "kv-int8", keyspace, workers, 1000, Duration.ZERO,
@@ -334,7 +334,7 @@ final class SeedStepFanoutTilingContractTest {
                 .filter(d -> "fanout_tiled".equals(d.classification())).findFirst().orElseThrow();
         assertThat(tiledLevel.cutsKept()).as("ON: fanout_tiled level contributes W-capped cuts").isPositive();
         assertThat(tiledLevel.cutsDiscarded()).isZero();
-        assertThat(on.specs.size()).isGreaterThan(8).isLessThanOrEqualTo(workers + 2);
+        assertThat(on.specs.size()).isGreaterThan(8).isLessThanOrEqualTo(workers + 3);
 
         SeedResult off = seed(keyspace, workers, FANOUT_OFF);
         assertThat(off.reasons.getOrDefault("SEED.fanout_tiled", 0L)).as("OFF: never tiles").isZero();
