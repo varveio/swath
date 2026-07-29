@@ -179,40 +179,16 @@ final class OwnerSelfSplit {
         // owner_split_decision event AFTER ws.lock is released (same lock discipline as the split
         // event below). null ⇒ tracing off, or the open-frontier early-out, which decides nothing.
         OwnerSplitGateInputs gateInputs = trace.enabled() ? decision.gateInputs() : null;
-        // Resolve a claimed confetti probe slot FIRST, before a single engagement is recorded (issue
-        // #31). The governor decides PROBE purely from the probeSeq this view was built from, so every
-        // owner that snapshotted the same value decides PROBE -- and before this claim existed, all of
-        // them carved, multiplying exactly the confetti-sized carves the gate exists to suppress. The
-        // run-scoped gate admits exactly one; a loser is suppressed exactly as the pre-#22 fused
-        // increment suppressed it, which is why nothing may be recorded before the claim resolves: on
-        // that path none of the carve's downstream engagements (the ALPHABET verdict included) ever
-        // fired, so recording them first would credit a carve that never happened.
-        boolean probeSlotClaimed = false;
-        if (decision instanceof Carve
-                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)) {
-            if (confettiFeedback.claimProbeSlot(confettiSnapshot.probeSeq())) {
-                probeSlotClaimed = true;
-            } else {
-                metrics.recordStealReason("OWNER_SPLIT", OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code());
-                return gateTrace(nodeId, gateInputs);
-            }
-        }
-        // The carve brake's exact mirror of the resolution above, against its OWN independent probe
-        // sequence — a decision can carry both claims at once (the two gates' probe sequences are
-        // independent, so a single consult can cross both thresholds on the same view), so this is a
-        // SEPARATE check, not an else-branch.
-        boolean carveBrakeProbeSlotClaimed = false;
-        if (decision instanceof Carve
-                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT)) {
-            if (confettiFeedback.claimCarveBrakeProbeSlot(confettiSnapshot.carveBrakeProbeSeq())) {
-                carveBrakeProbeSlotClaimed = true;
-            } else {
-                metrics.recordStealReason("OWNER_SPLIT", OwnerSplitSkipReason.CARVE_BRAKED.code());
-                return gateTrace(nodeId, gateInputs);
-            }
+        // Resolve BOTH probe-slot claims BEFORE any early return, and before a single engagement is
+        // recorded — see resolveProbeClaims's own javadoc for why both must resolve unconditionally,
+        // never bailing right after only the first.
+        ClaimResolution claims = resolveProbeClaims(confettiFeedback, decision, confettiSnapshot);
+        if (claims.bailReason() != null) {
+            metrics.recordStealReason("OWNER_SPLIT", claims.bailReason().code());
+            return gateTrace(nodeId, gateInputs);
         }
         applyEngagements(decision.engagements());
-        applyMutations(decision.mutations(), probeSlotClaimed, carveBrakeProbeSlotClaimed);
+        applyMutations(decision.mutations(), claims.probeSlotClaimed(), claims.carveBrakeProbeSlotClaimed());
         if (decision instanceof Skip skip) {
             if (skip.reason() == OwnerSplitSkipReason.DEMAND_GATED) {
                 ws.recordDemandGated();   // per-range tally for the slow-range dump
@@ -275,6 +251,82 @@ final class OwnerSelfSplit {
     }
 
     /**
+     * The result of {@link #resolveProbeClaims}: which claims (if requested) were WON, and the
+     * terminal {@link OwnerSplitSkipReason} to report if either present claim was requested and
+     * LOST ({@code null} iff neither lost, in which case the caller may proceed to publish).
+     */
+    record ClaimResolution(boolean probeSlotClaimed, boolean carveBrakeProbeSlotClaimed,
+                           OwnerSplitSkipReason bailReason) {
+    }
+
+    /**
+     * Resolve BOTH probe-slot claims a {@code decision} may carry against the real {@code gate},
+     * before anything is recorded — issue #31's fix, generalized to the carve brake's independent
+     * probe sequence. A {@link Carve} can carry EITHER {@code CLAIM_CONFETTI_PROBE_SLOT} or {@code
+     * CLAIM_CARVE_BRAKE_PROBE_SLOT}, or BOTH at once (the two gates' probe sequences are
+     * independent, so a single consult can cross both thresholds on the same view).
+     *
+     * <p><b>Both claims are always resolved, regardless of the other's outcome, before this method
+     * returns.</b> An earlier version of this fix resolved confetti's claim first and returned
+     * immediately on a loss — before the carve brake's claim was ever even attempted. That silently
+     * dropped the brake's claim on every dual-claim decision where confetti's claim lost: {@code
+     * carveBrakeProbeSeq} would never advance for that consult, drifting the {@code
+     * carveBrakeProbeSeq % CARVE_BRAKE_PROBE_K} boundary out from under a gate that was never even
+     * asked (anti-bounded-suppression — the property both gates' probes exist to guarantee).
+     *
+     * <p>Both claim methods advance their OWN sequence exactly once per call regardless of outcome —
+     * the CAS itself advances the sequence on a win, and the internal fallback increment advances it
+     * on a loss (see {@link ConfettiFeedbackGate#claimProbeSlot}'s javadoc) — so calling both
+     * unconditionally, independent of each other's result, already gives exactly "one CAS attempt
+     * per over-threshold consult" for EACH sequence. Neither claim is downgraded to a plain consume
+     * based on the other's outcome: a real, independent CAS attempt already gives the correct
+     * accounting for both sequences with no special-casing, and downgrading only one of the two
+     * (say, the brake, because confetti lost) without symmetrically downgrading the other case
+     * (confetti, because the brake lost) would just move the bias rather than remove it.
+     *
+     * <p>Package-private and static (no instance state — {@code gate}/{@code decision}/{@code
+     * snapshot} are all explicit parameters) so a test can drive this exact algorithm against a
+     * hand-built decision and a gate primed to a chosen state, without needing a fully-simulated
+     * engine run — see {@code OwnerSelfSplitClaimResolutionTest}.
+     *
+     * @param gate     the real {@link ConfettiFeedbackGate} to resolve the claim(s) against
+     * @param decision the governor's decision for this consult
+     * @param snapshot the SAME snapshot {@code decision}'s view was built from — the claim(s)
+     *                 resolve against the {@code probeSeq}/{@code carveBrakeProbeSeq} this snapshot
+     *                 carries, exactly as the governor's decision assumed when it decided PROBE
+     */
+    static ClaimResolution resolveProbeClaims(ConfettiFeedbackGate gate, OwnerSplitDecision decision,
+                                              ConfettiFeedbackGate.Snapshot snapshot) {
+        boolean probeSlotClaimed = false;
+        boolean confettiClaimLost = false;
+        if (decision instanceof Carve
+                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)) {
+            if (gate.claimProbeSlot(snapshot.probeSeq())) {
+                probeSlotClaimed = true;
+            } else {
+                confettiClaimLost = true;
+            }
+        }
+        boolean carveBrakeProbeSlotClaimed = false;
+        boolean carveBrakeClaimLost = false;
+        if (decision instanceof Carve
+                && decision.mutations().contains(OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT)) {
+            if (gate.claimCarveBrakeProbeSlot(snapshot.carveBrakeProbeSeq())) {
+                carveBrakeProbeSlotClaimed = true;
+            } else {
+                carveBrakeClaimLost = true;
+            }
+        }
+        // Confetti's own reason takes priority when BOTH lost — mirrors decide()'s own gate order,
+        // and reports exactly ONE terminal reason per decision (the existing single-reason
+        // contract); the OTHER claim's outcome has already been fully accounted for above either way.
+        OwnerSplitSkipReason bailReason = confettiClaimLost ? OwnerSplitSkipReason.CONFETTI_SUPPRESSED
+                : carveBrakeClaimLost ? OwnerSplitSkipReason.CARVE_BRAKED
+                : null;
+        return new ClaimResolution(probeSlotClaimed, carveBrakeProbeSlotClaimed, bailReason);
+    }
+
+    /**
      * Apply every {@link OwnerSplitMutation} the governor returned to the real collaborator it
      * names — the policy never touches {@link ConfettiFeedbackGate} directly (issue #22).
      *
@@ -290,14 +342,22 @@ final class OwnerSelfSplit {
      */
     private void applyMutations(List<OwnerSplitMutation> mutations, boolean probeSlotClaimed,
                                 boolean carveBrakeProbeSlotClaimed) {
+        // Exhaustive over OwnerSplitMutation (no default): a fifth mutation added later without a
+        // case here fails the BUILD, not silently falling through unhandled.
         for (OwnerSplitMutation m : mutations) {
-            if (m == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT
-                    || (m == OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT && !probeSlotClaimed)) {
-                confettiFeedback.consumeProbeSlot();
-            }
-            if (m == OwnerSplitMutation.CONSUME_CARVE_BRAKE_PROBE_SLOT
-                    || (m == OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT && !carveBrakeProbeSlotClaimed)) {
-                confettiFeedback.consumeCarveBrakeProbeSlot();
+            switch (m) {
+                case CONSUME_CONFETTI_PROBE_SLOT -> confettiFeedback.consumeProbeSlot();
+                case CLAIM_CONFETTI_PROBE_SLOT -> {
+                    if (!probeSlotClaimed) {
+                        confettiFeedback.consumeProbeSlot();
+                    }
+                }
+                case CONSUME_CARVE_BRAKE_PROBE_SLOT -> confettiFeedback.consumeCarveBrakeProbeSlot();
+                case CLAIM_CARVE_BRAKE_PROBE_SLOT -> {
+                    if (!carveBrakeProbeSlotClaimed) {
+                        confettiFeedback.consumeCarveBrakeProbeSlot();
+                    }
+                }
             }
         }
     }

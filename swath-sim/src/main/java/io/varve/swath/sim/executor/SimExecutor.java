@@ -738,25 +738,67 @@ public final class SimExecutor {
                 gateDump.ownerDecision(at.nowNanos(), nodeId, decision.gateInputs(), state.lo(),
                         cursorTo, hi);
             }
-            // A claimed probe slot resolves BEFORE any engagement is recorded: every owner that
-            // snapshotted the same sequence decides to probe, and the run-scoped gate admits exactly
-            // one, so recording first would credit carves that never happened.
+            // BOTH probe-slot claims resolve BEFORE any engagement is recorded, and BEFORE either can
+            // cause an early return (mirrors the engine's OwnerSelfSplit fix): a Carve can carry EITHER
+            // claim, or BOTH at once (confetti's and the carve brake's probe sequences are
+            // independent), and bailing right after the FIRST one resolved would silently skip calling
+            // the SECOND claim method whenever the first lost — its sequence would never advance for
+            // this consult, drifting its modulo-PROBE_K boundary out from under a gate that was never
+            // even asked. Both claim methods advance their own sequence exactly once per call
+            // regardless of outcome (the CAS advances it on a win; the internal fallback increment
+            // advances it on a loss), so calling both unconditionally, independent of each other's
+            // result, already gives the correct "one CAS attempt per over-threshold consult" for EACH
+            // sequence with no further special-casing.
             boolean probeSlotClaimed = false;
+            boolean confettiClaimLost = false;
             if (decision instanceof Carve
                     && decision.mutations().contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)) {
                 if (confettiFeedback.claimProbeSlot(confetti.probeSeq())) {
                     probeSlotClaimed = true;
                 } else {
-                    at.count(OWNER_SPLIT_CATEGORY + "." + OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), 1);
-                    recordOwnerSplitSkip(at, OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
-                    return;
+                    confettiClaimLost = true;
                 }
             }
+            boolean carveBrakeProbeSlotClaimed = false;
+            boolean carveBrakeClaimLost = false;
+            if (decision instanceof Carve
+                    && decision.mutations().contains(OwnerSplitMutation.CLAIM_CARVE_BRAKE_PROBE_SLOT)) {
+                if (confettiFeedback.claimCarveBrakeProbeSlot(confetti.carveBrakeProbeSeq())) {
+                    carveBrakeProbeSlotClaimed = true;
+                } else {
+                    carveBrakeClaimLost = true;
+                }
+            }
+            // Bail only AFTER both claims above have resolved -- the order (confetti's own reason
+            // first) mirrors decide()'s own gate order and reports exactly one terminal reason; the
+            // OTHER claim's outcome has already been fully accounted for above either way.
+            if (confettiClaimLost) {
+                at.count(OWNER_SPLIT_CATEGORY + "." + OwnerSplitSkipReason.CONFETTI_SUPPRESSED.code(), 1);
+                recordOwnerSplitSkip(at, OwnerSplitSkipReason.CONFETTI_SUPPRESSED);
+                return;
+            }
+            if (carveBrakeClaimLost) {
+                at.count(OWNER_SPLIT_CATEGORY + "." + OwnerSplitSkipReason.CARVE_BRAKED.code(), 1);
+                recordOwnerSplitSkip(at, OwnerSplitSkipReason.CARVE_BRAKED);
+                return;
+            }
             recordEngagements(at, decision.engagements());
+            // Exhaustive over OwnerSplitMutation (no default): a fifth mutation added later without a
+            // case here fails the build, not silently falling through unhandled.
             for (OwnerSplitMutation mutation : decision.mutations()) {
-                if (mutation == OwnerSplitMutation.CONSUME_CONFETTI_PROBE_SLOT
-                        || (mutation == OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT && !probeSlotClaimed)) {
-                    confettiFeedback.consumeProbeSlot();
+                switch (mutation) {
+                    case CONSUME_CONFETTI_PROBE_SLOT -> confettiFeedback.consumeProbeSlot();
+                    case CLAIM_CONFETTI_PROBE_SLOT -> {
+                        if (!probeSlotClaimed) {
+                            confettiFeedback.consumeProbeSlot();
+                        }
+                    }
+                    case CONSUME_CARVE_BRAKE_PROBE_SLOT -> confettiFeedback.consumeCarveBrakeProbeSlot();
+                    case CLAIM_CARVE_BRAKE_PROBE_SLOT -> {
+                        if (!carveBrakeProbeSlotClaimed) {
+                            confettiFeedback.consumeCarveBrakeProbeSlot();
+                        }
+                    }
                 }
             }
             if (decision instanceof Skip skipped) {
