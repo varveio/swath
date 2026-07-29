@@ -16,10 +16,19 @@ package io.varve.swath.engine.policy;
  */
 public enum OwnerSplitSkipReason {
     /**
-     * The range is unbounded ({@code hi == null}). Deliberately UNCOUNTED: this is not a gate
-     * declining a carve, it is a path that structurally does not apply — an open frontier has no
-     * far tail to carve off, so there is nothing for post-hoc analysis to learn from a rate here
-     * that {@code hi}-bounded-ness itself doesn't already say. Never emits an {@link Engagement}.
+     * The range is unbounded ({@code hi == null}) — {@code OWNER_SPLIT.open_frontier}. Not a gate
+     * declining a carve: it is a path that structurally does not apply, because an owner carve
+     * interpolates a midpoint between {@code lo} and {@code hi}, and a {@code null} upper bound has
+     * no midpoint. <b>That interpolation argument holds — but the corollary once drawn from it, "so
+     * there is nothing for post-hoc analysis to learn from a rate here", does not (issue #76).</b>
+     * {@code (lastCut, null]} can hold an arbitrary share of a bucket's mass — most of it, on a
+     * keyspace whose mass sits past the last seed cut — and it is the one range the owner can never
+     * self-split off. Left uncounted, the metrics cannot tell "the tail sat on the open frontier"
+     * apart from "the tail was gate-blocked" when a run's tail turns out serial. So — unlike the
+     * gates below, whose rate this counter's neighbors is compared against — this counter's own
+     * population (qualifying page commits against an unbounded range) is the diagnostic: alongside
+     * {@code swath.open_frontier.keys_emitted} (the keys drained from that range), it tells whether a
+     * slow tail sat here at all, and how much of the run it carried.
      */
     OPEN_FRONTIER("open_frontier"),
     /**

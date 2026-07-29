@@ -676,7 +676,8 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                 // the trailing keys now above hi here closes that window; the dropped keys
                                 // are exactly the child's, and the next page (start_after past them) finds
                                 // the bound and completes the node.
-                                inRange = inRange(batch, ws.hiSupplier().get());
+                                byte[] hiAtCommit = ws.hiSupplier().get();
+                                inRange = inRange(batch, hiAtCommit);
                                 cursorTo = inRange.isEmpty() ? null : inRange.getLast().key().rawUnsafe();
                                 if (!inRange.isEmpty()) {
                                     ws.setCursor(cursorTo);
@@ -684,6 +685,13 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                                     ws.recordPage(inRange.getFirst().key().rawUnsafe(),
                                             cursorTo, inRange.size());   // density digest
                                     metrics.setCursor(cursorTo);
+                                    if (hiAtCommit == null) {
+                                        // The open-frontier attribution seam (issue #76): this node's hi
+                                        // was already read above to trim the batch, and inRange.size() is
+                                        // already the count folded into addKeysEmitted -- reusing both is
+                                        // O(1), no extra I/O and no per-key work.
+                                        metrics.recordOpenFrontierKeysEmitted(inRange.size());
+                                    }
                                 }
                                 madeProgress = !inRange.isEmpty();
                                 commit = store.commitPageAsync(new PageCommit(

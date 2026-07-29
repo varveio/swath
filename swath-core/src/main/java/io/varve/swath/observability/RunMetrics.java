@@ -125,6 +125,15 @@ public final class RunMetrics {
     private final AtomicBoolean diskGaugeRegistered = new AtomicBoolean();
 
     private final Counter entriesEmitted;
+    /**
+     * Keys committed while their node's upper bound was {@code null} (issue #76) — the share of
+     * {@link #entriesEmitted} the owner-split governor's un-carvable {@code OWNER_SPLIT.open_frontier}
+     * skip is structurally unable to peel off. Folded at the SAME already-serialized per-page commit
+     * site {@code WorkStealingScan} reads {@code hi} at anyway (O(1): no extra read, no per-key work),
+     * so a run whose mass sits past the last seed cut shows this counter move alongside the aggregate
+     * {@link #entriesEmitted} it is a subset of; an analyst divides the two for the share.
+     */
+    private final Counter openFrontierKeysEmitted;
     private final Counter bytesEstimated;
     private final Timer listObjectsLatency;
     private final Timer queueWait;
@@ -446,6 +455,7 @@ public final class RunMetrics {
         this.nanoClock = nanoClock;
         this.inFlightGauge = new InFlightGauge(nanoClock);
         entriesEmitted = Counter.builder("swath.entries.emitted").register(registry);
+        openFrontierKeysEmitted = Counter.builder("swath.open_frontier.keys_emitted").register(registry);
         bytesEstimated = Counter.builder("swath.bytes.estimated").register(registry);
         progressUnits = Counter.builder("swath.progress.units").register(registry);
         probeFetches = Counter.builder("swath.probe.fetches").register(registry);
@@ -1602,6 +1612,19 @@ public final class RunMetrics {
             // and "current in-flight" were observed together, consistently, once per page.
             tailOccupancy.record(Math.round(entriesEmitted.count()),
                     nanoClock.getAsLong() - runStartNanos.get(), (int) currentInFlight());
+        }
+    }
+
+    /**
+     * A page-commit's keys were emitted while their node's {@code hi} was {@code null} (issue #76) —
+     * called from {@code WorkStealingScan}'s page-commit callback with the SAME {@code hi} it already
+     * read to trim the batch and the SAME {@code inRange.size()} it already folded into {@code
+     * WorkerState#addKeysEmitted}, so this is O(1): no extra read, no per-key work. See {@link
+     * #openFrontierKeysEmitted}'s javadoc.
+     */
+    public void recordOpenFrontierKeysEmitted(long keyCount) {
+        if (keyCount > 0) {
+            openFrontierKeysEmitted.increment(keyCount);
         }
     }
 
