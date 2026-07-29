@@ -310,9 +310,9 @@ class SortedParquetStoreTest {
      * The exclusive upper bound for a scan prefix, for tests to pass directly to {@link
      * SortedParquetStore#delimitedRollup} (which — unlike the pager — never derives it itself). A
      * non-empty prefix uses the real {@link ByteKeys#prefixUpper} carry; the empty (root) prefix has
-     * no finite carry, so tests that want to exercise the skip-scan's root-level behaviour directly
-     * (bypassing the pager, which declines an open bound and range-walks instead — see {@link
-     * #delimitedRollupAnswersAnOpenUpperBoundAndDeclinesOnlyNonSlashDelimiters}) use a sentinel past every key this file's fixtures
+     * no finite carry — the store now serves that open bound natively (see {@link
+     * #delimitedRollupAnswersAnOpenUpperBoundAndDeclinesOnlyNonSlashDelimiters}), but tests that
+     * want a BOUNDED root-level scan use a sentinel past every key this file's fixtures
      * ever write.
      */
     private static ByteKey upperOf(String prefix) {
