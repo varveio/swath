@@ -570,11 +570,10 @@ below. To restore pre-0.2.0 engine behaviour exactly, pass both
 `--engine-toggle rate_anchored_sensing=off --engine-toggle tail_floor=current`. Output is
 unaffected either way — the pair changes scheduling, not the key set.
 
-> Note: that rollback is a *deviation from the defaults*, so it trips the
-> `engine_toggles_effective` startup line, whose text ends "…not a supported configuration".
-> That wording is about the ablation surface as a whole; the two-toggle rollback above is
-> documented and supported. The log text is pinned by a test that guards the
-> operator-visible token, so it is deliberately left alone here.
+> Note: that rollback is a *deviation from the defaults*, so it prints the
+> `engine_toggles_effective` startup line. As of 0.2.0 that line names the pair as a supported
+> rollback rather than calling the whole non-default surface unsupported — the warning is about
+> the other toggles, not this one.
 
 | Name | Default | Change from default when |
 | --- | --- | --- |
