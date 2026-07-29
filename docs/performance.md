@@ -12,8 +12,10 @@ measures it. Its comparative runs have not started yet, so it carries a
 [methodology](https://github.com/varveio/s3-listing-study/blob/main/docs/methodology.md)
 and a tool roster but no results so far.
 
-Every figure below is pending a release-candidate measurement pass; the numbers
-are not filled in yet.
+With one exception, every figure below is pending a release-candidate measurement
+pass and the numbers are not filled in yet. The exception is
+[The 0.2.0 scheduling defaults](#the-020-scheduling-defaults-rate_anchored_sensing--tail_floor),
+which reports completed measurements and states its own limits.
 
 ## Scaling behavior
 
@@ -81,15 +83,23 @@ the full key set:
 | 0.2.0 default, rep 1 | **62.4s** | 216,985 | 24.1 | 15,009 |
 | 0.2.0 default, rep 2 | **57.7s** | 234,537 | 26.6 | 14,879 |
 
-≈11.3× end-to-end on both repetitions, at slightly *fewer* API calls — the fleet
-stops idling, it does not start over-fetching. Worst-new versus best-old is still
-10.8×.
+≈11.3× and ≈11.6× end-to-end on the two repetitions, at slightly *fewer* API calls —
+the fleet stops idling, it does not start over-fetching. Comparing the worst new run
+against the best old one, the least favourable reading available, it is still 10.8×.
 
 **Breadth, and the correctness claim.** Both arms were then replayed over a
 123-fixture capture corpus (465M keys total, every fixture ≤20M keys) against the
-real engine. Across all 114 fixtures that completed, **the emitted key set was
-byte-identical between arms on every single one** — the pair changes scheduling,
-never output — and total API calls moved −0.4%. Ten fixtures gained ≥1.5×.
+real engine. **114 of the 123 completed.** Across those 114, the emitted key set was
+byte-identical between arms on every one — the pair changes scheduling, never output —
+and total API calls moved −0.4%. Ten fixtures gained ≥1.5×.
+
+The remaining **nine fixtures produced no result on either arm**: each stalled during
+seeding in the *pre-flip* arm and was aborted by the liveness watchdog, so the run
+never reached the arm under test. The cause was traced to the replay harness rather
+than the engine — a single delimiter rollup on those keyspaces takes ~70s of server
+compute against a ~3s client probe budget — and is tracked separately. They are a
+coverage gap: the correctness claim above covers 114 fixtures, not 123, and nothing is
+claimed about the nine either way.
 
 **Honest limits.** The pair cures the wide-flat tail; it does not make every
 bucket parallel. Keyspaces that are deep and narrow enough that a pivot has almost

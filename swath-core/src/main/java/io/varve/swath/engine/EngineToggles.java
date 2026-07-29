@@ -78,7 +78,8 @@ public record EngineToggles(
      * The one non-boolean component must exist: every consumer (the governor's gate consults, the
      * effective-toggle log, the run-summary writer) dereferences it, so a null would surface as an
      * NPE far from the construction that caused it. {@code parse} can never produce one (absent
-     * defaults to {@link TailFloorMode#CURRENT}); this guards the public constructor.
+     * defaults to {@link TailFloorMode#REACH_FLOORED}, the 0.2.0 default); this guards the public
+     * constructor.
      */
     public EngineToggles {
         java.util.Objects.requireNonNull(tailFloor, "tailFloor");

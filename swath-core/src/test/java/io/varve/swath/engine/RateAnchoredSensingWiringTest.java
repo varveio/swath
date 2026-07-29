@@ -127,23 +127,35 @@ final class RateAnchoredSensingWiringTest {
     }
 
     /**
-     * The documented rollback ({@code rate_anchored_sensing=off}) reinstates the pre-0.2.0 window
-     * reading, which is not an arm and so adds no counter. This is the assertion that used to cover
-     * the DEFAULT, moved onto the arm that now carries the legacy behaviour.
+     * The documented rollback, exercised end-to-end as the pair {@code docs/usage.md} actually
+     * tells a user to pass: {@code rate_anchored_sensing=off} AND {@code tail_floor=current}
+     * together, parsed from those strings and driven through a real bounded scan.
+     *
+     * <p>Asserting the sensor half alone would leave the promise half-tested — the pair is what the
+     * docs promise restores pre-0.2.0 behaviour, and the two mechanisms are known to interact
+     * (their combination is what destabilises the dense/uniform carve, see
+     * {@code ConfettiFeedbackWiringTest}). So the rollback is verified as a pair or not at all.
      */
     @Test
     @Timeout(60)
-    void theRollbackArmRunsTheLegacySensorAndIsSilentOnBothCounters(@TempDir Path dir) throws Exception {
+    void theDocumentedRollbackPairRunsBothLegacyMechanismsAndIsSilentOnBothCounters(@TempDir Path dir)
+            throws Exception {
         List<byte[]> keyspace = Keyspaces.exactly(2000);
-        EngineToggles legacy = EngineToggles.DEFAULT.withRateAnchoredSensing(false);
-        assertThat(legacy.remainingWorkEstimator(20)).isSameAs(RemainingWorkEstimator.WINDOW);
+        EngineToggles rollback = EngineToggles.parse(
+                List.of("rate_anchored_sensing=off", "tail_floor=current"), false);
+        assertThat(rollback.remainingWorkEstimator(20)).isSameAs(RemainingWorkEstimator.WINDOW);
+        assertThat(rollback.tailFloor()).isEqualTo(TailFloorMode.CURRENT);
 
-        ScanResult result = runBoundedRoot(dir, "sensing-off", keyspace, legacy);
+        ScanResult result = runBoundedRoot(dir, "rollback-pair", keyspace, rollback);
         assertExactlyOnce(result.emitted(), keyspace);
 
         assertThat(result.stealReasons().getOrDefault("TOGGLE.rate_anchored_sensing_on", 0L)).isZero();
         assertThat(sumCategory(result.stealReasons(), "SENSING_OWNER")
                 + sumCategory(result.stealReasons(), "SENSING_STEAL"))
                 .as("the legacy reading adds no counter to a run that has always existed").isZero();
+        assertThat(result.stealReasons().keySet().stream().filter(k -> k.startsWith("TOGGLE.tail_floor")))
+                .as("and the legacy floor is not an arm, so it marks nothing either").isEmpty();
+        assertThat(sumCategory(result.stealReasons(), "TAIL_FLOOR"))
+                .as("nor does it compute a second verdict to compare against").isZero();
     }
 }

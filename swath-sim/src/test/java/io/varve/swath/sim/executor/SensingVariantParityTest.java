@@ -105,11 +105,17 @@ class SensingVariantParityTest {
     }
 
     /**
-     * <b>The control leg is the shipped path, byte for byte.</b> {@code CURRENT} installs no estimator
-     * at all — the executor passes {@code null} and the engine keeps its own {@code WINDOW} reading —
-     * and this is the pin that the convergence of the two construction paths changed nothing there:
-     * the chain steered by this module's incumbent delegate decides identically to the chain nobody
-     * steered, on every view and every pool of the battery, down to the gate inputs.
+     * <b>The control leg installs no estimator, and decides exactly as an unsteered chain does.</b>
+     * {@code CURRENT} installs no estimator at all — the executor passes {@code null} and the engine
+     * keeps its own {@code WINDOW} reading — and this is the pin that the convergence of the two
+     * construction paths changed nothing there: the chain steered by this module's incumbent
+     * delegate decides identically to the chain nobody steered, on every view and every pool of the
+     * battery, down to the gate inputs.
+     *
+     * <p>Both legs are held at {@code tail_floor=current}, which since the 0.2.0 default flip is the
+     * rollback arm rather than the shipped one. This is therefore a fixed-legacy-floor control for
+     * sensor-vs-no-sensor, NOT a claim about the shipped configuration — holding the floor constant
+     * is what keeps the comparison about the estimator seam. See {@link #governor(SensingVariant)}.
      */
     @Test
     void theCurrentArmDecidesExactlyAsAnUnsteeredEngineChainDoes() {
