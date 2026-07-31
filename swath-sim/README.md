@@ -17,31 +17,25 @@ the **discrete-event kernel** that drives it.
 
 The simulator does not run a listing and time it. It **computes** what the timings would be.
 
-The clock is a plain number of nanoseconds, and it only moves when the model says something
-happened. Alongside it is a queue of events scheduled for future instants — "this page request
-completes at t + 4.1 ms", "this worker's backoff expires at t + 5 ms". The kernel loops: take the
-earliest event in the queue, jump the clock straight to its instant, run it (which typically
-schedules more events), repeat until the queue is empty. All the time in between, in which nothing
+The clock is a plain number of nanoseconds. Alongside it is a queue of events scheduled for future
+instants — "this page request completes at t + 4.1 ms", "this worker's backoff expires at t + 5 ms".
+The kernel takes the earliest event, jumps the clock straight to its instant, and runs its body
+atomically; events at the same instant run in scheduling order. It repeats until the queue is empty
+or the scenario's duration or event ceiling stops the run. All the time in between, in which nothing
 happens, is skipped for free. That is what makes it fast: a modelled ten-minute listing costs
-whatever its few million events cost to process, not ten minutes.
+whatever its events cost to process, not ten minutes.
 
 Virtual time buys two things beyond speed.
 
 - **Reproducibility.** The kernel is single-threaded and events are totally ordered by
-  `(instant, scheduling sequence)`, so there is nothing for a host scheduler to decide. Every random
-  draw comes from a stream derived from the run's single seed, one stream per actor and purpose. Two
-  runs of one scenario at one seed therefore produce byte-identical event logs — and a policy change
-  shows up as a difference in the log rather than as noise. (This is determinism *inside the
-  simulator*; a real multi-worker run's thread scheduling stays outside anyone's control.)
-
-  The **byte-identity check** is stated on traces that fit in memory: the log accumulates entries on
-  the heap and serialises the whole trace to compare it, so it is enabled for invariant and
-  determinism runs and disabled for sweeps, where it would dominate the cost. A rolling digest would
-  lift that ceiling and is deliberately **not** built yet: the measured event volume of a run at
-  realistic scale (a few million events for a very large bucket, see below) is well inside what the
-  in-memory log handles, so the ceiling is not currently reached. The claim is therefore "identical
-  traces, on fixtures whose traces fit" — and a fixture large enough to need the digest needs it
-  built first, rather than needing this sentence reinterpreted.
+  `(instant, scheduling sequence)`, so there is nothing for a host scheduler to decide. Randomness
+  is derived from the run's single seed and isolated by actor (or the reserved fleet identity) and
+  purpose or policy mechanism. Adding actors does not re-seed existing actors, and consuming more
+  draws from one stream does not shift another stream. Within a stream, draws are consumed in event
+  order, so changing when that mechanism draws can change its later values. Two runs of one scenario
+  at one seed therefore produce byte-identical recorded event logs; recording can also be disabled
+  without changing the simulated result. This is determinism *inside the simulator*; a real
+  multi-worker run's thread scheduling stays outside anyone's control.
 - **Inputs you state rather than inherit.** Request latencies, the client-side cost of processing a
   page, and the engine's own time budgets (probe timeouts, pacing windows, run duration ceiling) are
   all **declared parameters** of a scenario, not properties of the machine the simulation runs on.
