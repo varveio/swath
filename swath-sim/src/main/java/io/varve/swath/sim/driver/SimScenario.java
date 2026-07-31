@@ -12,9 +12,8 @@ import io.varve.swath.sim.model.MissingSimDependencyException;
 import java.util.List;
 
 /**
- * Everything a simulated run needs except the store handle: the seed, the workload, the physics, and
- * the declared budgets. Two runs of one scenario at one seed against one store produce identical
- * results, which is the property the whole design exists to provide.
+ * Everything a simulated run needs except the store handle. Two runs of one scenario at one seed
+ * against one store produce identical results.
  *
  * <p>Every input is required. There is no partially-specified scenario, because each of the defaults
  * a scenario could plausibly fall back to is a claim about the world that would then go unstated —
@@ -43,7 +42,6 @@ public record SimScenario(
         boolean recordEventLog,
         long maxEvents) {
 
-    /** The event cap a scenario gets when it does not choose one; ample for any in-repo fixture. */
     public static final long DEFAULT_MAX_EVENTS = 100_000_000L;
 
     public SimScenario {
@@ -70,16 +68,11 @@ public record SimScenario(
         ranges = List.copyOf(ranges);
     }
 
-    /**
-     * This scenario at {@code newWorkerCount} workers, everything else held fixed — the one axis a
-     * concurrency-scaling sweep varies.
-     */
     public SimScenario withWorkerCount(int newWorkerCount) {
         return new SimScenario(seed, newWorkerCount, pageSize, ranges, latency, clientCost, budgets,
                 recordEventLog, maxEvents);
     }
 
-    /** This scenario at {@code newSeed}, everything else held fixed. */
     public SimScenario withSeed(long newSeed) {
         return new SimScenario(newSeed, workerCount, pageSize, ranges, latency, clientCost, budgets,
                 recordEventLog, maxEvents);

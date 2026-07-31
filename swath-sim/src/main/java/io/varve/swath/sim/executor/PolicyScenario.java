@@ -12,9 +12,7 @@ import io.varve.swath.sim.model.LatencyModel;
 import io.varve.swath.sim.model.MissingSimDependencyException;
 
 /**
- * Everything a <b>policy</b> run needs except the store handle. The sibling of the synthetic driver's
- * scenario, and different from it in exactly one structural way that matters: its workload is not a
- * list of ranges.
+ * Everything a <b>policy</b> run needs except the store handle.
  *
  * <p><b>Why the workload cannot be a range list here.</b> Under real policies nobody knows the ranges
  * in advance. The seed planner decides how the keyspace is first cut, from probes it issues against
@@ -23,9 +21,7 @@ import io.varve.swath.sim.model.MissingSimDependencyException;
  * declaring the answer to the first question the run exists to ask. The workload is therefore "this
  * bucket, under this seed mode", and everything after that is the policies' own doing.
  *
- * <p>Every input is required, for the same reason the synthetic scenario requires its own: a default
- * would be an unstated claim about the world. The client-cost model in particular is refused rather
- * than defaulted to zero.
+ * <p>Every input is required; in particular, client cost is not defaulted to zero.
  *
  * @param seed           the run's one seed; every draw is derived from it
  * @param workerCount    the fleet size, which is also the adaptive controller's ceiling
@@ -65,7 +61,6 @@ public record PolicyScenario(
         boolean recordEventLog,
         long maxEvents) {
 
-    /** The event cap a scenario gets when it does not choose one; ample for any in-repo fixture. */
     public static final long DEFAULT_MAX_EVENTS = 100_000_000L;
 
     /**
@@ -94,7 +89,6 @@ public record PolicyScenario(
         BOUNDED
     }
 
-    /** How the keyspace is cut before the fleet starts. */
     public enum SimSeedMode {
         /** One range over the whole keyspace: every cut after this is a policy decision at run time. */
         NONE,
@@ -110,9 +104,6 @@ public record PolicyScenario(
             throw new IllegalArgumentException("pageSize must be positive, got " + pageSize);
         }
         if (pageSize > MAX_PAGE_SIZE) {
-            // Refused, not clamped. The protocol layer would cap the request at 1,000 while the run
-            // record went on reporting the declared value, and a run that still produces a number
-            // while answering a different question is worse than one that does not start.
             throw new IllegalArgumentException("pageSize must be <= " + MAX_PAGE_SIZE
                     + ", the largest page a ListObjectsV2 call can ask for, got " + pageSize);
         }
@@ -154,13 +145,11 @@ public record PolicyScenario(
         return scanPrefix.clone();
     }
 
-    /** This scenario at {@code newWorkerCount} workers, everything else held fixed. */
     public PolicyScenario withWorkerCount(int newWorkerCount) {
         return new PolicyScenario(seed, newWorkerCount, pageSize, scanPrefix, seedMode, toggles, latency,
                 clientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog, maxEvents);
     }
 
-    /** This scenario at {@code newSeed}, everything else held fixed. */
     public PolicyScenario withSeed(long newSeed) {
         return new PolicyScenario(newSeed, workerCount, pageSize, scanPrefix, seedMode, toggles,
                 latency, clientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog,
@@ -176,7 +165,6 @@ public record PolicyScenario(
                 newClientCost, budgets, faultDisposition, storeServerCapacity, recordEventLog, maxEvents);
     }
 
-    /** This scenario with the trace turned on or off — on for a determinism check, off for a sweep. */
     public PolicyScenario withEventLog(boolean record) {
         return new PolicyScenario(seed, workerCount, pageSize, scanPrefix, seedMode, toggles, latency,
                 clientCost, budgets, faultDisposition, storeServerCapacity, record, maxEvents);

@@ -56,14 +56,7 @@ public record PolicyRunResult(
         PolicyRunTimeline timeline,
         SensingVariant sensing) {
 
-    /**
-     * Assembles a result, merging the kernel's counters with the controller's own so a reader has one map
-     * rather than two places to look for a run's engagement counts.
-     *
-     * <p>A named factory rather than a second constructor: the two would have had the same arity and
-     * differed only by which of several {@code long}/{@code int} positions carried what, which is a
-     * call-site mistake the compiler would have been happy to accept.
-     */
+    /** Merges kernel and controller counters into one result. */
     static PolicyRunResult of(SimRunResult run, PolicyScenario scenario, String storeLabel,
                               SortedMap<String, Long> gaugeCounters, int finalConcurrencyTarget,
                               long nodesCreated, long splitsRejected, long storeReads, boolean stuck,
@@ -75,10 +68,6 @@ public record PolicyRunResult(
 
     public PolicyRunResult {
         if (run == null || scenario == null || timeline == null || sensing == null) {
-            // Every accessor and describe() dereferences all four, so a missing one has to fail here,
-            // where the caller that dropped it is still on the stack, rather than at the first read.
-            // The sensor is in the guard for a second reason: a run whose sensor is unknown is a number
-            // no one can quote, which is the invariant this record's own javadoc declares.
             throw new IllegalArgumentException("a run record needs its kernel result, its scenario, its "
                     + "timeline and the sensor it steered on");
         }
@@ -136,7 +125,7 @@ public record PolicyRunResult(
         return counter(SimExecutor.KEYS_EMITTED_COUNTER);
     }
 
-    /** Pages committed. */
+    /** Committed pages, including empty pages. */
     public long pages() {
         return counter(SimExecutor.PAGES_COUNTER);
     }

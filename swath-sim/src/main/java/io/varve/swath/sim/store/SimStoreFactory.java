@@ -26,11 +26,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Resolves a {@link SimStoreBackend} choice into a concrete store over a fixture, the simulator's
- * counterpart to the replay server's {@code ReplayServingFactory}. One shared {@link MeterRegistry}
- * carries both the tier-selection signals ({@link SimStoreMetrics}) and the per-read meters the
- * reused replay stores publish ({@link ReplayMetrics}), so a run is self-describing from one
- * registry; reach it through {@code result.metrics().registry()}.
+ * Resolves a {@link SimStoreBackend} choice into a fixture store. One shared {@link MeterRegistry}
+ * carries tier-selection signals ({@link SimStoreMetrics}) and replay-store read meters
+ * ({@link ReplayMetrics}); reach it through {@code result.metrics().registry()}.
  *
  * <ul>
  *   <li>{@link SimStoreBackend#PARQUET} — the replay module's Parquet-backed store, unchanged:
@@ -116,10 +114,8 @@ public final class SimStoreFactory {
     }
 
     /**
-     * Opens {@code fixturePath} under the requested {@code backend}, configured from the
-     * {@code swath.sim.*} system properties — the entry point a runner uses, so an operator can
-     * retune the tier threshold without a code change (the same idiom as the replay server's
-     * {@code swath.replay.prefetch.*}). Tests that pin a threshold pass an explicit config instead.
+     * Opens {@code fixturePath} under the requested {@code backend}, configured from
+     * {@code swath.sim.*} system properties.
      */
     public static Result open(Path fixturePath, SimStoreBackend backend) {
         return open(fixturePath, backend, SimStoreConfig.fromSystemProperties());
@@ -139,9 +135,6 @@ public final class SimStoreFactory {
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
         SimStoreMetrics simMetrics = new SimStoreMetrics(registry);
-        // The same registry the sorted-eligibility derive pass records into (swath.replay.index.*)
-        // -- one shared registry describes the whole resolution, exactly as each branch's own
-        // ReplayMetrics does.
         FixtureMetrics fixtureMetrics = new FixtureMetrics(registry);
 
         return switch (backend) {
@@ -151,9 +144,7 @@ public final class SimStoreFactory {
                         OptionalLong.empty());
             }
             case ARENA -> {
-                // SERVING_MODE_DUCKDB, and that is not a mislabel: the arena reads the fixture through
-                // the DuckDB-over-Parquet store to stream keys out, and only then decides whether to
-                // keep it, so the tag describes the store that actually touched the file, truthfully.
+                // The arena is populated through DuckDB; serving_mode names the store that reads the fixture.
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ArenaListingStore arena;
                 try (ListingStore source = parquetStore(fixturePath, metrics)) {
@@ -167,8 +158,6 @@ public final class SimStoreFactory {
                         OptionalLong.of(arena.keyCount()));
             }
             case STREAMING -> {
-                // SERVING_MODE_SORTED: like the windowed tier below, this one reads the fixture's own
-                // sorted layout natively (row group by row group), never a materialized DuckDB table.
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
                 List<Path> files = resolveFiles(fixturePath);
                 List<IndexEntry> index = requireSortedIndex(files, fixtureMetrics, SimStoreBackend.STREAMING);
@@ -182,13 +171,6 @@ public final class SimStoreFactory {
                 yield resolved(windowedStore(files, index, metrics), SimStoreBackend.WINDOWED,
                         metrics, simMetrics, keyCount(index));
             }
-            // AUTO is a fixture-tier router, not an engine algorithm path: AGENTS.md's "instrument
-            // every new algorithm path" doctrine (recordStealReason) is scoped to the LISTING
-            // ENGINE's own split/steal/pivot/seed/backoff decisions, whose post-hoc keyspace-shape
-            // classification that counter family exists for. Choosing a simulator fixture's backing
-            // store is a different concern with its own engagement counters
-            // (SimStoreMetrics#recordArenaDecline / #recordStreamingDecline, both tagged with why),
-            // not an omission of the engine's.
             case AUTO -> {
                 ReplayMetrics duckdbMetrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ListingStore source = parquetStore(fixturePath, duckdbMetrics);
@@ -208,9 +190,7 @@ public final class SimStoreFactory {
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
                         + "— trying the streaming tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
 
-                // source is still open here (the abandoned DuckDB pool, kept as the PARQUET fallback
-                // in case streaming also declines) -- a resolveFiles/decide failure must close it too,
-                // exactly like the arena step just above, or it leaks.
+                // Keep DuckDB for a possible PARQUET fallback; close it if eligibility evaluation throws.
                 SortedEligibility.Result eligibility;
                 try {
                     eligibility = SortedEligibility.decide(resolveFiles(fixturePath), fixtureMetrics, true);
@@ -246,10 +226,8 @@ public final class SimStoreFactory {
     }
 
     /**
-     * The arena load, with the fixture named on the way out of a rejection. The arena rejects a key
-     * that is over-long or not strictly above its predecessor, and its message names the offending key
-     * and its row ordinal — but it is built over a {@link ListingStore} and cannot know which fixture
-     * that store is reading, which is exactly what a sweep over a corpus needs told.
+     * Adds the fixture path to an arena rejection, which the {@link ListingStore}-based arena cannot
+     * otherwise report.
      */
     private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config,
                                                          Path fixturePath) {
@@ -266,12 +244,9 @@ public final class SimStoreFactory {
     }
 
     /**
-     * The derived routing index of a sorted-eligible {@code files}, for the two forced backends that
-     * require one. {@code recordFallbackOnFailure=false}: a forced backend that declines hard-fails,
-     * so this is not a "fallback" any more than {@link SimStoreBackend#ARENA}'s forced decline is.
-     * The decline is raised as a typed {@link IneligibleFixtureException} carrying the eligibility
-     * reason and the file set, for the same reason the mid-decode disorder is typed: a sweep must be
-     * able to file it as corpus data without reading a message.
+     * Returns the derived routing index for a forced sorted backend. An ineligible fixture fails with
+     * a typed {@link IneligibleFixtureException} carrying its reason and file set so a sweep need not
+     * parse a message.
      */
     private static List<IndexEntry> requireSortedIndex(List<Path> files, FixtureMetrics fixtureMetrics,
                                                        SimStoreBackend backend) {
@@ -293,8 +268,7 @@ public final class SimStoreFactory {
      * identical store served bare here too, mirroring {@code ReplayServingFactory#sorted}.
      */
     private static ListingStore windowedStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
-        // Read the prefetch config before opening any connection, so a malformed
-        // swath.replay.prefetch.* property can't leak a freshly-opened DuckDB pool.
+        // Read configuration before opening a pool so malformed properties cannot leak one.
         WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
         int connections = SortedParquetStore.defaultConnectionCount();
         if (!prefetch.enabled()) {
