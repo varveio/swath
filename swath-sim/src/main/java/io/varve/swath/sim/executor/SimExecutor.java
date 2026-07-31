@@ -72,78 +72,17 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Runs swath's <b>real</b> listing policies — the seed planner, the owner-side split governor, the
- * thief's victim selection and pivot cascade, the idle-steal pacing arithmetic — against a ground-truth
- * store, in virtual time.
+ * Runs swath's shared seed, owner-split, thief and pacing policies against a ground-truth store in
+ * virtual time. This executor owns scheduling, policy views, application of returned mutations, the
+ * range ledger, and the simulator-side concurrency port.
  *
- * <p>The policies are consumed exactly as the engine consumes them: as decisions over views, returning
- * actions and mutations. This class is the other half of that seam — the executor. It builds each view
- * from the state it owns, issues whatever the decision asks for, applies the mutations the decision
- * returns, and owns everything the policies deliberately never see: the clock, the concurrency target,
- * the ranges' bookkeeping, and the compare-and-set that decides whether a proposed split survives.
+ * <p>One event body is one atomic region. In particular, page trim, cursor/density update, ledger
+ * commit, sensor reading and owner decision share a body; thief probes deliberately separate its
+ * snapshot from revalidation. See {@code docs/executor-ordering.md} for the full ordering, timing and
+ * documented divergence contract.
  *
- * <h2>What a lock is here</h2>
- * The kernel never interleaves two event bodies, so a region other actors cannot observe half-finished
- * <em>is</em> one event body. The page commit — trimming the batch to the current bound, advancing the
- * cursor, folding the page into the density digest, and running the owner-side split decision — is one
- * body, which is exactly the region the engine holds a worker's lock across.
- *
- * <p>The converse is what makes a simulated race real. A thief reads its victim's cursor and bound in
- * one body, issues probes that resolve in later ones, and only then proposes a split. Everything the
- * victim does in between happens in bodies of its own, so by the time the proposal is checked the
- * cursor may have passed the pivot or another thief may have narrowed the bound — and the check
- * legitimately fails, without a lock, a thread, or a retry loop anywhere in this file.
- *
- * <h2>Timing, and the two timing widenings this reproduces</h2>
- * A call's duration is drawn when the request is issued; the store is read when the response arrives.
- * A modelled attempt timeout is decided at issue too, wherever the completion instant is known then:
- * the executor tells the caller once, scheduling the response <em>or</em> the timeout, never both. It
- * cannot be decided at issue when a queueing store is modelled, and there the executor arms both and
- * retires the loser by attempt generation — a dead event that is counted ({@code events.stale}) rather
- * than absorbed. Either way the store's own occupancy is retired when the <em>store</em> finishes, not
- * when the client gives up, so a timed-out call keeps crowding the store for as long as it really
- * would.
- *
- * <p>Three disclosed read-window widenings from the policy extraction are reproduced as the current
- * engine behaves, not as it behaved before the seam existed — modelling the narrower pre-seam versions
- * would make the simulator disagree with the engine that actually ships:
- *
- * <ul>
- *   <li><b>The per-victim futility cooldown is read and consumed as two steps.</b> Whether a candidate
- *       has a cooldown skip left is read while the pool is being scanned, and the skip is consumed
- *       afterwards, for exactly the candidates the policy reports it skipped — where the pre-seam code
- *       checked and decremented in one call. A cooldown can therefore end a call or two later than it
- *       used to.</li>
- *   <li><b>A victim's structure-probe suppression streaks are read once, at view construction.</b> A
- *       streak that changes mid-cascade is not observed until the next attempt.</li>
- *   <li><b>The zero-fan-out streak is applied one step late.</b> The policy returns it as a mutation
- *       alongside the action it decided, so it lands after that step rather than during it.</li>
- * </ul>
- *
- * <p>The fleet-wide idle-steal pacing window is <em>not</em> one of them: its arithmetic moved behind
- * the seam unchanged, still consulted under the same monitor, so this executor's single check-then-act
- * at the top of an attempt is the engine's own shape rather than a widening of it.
- *
- * <h2>Instrumenting the position sensor</h2>
- * Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
- * quantity: {@link StealMath#estRemaining}, a local density times a remaining span, both measured in
- * the window-relative fraction {@link StealMath#fracIn} defines. Whether that sensor can actually see a
- * given keyspace is a property of the keys, not of the policies, so the executor measures it where the
- * policies read it — at every bounded page commit, and at every victim scanned. Nothing in swath-core
- * changes to produce these counters.
- *
- * <p><b>The sensor is swappable, and the counters follow whichever one is installed.</b> A run may
- * steer on a candidate estimator instead of the shipped one ({@link SensingVariant}), and when it does
- * the readings below are taken through that estimator: the question a counter answers is "could the
- * sensor THIS run steers on see this?", so reading the incumbent's arithmetic under a variant would
- * report the disease while the cure was running. A run that does not ask for a variant gets
- * {@link SensingVariant#CURRENT}, whose readings are the engine's own public arithmetic, unchanged.
- *
- * <h2>Determinism</h2>
- * One scenario at one seed against one store reproduces itself exactly, including its event trace. That
- * is a claim about the simulator only. It is not a claim that a seeded live run would produce the same
- * decisions: a real fleet's assignment of ranges to threads is scheduling-dependent, and no seed
- * removes that.
+ * <p>A fixed scenario and seed against the same store state determine simulated event order. They do
+ * not make live thread scheduling deterministic.
  */
 public final class SimExecutor {
 
@@ -165,19 +104,9 @@ public final class SimExecutor {
     public static final String PAGE_TIMEOUTS_COUNTER = "page.timeouts";
     /** Probe attempts that hit their declared timeout. */
     public static final String PROBE_TIMEOUTS_COUNTER = "probe.timeouts";
-    /**
-     * Events that were dispatched and had no effect because a faster event had already retired what
-     * they referred to. The kernel has no cancellation, so this is what a cancelled timer costs, and it
-     * is counted rather than absorbed: these events are charged against the run's event budget like any
-     * other, so a budget has to be sized including them.
-     */
+    /** Dispatched losers of uncancellable event races; included in the run's event budget. */
     public static final String STALE_EVENTS_COUNTER = "events.stale";
-    /**
-     * Events whose only work is retiring a timed-out call's occupancy at the instant the store would
-     * have answered. A sibling of {@link #STALE_EVENTS_COUNTER}: it is the same kind of cost — an event
-     * the kernel dispatches because it cannot cancel one — but it is not dead, so it is counted apart
-     * from the events that are.
-     */
+    /** Events that drain timed-out nonqueued calls; queued timeout losers count as stale instead. */
     public static final String OCCUPANCY_DRAIN_EVENTS_COUNTER = "events.timeout_occupancy_drain";
     /** Seed-descent probes issued. */
     public static final String SEED_PROBES_COUNTER = "seed.probes";
@@ -185,11 +114,7 @@ public final class SimExecutor {
     public static final String OWNER_SPLIT_COUNTER = "owner_split.published";
     /** Children published by a thief's steal. */
     public static final String THIEF_SPLIT_COUNTER = "steal.children";
-    /**
-     * The category every owner-side split engagement and refusal is counted under — the engine's own
-     * {@code recordStealReason} category, held here as one name so a reader composing a counter out of
-     * it and an {@link OwnerSplitSkipReason} fails to compile rather than reading a column of zeroes.
-     */
+    /** Engine category for owner-split engagements and refusals. */
     public static final String OWNER_SPLIT_CATEGORY = "OWNER_SPLIT";
     /** Completed owner-split children whose realized mass came back confetti-sized. */
     public static final String OWNER_SPLIT_CHILD_CONFETTI_COUNTER = "OWNER_SPLIT_CHILD.confetti";
@@ -199,66 +124,27 @@ public final class SimExecutor {
     public static final String STEAL_OUTCOME_PREFIX = "steal.outcome.";
     /** The outcome of an attempt whose victim selection found nothing eligible to steal from. */
     public static final String NO_VICTIM_OUTCOME = "NO_VICTIM";
-    /**
-     * The category the two <b>sensing routes</b> are counted under: which sensor the engine's own two
-     * policies were actually constructed with, counted once each at the top of the run. The
-     * instrument-every-algo-path rule (AGENTS.md) applied to the route selection itself — the run record
-     * states which sensor was <em>asked</em> for, and these state which one was installed.
-     */
+    /** Installed sensing routes, counted once per policy per run. */
     public static final String SENSING_ROUTE_CATEGORY = "SENSING_ROUTE";
-    /** The engine's governor ran on the engine's own sensor: no estimator was passed through its seam. */
+    /** Stable schema name for the unsteered governor route, which uses legacy WINDOW sensing. */
     public static final String OWNER_SPLIT_ROUTE_SHIPPED = "owner_split_shipped";
     /** It ran on the sensor a variant installed through that seam. */
     public static final String OWNER_SPLIT_ROUTE_ESTIMATOR = "owner_split_estimator";
-    /** The engine's thief scored victims on the engine's own sensor, its seam left unsteered. */
+    /** Stable schema name for the unsteered thief route, which uses legacy WINDOW sensing. */
     public static final String THIEF_ROUTE_SHIPPED = "thief_shipped";
     /** It scored them on the sensor a variant installed through that seam. */
     public static final String THIEF_ROUTE_ESTIMATOR = "thief_estimator";
-    /**
-     * Page commits on a bounded range that emitted at least one key — a commit that emitted none moved
-     * no cursor, so it is neither visible nor invisible and is not counted either way. The denominator
-     * {@link #SENSOR_INVISIBLE_ADVANCE_COUNTER} reads against.
-     */
+    /** Non-empty bounded page commits; denominator for invisible cursor advances. */
     public static final String SENSOR_BOUNDED_COMMITS_COUNTER = "sensor.bounded_page_commits";
-    /**
-     * Bounded page commits whose cursor advance did not move <b>the installed sensor's own sense of
-     * position</b> at all: real keys came out and the quantity the policies measure stayed where it was.
-     * What counts as position is the estimator's to declare
-     * ({@link RemainingWorkEstimator#advanceVisible}) — for the shipped sensor it is
-     * {@link StealMath#fracIn}; for one whose position <em>is</em> the emitted count no commit can be
-     * invisible, and this reads zero.
-     */
+    /** Non-empty bounded commits invisible to the installed estimator's position measure. */
     public static final String SENSOR_INVISIBLE_ADVANCE_COUNTER = "sensor.cursor_advance_invisible";
-    /**
-     * Victims whose {@code estRemaining} victim selection actually evaluated, summed over attempts:
-     * the eligible pool minus the candidates the policy skips <em>before</em> scoring them — the
-     * unsplittable ones and the ones holding a futility-pacing skip. Open frontiers are included, as
-     * selection includes them (it scores them {@code +∞}).
-     */
+    /** Victims actually scored, after pre-score skips, summed over attempts. */
     public static final String SENSOR_VICTIMS_SCANNED_COUNTER = "sensor.victims_scanned";
-    /**
-     * Of {@link #SENSOR_VICTIMS_SCANNED_COUNTER}, those carrying a bound — the denominator of the two
-     * degeneracy counters below, since an open frontier's estimate is {@code +∞} by contract and its
-     * consumed span is not defined.
-     */
+    /** Scored victims with a bound; denominator for the victim degeneracy counters. */
     public static final String SENSOR_VICTIMS_BOUNDED_COUNTER = "sensor.victims_scanned_bounded";
-    /**
-     * Scored bounded victims whose estimate — the installed sensor's — read zero, so selection passed
-     * over them as having no remaining span. An attempt in which <em>every</em> scored candidate reads
-     * this way is what a {@code NO_VICTIM.all_no_remaining_span} is made of; this counter is the
-     * per-candidate reading, not that verdict.
-     */
+    /** Scored bounded victims whose installed-estimator remaining-work score is zero. */
     public static final String SENSOR_EST_ZERO_COUNTER = "sensor.victim_est_zero";
-    /**
-     * Scored bounded victims whose estimate <b>discards the keys they have emitted</b>: the installed
-     * sensor scores a worker that has emitted a million keys identically to one that has emitted none.
-     * Which readings those are is again the estimator's to declare
-     * ({@link RemainingWorkEstimator#ignoresEmittedKeys}) — the shipped sensor's are its zero-consumed-
-     * span branch; a sensor whose estimate <em>is</em> the emitted count has none. These are victims
-     * that have <em>certainly</em> emitted keys — a candidate only becomes steal-eligible after
-     * emitting some — which is what makes such a reading a defect in the measurement rather than a
-     * fact about the worker.
-     */
+    /** Scored bounded victims whose installed-estimator score ignores their emitted-key count. */
     public static final String SENSOR_EST_IGNORES_KEYS_COUNTER = "sensor.victim_est_ignores_keys";
 
     /**
@@ -272,25 +158,18 @@ public final class SimExecutor {
     public static final String WAKE_RANGE_COMPLETED = "range_completed";
     /** A parked worker was woken because the fleet's single steal-attempt slot was released. */
     public static final String WAKE_STEAL_ATTEMPT_FINISHED = "steal_attempt_finished";
-    /**
-     * A parked worker was woken because some worker committed a non-empty page — the engine's own
-     * prompt-rebalance signal, and by an order of magnitude the most frequent of the four.
-     */
+    /** A parked worker was woken by a non-empty page commit. */
     public static final String WAKE_PAGE_COMMITTED = "page_committed";
 
     private static final HexFormat HEX = HexFormat.of();
 
-    /**
-     * The per-call-class counter names, by ordinal. Built once: every modelled call increments one of
-     * them, and composing the name per call would put a string concatenation and a locale-sensitive
-     * lower-casing on the hottest path in the executor.
-     */
+    /** Per-call-class counter names, precomputed for the issue path. */
     private static final String[] CALL_CLASS_COUNTERS = callClassCounters();
 
     private final PolicyScenario scenario;
     private final SensingVariant sensing;
     private final RemainingWorkEstimator estimator;
-    /** What the policies were constructed with: the variant's estimator, or null under {@code CURRENT}. */
+    /** Variant estimator, or null for the simulator's ordinary legacy-WINDOW route. */
     private final RemainingWorkEstimator installedEstimator;
     private final String storeLabel;
     private final SimListingView view;
@@ -300,9 +179,8 @@ public final class SimExecutor {
     private final ConfettiFeedbackGate confettiFeedback = new ConfettiFeedbackGate();
     private final PolicyRunTimeline.Recorder timeline = new PolicyRunTimeline.Recorder();
     /**
-     * The opt-in per-decision dump, or {@code null} when {@link SimGateDump#DUMP_PATH_PROPERTY} names
-     * nothing. Null rather than a disabled instance, and every call site guarded on it: a run that is
-     * not dumping must not format a row or render a key for one.
+     * Opt-in decision dump; null avoids formatting work when disabled. Always closed by
+     * {@link #execute()}.
      */
     private final SimGateDump gateDump = SimGateDump.fromSystemProperties();
     private final OwnerSplitPolicy governor;
@@ -327,9 +205,7 @@ public final class SimExecutor {
         this.scenario = scenario;
         this.sensing = sensing;
         this.estimator = sensing.estimator(scenario.pageSize());
-        // The seam takes null for the shipped reading, so CURRENT installs the engine's own WINDOW
-        // object rather than this module's delegate to it: a control leg is then not merely the same
-        // arithmetic, it is the same field the engine holds when nothing steers the seam.
+        // CURRENT leaves the seam unsteered, selecting the simulator's legacy WINDOW control.
         this.installedEstimator = sensing == SensingVariant.CURRENT ? null : estimator;
         this.storeLabel = storeLabel;
         this.view = new SimListingView(store, scenario.scanPrefix());
@@ -337,10 +213,7 @@ public final class SimExecutor {
                 scenario.pageSize(), installedEstimator);
         this.seedPlanner = new HybridSeedPlanner(scenario.scanPrefix(), scenario.workerCount(),
                 scenario.toggles());
-        // The controller is one instrument for the whole fleet, so its jitter is drawn on the reserved
-        // fleet actor rather than through any worker's context -- see SimKernel#FLEET_ACTOR. Holding the
-        // stream here (rather than adding a context accessor for another actor's tape) keeps the merged
-        // kernel's surface unchanged, and nothing else can reach this (actor, stream) key.
+        // AIMD jitter belongs to the fleet's reserved stream, isolated from every worker's draws.
         this.gauge = new SimConcurrencyPolicy(scenario.workerCount(), scenario.budgets(),
                 SimRng.forStream(scenario.seed(), SimKernel.FLEET_ACTOR, SimRngStream.AIMD_JITTER));
         this.idlePacing = new IdleStealPacingPolicy(scenario.budgets().idleStealBaseParkNanos(),
@@ -355,28 +228,19 @@ public final class SimExecutor {
     }
 
     /**
-     * Runs {@code scenario} against an already-open {@code store}.
+     * Runs {@code scenario} on the simulator's ordinary {@link SensingVariant#CURRENT} arm.
      *
-     * @param store      the caller's handle; used, never opened, never closed. Opening one over a large
-     *                   fixture costs more than most runs do, so it is opened once and reused across a
-     *                   whole sweep; this signature makes that the only possibility
-     * @param storeLabel what served this run (the resolved backend, or a test fixture's own name) — part
-     *                   of the run record, because a result is not readable without it
+     * @param store      caller-owned handle; borrowed, never opened or closed here
+     * @param storeLabel resolved backend or fixture label recorded with the result
      */
     public static PolicyRunResult run(PolicyScenario scenario, ListingStore store, String storeLabel) {
         return run(scenario, store, storeLabel, SensingVariant.CURRENT);
     }
 
     /**
-     * Runs {@code scenario} steering on {@code sensing}'s position sensor rather than the shipped one.
+     * Runs {@code scenario} on an explicit simulator sensing arm.
      *
-     * <p>The variant is not part of the scenario, and deliberately: a scenario is a statement about the
-     * world being modelled — its keyspace, its fleet, its latencies, its budgets — whereas this is a
-     * statement about which candidate algorithm is being run against that world. Keeping it out of the
-     * scenario also keeps every existing run, sweep and golden on the shipped sensor without touching
-     * a single call site.
-     *
-     * @param sensing which position sensor the thief's selection and the owner-split gates read
+     * @param sensing position sensor read by thief selection and owner-split gates
      * @see #run(PolicyScenario, ListingStore, String)
      */
     public static PolicyRunResult run(PolicyScenario scenario, ListingStore store, String storeLabel,
@@ -403,8 +267,7 @@ public final class SimExecutor {
         try {
             result = kernel.run();
         } finally {
-            // Closed on the failing path too: a run that died holding half its dump is the run whose
-            // dump is most worth reading.
+            // Preserve an opt-in dump even when execution fails.
             if (gateDump != null) {
                 gateDump.close();
             }
@@ -416,11 +279,7 @@ public final class SimExecutor {
 
     // ---- seed phase ---------------------------------------------------------------------
 
-    /**
-     * The descent runs before any worker exists, and it costs real time: every probe it asks for is a
-     * store call with its own latency, charged on the timeline like any other. A run that seeds nothing
-     * skips straight to one range over the whole keyspace.
-     */
+    /** Runs timed seed probes before workers; abandonment falls back to the whole keyspace. */
     private void startSeedPhase(SimContext ctx) {
         recordSensingRoutes(ctx);
         if (scenario.seedMode() == PolicyScenario.SimSeedMode.NONE) {
@@ -460,13 +319,11 @@ public final class SimExecutor {
 
                     @Override
                     public void onTimeout(SimContext at, int attempt) {
-                        // A seed probe carries no store-backpressure signal, exactly like a thief's.
+                        // Probe-class transients affect attribution, not AIMD backpressure.
                         gauge.onTransientTimeout(at.nowNanos(), false);
                         at.count(PROBE_TIMEOUTS_COUNTER, 1);
                         if (attempt > scenario.budgets().probeAttemptRetryCap()) {
-                            // The descent cannot proceed without an answer, so a probe that will not
-                            // answer ends the seed phase at whatever it has: the engine's own bounded
-                            // behaviour, and better than an unbounded retry that never seeds at all.
+                            // A partial descent cannot tile safely; start one whole-keyspace range.
                             at.record("seed.abandoned", "probe_retry_cap");
                             seedRanges(at, List.of());
                             return;
@@ -477,7 +334,7 @@ public final class SimExecutor {
                 });
     }
 
-    /** Tiles the descent's cut set into seed ranges and starts the fleet. */
+    /** Tiles the cuts into seed ranges, then starts the fleet. */
     private void seedRanges(SimContext ctx, List<byte[]> cuts) {
         byte[] lo = null;
         for (byte[] cut : cuts) {
@@ -494,11 +351,7 @@ public final class SimExecutor {
 
     // ---- the worker: claim, page, commit, split -------------------------------------------
 
-    /**
-     * One simulated worker. It is a claimant, a drainer and — when there is nothing to claim — a thief;
-     * the engine gives one thread all three roles for the same reason, so that idleness is what pays for
-     * discovering more work.
-     */
+    /** Simulated claimant, drainer and idle thief. */
     private final class Worker {
 
         private final int id;
@@ -521,22 +374,13 @@ public final class SimExecutor {
 
         private Worker(int id) {
             this.id = id;
-            // The thief brain is per-worker and bound to that worker's own decision tape: a variant that
-            // changes how often ONE worker consults its escape hatch must not re-tape another's draws.
-            // The engine shares one instance fleet-wide because it has one Thief; there, the same draw
-            // source is shared under a lock, and which worker consumes which value is already a function
-            // of the interleaving -- the property a comparison between two simulated variants needs to
-            // not have.
+            // Each worker owns its decision RNG so one actor's path cannot shift another's draws.
             DecisionRng rng = bound -> ctx.rng(SimRngStream.STEAL_DECISION).nextInt(bound);
             this.thief = new ThiefPolicy(scenario.toggles(), scenario.scanPrefix(), rng,
                     installedEstimator);
         }
 
-        /**
-         * Binds this worker to the context of the body it is running in. The kernel reuses one context
-         * and re-points it before each dispatch, so it may be held only for the duration of a body —
-         * this is set at the top of every one of this worker's own bodies and read nowhere else.
-         */
+        /** Binds this worker to the current event body's reused context. */
         private Worker enter(SimContext current) {
             this.ctx = current;
             return this;
@@ -575,18 +419,13 @@ public final class SimExecutor {
             requestPage(0);
         }
 
-        /**
-         * A worker page fetch is slot-gated: it may not go out unless the adaptive controller's current
-         * target has room for it. A worker denied a slot waits for one to be released rather than
-         * spinning, which is what a permit does in the engine.
-         */
+        /** Issues a worker page only after acquiring an adaptive-concurrency slot. */
         private void requestPage(int attemptNumber) {
             if (slotsHeld >= gauge.effectiveT()) {
                 pendingAttempt = attemptNumber;
                 slotWaiters.add(this);
                 if (log.isRecording()) {
-                    // Guarded like page.commit's: this fires once per denied page on a slot-starved
-                    // fleet, and a sweep leg runs with the trace off.
+                    // Avoid trace formatting on the frequent denied-slot path.
                     ctx.record("slot.wait", "worker=" + id);
                 }
                 return;
@@ -605,9 +444,7 @@ public final class SimExecutor {
                             releaseSlot(arrived);
                             gauge.onSuccess(arrived.nowNanos());
                             gauge.onAttemptLatency(arrived.nowNanos(), arrived.nowNanos() - issuedAt);
-                            // The success may have grown the target; the slots that growth released are
-                            // handed out now rather than at whatever later instant a slot happens to be
-                            // returned.
+                            // A target increase makes slots available immediately.
                             grantSlots(arrived);
                             onPage(arrived);
                         }
@@ -617,16 +454,11 @@ public final class SimExecutor {
                             enter(at);
                             releaseSlot(at);
                             at.count(PAGE_TIMEOUTS_COUNTER, 1);
-                            // A worker-class timeout, which is the only kind that feeds the growth
-                            // freeze and the shed gate. The latency of a timed-out attempt is never
-                            // sampled: it is censored at the budget, and feeding it would poison the
-                            // baseline the freeze reads.
+                            // Worker timeouts feed AIMD, but their censored durations are not samples.
                             gauge.onTransientTimeout(at.nowNanos(), true);
                             if (scenario.faultDisposition() == PolicyScenario.FaultDisposition.BOUNDED
                                     && attempt > scenario.budgets().workerAttemptRetryCap()) {
-                                // The bounded disposition: the retry ceiling ends the run. Under the
-                                // shipped default a watchdog owns storm death instead, so the fetch keeps
-                                // retrying and the run ends on its declared ceilings, not here.
+                                // BOUNDED stops here; RIDE_OUT ignores the worker threshold.
                                 runStuck = true;
                                 at.record("run.stuck", "worker_attempt_retry_cap");
                                 return;
@@ -637,12 +469,7 @@ public final class SimExecutor {
                     });
         }
 
-        /**
-         * The page commit — one body, which is one lock hold. The batch is re-validated against the
-         * bound as it stands right now (a thief may have narrowed it while the call was in flight), the
-         * cursor advances, the page folds into the density digest, and the owner-side split decision
-         * runs against a view of all of it, before any other actor can observe a half-finished commit.
-         */
+        /** Commits page trim, ledger state, sensor state and owner decision in one event body. */
         private void onPage(SimContext arrived) {
             byte[] cursorFrom = state.cursor();
             SimListingView.Page page = view.page(cursorFrom, scenario.pageSize());
@@ -669,14 +496,7 @@ public final class SimExecutor {
             timeline.keysCommitted(inRange.size());
             recordSensorReading(arrived, state.lo(), cursorFrom, cursorTo, hi);
             if (log.isRecording()) {
-                // The page's own emitted interval goes into the trace, not just its size: a total tells a
-                // reader that the right NUMBER of keys came out, which a gap and an overlap of equal size
-                // would also satisfy. The interval makes both visible.
-                //
-                // Guarded, unlike every other trace site here, because this is the only one that formats
-                // key bytes: a sweep leg runs with the trace off, and hex-encoding two keys per page for
-                // a string nothing retains is the one piece of trace work worth not doing. The bytes are
-                // identical when the trace is on.
+                // Intervals expose gaps/overlaps; guard their key formatting when tracing is off.
                 arrived.record("page.commit", "node=" + nodeId + "|keys=" + inRange.size()
                         + "|from=" + (inRange.isEmpty() ? "" : HEX.formatHex(inRange.getFirst()))
                         + "|to=" + (cursorTo == null ? "" : HEX.formatHex(cursorTo))
@@ -688,8 +508,7 @@ public final class SimExecutor {
             if (!inRange.isEmpty()) {
                 signalStealableProgress(arrived);
             }
-            // Everything after this point is the page's client-side cost: the worker's own conversion
-            // work, then the durability commit it waits for before emitting, then the consumer stage.
+            // Charge modelled client stages only after the atomic commit body.
             scenario.clientCost().chargePage(arrived, inRange.size(), charged -> {
                 enter(charged);
                 if (completed) {
@@ -709,8 +528,7 @@ public final class SimExecutor {
             nodeId = -1L;
             state = null;
             long remaining = ledger.decrement();
-            // A decrement is a quiescence signal in the engine's ledger; here it wakes every parked
-            // worker so none of them sits out the end of the run on a stale park timer.
+            // Completion wakes parked workers so they can observe work or quiescence.
             wakeParked(at, WAKE_RANGE_COMPLETED);
             if (remaining == 0L) {
                 timeline.quiesced(at.nowNanos());
@@ -723,8 +541,7 @@ public final class SimExecutor {
 
         private void maybeOwnerSelfSplit(SimContext at, byte[] cursorTo) {
             byte[] hi = state.hi();
-            // The rate-limit's page counter advances only where the rate limit applies: an open frontier
-            // has no far tail to carve, so it is not a suppressed carve and never consumes a page.
+            // Open frontiers have no carveable far tail and do not spend the rate-limit counter.
             long committed = hi == null ? committedPages : ++committedPages;
             ConfettiFeedbackGate.Snapshot confetti = confettiFeedback.snapshot();
             OwnerSplitView splitView = new OwnerSplitView(hi, state.lo(), cursorTo, state.keysEmitted(),
@@ -738,9 +555,7 @@ public final class SimExecutor {
                 gateDump.ownerDecision(at.nowNanos(), nodeId, decision.gateInputs(), state.lo(),
                         cursorTo, hi);
             }
-            // A claimed probe slot resolves BEFORE any engagement is recorded: every owner that
-            // snapshotted the same sequence decides to probe, and the run-scoped gate admits exactly
-            // one, so recording first would credit carves that never happened.
+            // Claim the run-scoped probe slot before crediting the decision's engagements.
             boolean probeSlotClaimed = false;
             if (decision instanceof Carve
                     && decision.mutations().contains(OwnerSplitMutation.CLAIM_CONFETTI_PROBE_SLOT)) {
@@ -764,8 +579,7 @@ public final class SimExecutor {
                 return;
             }
             byte[] pivot = ((Carve) decision).pivot();
-            // The owner picks a pivot ahead of its own cursor while nothing else can observe it, so this
-            // split cannot lose the race a thief's can -- the guard holds by construction.
+            // The owner chooses and publishes while its cursor/bound state is atomic.
             state.narrowHi(pivot);
             long childId = ledger.splitNode(nodeId, pivot, hi);
             if (childId == SimNodeLedger.SPLIT_ABORTED) {
@@ -783,28 +597,18 @@ public final class SimExecutor {
             at.count(OWNER_SPLIT_COUNTER, 1);
             at.count(OWNER_SPLIT_CATEGORY + ".self_published", 1);
             at.record("owner_split", "node=" + nodeId + "|child=" + childId);
+            // Publication makes the child claimable before the wake is scheduled.
             wakeParked(at, WAKE_CHILD_PUBLISHED);
         }
 
-        /**
-         * Which gate refused, against WHICH range. The counter says a gate fired N times over a run; a
-         * straggler holding the fleet alone is one range, and the question its diagnosis turns on is
-         * which gate kept refusing to divide THAT one — so every refusal that increments a counter
-         * writes this record too, the lost probe slot's included. A refusal reported only as a run
-         * total is a refusal no per-range decomposition can attribute.
-         */
+        /** Traces an owner refusal against its range for per-range attribution. */
         private void recordOwnerSplitSkip(SimContext at, OwnerSplitSkipReason reason) {
             if (log.isRecording()) {
                 at.record("owner_split.skip", "node=" + nodeId + "|reason=" + reason.code());
             }
         }
 
-        /**
-         * Folds a completed owner-split child's realized mass into the feedback the next carve reads.
-         * The classification mirrors the engine's own predicate: a small tally is only confetti if the
-         * child never itself split — a node that shed its own tail finished small because the carve
-         * worked, which is the opposite of the pathology this measures.
-         */
+        /** Classifies an unsplit, small owner child as confetti for the next carve's feedback. */
         private void classifyOwnerSplitChild(SimContext at) {
             if (!scenario.toggles().confettiFeedback() || !ownerSplitTaggedChildren.remove(nodeId)) {
                 return;
@@ -823,17 +627,14 @@ public final class SimExecutor {
                 return;
             }
             if (stealAttemptInFlight) {
-                // The fleet allows one steal attempt at a time; the others wait on the slot rather than
-                // multiplying probes against the same pool.
+                // The fleet permits one probe cascade at a time.
                 ctx.count("IDLE_SLOT.in_flight", 1);
                 park(scenario.budgets().idleStealAttemptParkNanos());
                 return;
             }
             long now = clock(ctx).nanoTime();
             if (idlePacing.decide(pacingState, now) == IdleStealPacingDecision.PACED) {
-                // Checked and acted on as one step, which is the engine's own shape: this arithmetic
-                // moved behind the seam unchanged and is still consulted under one monitor there, so
-                // unlike the per-victim cooldown it is not one of the extraction's widened windows.
+                // Pacing check-and-act is one executor step, matching the policy seam.
                 ctx.count("IDLE_SLOT.paced", 1);
                 park(idlePacing.parkNanos(pacingState, now));
                 return;
@@ -869,9 +670,7 @@ public final class SimExecutor {
                 gateDump.victimScan(ctx.nowNanos(), selection.scan(), victim.nodeId(), null,
                         victim.lo(), victim.cursor(), victim.hi());
             }
-            // The coherent snapshot: read here, in this body, and used to propose a split several
-            // bodies later. Everything the victim does in between is exactly the race the proposal has
-            // to survive.
+            // Snapshot cursor and bound coherently; later bodies must revalidate both.
             snapshotCursor = victim.cursor();
             snapshotHi = victim.hi();
             StealAttemptView attemptView = new StealAttemptView(victim.nodeId(), victim.lo(),
@@ -897,8 +696,7 @@ public final class SimExecutor {
                 case RequestStructureProbe structureProbe -> probe(CallClass.STRUCTURE_PROBE, arrived -> {
                     SimListingView.Rollup rollup = view.rollup(structureProbe.probePrefix(),
                             structureProbe.startAfter(), ThiefPolicy.STRUCTURE_PROBE_MAX_KEYS);
-                    // The probe answered, whatever its fan-out, so this victim's consecutive-timeout
-                    // streak is broken -- the mirror of the zero-fan-out streak's own reset.
+                    // Any structure response ends this victim's consecutive-timeout streak.
                     victim.resetTimedOutStructureProbes();
                     arrived.count("STRUCTURE.fanout", rollup.commonPrefixes().size());
                     driveSteal(attempt.onProbeResult(
@@ -916,9 +714,8 @@ public final class SimExecutor {
         }
 
         /**
-         * Issues one probe. Probes are not slot-gated — they are rare one-key calls, and pausing steals
-         * is the separate lever that holds them back — and a probe that times out fails the whole
-         * attempt fast rather than riding out a storm.
+         * Issues a probe outside worker-page slot gating. Point probes and bounded delimiter scans alike
+         * obey the declared probe retry cap.
          */
         private void probe(CallClass callClass, ProbeResponse onArrival, boolean keyProbe) {
             issueCall(ctx, callClass, scenario.budgets().probeAttemptTimeoutNanos(), 0, new CallOutcome() {
@@ -932,12 +729,10 @@ public final class SimExecutor {
                 public void onTimeout(SimContext at, int attemptNumber) {
                     enter(at);
                     at.count(PROBE_TIMEOUTS_COUNTER, 1);
-                    // A probe timeout is deliberately not a store-backpressure signal: it never feeds
-                    // the growth freeze or the shed gate, only the attribution split.
+                    // Probe-class transients affect attribution, not AIMD backpressure.
                     gauge.onTransientTimeout(at.nowNanos(), false);
                     if (!keyProbe) {
-                        // A structure probe that times out reported nothing, so without this the timeout
-                        // would destroy the very evidence that would stop the next one.
+                        // Preserve timeout evidence used by structure-probe suppression.
                         victim.recordTimedOutStructureProbe();
                         at.count("STRUCTURE.probe_timed_out", 1);
                     }
@@ -951,14 +746,7 @@ public final class SimExecutor {
             });
         }
 
-        /**
-         * A retried probe, which is the same call under a second attempt number — including its own
-         * right to retry again. The declared {@code probeAttemptRetryCap} is what bounds the chain: a
-         * scenario that declares three gets three, and one that declares the engine's default of one
-         * gets exactly the single retry it asked for. Consulting the budget here rather than
-         * fail-fasting unconditionally is what keeps the cap a declared input instead of a constant
-         * that happens to agree with today's default.
-         */
+        /** Reissues a probe with the chain's attempt number and declared retry cap. */
         private void probeRetry(CallClass callClass, ProbeResponse onArrival, boolean keyProbe, int attemptNumber) {
             issueCall(ctx, callClass, scenario.budgets().probeAttemptTimeoutNanos(), attemptNumber,
                     new CallOutcome() {
@@ -974,10 +762,7 @@ public final class SimExecutor {
                             at.count(PROBE_TIMEOUTS_COUNTER, 1);
                             gauge.onTransientTimeout(at.nowNanos(), false);
                             if (!keyProbe) {
-                                // Counted on every attempt, not only the first: the streak this feeds is
-                                // what eventually suppresses structure probing against a victim, and a
-                                // tally that stopped at the first attempt would understate the evidence
-                                // the suppression is made of.
+                                // Every timed-out attempt contributes suppression evidence.
                                 victim.recordTimedOutStructureProbe();
                                 at.count("STRUCTURE.probe_timed_out", 1);
                             }
@@ -991,14 +776,7 @@ public final class SimExecutor {
                     });
         }
 
-        /**
-         * The proposal, re-validated. Both checks are against the victim as it stands <em>now</em>,
-         * not as it was when the snapshot was taken: if the bound moved, another thief already narrowed
-         * it and this pivot was placed against a range that no longer exists; if the cursor reached the
-         * pivot, the victim drained past it while the probes were in flight. Either way the attempt is
-         * futile — recorded as such against that victim, which is what eventually paces attempts
-         * against a drainer nobody can catch.
-         */
+        /** Revalidates the snapshotted bound and pivot against the victim's current state. */
         private void commitSteal(Commit commit) {
             byte[] pivot = commit.pivot();
             if (!Arrays.equals(victim.hi(), snapshotHi)) {
@@ -1015,15 +793,8 @@ public final class SimExecutor {
             victim.narrowHi(pivot);
             long childId = ledger.splitNode(victim.nodeId(), pivot, snapshotHi);
             if (childId == SimNodeLedger.SPLIT_ABORTED) {
-                // The durable guard rejected what the in-memory checks above allowed: restore the bound
-                // this attempt validated and re-steal later.
-                //
-                // The futility record is a deliberate, disclosed divergence: Thief#commit restores the
-                // bound here and leaves the victim's tally alone, tallying only the two earlier losers.
-                // It has never mattered -- this branch is reachable at most once per run and has not
-                // been reached at all in any in-repo fixture -- and it is listed in
-                // docs/executor-ordering.md rather than fixed, because changing it would be this
-                // executor departing from the engine in the other direction.
+                // Restore after the ledger guard. Futility attribution differs from production; see
+                // docs/executor-ordering.md.
                 victim.restoreHi(snapshotHi);
                 victim.recordFutileSteal();
                 finishSteal("RETRY", "split_aborted", false);
@@ -1036,12 +807,7 @@ public final class SimExecutor {
             ctx.count("PIVOT." + commit.mechanism().code(), 1);
             ctx.record("steal.split", "victim=" + victim.nodeId() + "|child=" + childId
                     + "|mechanism=" + commit.mechanism().code());
-            // The child is claimable now, so whoever this wakes was woken by the publication and is
-            // traced as such — the owner-side carve's own wake, on the other side of the same ledger.
-            // Without it every one of these workers is attributed to the attempt slot being released a
-            // moment later, which is the one wake source that says nothing about where work came from.
-            // Nothing else moves: this empties the park list, so finishSteal's wake finds it empty and
-            // the same workers resume with the same delay in the same order.
+            // Attribute wakes to claimable-child publication before releasing the attempt slot.
             wakeParked(ctx, WAKE_CHILD_PUBLISHED);
             finishSteal("CHILD_CREATED", "split_committed", true);
         }
@@ -1059,8 +825,7 @@ public final class SimExecutor {
             } else {
                 pacingState = idlePacing.onNonProductive(pacingState, clock(ctx).nanoTime());
             }
-            // Whatever the outcome, the attempt slot is free again, so anyone parked behind it should
-            // re-evaluate rather than sit out its full backstop.
+            // Release the attempt slot before waking its waiters.
             wakeParked(ctx, WAKE_STEAL_ATTEMPT_FINISHED);
             idle(ctx);
         }
@@ -1072,9 +837,7 @@ public final class SimExecutor {
             parked.add(this);
             ctx.schedule(Math.max(1L, nanos), "worker.park", woken -> {
                 if (generation != parkGeneration) {
-                    // Something happened while this worker was parked and it was already woken: this
-                    // timer is the loser of that race. The kernel cannot cancel it, so it is retired
-                    // here, and counted, because it still cost an event.
+                    // A wake retires its uncancellable timer by advancing the park generation.
                     woken.count(STALE_EVENTS_COUNTER, 1);
                     woken.count("events.stale.park", 1);
                     return;
@@ -1088,7 +851,7 @@ public final class SimExecutor {
             for (VictimMutation mutation : mutations) {
                 WorkerState target = livePool.get(mutation.victimNodeId());
                 if (target == null) {
-                    continue;   // the victim finished while this attempt was in flight
+                    continue;   // victim completed while the attempt was in flight
                 }
                 switch (mutation.kind()) {
                     case CONSUME_PACING_SKIP -> target.consumePacingSkip();
@@ -1106,51 +869,36 @@ public final class SimExecutor {
 
     // ---- shared executor mechanics ----------------------------------------------------------
 
-    /** What a simulated call resolves to: an answer, or the budget running out first. */
+    /** A simulated call resolves to either an answer or its attempt timeout. */
     private interface CallOutcome {
         void onResponse(SimContext arrived);
 
         void onTimeout(SimContext at, int attemptNumber);
     }
 
-    /** A probe's arrival handler — the store read happens here, at the instant the answer lands. */
+    /** Probe arrival handler; the store is read when the answer lands. */
     private interface ProbeResponse {
         void accept(SimContext arrived);
     }
 
     /**
-     * Issues one store call and schedules its outcome.
-     *
-     * <p><b>Where the completion instant is known at issue</b> — the ordinary case, a store that
-     * answers independently — the caller is told once: the response if the drawn duration fits the
-     * attempt budget, the timeout if it does not. Nothing has to be cancelled, because nothing
-     * competing was ever armed. A timed-out call keeps a second, silent event at the instant the store
-     * would have answered, which retires its occupancy there rather than at the client's timeout —
-     * the same semantics the queueing branch has, for the same reason.
-     *
-     * <p><b>Where it is not</b> — a modelled store with a queue, whose answer depends on what else is
-     * in flight — both are armed and the loser is retired when it fires, by comparing the call's
-     * generation against the one that resolved first. That is what a discrete-event kernel without
-     * cancellation costs: one extra dispatched event per timed-out call, counted as
-     * {@link #STALE_EVENTS_COUNTER} rather than quietly absorbed into the run's event budget.
+     * Issues one store call. Independent calls schedule one client outcome plus any later occupancy
+     * drain; queued calls arm response and timeout and count the loser stale. Occupancy always ends at
+     * store completion. See {@code docs/executor-ordering.md}.
      */
     private void issueCall(SimContext ctx, CallClass callClass, long timeoutNanos, int attemptNumber,
                            CallOutcome outcome) {
         ctx.count(STORE_CALLS_COUNTER, 1);
         ctx.count(CALL_CLASS_COUNTERS[callClass.ordinal()], 1);
         int attempt = attemptNumber + 1;
+        // Draw against existing occupancy; this call is excluded from its own input.
         long serviceNanos = scenario.latency().drawNanos(callClass, ctx.rng(SimRngStream.LATENCY),
                 callsInFlight);
         callsInFlight++;
         if (storeServer == null) {
             if (serviceNanos > timeoutNanos) {
                 ctx.schedule(timeoutNanos, "call.timeout", at -> outcome.onTimeout(at, attempt));
-                // Occupancy is retired on the STORE's completion, not on the client's timeout, exactly
-                // as the queueing branch below does it: a call the client has given up on is still work
-                // the store is doing and still crowds out the next one, and retiring it early would
-                // understate occupancy by precisely the calls a struggling store is struggling with.
-                // That costs one extra event per timed-out call — the only case where a timeout is not
-                // free here — and it is charged rather than hidden, like every other event.
+                // Client timeout does not end the store's occupancy.
                 ctx.schedule(serviceNanos, "call.service_completed", at -> {
                     at.count(OCCUPANCY_DRAIN_EVENTS_COUNTER, 1);
                     callsInFlight--;
@@ -1165,11 +913,7 @@ public final class SimExecutor {
         }
         boolean[] resolved = {false};
         storeServer.submit(ctx, serviceNanos, at -> {
-            // Occupancy is retired HERE, on the store's own completion, whether or not the caller gave
-            // up first: a call the client has timed out on is still work the store is doing, and it is
-            // still crowding out the next one. Retiring it at the timeout instead would understate
-            // occupancy by exactly the calls a struggling store is struggling with -- the one regime
-            // where an occupancy-sensitive latency model has anything to say.
+            // Queued work retires occupancy at store completion even after a client timeout.
             callsInFlight--;
             if (resolved[0]) {
                 at.count(STALE_EVENTS_COUNTER, 1);
@@ -1203,15 +947,7 @@ public final class SimExecutor {
         grantSlots(ctx);
     }
 
-    /**
-     * Hands out every slot the current target has room for, in the order workers began waiting.
-     *
-     * <p>Called both when a slot is returned and after the controller has had a chance to move the
-     * target, because a growth step releases as many slots as it grew by: waking one worker per
-     * completion would let the fleet lag its own target indefinitely on a run where completions are rare.
-     * The slot is reserved here and the waiter is woken in its own event body, so the two workers never
-     * hold one between them.
-     */
+    /** Reserves every available slot FIFO before scheduling its waiter, including target growth. */
     private void grantSlots(SimContext ctx) {
         while (!slotWaiters.isEmpty() && slotsHeld < gauge.effectiveT()) {
             Worker next = slotWaiters.removeFirst();
@@ -1221,16 +957,7 @@ public final class SimExecutor {
         }
     }
 
-    /**
-     * Wakes every parked worker. Bumping the generation is what retires their outstanding park timers:
-     * the timer still fires, sees a generation it does not recognise, and returns.
-     *
-     * <p>The {@code reason} rides on the wake event's kind so a trace says which of the four signals
-     * fired it.
-     * There are exactly four, they are the engine's four, and the last of them dominates the other
-     * three by an order of magnitude — see {@code docs/executor-ordering.md}, and
-     * {@code WorkerWakeSourcesTest}, which reads them back out of a trace so that list cannot go stale.
-     */
+    /** Wakes parked workers, retiring their timers; {@code reason} is encoded in the event kind. */
     private void wakeParked(SimContext ctx, String reason) {
         if (parked.isEmpty()) {
             return;
@@ -1243,22 +970,13 @@ public final class SimExecutor {
         }
     }
 
-    /**
-     * A non-empty page commit is the fleet's signal that there is something worth stealing again: it
-     * resets the idle-steal pacing ladder and wakes whoever was parked behind it.
-     */
+    /** Resets fleet pacing and wakes thieves after a non-empty commit. */
     private void signalStealableProgress(SimContext ctx) {
         pacingState = idlePacing.onReset();
         wakeParked(ctx, WAKE_PAGE_COMMITTED);
     }
 
-    /**
-     * Reads the position sensor across one page commit: did the keys that just came out move the range's
-     * cursor <em>in the fraction the policies measure</em>?
-     *
-     * <p>Only bounded ranges are read. An open frontier has no {@code hi} to define a window and always
-     * scores {@code +∞} in selection, so a fraction over it would be measuring nothing.
-     */
+    /** Records whether a non-empty bounded commit advances the installed estimator's position. */
     private void recordSensorReading(SimContext ctx, byte[] lo, byte[] cursorFrom, byte[] cursorTo,
                                      byte[] hi) {
         if (hi == null || cursorTo == null) {
@@ -1271,22 +989,8 @@ public final class SimExecutor {
     }
 
     /**
-     * Reads the installed sensor over the pool victim selection is about to rank, recording the two ways
-     * an estimate degenerates: a zero score, which takes a candidate out of the running entirely, and a
-     * score that discards the candidate's emitted keys. Both are asked of the estimator in use rather
-     * than re-derived here, so what a counter reports is the sensor this run steers on.
-     *
-     * <p><b>The skip order mirrors the policy's.</b> {@link ThiefPolicy#selectVictim} passes over an
-     * unsplittable candidate, and over one holding a futility-pacing skip, <em>before</em> it computes
-     * any estimate — so scoring those here would report readings selection never took. The mirror is
-     * read-only: a pacing skip is observed, never consumed, because consuming it is the policy's
-     * mutation to return and the executor applies exactly the ones it does.
-     *
-     * <p>This duplicates the arithmetic the policy is about to do rather than asking it what it saw:
-     * the policy's contract is a {@link Selection}, and widening it to report its own intermediate
-     * readings would put a diagnostic in the engine's decision seam. The inputs are the same view the
-     * policy gets and the estimator is the one the policy scores with — the engine's own public
-     * arithmetic under {@link SensingVariant#CURRENT}, and whichever candidate is installed otherwise.
+     * Mirrors the policy's pre-score skips without consuming returned mutations, then asks the
+     * installed estimator for the diagnostics selection is about to read.
      */
     private void recordVictimSensorReadings(SimContext ctx, List<VictimView> pool) {
         for (VictimView candidate : pool) {
@@ -1318,14 +1022,9 @@ public final class SimExecutor {
     }
 
     /**
-     * Counts the two policy routes this run's decisions are taken through, once each, at the top of the
-     * run. Both sides are the engine's own policy objects, so what a route now proves is which
-     * <b>sensor</b> was installed through their estimator seam: the shipped route is the one that
-     * passed no estimator at all, and left the engine on its own {@code WINDOW} default.
-     *
-     * <p>Once per run and not once per worker: the thief brain is deliberately constructed per worker
-     * (its decision tape is that worker's own), so counting it there would report the fleet size under
-     * a name that reads like a route.
+     * Counts the installed owner and thief sensing routes once per run. The stable {@code *_SHIPPED}
+     * schema names denote this simulator's unsteered legacy-WINDOW route, not production's 0.2.0
+     * {@code RATE_ANCHORED_FLOOR_QUARTER} default.
      */
     private void recordSensingRoutes(SimContext ctx) {
         boolean steered = installedEstimator != null;
@@ -1342,25 +1041,12 @@ public final class SimExecutor {
         }
     }
 
-    /**
-     * The worker's <b>raw, pre-toggle</b> observed density ratio — what the view's contract asks for, and
-     * what the engine passes it.
-     *
-     * <p>The accessor itself is package-private to the engine, so it is read through the one public
-     * overload that returns it untouched: the all-on toggle namespace applies no substitution, so this is
-     * the identical value, obtained without widening anything in swath-core. The scenario's own toggles
-     * are deliberately not applied here — the governor applies them itself, and pre-applying them would
-     * hand it a value its own contract says is raw.
-     */
+    /** Returns the owner view's raw, pre-toggle observed density ratio. */
     private static double rawObservedDensityRatio(WorkerState state) {
         return EngineToggles.DEFAULT.observedDensityRatio(state);
     }
 
-    /**
-     * The engine's own clock seam, bound to the virtual clock. The pacing arithmetic takes its instant
-     * as an argument, so this is the whole of what "injecting a clock" means here — and it is the only
-     * clock anything in this file can reach.
-     */
+    /** Binds the policy clock seam to virtual time. */
     private static DecisionClock clock(SimContext ctx) {
         return ctx::nowNanos;
     }
