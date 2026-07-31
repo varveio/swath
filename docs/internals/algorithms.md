@@ -658,13 +658,14 @@ estRemaining(w):
   return (w.keysEmitted / consumed) * remaining   // localDensity · remaining span
 ```
 
-- **The reading above is one implementation behind a seam, and it is the default.**
+- **The reading above is the pre-0.2.0 rollback/control behind a seam.**
   `estRemaining` is what victim choice, the owner-side self-split's remaining-work floor
   and its pivot mass floors all steer on, so which arithmetic computes it is a run-time
   choice: `RemainingWorkEstimator` (`swath-core`, `io.varve.swath.engine`) is that
   quantity, `RemainingWorkEstimator.WINDOW` is `StealMath.estRemaining` itself expressed
-  through it, and `EngineToggles.remainingWorkEstimator(maxKeys)` is the only place a run
-  picks one. The engine builds exactly one per run and shares it (it is pure and
+  through it, `rate_anchored_sensing=off` selects it, and
+  `EngineToggles.remainingWorkEstimator(maxKeys)` is the only place a run picks one. The
+  engine builds exactly one per run and shares it (it is pure and
   stateless) between `ThiefPolicy`'s selection, `OwnerSplitGovernor`'s gate chain, and the
   `slow_ranges[]` diagnostic dump, so a run's reported estimate is the one its decisions
   were taken on. A **fourth** reader sits deliberately outside the seam: `RangeScanner`'s
@@ -674,9 +675,9 @@ estRemaining(w):
   degenerate branch (a consumed span that rounds to zero, which it fails OPEN on). Which
   range the fleet steals from and when an owner carves is a fleet-wide ranking decision;
   whether one owner has the local runway to earn back a speculative fetch is not, so
-  `readahead=on rate_anchored_sensing=on` leaves that gate on the shipped reading.
-- **The opt-in second reading: `RateAnchoredEstimator` (`--engine-toggle
-  rate_anchored_sensing=on`, default OFF).** The window reading above is degenerate on a
+  `readahead=on rate_anchored_sensing=on` leaves that gate on the window reading.
+- **The default reading since 0.2.0: `RateAnchoredEstimator`
+  (`rate_anchored_sensing=on`).** The window reading above is degenerate on a
   deep-nested keyspace: a cursor that agrees with `hi` across all `K = 12` window bytes
   makes `consumed` underflow to exactly `0.0`, and the estimate collapses to a raw width
   with the range's emitted keys discarded entirely (`NO_VICTIM.all_no_remaining_span`'s
@@ -699,10 +700,12 @@ estRemaining(w):
   16 pages — the quarter floor puts that boundary at 16 pages, and is the rung the sweep
   promoted. Both bounds stay exact: an open frontier still scores `+infinity` and a cursor
   at its bound still scores `0`. **This changes which range is stolen from and when an
-  owner carves, so it is an A/B arm and not a default**; a run on it marks itself
+  owner carves. It remains an A/B arm after promotion to the default**; a run on it
+  marks itself
   `TOGGLE.rate_anchored_sensing_on` and emits the sensor's own classification counters,
   one namespace per decision site (`SENSING_OWNER.*` at the owner gate, `SENSING_STEAL.*`
   at victim selection — the two count against different denominators, metrics-internals §5a).
+  `rate_anchored_sensing=off` selects the unmarked pre-0.2.0 window control.
 - Pick the victim with the largest `estRemaining`. A left-skewed (dense-head)
   victim is attacked by the **density-reflected pivot** and, behind it, the
   **retry-nearer-cursor** bisection in `steal()` (§3) — both walk the pivot back
@@ -800,7 +803,8 @@ two buckets they were measured on**; per-mechanism status follows.
   parallelism" is moot rather than true). The adaptive concurrency gauge's
   effective `T` is recorded for diagnosis but does not change this gate.
   **The child-tail floor's exact reading, and its wide-flat blindness
-  (`--engine-toggle tail_floor=MODE`, default `current`).** The floor is not
+  (`--engine-toggle tail_floor=MODE`, default `reach_floored` since 0.2.0).** The
+  pre-0.2.0 `current` floor is not
   `(1−f)·est` but its observed-density correction
   `est × max(0, min(1, densityRatio) − f) > 2·maxKeys`, where `densityRatio =
   trailingEwmaDensity / averageDensity` (`StealMath.childTailBelowObservedMassFloor`;
@@ -813,8 +817,9 @@ two buckets they were measured on**; per-mechanism status follows.
   attempts over that tail ended `OWNER_SPLIT.floor_reflected_blocked` while the
   position sensor was honestly reporting 322,500–1,653,750 keys remaining, and the
   range drained serially to the end of the run. Because the term is right on some
-  shapes and blind on this one, the two candidate cures are **selectable arms**
-  rather than a replacement, raced from one binary:
+  shapes and blind on this one, the two candidate cures remain **selectable arms**
+  raced from one binary; `reach_floored` is the promoted default, `est_direct` is the
+  other raced arm, and `current` is the rollback/control:
   - `tail_floor=est_direct` — block iff `est <= 2·maxKeys`; the window product is
     dropped entirely. Under `rate_anchored_sensing` the estimate is already the
     range's own realized mass, so multiplying it by a byte-geometry window
@@ -826,13 +831,13 @@ two buckets they were measured on**; per-mechanism status follows.
     still shrinks the child's share; it can no longer erase it. The 1/16 floor puts
     the admit boundary at 32 pages of estimate, and wherever the real reach exceeds
     1/16 the arm is byte-for-byte `current`.
-  Both arms are monotonically more permissive than `current` (they can only admit
+  Both cure arms are monotonically more permissive than `current` (they can only admit
   carves it refuses), both leave pivot placement and the split CAS untouched
   (I2/I3 unaffected — only *whether* an owner carves changes), and both compose with
   `rate_anchored_sensing` without being coupled to it, so the race keeps its
   factorial of controls. The mode is threaded through the governor to all three of
   the floor's consult sites (the gate, the reflection clamp, the reflect-lift), and
-  at each one a non-default mode evaluates `current`'s verdict too and records the
+  at each one a cure mode evaluates `current`'s verdict too and records the
   difference (`TAIL_FLOOR.<site>_admit_current_blocks` /
   `TAIL_FLOOR.<site>_would_block_current_admits`, metrics-internals §5) — which is
   what makes a live A/B attributable to the toggle instead of to the run.
