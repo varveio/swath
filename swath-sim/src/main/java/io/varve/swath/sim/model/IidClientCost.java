@@ -9,16 +9,13 @@ import io.varve.swath.sim.kernel.SimAction;
 import io.varve.swath.sim.kernel.SimContext;
 
 /**
- * The independent form: a page's client-side cost is paid on the timeline of whichever actor
- * received it, in parallel with every other actor's. Two pages arriving at once cost one page's
- * worth of elapsed time.
+ * Charges each actor independently, so client costs can overlap.
  *
- * <p>See {@link ClientCostModel} for when this form is the right one and what it gets wrong when it
- * is not.
+ * <p>See {@link ClientCostModel} for when this model is appropriate.
  */
 public record IidClientCost(ClientCostTerm term) implements ClientCostModel {
 
-    /** The event kind a charge is traced under. */
+    /** Trace event for a charge. */
     public static final String CHARGE_EVENT = "client_cost.iid";
 
     public IidClientCost {
