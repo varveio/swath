@@ -8,40 +8,32 @@ package io.varve.swath.sim.model;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The engine's timeouts, pacing windows and probe budget, restated as <b>declared inputs of a
- * simulated run</b> rather than inherited from whatever the engine's compiled-in constants happen to
- * be.
+ * Declared virtual-time budgets for a simulated engine run.
  *
- * <p><b>Why they are declared and not imported.</b> Every one of these is a fixed duration, and a
- * fixed duration only means something relative to the latencies around it. Under a real-time
- * experiment those ratios move with the host and with any latency scaling applied to the workload,
- * which is exactly how a timeout pathology disappears from a scaled-down reproduction: the budget
- * stayed at three seconds while the call it bounds got ten times faster. Virtual time can state the
- * ratio exactly — but only if the budget is an input a scenario can set, so a sweep can vary the
- * ratio deliberately instead of discovering it. Reading the engine's constants directly would
- * reintroduce the silent coupling this record exists to break.
+ * <p>{@link #engineDefaults()} is an approximate reference, not an exact copy of production. In
+ * particular, this model has one 3 s probe-attempt field for seed, pivot, and structure calls;
+ * production uses 3 s for point-class pivot probes and 10 s for scan-class seed and structure calls.
  *
- * <p>{@link #engineDefaults()} carries the values the shipped engine currently uses, so a scenario
- * that wants "today's engine" says so explicitly and a scenario that wants a different ratio states
- * the difference against a written reference.
- *
- * <p><b>Not here, deliberately:</b> the per-victim futility-pacing cooldown. It is counted in
- * steal-selection <em>skips</em>, not nanoseconds, so it is not a time budget at all and belongs to
- * the policy configuration a later phase wires up.
+ * <p>Durations are nanoseconds. Construction requires all counts and every duration except the
+ * maximum duration to be positive, both maxima to be at least their minima, the AIMD budgets to be
+ * present, and the maximum duration to be nonnegative. The futility cooldown is excluded because it
+ * is measured in selection skips, not time.
  *
  * @param seedProbeBudget            probes the seed descent may spend, in calls
- * @param probeAttemptTimeoutNanos   per-attempt timeout for a pivot/structure probe
- * @param workerAttemptTimeoutNanos  per-attempt timeout for a worker page fetch
- * @param workerAttemptRetryCap      transient retries a worker page fetch may spend before the run is
- *                                   declared stuck (the engine's bounded transient-retry policy)
- * @param probeAttemptRetryCap       transient retries a thief probe may spend before the whole steal
- *                                   attempt fails fast — deliberately far smaller than the worker cap
- * @param transientRetryBackoffNanos the delay charged between transient retries. The engine draws a
- *                                   full-jitter exponential backoff here; a scenario declares one flat
- *                                   interval instead, because jitter's live purpose is desynchronising
- *                                   a fleet of separate processes, which a single-threaded kernel has
- *                                   no analogue of — what the model needs is the ratio of the backoff
- *                                   to the latencies around it, and that is exactly what this states
+ * @param probeAttemptTimeoutNanos   per-attempt timeout for every simulated probe class; unlike
+ *                                   production, the model cannot express its 3 s point / 10 s scan
+ *                                   split
+ * @param workerAttemptTimeoutNanos  per-attempt timeout for worker page fetches; the reference default
+ *                                   is 10 s
+ * @param workerAttemptRetryCap      worker retry threshold; under simulated {@code BOUNDED},
+ *                                   exhaustion stops the run as stuck, while simulated
+ *                                   {@code RIDE_OUT} ignores it. Production's default
+ *                                   {@code RIDE_OUT} uses the reference value to shape backoff,
+ *                                   not as a stopping ceiling
+ * @param probeAttemptRetryCap       transient retries before an exhausted seed or thief probe
+ *                                   abandons its descent or steal attempt
+ * @param transientRetryBackoffNanos flat simulated delay between retries; production uses full-jitter
+ *                                   exponential backoff
  * @param idleStealBaseParkNanos     the idle thief's shortest park, and its backoff's base step
  * @param idleStealBackoffCapNanos   the cap the idle-steal backoff grows to
  * @param idleStealAttemptParkNanos  the park of a worker denied the fleet-wide steal-attempt slot
@@ -64,9 +56,7 @@ public record EngineTimeBudgets(
         long maxDurationNanos) {
 
     /**
-     * The adaptive-concurrency controller's own time windows, grouped so the surrounding record stays
-     * readable: they are one mechanism's parameters, they are varied together, and every one of them is
-     * meaningless except relative to the others.
+     * Virtual-time windows used by the simulated adaptive-concurrency controller.
      *
      * @param growthPaceNanos          minimum interval between successive additive {@code +1} steps
      * @param transientTimeoutWindowNanos trailing window over which worker timeouts are counted for the
@@ -124,13 +114,13 @@ public record EngineTimeBudgets(
     /** {@link #maxDurationNanos()} for a run with no ceiling — the engine's own default. */
     public static final long UNBOUNDED_DURATION = 0L;
 
-    /** The seed descent's probe budget at the engine's default concurrency ceiling (see below). */
+    /** Seed budget at concurrency 64: {@code min(256, max(1, min(1000, 4 * 64)))}. */
     private static final int DEFAULT_SEED_PROBE_BUDGET = 256;
 
-    /** The engine's bounded transient-retry ceiling for a slot-gated worker page fetch. */
+    /** Reference worker retry threshold; it is a hard ceiling only under simulated {@code BOUNDED}. */
     private static final int DEFAULT_WORKER_ATTEMPT_RETRY_CAP = 8;
 
-    /** The engine's probe fail-fast ceiling: a probe rides out nothing. */
+    /** Reference probe retry ceiling; exhaustion abandons the descent or steal. */
     private static final int DEFAULT_PROBE_ATTEMPT_RETRY_CAP = 1;
 
     public EngineTimeBudgets {
@@ -159,28 +149,16 @@ public record EngineTimeBudgets(
     }
 
     /**
-     * The values the shipped engine uses today, as the reference point a scenario varies from.
+     * Returns the simulator's production-reference defaults.
      *
-     * <ul>
-     *   <li><b>seed probe budget 256</b> — the descent bounds itself at
-     *       {@code min(256, max(1, min(1000, 4 x concurrency)))}, which saturates at the default
-     *       concurrency ceiling of 64. A scenario at a lower concurrency sets the smaller budget its
-     *       own worker count would produce.</li>
-     *   <li><b>probe attempt timeout 3 s</b> — the pivot/structure-probe attempt override.</li>
-     *   <li><b>worker attempt timeout 10 s</b> — the client-level per-attempt default worker pages
-     *       keep.</li>
-     *   <li><b>worker retry cap 8 / probe retry cap 1</b> — the transient-retry ceilings the engine's
-     *       bounded retry policy and its probe fail-fast apply. A probe that keeps timing out costs the
-     *       whole steal attempt rather than riding out a storm; a worker page that exhausts its cap
-     *       ends the run as stuck.</li>
-     *   <li><b>transient retry backoff 100 ms</b> — one flat interval standing in for the engine's
-     *       full-jitter exponential schedule (see the component's own note).</li>
-     *   <li><b>idle-steal base park 5 ms / backoff cap 50 ms / attempt park 1 s</b> — the fleet-wide
-     *       idle-steal pacing windows.</li>
-     *   <li><b>clean window 10 s</b> — the interval of clean responses an additive concurrency
-     *       increase requires.</li>
-     *   <li><b>max duration unbounded</b> — the engine ships with no run ceiling set.</li>
-     * </ul>
+     * <p>The seed budget is 256 at concurrency 64; the worker retry threshold is 8 (a hard cap only
+     * under simulated {@code BOUNDED}) and the probe retry cap is 1; retry backoff is a flat 100 ms;
+     * idle-steal pacing is 5 ms base, 50 ms cap, and 1 s attempt park; the clean window is 10 s; and
+     * duration is unbounded. The worker timeout is 10 s.
+     *
+     * <p>This is only approximate for probes: the returned single 3 s timeout applies to seed, pivot,
+     * and structure calls, whereas production uses 3 s for point pivots and 10 s for scan-class seed
+     * and structure calls.
      */
     public static EngineTimeBudgets engineDefaults() {
         return new EngineTimeBudgets(
@@ -214,11 +192,7 @@ public record EngineTimeBudgets(
                 concurrencyCleanWindowNanos, newAimd, maxDurationNanos);
     }
 
-    /**
-     * This budget set with both per-attempt timeouts replaced — the ratio a timeout-pathology scenario
-     * varies against a fixed latency model (C0's lesson: a budget only means something relative to the
-     * latencies it bounds).
-     */
+    /** Returns these budgets with different probe and worker attempt timeouts. */
     public EngineTimeBudgets withAttemptTimeouts(long newProbeTimeoutNanos, long newWorkerTimeoutNanos) {
         return new EngineTimeBudgets(seedProbeBudget, newProbeTimeoutNanos, newWorkerTimeoutNanos,
                 workerAttemptRetryCap, probeAttemptRetryCap, transientRetryBackoffNanos,
@@ -226,12 +200,7 @@ public record EngineTimeBudgets(
                 concurrencyCleanWindowNanos, aimd, maxDurationNanos);
     }
 
-    /**
-     * This budget set with the thief's probe retry ceiling replaced — the knob a scenario varies to ask
-     * how much a steal is willing to spend riding out a store that is not answering. A declared input
-     * like every other here: the executor honours whatever this says rather than the default it
-     * happens to agree with.
-     */
+    /** Returns these budgets with a different seed/thief probe retry ceiling. */
     public EngineTimeBudgets withProbeAttemptRetryCap(int newProbeAttemptRetryCap) {
         return new EngineTimeBudgets(seedProbeBudget, probeAttemptTimeoutNanos, workerAttemptTimeoutNanos,
                 workerAttemptRetryCap, newProbeAttemptRetryCap, transientRetryBackoffNanos,
