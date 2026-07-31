@@ -31,9 +31,13 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
         └─────▲──────┘   └──────────▲──────────┘
        impl │  │ impl               │ api
         ┌────┴──┴────┐        ┌─────┴─────┐
-        │  swath-cli │        │ swath-sim │  policy simulator's store (non-published)
+        │  swath-cli │        │ swath-sim │  store + kernel + synthetic driver + policy executor
         └────────────┘        └───────────┘
 ```
+
+For readability the diagram routes `swath-sim` through its `api` dependency on
+`swath-replay-server`; the module also has the direct `implementation` dependency on `swath-core`
+shown in the table below.
 
 All edges point one way (no cross-module cycles). The `engine`↔`runtime` package cycle is
 **internal to `swath-core`** and therefore harmless.
@@ -47,7 +51,7 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
 | **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | ❌ (dev/test tool) |
-| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — backends answering the replay module's `ListingStore` range seam from a fixture with no HTTP and no wall-clock, driven by the same `ListObjectsV2Pager`), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, single-threaded scheduler, per-actor seeded draw streams), the **models** it is parameterised by (`sim.model` — latency, client cost, engine time budgets), and a synthetic **driver** (`sim.driver`). Real policies, modelled store, virtual time — where the replay server is real engine, fake S3, real time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server; `impl` → swath-core | ❌ (dev/analysis tool) |
+| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — fixture-backed implementations of the replay module's `ListingStore` seam), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, scheduler, seeded draw streams), the **models** (`sim.model` — latency, client cost, engine budgets), a synthetic load **driver** (`sim.driver`), and the real-policy **executor** (`sim.executor` — seed, owner-split, thief, pacing, and the simulator's AIMD port). The driver exercises store/kernel arithmetic without split/steal policy; the executor runs those policies against the modelled store in virtual time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server; `impl` → swath-core | ❌ (dev/analysis tool) |
 
 Only `swath-cli` ships. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
 `runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped

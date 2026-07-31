@@ -16,6 +16,7 @@ LocalStack/MinIO/AWS one object at a time. Instead:
 | Correctness + **edge cases** (no-gap/no-overlap, resume, ordering, `0xFF`/supplementary-plane/1000-1001 boundaries, skew) | **`MockPageFetcher`** — in-memory, no SDK, no store; adversarial `Keyspaces.*` generators | instant |
 | **Memory/throughput at scale** (I11, PERF-1/2) | `MockPageFetcher` streams 100k–millions through the **real pipeline** | instant (no puts) |
 | **"Millions of objects" realism** | the **S3 Listing Replay Server** (`:swath-replay-server`) — serves synthetic `ListObjectsV2` XML from a fixture (the LIST-only high-fidelity oracle; swath is LIST-only, no inventory path) | fixture-backed, cheap |
+| **Simulator policy/model checks** | `:swath-sim` deterministic defaults (`SimKernelTest`, `PolicyInvariantsTest`), store/pager differential checks (`SimStoreDifferentialTest`, `SimListingViewProtocolTest`), and opt-in `@Tag("perf")` corpus/real-listing runs (`CorpusSweepRunTest`, `RealListingRunTest`) | in-memory or local fixture; no object-store population |
 | **Real-SDK integration** (pagination, continuation tokens, real byte order) | LocalStack/MinIO with **modest** counts (~1–2k zero-byte objects = a few pages) | seconds |
 | **Real-world ground truth** | the public-bucket `aws s3api --no-sign-request` differential at the **gates** | none (read-only) |
 
@@ -29,6 +30,8 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
   the LocalStack integration ITs + a fast `MockPageFetcher` work-stealing smoke
   (`WorkStealingScanSmokeTest`, ~2k keys). Fast. **Excludes the `perf` and `deep` tiers**
   (see below) so it stays the ~1-min per-commit gate.
+  `:swath-sim`'s deterministic kernel, policy, model, and fixture-differential tests run here too;
+  its corpus sweeps, throughput benches, and real-listing fixtures are opt-in `@Tag("perf")` tests.
 - **`-Pperf`** `./gradlew test -Pperf` — adds the gated `@Tag("perf")` tier. This is
   where the **full PERF-1 / PERF-2** live (mock-driven at 100k, per the no-mass-populate
   rule above — NO LocalStack), plus the heavier ≤50M-key throughput/memory sweeps and

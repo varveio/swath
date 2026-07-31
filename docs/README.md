@@ -34,6 +34,7 @@ engine gets a no-gap/no-overlap listing without a client-chosen partition key.
 - [`internals/probe-budgets.md`](internals/probe-budgets.md) — how each call class's per-attempt timeout is sized (point vs scan), and the probe-timeout storm that motivated the split.
 - [`internals/build-and-modules.md`](internals/build-and-modules.md) — the module graph, dependency rules, and shared build config.
 - [`swath-replay-server.md`](swath-replay-server.md) — the S3-listing replay server used to test against fixture bucket shapes without hitting real S3.
+- [`swath-sim`](../swath-sim/README.md) — the deterministic virtual-time policy simulator, its fixture backends, model limits, and experiment harnesses.
 - [`ops/dev/TESTING.md`](ops/dev/TESTING.md) — test tiers, speed, and the no-mass-populate rule.
 - [`ops/dev/decision-trace-goldens.md`](ops/dev/decision-trace-goldens.md) — the policy-seam decision-trace golden recorder: format, regeneration workflow, determinism requirement, known gaps.
 - [`ops/dev/field-investigations.md`](ops/dev/field-investigations.md) — write-ups of runs against specific real buckets, and the changes they drove.

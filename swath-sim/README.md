@@ -47,6 +47,15 @@ pagination, real truncation — but every duration in a result is only as good a
 produced it, which is why the module refuses to run without an explicit client-cost term and why its
 own tests pin closed-form answers in the mode where the arithmetic is exact.
 
+> **Current model limits.** Ordinary `SimExecutor.run` defaults to `SensingVariant.CURRENT`, which
+> leaves the estimator seam `null` and therefore selects the legacy `WINDOW` sensor. Scenario toggles
+> still select `REACH_FLOORED` and the other current mechanisms, so an ordinary default scenario is a
+> `WINDOW` + `REACH_FLOORED` hybrid, not the production 0.2.0 defaults (rate-anchored sensing plus
+> `REACH_FLOORED`). `RATE_ANCHORED_FLOOR_QUARTER` delegates to production's promoted sensor. Also,
+> `EngineTimeBudgets.engineDefaults()` uses one 3 s probe-attempt budget for seed, pivot, and structure
+> calls; production uses 3 s for point-class pivot probes and 10 s for scan-class seed/structure calls.
+> Historical experiment results below remain measurements of the explicitly stated arms and budgets.
+
 ### Two instruments, not two attempts at one
 
 |  | `swath-replay-server` | `swath-sim` |
@@ -269,9 +278,10 @@ A timeout only means something relative to the latencies it bounds. Under a scal
 experiment those ratios move, which is how a timeout pathology disappears from a reproduction — the
 budget stayed at three seconds while the call it bounds got ten times faster. Virtual time can state
 the ratio exactly, so every one of them is a declared input: probe and worker attempt timeouts, the
-transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Defaults
-restate what the shipped engine uses, so a scenario that wants "today's engine" says so, and a
-scenario that wants a different ratio states the difference against a written reference.
+transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Most defaults
+restate what the shipped engine uses, so a scenario can state its reference point and vary ratios
+deliberately. The current single probe-attempt field is the approximation disclosed in the model-limit
+note above, not an exact restatement of production's point/scan split.
 
 An action body runs atomically in virtual time — the clock does not move and no other actor runs
 inside it — which is how a lock hold is expressed without a lock. State read in one event and used
@@ -377,7 +387,7 @@ Two parts of that record are worth naming, because a counter total cannot expres
   it was given. Nothing in swath-core changes to produce them, because whether a sensor works is a
   property of the keys, and a fixture that defeats it needs to be able to say so in numbers. They are
   read **through whichever sensor the run steers on** (below): the question a counter answers is whether
-  *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
+  *this* run's sensor could see *this* keyspace, so reading the legacy-window arithmetic under a candidate
   would report the disease while the cure was running.
 
 ### Dumping what the gates read
@@ -408,32 +418,31 @@ rather than at one it has already written.
 ### Swapping the position sensor
 
 Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
-quantity: estimated remaining work on a range. The engine computes it one way — a local density times a
-remaining span, both measured in a byte window anchored at the divergence of the range's own bounds —
-and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes the quantity swappable
-*here*, so a candidate cure can be run against a fixture without the engine changing at all:
+quantity: estimated remaining work on a range. The legacy `WINDOW` sensor computes a local density
+times a remaining span in the range-bounds window and is degenerate on deep-nested keyspaces.
+`SensingVariant` makes the quantity swappable here so alternatives remain reproducible:
 
 | variant | reading |
 |---|---|
-| `CURRENT` | the shipped one; delegates to the engine's own public `StealMath`, so a control leg is the algorithm and not a copy of it |
+| `CURRENT` | the legacy `WINDOW` control selected by the simulator's null estimator seam; it delegates to the engine's `StealMath`, but is not production's 0.2.0 default sensor |
 | `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
-| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
+| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the legacy window exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside that window's own width, reads an order of magnitude lower |
 | `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
-| `RATE_ANCHORED_FLOOR_QUARTER` | the same, with the band's lower half cut short at a quarter — **the arm the corpus race promoted**. Its composition lives in the engine (`io.varve.swath.engine.RateAnchoredEstimator`, selectable on a real run with `--engine-toggle rate_anchored_sensing=on`) and this arm delegates to it, exactly as `CURRENT` delegates to `StealMath`, so neither side can drift from the reading that was measured |
+| `RATE_ANCHORED_FLOOR_QUARTER` | the same, with the band's lower half cut short at a quarter — **the arm the corpus race promoted and production now defaults to**. Its composition lives in the engine (`io.varve.swath.engine.RateAnchoredEstimator`) and this arm delegates to it, so neither side can drift from the reading that was measured |
 | `RATE_ANCHORED_LIFT_ONLY` | the same, with the band's lower half removed: geometry may **lift** a range's proven mass and never cut it. A factor below one asserts that less remains than has already come out, which is the inference the rate reading exists to refuse — and it is what refused a straggler's carve at the owner's remaining-work floor until the range had emitted 64 pages (`CarveAdmissionRaceProtocol`) |
 
-`SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
-the shipped sensor and reads exactly what it read before. The rungs of the geometry-floor ladder the
+`SimExecutor.run` takes one, defaulting to `CURRENT`; an unqualified run is therefore on the legacy
+control sensor, with its scenario's independently selected toggles. The geometry-floor rungs that the
 sweep rejected (`..._EIGHTH`, `..._HALF`, the symmetric `RATE_CURSOR_ANCHORED` and lift-only ends) are
 kept so those races stay reproducible; they run through the promoted arm's engine object at their own
 floor rather than through a second implementation of it. Victim selection, the owner-split gate chain
 and the whole pivot cascade are **the engine's own classes**, consumed through the estimator seam they
 already have (#68): an arm is a `RemainingWorkEstimator` handed to `OwnerSplitGovernor` and
-`ThiefPolicy`, and no mirror of either remains in this module — so a variant run and a deployed run
-differ in the sensor and in nothing else. `SensingVariantParityTest` drives the battery through that
+`ThiefPolicy`, and no mirror of either remains in this module. Within those policy objects, variant
+arms differ only in the sensor. `SensingVariantParityTest` drives the battery through that
 chain under every arm (decisions complete and stable; the observed-mass floor's structural zero visible
-under each), and pins `CURRENT` against a chain nobody steered — which is what says the sensor seam
-carries the shipped path unchanged. The route itself is instrumented like every other algo path here: a
+under each), and pins `CURRENT` against an unsteered legacy-window chain. The route itself is
+instrumented like every other algo path here: a
 run counts `SENSING_ROUTE.owner_split_*` and `SENSING_ROUTE.thief_*` once each, off whether an estimator
 was actually installed, so which sensor a table's legs were taken through is a reading of the run rather
 than an inference from its `sensing` field. A run on a rate+anchored arm also emits the engine's own
@@ -620,7 +629,7 @@ Three choices decide what its numbers mean, and all three are visible in the out
 - **Two screening seeds, four where it matters.** Four seeds is the verdict standard; the sweep
   screens at two and escalates to all four on any fixture whose screen *diverged* — a collapsed leg
   (serial fraction above ½) at any arm or seed, steals mostly finding no victim at any arm and either
-  seed, or a duration gap either way between the shipped sensor and **any** candidate arm, read both
+  seed, or a duration gap either way between the `CURRENT` control and **any** candidate arm, read both
   over the two screening seeds' mean **and at each seed on its own**. Both halves of that last one
   matter: screening against a single candidate leaves a divergence only the other candidate shows
   unexamined, and a mean over two seeds is the reading least able to see a bimodal fixture — one leg
@@ -699,7 +708,7 @@ placed by a structure probe (219 probes, zero wins), against three on the same m
 accession, and the estimate discards its victim's emitted keys for 72% of the victims it is computed
 over.
 
-Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
+Its readings are pinned in two places, both as characterizations of *legacy-window control* behaviour that a change
 to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
 against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
 what separates the two claims: the same geometry is just as blind (94% of commits invisible) and costs
