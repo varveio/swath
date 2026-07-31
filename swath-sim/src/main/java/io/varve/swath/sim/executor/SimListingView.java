@@ -19,61 +19,35 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The protocol half of a simulated store call: turns the four listing shapes the engine issues — a
- * worker's page, a one-key pivot probe, a bounded {@code delimiter=/} structure probe, and a leaf
- * floor probe — into ListObjectsV2 requests against a ground-truth {@link ListingStore}, which speaks
- * ranges and nothing else.
+ * Shapes the simulator's worker-page, pivot, structure, and floor listing calls. ListObjectsV2
+ * semantics, including exact-range truncation and delimiter resume, are delegated to
+ * {@link ListObjectsV2Pager}; this view only builds requests and distills responses.
  *
- * <p><b>Every protocol rule comes from the pager.</b> Max-keys accounting, truncation, delimiter
- * rollup and common-prefix resume all live once, in {@link ListObjectsV2Pager}, which is also what
- * every replay-server store is differentialled through. This class only shapes requests and reads
- * answers. That matters more here than anywhere else in the module: the policies driven against this
- * view are the production ones, written against S3's protocol, so a second implementation of it —
- * however careful — mismodels the engine rather than the workload, and does so invisibly. Two rules
- * are worth naming because a hand-rolled walk gets both wrong: a resumed delimiter probe must
- * <b>not</b> roll up the directory it resumed at (every key beneath {@code d/} sorts after
- * {@code d/}, so a resume that only lifts the range floor emits {@code d/} twice and pushes a real
- * directory off the end of a page that stays capped), and a page that exactly consumes a range is
- * <b>not</b> truncated (S3 looks one key past what it returns, which is why the pager reads
- * {@code maxKeys + 1} rows). {@code SimListingViewProtocolTest} pins both against the pager.
- *
- * <p><b>Where to check that, if you are reviewing this.</b> In {@link ListObjectsV2Pager}, not here:
- * this class contains no protocol rule to be right or wrong about, and reading only the seam
- * documentation — which has always said the rules live in the pager — is how a second implementation
- * of them survived here undetected once already. The two rules named above are at the pager's
- * common-prefix boundary guard and its {@code maxKeys + 1} fetch respectively.
- *
- * <p><b>Costing.</b> Nothing here consumes virtual time. A call's modelled duration is drawn when the
- * request is issued and the store is consulted only when the response arrives, so the number of range
- * reads a rollup happens to need is a property of the fixture's layout, not of the simulated world —
- * it shows up in how long the simulator takes to run, never in what it reports.
- *
- * <p>The handle is the caller's: opened once outside, used here, never closed here.
+ * <p>The store is borrowed, and this view consumes no virtual time. Fixture reads affect simulator
+ * runtime only, not modelled call durations.
  */
 final class SimListingView {
 
-    /** The one delimiter the engine ever probes with. */
+    /** The engine's structure-probe delimiter. */
     private static final byte[] DELIMITER = {'/'};
 
-    /** Any bucket name: nothing below the pager reads it, and no request here crosses a wire. */
+    /** Required by the request shape but never sent to a service. */
     private static final String BUCKET = "sim";
 
     /**
-     * One page as the store answered it, before any range bound is applied.
+     * A worker response before the client applies its upper bound.
      *
-     * <p>{@code keys} holds raw arrays, so this record's generated {@code equals}/{@code hashCode}
-     * compare array <em>references</em>: read the fields, never use a {@code Page} as a map key or in
-     * a set.
+     * <p>Because {@code keys} contains byte arrays, generated equality and hashing compare array
+     * references.
      */
     record Page(List<byte[]> keys, boolean truncated) {
     }
 
     /**
-     * One {@code delimiter=/} probe's distilled result.
+     * A distilled {@code delimiter=/} structure probe. {@code capped} reports that the request
+     * truncated; callers decide what that fact means.
      *
-     * <p>Same caveat as {@link Page}: the {@code byte[]} components make the generated
-     * {@code equals}/{@code hashCode} reference comparisons, so this is a carrier to read, not a key
-     * to look up by.
+     * <p>Its byte arrays make generated equality and hashing reference-based.
      */
     record Rollup(List<byte[]> commonPrefixes, int objectCount, byte[] lastKey, boolean capped) {
     }
@@ -84,19 +58,14 @@ final class SimListingView {
 
     SimListingView(ListingStore store, byte[] scanPrefix) {
         this.store = new CountingStore(store);
-        // The pager insists on a metrics sink; a run's own instrument is its counters and its
-        // timeline, so this one is a bit bucket that nothing reads and nothing publishes.
+        // Simulation counters and timelines are recorded elsewhere.
         this.pager = new ListObjectsV2Pager(this.store, new ReplayMetrics());
         this.scanPrefix = scanPrefix == null ? new byte[0] : scanPrefix;
     }
 
     /**
-     * One worker page: up to {@code maxKeys} keys after {@code startAfter}, scoped to the scan prefix
-     * and <b>not</b> to the caller's own upper bound. That omission is the protocol being faithful
-     * rather than helpful — a real listing call knows the prefix, not the range the client has since
-     * narrowed itself to, so the last page of a bounded range comes back full and the client pays for
-     * keys it then trims. A simulator that filtered here would quietly make bounded ranges cheaper than
-     * they are, which is the exact cost the owner-side split's floor exists to avoid incurring.
+     * Returns up to {@code maxKeys} keys after {@code startAfter}, scoped to the scan prefix. The
+     * response intentionally ignores the client's upper bound; the client trims it afterward.
      *
      * @param startAfter the exclusive resume cursor, or {@code null} to start at the prefix
      */
@@ -109,10 +78,7 @@ final class SimListingView {
         return new Page(keys, result.truncated());
     }
 
-    /**
-     * The one-key speculative probe: is there a key after {@code startAfter} that is still at or below
-     * {@code hi}? An open {@code hi} accepts any key the probe finds.
-     */
+    /** Tests whether the one-key pivot probe finds a key after {@code startAfter} and within {@code hi}. */
     boolean probeNonEmpty(byte[] startAfter, byte[] hi) {
         List<S3ResultEntry> entries = list(scanPrefix, null, startAfter, 1).entries();
         if (entries.isEmpty()) {
@@ -121,22 +87,15 @@ final class SimListingView {
         return hi == null || KeyBytes.compareUnsigned(entries.getFirst().key(), hi) <= 0;
     }
 
-    /** The flat-leaf floor probe: the first key at or after {@code prefix}, or {@code null}. */
+    /** Returns the flat-leaf floor probe's first key under {@code prefix}, or {@code null}. */
     byte[] firstKeyUnder(byte[] prefix) {
         List<S3ResultEntry> entries = list(prefix, null, null, 1).entries();
         return entries.isEmpty() ? null : entries.getFirst().key();
     }
 
     /**
-     * One bounded {@code delimiter=/} probe of {@code probePrefix}, resuming after {@code startAfter}:
-     * the directories directly beneath it and the objects directly in it, interleaved in key order,
-     * stopping at {@code maxKeys} entries.
-     *
-     * <p>{@code capped} means the probe stopped at its own limit rather than at the end of the
-     * directory — the sample of children is a strict prefix of the truth. Both callers read that bit,
-     * and they read it differently (one as "the fan-out is at least this wide", the other as "this
-     * child holds at least a page of mass"), which is why it is reported as the fact rather than as
-     * either interpretation.
+     * Runs a {@code maxKeys}-bounded structure probe under {@code probePrefix}, or the scan prefix
+     * when it is {@code null}, resumed after {@code startAfter}.
      */
     Rollup rollup(byte[] probePrefix, byte[] startAfter, int maxKeys) {
         S3ListResult result = list(probePrefix == null ? scanPrefix : probePrefix, DELIMITER, startAfter, maxKeys);
@@ -154,7 +113,7 @@ final class SimListingView {
         return new Rollup(commonPrefixes, objects, lastKey, result.truncated());
     }
 
-    /** Range reads issued against the fixture — the sim's own cost, never the modelled system's. */
+    /** Fixture reads performed by the simulator, separate from modelled listing calls. */
     long storeReads() {
         return store.reads();
     }
@@ -163,11 +122,7 @@ final class SimListingView {
         return pager.list(new S3ListRequest(BUCKET, prefix, delimiter, startAfter, null, maxKeys, false, false));
     }
 
-    /**
-     * Counts what the pager asks of the fixture. The pager may need several reads to answer one
-     * modelled call (a rollup hops once per directory), and that ratio is the simulator's own runtime
-     * cost — hence a count of store work, kept separate from the modelled call counters.
-     */
+    /** Counts fixture work performed while the pager answers modelled calls. */
     private static final class CountingStore implements ListingStore {
 
         private final ListingStore delegate;
@@ -188,12 +143,7 @@ final class SimListingView {
             return delegate.rows(from, fromInclusive, toExclusive, limit, projection);
         }
 
-        /**
-         * A store that declines the fast path returns {@code null} having done no work, so only an
-         * answered rollup is counted — the pager then falls back to the range walk above and every hop
-         * it makes is counted there instead. A declining store therefore never contributes a phantom
-         * read, and an answering one contributes exactly one however wide the directory was.
-         */
+        /** A declined rollup performs no fixture read and therefore does not increment the counter. */
         @Override
         public List<DelimitedEntry> delimitedRollup(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
                                                     byte[] prefix, byte[] delimiter, int limit,
@@ -206,7 +156,7 @@ final class SimListingView {
             return rollup;
         }
 
-        /** The fixture handle belongs to whoever opened it; a run never closes it. */
+        /** The fixture handle is borrowed from the caller. */
         @Override
         public void close() {
         }
