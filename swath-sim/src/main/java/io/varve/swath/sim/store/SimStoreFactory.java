@@ -26,67 +26,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Resolves a {@link SimStoreBackend} choice into a fixture store. One shared {@link MeterRegistry}
- * carries tier-selection signals ({@link SimStoreMetrics}) and replay-store read meters
- * ({@link ReplayMetrics}); reach it through {@code result.metrics().registry()}.
+ * Opens a local capture fixture with a shared registry for selection and replay-read metrics.
+ * The caller closes the {@link Result#store() returned store}; this factory closes temporary sources,
+ * including exception paths. Forced backends either open their requested store or fail: ARENA on
+ * budget, and STREAMING or WINDOWED with a typed eligibility exclusion. {@link SimStoreBackend#AUTO}
+ * resolves ARENA, then eligible STREAMING, then PARQUET; WINDOWED is forced-only.
  *
- * <ul>
- *   <li>{@link SimStoreBackend#PARQUET} — the replay module's Parquet-backed store, unchanged:
- *       full metadata, and the reference the arena is differentially tested against.</li>
- *   <li>{@link SimStoreBackend#ARENA} — require the keys-only arena; a fixture whose keys exceed
- *       the configured budget fails fast rather than silently serving a slower tier.</li>
- *   <li>{@link SimStoreBackend#STREAMING} — require the keys-only decode-once streaming tier; a
- *       fixture that is not sorted-eligible ({@link SortedEligibility}) fails fast rather than
- *       silently serving a slower tier.</li>
- *   <li>{@link SimStoreBackend#WINDOWED} — require the windowed row-group prefetch over the
- *       replay module's sorted-Parquet store; same eligibility, same hard failure. Forced-only:
- *       {@link SimStoreBackend#AUTO} never resolves here (see the constant's own note).</li>
- *   <li>{@link SimStoreBackend#AUTO} — arena when it fits, else streaming when the fixture is
- *       sorted-eligible, else the Parquet store, recording
- *       {@code swath.sim.store.arena.decline\{reason\}} / {@code swath.sim.store.streaming.decline\{reason\}}
- *       and logging why.</li>
- * </ul>
- *
- * <p><b>Fixtures are local paths.</b> {@code fixturePath} is a swath Parquet capture file or a
- * directory of them, on this machine. Nothing here resolves a remote object-store location:
- * fetching a fixture to local disk is the caller's job, deliberately outside this seam.
- *
- * <h2>What an unsorted fixture does here, tier by tier</h2>
- * A fixture that is not in strictly ascending key order is a corrupt input for a simulator: the sim's
- * whole premise is that its store answers the ranges a real ordered store would. The check is inline
- * in the loops each tier already runs — never a separate validation pass — and it does not reach every
- * tier equally, which is stated here rather than left to be discovered:
- * <ul>
- *   <li>{@link SimStoreBackend#STREAMING} — <b>guarded</b>. Row-group first keys are proved ascending
- *       at index derive ({@link SortedFixtures#loadIndex}, the fixture is otherwise ineligible), and
- *       every key of every row group the run actually faults in is proved on the way into its
- *       {@link KeyBlock}. The first violation fails the read, naming file, row group and the
- *       offending key's position within that group (spelled {@code key N}, the position the
- *       block counted — the skip-scan's cursor calls the same thing {@code row N}).</li>
- *   <li>{@link SimStoreBackend#WINDOWED} — <b>partly guarded, and the unguarded half loses keys</b>.
- *       Same index-derive gate, and the {@code delimiter=/} skip-scan proves the ascent of every row
- *       it steps over ({@code SortedRowGroupReader.KeyCursor}). Its plain range reads are routed off
- *       the derived index — which describes an order the file does not have — so on a multi-file
- *       fixture the plan for a range can omit the file a misplaced in-range key physically sits in,
- *       and that key is then never read. Not a short page and not an out-of-order one: a clean,
- *       un-truncated end of listing that is missing a key. It surfaces on a range that <em>starts</em>
- *       above the misplaced key's own file (every steal, every split), not on a whole-listing read,
- *       whose plan spans every file anyway. {@code UnsortedFixtureGuardTest} pins both halves.</li>
- *   <li>{@link SimStoreBackend#ARENA} — <b>duplicates guarded, disorder normalised</b>. The arena is
- *       loaded <em>through</em> the Parquet store below, whose reads are {@code ORDER BY key}: keys
- *       therefore arrive sorted whatever the file holds, and the arena's ascending check can only
- *       fire on a duplicate (which survives sorting). The keys it then serves are the fixture's, in
- *       order.</li>
- *   <li>{@link SimStoreBackend#PARQUET} — <b>not guarded, and deliberately</b>. That store exists to
- *       serve arbitrary captures, sorted or not, and it re-sorts at query time; proving the file's
- *       physical order would mean a second scan of it, which is precisely what an inline check is
- *       not. A fixture that reaches this tier is served in key order regardless.</li>
- * </ul>
- * {@link SimStoreBackend#AUTO} therefore hard-fails an unsorted fixture whenever it lands on the
- * streaming tier — which is where a fixture large enough for a real sweep lands by construction. The
- * failure is a typed {@link io.varve.swath.sort.RowGroupOrderException} and is counted
- * ({@link SimStoreMetrics#SEGMENT_REFUSED_METRIC}) before it is rethrown, so a sweep classifies the
- * excluded fixture from the reason and the metrics rather than from a message.
+ * <p>ARENA and STREAMING are keys-only ({@link SimModeRows}); PARQUET and WINDOWED retain metadata.
+ * Both sorted backends validate row-group first keys. STREAMING also validates every faulted row
+ * group; WINDOWED validates within-group rows only on delimiter skip-scans, so ordinary index-routed
+ * ranges can silently omit misplaced keys. ARENA and PARQUET query-sort instead. Within-group
+ * STREAMING disorder is typed and counted before rethrow.
  */
 public final class SimStoreFactory {
 
@@ -96,18 +46,9 @@ public final class SimStoreFactory {
     }
 
     /**
-     * The resolved store, the backend actually chosen, the metrics that back it, and — where the
-     * chosen tier knows it — how many keys the fixture holds.
-     *
-     * <p>{@code keyCount} is the fixture's own total, not a run's output: the summed
-     * {@link IndexEntry#rowCount()} of the derived routing index for the two tiers that carry one
-     * ({@link SimStoreBackend#STREAMING}, {@link SimStoreBackend#WINDOWED} — eligibility already
-     * proved every row group is pure {@code OBJECT}, so a row count is a key count), and
-     * {@link ArenaListingStore#keyCount()} for the arena. It is what a run's emitted-key assertion
-     * must be checked against: comparing legs with each other passes a loss every leg shares, which
-     * is exactly the shape a routing or pagination bug takes. Empty under
-     * {@link SimStoreBackend#PARQUET}, whose store would have to scan the fixture to answer — a cost
-     * the caller has not asked for; those callers fall back to cross-leg equality and say so.
+     * A store, its resolved backend, and its metrics. {@code keyCount} is the fixture total from the
+     * arena or eligible routing index, not a run result; PARQUET leaves it empty because finding it
+     * would require an extra scan.
      */
     public record Result(ListingStore store, SimStoreBackend resolvedBackend, ReplayMetrics metrics,
                          OptionalLong keyCount) {
@@ -122,15 +63,10 @@ public final class SimStoreFactory {
     }
 
     /**
-     * Opens {@code fixturePath} under the requested {@code backend} and an explicit {@code config}.
+     * Opens {@code fixturePath} with {@code config}.
      *
-     * @throws IllegalArgumentException      under {@link SimStoreBackend#ARENA} when the fixture's
-     *                                       keys do not fit
-     *                                       {@link SimStoreConfig#arenaMaxEncodedBytes()}
-     * @throws IneligibleFixtureException    under {@link SimStoreBackend#STREAMING} /
-     *                                       {@link SimStoreBackend#WINDOWED} when the fixture is not
-     *                                       sorted-eligible — typed, so a corpus sweep can file it as
-     *                                       an exclusion without reading a message
+     * @throws IllegalArgumentException   forced ARENA cannot fit the fixture
+     * @throws IneligibleFixtureException forced STREAMING or WINDOWED cannot use the fixture
      */
     public static Result open(Path fixturePath, SimStoreBackend backend, SimStoreConfig config) {
         MeterRegistry registry = new SimpleMeterRegistry();
@@ -144,7 +80,7 @@ public final class SimStoreFactory {
                         OptionalLong.empty());
             }
             case ARENA -> {
-                // The arena is populated through DuckDB; serving_mode names the store that reads the fixture.
+                // Arena loading reads its source; the resulting arena owns the served keys.
                 ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
                 ArenaListingStore arena;
                 try (ListingStore source = parquetStore(fixturePath, metrics)) {
@@ -190,7 +126,7 @@ public final class SimStoreFactory {
                 log.info("sim_store auto declined the arena tier (encoded keys exceed {} bytes) "
                         + "— trying the streaming tier next for {}", config.arenaMaxEncodedBytes(), fixturePath);
 
-                // Keep DuckDB for a possible PARQUET fallback; close it if eligibility evaluation throws.
+                // Retain DuckDB for PARQUET fallback, closing it on every other path including failures.
                 SortedEligibility.Result eligibility;
                 try {
                     eligibility = SortedEligibility.decide(resolveFiles(fixturePath), fixtureMetrics, true);
@@ -220,15 +156,12 @@ public final class SimStoreFactory {
         return new Result(store, backend, metrics, keyCount);
     }
 
-    /** The fixture's key total as the derived routing index carries it — see {@link Result#keyCount()}. */
+    /** The eligible index's fixture total; see {@link Result#keyCount()}. */
     private static OptionalLong keyCount(List<IndexEntry> index) {
         return OptionalLong.of(index.stream().mapToLong(IndexEntry::rowCount).sum());
     }
 
-    /**
-     * Adds the fixture path to an arena rejection, which the {@link ListingStore}-based arena cannot
-     * otherwise report.
-     */
+    /** Adds fixture context to an arena rejection. */
     private static Optional<ArenaListingStore> loadArena(ListingStore source, SimStoreConfig config,
                                                          Path fixturePath) {
         try {
@@ -243,11 +176,7 @@ public final class SimStoreFactory {
         return new DuckDbListingStore(fixturePath, metrics, DuckDbListingStore.defaultConnectionCount());
     }
 
-    /**
-     * Returns the derived routing index for a forced sorted backend. An ineligible fixture fails with
-     * a typed {@link IneligibleFixtureException} carrying its reason and file set so a sweep need not
-     * parse a message.
-     */
+    /** Returns a forced sorted backend's index or a typed eligibility exclusion. */
     private static List<IndexEntry> requireSortedIndex(List<Path> files, FixtureMetrics fixtureMetrics,
                                                        SimStoreBackend backend) {
         SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, false);
@@ -259,24 +188,18 @@ public final class SimStoreFactory {
     }
 
     /**
-     * The windowed tier: {@link WindowedListingStore} wrapping the replay module's sorted-Parquet
-     * store as-is, in process — no JDBC/HTTP round trip, just the decorator's sequential-window
-     * prefetch over an already-local reader. {@code window-rows}/{@code max-windows}/{@code enabled}
-     * come from the same {@code swath.replay.prefetch.*} properties the replay server's
-     * sorted-serving path reads, rather than a second sim-only knob for the same tuning — including
-     * {@code enabled}: an operator who has turned prefetch off for the replay server must see the
-     * identical store served bare here too, mirroring {@code ReplayServingFactory#sorted}.
+     * Builds the forced windowed tier using the replay server's prefetch configuration; disabled
+     * prefetch returns the bare sorted store. The wrapper owns page-read latency measurement.
      */
     private static ListingStore windowedStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
-        // Read configuration before opening a pool so malformed properties cannot leak one.
+        // Parse before opening a pool, so malformed properties cannot leak one.
         WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
         int connections = SortedParquetStore.defaultConnectionCount();
         if (!prefetch.enabled()) {
             log.info("sim_store windowed prefetch DISABLED (bare store) for {}", files);
             return new SortedParquetStore(files, index, metrics, connections);
         }
-        // recordPageReadLatency=false: the wrapper owns the outer per-page timer, same reasoning as
-        // the replay server's own sorted-serving wiring (SortedParquetStore's javadoc).
+        // The wrapper records the outer page latency.
         SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
         try {
             log.info("sim_store windowed prefetch ENABLED (window_rows={} max_windows={}) for {}",

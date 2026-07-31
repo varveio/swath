@@ -14,7 +14,7 @@ public enum SimStoreBackend {
     /** Force the keys-only in-memory arena; fail fast when the fixture does not fit its budget. */
     ARENA,
 
-    /** Force keys-only decode-once streaming; rejects a fixture that is not sorted-eligible. */
+    /** Force keys-only on-demand decoded-block streaming; rejects an ineligible fixture. */
     STREAMING,
 
     /**

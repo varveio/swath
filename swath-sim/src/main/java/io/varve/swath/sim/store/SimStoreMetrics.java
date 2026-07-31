@@ -42,7 +42,7 @@ public final class SimStoreMetrics {
     /** Wall time of one segment decode; its count is the fault count and its sum the decode total. */
     public static final String SEGMENT_DECODE_METRIC = "swath.sim.store.streaming.segment.decode";
 
-    /** Rows decoded across every segment fault — the numerator of the decode-once claim. */
+    /** Rows decoded across all segment faults, including refaults after eviction. */
     public static final String SEGMENT_DECODE_ROWS_METRIC = "swath.sim.store.streaming.segment.decode.rows";
 
     /** Bumped per decoded segment dropped to stay inside the residency budget. */

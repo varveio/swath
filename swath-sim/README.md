@@ -94,7 +94,7 @@ backend per fixture, so a conformance or differential run could never compare th
 | Backend | What it is | Metadata |
 |---|---|---|
 | `ARENA` | Keys-only in-memory arena: segmented key-byte blocks plus long offsets, built once from any other `ListingStore` and then answered entirely from memory. For a fixture whose whole key set fits the configured budget. | **Stubbed** (sim-mode projection, below) |
-| `STREAMING` | Keys-only **decode-once** tier: each row group of a sorted fixture is decoded to off-heap keys the first time a cursor reaches it, then served from memory, and evicted behind the cursors. For fixtures too large for the arena. | **Stubbed** |
+| `STREAMING` | Keys-only **on-demand decoded-block** tier: a sorted fixture's row groups are decoded to off-heap keys when reached, cached while resident, and evicted behind the cursors. An evicted group is decoded again if revisited. For fixtures too large for the arena. | **Stubbed** |
 | `WINDOWED` | The replay module's sequential-window prefetch decorator (`WindowedListingStore`) wrapping its sorted-Parquet store, in process. **Forced-only** — see below. | Full |
 | `PARQUET` | The replay module's Parquet-backed store, unchanged. The differential reference. | Full |
 | `AUTO` | `ARENA` when the fixture's encoded key bytes fit the configured budget; else `STREAMING` when the fixture is sorted-eligible; else `PARQUET`. | Depends on the resolution |
@@ -171,23 +171,23 @@ pay for on every key of every fixture, so these tiers skip loading it altogether
 is explicit: **their responses are ground truth for keys, pagination and truncation only.**
 Anything that needs real metadata must use a `PARQUET`-backed backend.
 
-### The streaming tier: decode once, serve from memory, evict behind the cursors
+### The streaming tier: decode on demand, serve from residency, evict behind the cursors
 
 A simulated run issues on the order of 150,000 store calls, so anything the serving loop does per
 call is multiplied by 150,000. The streaming tier's whole design is to make *decode* not one of
 those things.
 
-- **A segment is one row group**, decoded keys-only the first time a read reaches it. A fixture's
+- **A segment is one row group**, decoded keys-only when a read faults it into residency. A fixture's
   row groups hold hundreds of thousands of rows, so one decode is amortised over hundreds of
-  1000-row pages; served calls after that are a binary search and a walk, the same shape (and the
-  same cost class) as the arena tier.
+  1000-row pages while resident; served calls are then a binary search and a walk, the same shape
+  (and the same cost class) as the arena tier. A later revisit after eviction decodes it again.
 - **Mid-keyspace starts seek, they do not scan.** A steal or a split starts a fresh cursor at an
   arbitrary key. The derived row-group index (`SortedFixtures`/`SortedEligibility`, shared with the
   replay server's sorted-serving path) locates the one row group containing that key by binary
   search, and decode begins there — nothing earlier in the file is touched. The
-  `swath.sim.store.streaming.segment.fault{kind}` counter separates these (`seek`) from a cursor
-  walking off the end of its current segment (`forward`), so a workload's access shape is readable
-  from the metrics alone.
+  `swath.sim.store.streaming.segment.fault{kind}` counter records `forward` when the preceding row
+  group is resident and `seek` otherwise. These are observable access-shape signals, not proof of
+  which cursor caused the fault.
 - **Memory is bounded by configuration, not by fixture size.** Decoded segments live in an
   access-ordered map bounded by `swath.sim.streaming.max-resident-bytes`; the least recently used is
   released once the budget is exceeded, which for N mostly-sequential cursors is exactly "evict

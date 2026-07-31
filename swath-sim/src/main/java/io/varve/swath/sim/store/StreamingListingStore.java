@@ -24,68 +24,20 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The giant-fixture tier: <b>decode each region of a sorted fixture once</b>, as simulated streams
- * advance over it, and serve every range read from the decoded keys in memory. A fixture too large
- * for {@link ArenaListingStore} — which loads the whole key set up front — is served here at the
- * same per-call cost, because a served call touches only decoded key blocks; the Parquet decode is
- * hoisted out of the serving loop entirely and paid once per region.
+ * Keys-only, on-demand decoded-block store for a sorted-eligible fixture. Each off-heap
+ * {@link KeyBlock} holds one row group; {@link SortedRouting#startRowGroup} seeks the index for a
+ * mid-keyspace start, so it need not decode earlier groups. An evicted block is decoded again if
+ * revisited.
  *
- * <h2>Why not a query per window</h2>
- * The alternative already in the tree, {@code WindowedListingStore} over the sorted-Parquet store,
- * decodes <em>inside</em> the serving loop: every window refill is a bounded DuckDB range query, and
- * because the {@code key} column is a {@code BLOB} with no usable zonemaps that query costs a scan of
- * the whole key column — a cost proportional to the fixture, not to the window. Amortising it over a
- * window of rows divides that cost by a constant and leaves the fixture-size term intact, which is
- * why the windowed tier stays the memory-bounded conformance/fallback path rather than the tier a
- * simulated sweep runs on. Here, decode is proportional to the rows actually walked and nothing else.
+ * <p>A single lock protects both the access-ordered resident LRU and its single-threaded
+ * {@link SortedRowGroupReader}s. A block is charged as key bytes plus {@code (rowCount + 1)}
+ * eight-byte offsets and is evicted promptly on crossing {@code maxResidentBytes}. The budget
+ * bounds settled residency; a fault can transiently add its decoded block and staging space before
+ * eviction. A row group larger than the budget fails rather than being immediately evicted and
+ * repeatedly decoded.
  *
- * <h2>Segments, faults, and eviction</h2>
- * A <b>segment</b> is one physical row group of the fixture, decoded keys-only into an off-heap
- * {@link KeyBlock}. Segments are faulted in on demand and held in an access-ordered map bounded by
- * {@code maxResidentBytes}: the least recently used segment is dropped once the budget is exceeded,
- * which for N mostly-sequential cursors is exactly "evict behind the cursors" — each cursor keeps the
- * segment it is walking (and the next, across a boundary) at the hot end of the order, while the
- * segments it has walked off fall to the cold end. Eviction {@linkplain KeyBlock#close() releases} a
- * block's memory then and there rather than leaving it for a collector, so the budget bounds what the
- * process actually holds. The {@link ListingStore} seam carries no cursor identity for the store to
- * key a per-cursor window off, and inventing one would put session state below a seam whose whole
- * purpose is to be stateless, so residency is governed by one shared budget.
- *
- * <p><b>Mid-keyspace starts are a seek, not a scan.</b> A steal or a split starts a fresh cursor at
- * an arbitrary key; {@link SortedRouting#startRowGroup} locates the one row group that contains it
- * from the derived index alone (a binary search over ~10^3 entries), and decode begins there. Nothing
- * before it in the file is ever touched.
- *
- * <h2>Sizing</h2>
- * A segment's footprint is exactly its row group's key bytes plus an 8-byte offset per key. For a
- * fixture whose row groups hold ~300K keys of ~100 bytes that is ~33 MB per resident segment, so the
- * default budget ({@link SimStoreConfig#DEFAULT_STREAMING_MAX_RESIDENT_BYTES}) holds ~30 of them —
- * enough for a fleet of ~30 concurrent cursors, on a fixture of any size, since residency is a
- * function of the budget and never of the key count. It is off-heap, so it sits beside the JVM heap
- * rather than inside it. Raise it (or lower it) through
- * {@link SimStoreConfig#STREAMING_MAX_RESIDENT_BYTES_PROPERTY}; a budget too small to hold even one
- * row group's decoded keys fails fast at the first decode that hits it, naming the property to raise.
- *
- * <p>The budget bounds the <b>settled</b> residency. A fault transiently exceeds it, because the
- * block being decoded is built before the eviction it triggers frees anything: worst case, the
- * budget plus one segment's decoded bytes plus that decode's staging buffer. Sizing a run means
- * leaving room for one more row group than the budget names, not for a hidden multiple of it.
- *
- * <h2>What it serves, and what it declines</h2>
- * Keys only, through {@link SimModeRows} — the same sim-mode projection the arena tier answers with,
- * for the same reason (decoding nine columns per row group would reinstate the cost this tier exists
- * to remove). {@link #delimitedRollup} is declined, so every delimiter rule stays in the pager where
- * the differential suite can attribute a disagreement to a store by construction. A rollup's hop
- * pattern jumps whole subtrees and so faults segments it then reads few rows from; that shows up as
- * {@code seek} rather than {@code forward} in {@code swath.sim.store.streaming.segment.fault}, which
- * is precisely the signal that says a workload is not the sequential walk this tier is shaped for.
- *
- * <h2>Concurrency</h2>
- * One lock covers the resident map and the decoders (a {@link SortedRowGroupReader} is single-
- * threaded by contract), and a fault decodes while holding it. The caller this tier exists for is a
- * simulator's event loop, which is sequential by construction; a concurrent caller stays correct and
- * serialises behind a fault, which is rare by design — one per row group walked, hundreds of served
- * calls apart.
+ * <p>Range reads are half-open and can span blocks. Rows use {@link SimModeRows}; delimiter rollup
+ * remains pager-owned. {@link #close()} owns all resident blocks and decoders.
  */
 public final class StreamingListingStore implements ListingStore {
 
@@ -100,10 +52,9 @@ public final class StreamingListingStore implements ListingStore {
     private long peakResidentBytes;
 
     /**
-     * @param index            the derived {@code (file, rowGroup, firstKey, rowCount)} routing index of a
-     *                         sorted-eligible fixture, globally ascending by first key
-     * @param metrics          records this tier's segment hit/fault/decode/evict signals
-     * @param maxResidentBytes the decoded-segment residency budget; see the sizing note above
+     * @param index            routing index for a sorted-eligible fixture
+     * @param metrics          records segment activity
+     * @param maxResidentBytes settled decoded-block residency budget
      */
     public StreamingListingStore(List<IndexEntry> index, SimStoreMetrics metrics, long maxResidentBytes) {
         if (maxResidentBytes < 1) {
@@ -140,17 +91,11 @@ public final class StreamingListingStore implements ListingStore {
         byte[] upper = toExclusive == null ? null : toExclusive.toByteArray();
         List<ListedObject> rows = new ArrayList<>(limit);
         synchronized (lock) {
-            // Walk forward from the row group holding `from`, faulting each segment in as the read
-            // reaches it: a page that straddles a boundary spans two segments, and one wide enough to
-            // span more spans as many as it needs. `lower` is re-bounded per segment rather than only
-            // in the first — every later segment starts wholly above it, so the search returns 0 there
-            // and the uniform form cannot drift from the first-segment case.
+            // A page can span multiple blocks; applying the lower bound uniformly keeps that path exact.
             for (int group = SortedRouting.startRowGroup(index, from);
                  group < index.size() && rows.size() < limit;
                  group++) {
-                // Every read out of `segment` finishes before the next iteration asks for another —
-                // which matters, because faulting that next one can evict this one, and an evicted
-                // block's memory is released immediately rather than at some later collection.
+                // Finish with this block before faulting another, which may evict and close it.
                 KeyBlock segment = segment(group);
                 int start = start(segment, lower, fromInclusive);
                 int end = upper == null ? segment.size() : segment.lowerBound(upper);
@@ -198,11 +143,8 @@ public final class StreamingListingStore implements ListingStore {
     }
 
     /**
-     * Row group {@code group}'s decoded keys, faulting them in when absent. A fault is classified
-     * from the resident set alone: {@code forward} when the preceding group is resident (a cursor
-     * walking off the end of the segment it was serving from) and {@code seek} otherwise (a cursor
-     * started mid-keyspace — a steal or a split — or the first touch of a run). Called under
-     * {@link #lock}.
+     * Gets or faults row group {@code group}; called under {@link #lock}. {@code forward} means its
+     * predecessor was resident: usual forward-walk evidence, not proof of cursor causality.
      */
     private KeyBlock segment(int group) {
         KeyBlock cached = resident.get(group);
@@ -221,20 +163,9 @@ public final class StreamingListingStore implements ListingStore {
     }
 
     /**
-     * Decodes one row group's key column into a {@link KeyBlock}. The block's strictly-ascending
-     * check is the fail-fast here: a row group whose keys are not ascending would corrupt every later
-     * binary search over this segment, and the sorted-eligibility gate that let the fixture reach
-     * this tier only proved the ascent of row-group <em>first</em> keys, not of the rows within one
-     * group. A decode that fails part-way releases what it had already allocated rather than leaking
-     * it off-heap, where no collector would come for it. Called under {@link #lock}.
-     *
-     * <p>The block's own rejection message names the offending key and its position <em>within the
-     * group</em>, which is all a block can know; the file and row group it came from are added here,
-     * so a sweep that trips this over one fixture out of a corpus says which fixture and where. A
-     * disorder rejection is {@linkplain RowGroupOrderException typed} and
-     * {@linkplain SimStoreMetrics#SEGMENT_REFUSED_METRIC counted before it is rethrown}, so a sweep
-     * classifies the exclusion from the metrics and {@link RowGroupOrderException#reason()} rather
-     * than by matching a message.
+     * Decodes one row group's keys under {@link #lock}. Eligibility validates first keys; the
+     * {@link KeyBlock} validates every key before binary search can rely on it. Disorder is typed,
+     * located, and counted before rethrow; every failed partial decode discards its off-heap state.
      */
     private KeyBlock decode(int group) {
         IndexEntry entry = index.get(group);
@@ -247,9 +178,7 @@ public final class StreamingListingStore implements ListingStore {
                 try {
                     fits = builder.append(key);
                 } catch (RowGroupOrderException disordered) {
-                    // Count BEFORE rethrowing: the run aborts on this, and the exclusion still has to
-                    // be readable from the sweep's metrics (the same discipline PageRunSegmentIo's
-                    // own pre-throw count keeps).
+                    // The aborted run must still leave a countable exclusion reason.
                     metrics.recordStreamingSegmentRefused(disordered.reason());
                     throw disordered.locatedIn(entry.file(), entry.rowGroup());
                 } catch (IllegalStateException rejected) {
@@ -276,9 +205,8 @@ public final class StreamingListingStore implements ListingStore {
     }
 
     /**
-     * Drops least-recently-used segments until the residency budget is met, always keeping the one
-     * just faulted in — a budget smaller than a single segment would otherwise evict it immediately
-     * and re-decode it on the very next call. Called under {@link #lock}.
+     * Evicts least-recently-used blocks to the budget, retaining the just-faulted block. Called
+     * under {@link #lock}.
      */
     private void evictBehind() {
         while (residentBytes > maxResidentBytes && resident.size() > 1) {
@@ -290,7 +218,7 @@ public final class StreamingListingStore implements ListingStore {
         }
     }
 
-    /** The (lazily opened, then retained) decoder for {@code file}. Called under {@link #lock}. */
+    /** Returns the retained decoder for {@code file}; called under {@link #lock}. */
     private SortedRowGroupReader reader(Path file) {
         return readers.computeIfAbsent(file, f -> {
             try {
