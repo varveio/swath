@@ -278,10 +278,12 @@ A timeout only means something relative to the latencies it bounds. Under a scal
 experiment those ratios move, which is how a timeout pathology disappears from a reproduction — the
 budget stayed at three seconds while the call it bounds got ten times faster. Virtual time can state
 the ratio exactly, so every one of them is a declared input: probe and worker attempt timeouts, the
-transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Most defaults
-restate what the shipped engine uses, so a scenario can state its reference point and vary ratios
-deliberately. The current single probe-attempt field is the approximation disclosed in the model-limit
-note above, not an exact restatement of production's point/scan split.
+probe retry cap, the worker retry threshold, the pacing windows, and the adaptive controller's own
+windows. The worker threshold is a stopping ceiling only under simulated `BOUNDED`; simulated
+`RIDE_OUT` ignores it, while probe chains stay bounded under either disposition. Most defaults restate
+what the shipped engine uses, so a scenario can state its reference point and vary ratios deliberately.
+The current single probe-attempt field is the approximation disclosed in the model-limit note above,
+not an exact restatement of production's point/scan split.
 
 An action body runs atomically in virtual time — the clock does not move and no other actor runs
 inside it — which is how a lock hold is expressed without a lock. State read in one event and used
@@ -290,14 +292,14 @@ widened read window, and the race it permits, is expressed without a thread.
 
 ## Running the real policies
 
-The point of the module. `SimExecutor` runs swath's **actual** decision code — the seed planner, the
-owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing —
-against a fixture, in virtual time. Nothing is reimplemented: those modules are consumed exactly as the
-engine consumes them, as decisions over views that return actions and mutations. What the simulator
-supplies is the other half of that seam: it builds the views, issues what the decisions ask for,
-applies the mutations they return, and owns everything the policies deliberately never see — the clock,
-the concurrency target, the ranges' bookkeeping, and the check that decides whether a proposed split
-survives.
+The point of the module. `SimExecutor` runs swath's **shared decision policies** — the seed planner,
+the owner-side split governor, the thief's victim selection and pivot cascade, and the idle-steal
+pacing — against a fixture, in virtual time. Those modules are consumed exactly as the engine consumes
+them, as decisions over views that return actions and mutations. What the simulator supplies is the
+other half of that seam: it builds the views, issues what the decisions ask for, applies the mutations
+they return, and owns everything the policies deliberately never see — the clock, the ranges'
+bookkeeping, and the guarded split outcome. Adaptive concurrency is the explicit port described next,
+not shared implementation.
 
 One mechanism is a **port** rather than the real thing: the adaptive-concurrency controller. It is the
 most timing-coupled code in the engine — jittered windows, paced valves, a decaying latency baseline,
@@ -311,19 +313,23 @@ agree.
 placing a pivot, and by the time it proposes the split the victim may have drained past it. The
 proposal is then refused — exactly as in a real run, and for exactly the same reason. A simulator that
 let it through would report splits a real fleet never gets, on precisely the workloads where stealing
-is hardest. The full ordering contract, including the two disclosed timing widenings the executor
+is hardest. The full ordering contract, including the three disclosed timing widenings the executor
 models and what a cancelled timer costs a run's event budget, is in
 [`docs/executor-ordering.md`](docs/executor-ordering.md).
 
-**There are two losers of that race, and only one of them is where the losses are.** The engine
+**There are two guard stages, and the first is where ordinary footrace losses land.** The engine
 re-validates its pivot against the victim as it stands *now*, immediately before proposing the split,
-and then the durable split is guarded again on the same facts. The first check is where a thief that
-spent its probes on a drainer it cannot catch finds out — `RETRY.cursor_passed_pivot`,
-`RETRY.bound_moved`, reported as `splits_lost_revalidation`. The second can only fire when something
-changed *between* a re-validation that passed and the split it authorised, which needs a second
-proposer, and the fleet admits one steal attempt at a time. So `splits_rejected` sits at zero on runs
-that are losing four proposals in five, and that zero is a fact about the ordering rather than a
-simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
+and then the ledger guards the expected bound and cursor again and additionally rejects an already
+completed node. The first check is where a thief that spent its probes on a drainer it cannot catch
+usually finds out — `RETRY.cursor_passed_pivot`, `RETRY.bound_moved`, reported as
+`splits_lost_revalidation`. The completion guard needs no mutation between that re-validation and the
+serial ledger call: a final non-empty page marks the ledger node complete before its client-side cost
+is charged, while its progress-eligible worker remains in `livePool` until that cost finishes. A
+proposal whose pivot is still above the final cursor can pass the in-memory checks during that interval
+and be rejected by the ledger. The single steal-attempt slot makes a concurrent second proposer
+unavailable in the modelled fleet. Thus `splits_rejected` is a counter for this late guard, not for all
+lost races; the ordering doc reports the measured rejection and zero-rejection cases. Both stages are
+in the run record, named apart, for exactly that reason.
 
 **How often that race is lost turns on one ratio the scenario declares: what a probe costs relative to
 a page.** This README used to say the opposite — that the loss share is a property of the keyspace and

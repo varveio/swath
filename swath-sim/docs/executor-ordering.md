@@ -37,12 +37,14 @@ the region the engine holds the worker's lock across:
 | Read the page from the store | The store is consulted on arrival, never at issue, so a model whose store can change gets the faithful answer without a redesign. |
 | Trim the page to the current bound | A thief may have narrowed `hi` while the call was in flight. The keys above the new bound belong to the child; emitting them would be a double-emit. |
 | Advance the cursor, add the emitted keys, fold the page into the density digest | The digest has to be coherent with the cursor, or the far-ahead fraction is computed against a page the cursor has not reached. |
-| Commit the page to the ledger | The durable cursor advance. |
+| Commit the page to the ledger | Advance the simulator's durable-state stand-in, including marking a final page complete. |
 | Run the owner-side split decision | It reads the cursor this commit just advanced, and the bound nothing else can have moved, so its pivot is ahead of its own cursor **by construction** — which is why an owner's split never loses the race a thief's can. |
 
 The page's client-side cost is charged *after* that region, in stages, on the worker's own timeline:
-its conversion work, then the durability commit it waits on before emitting, then the consumer stage.
-Only then does the worker ask for the next page or complete the range.
+its conversion work, then the modelled persistence cost it waits on before emitting, then the consumer
+stage. Only then does the worker ask for the next page or retire the range from the live pool. Thus a
+final non-empty page is already complete in the ledger during its client-cost interval while its
+progress-eligible worker remains visible in `livePool`.
 
 ## One steal, and the race it can lose
 
@@ -50,7 +52,7 @@ Only then does the worker ask for the next page or complete the range.
 |---|---|
 | 1 | The victim pool is built from live workers that have committed a non-empty page since they were last split (the progress gate). Selection runs. The chosen victim's cursor and bound are read — **the snapshot**. |
 | 2..n | The cascade's probes are issued and answered, one modelled call each. The victim is draining the whole time, in bodies of its own. |
-| n+1 | The proposal is re-validated against the victim **as it stands now**: the bound must still be the one the snapshot saw, and the cursor must still be below the pivot. Then the durable split guard checks the same facts again, and only then is a child published. |
+| n+1 | The proposal is re-validated against the victim **as it stands now**: the bound must still be the one the snapshot saw, and the cursor must still be below the pivot. Then the ledger checks those facts again, additionally rejects a completed node, and only then is a child published. |
 
 A proposal that fails either check is refused and recorded as futile against that victim, which is
 what eventually paces attempts against a drainer nobody can catch. That refusal is not a defect to be
@@ -58,26 +60,24 @@ engineered away: it is the fidelity the simulator exists for, and there is a tes
 re-validation is removed.
 
 The two checks in body `n+1` are not two chances at the same thing, and a run's counters read very
-differently across them. The re-validation is where proposals die: it is the first place the victim's
-current cursor is compared with a pivot placed against a snapshot taken several bodies ago
-(`splits_lost_revalidation`). The durable guard sees only what that check has already passed, so it can
-reject only if something changed between the two — inside one body, where no other actor runs. That
-needs a second in-flight proposer, and the fleet allows one steal attempt at a time.
+differently across them. The re-validation is where ordinary footrace proposals die: it is the first
+place the victim's current cursor is compared with a pivot placed against a snapshot taken several
+bodies ago (`splits_lost_revalidation`). The ledger repeats the bound/cursor guard and additionally
+rejects a completed node. Serial event execution means no actor mutates state between the executor's
+re-validation and that ledger call, and the fleet's single steal-attempt slot rules out a second
+modelled proposer. Neither fact makes the completion guard unreachable: the victim's final non-empty
+page may already have marked the ledger node complete while client cost keeps its progress-eligible
+worker in `livePool`. If its final cursor is still below a pivot placed in an empty span above the last
+key, the in-memory re-validation passes and the ledger refuses the completed parent.
 
-What is left is narrow enough to describe exactly. The guard's third condition is completion, and a
-victim can complete while a steal attempt against it is in flight, its claim not yet retired (the page's
-client-side cost is charged before the range is released). For the earlier check to pass anyway, the
-victim's final cursor has to still be *below* the pivot — so the pivot has to sit above the last key in
-the range, which the cascade only produces where it commits a pivot it never probed: a structure
-boundary, or the flat-leaf reflection, landing in the empty span between a directory's last key and a
-bound synthesised above it. That combination was observed exactly once, in a sweep configuration that
-is not in the repository: the concentrated deep-nested shape at `(8, 8, 1, 160_000)` — 759,188 keys —
-under eight workers, a 1,000-key page at 110 ms with 35 ms probes, the measured client cost and seed
-`20260727`, which rejected one durable split. Fifty-four flat-leaf configurations swept across worker
-count, probe latency and the width of the client-cost window rejected none. The in-repo run of the
-concentrated shape pins `splits_rejected == 0`, which is the ordinary case. So `splits_rejected` reads zero on runs
-losing most of their steals, and it is not the number to read when asking how often a fleet loses this
-race.
+That combination was observed once in a sweep configuration that is not in the repository: the
+concentrated deep-nested shape at `(8, 8, 1, 160_000)` — 759,188 keys — under eight workers, a
+1,000-key page at 110 ms with 35 ms probes, the measured client cost and seed `20260727`, which
+rejected one durable split. Fifty-four measured flat-leaf configurations swept across worker count,
+probe latency and the width of the client-cost window rejected none. The in-repo run of the
+concentrated shape pins `splits_rejected == 0`. These are measurements, not a theoretical frequency
+bound: `splits_rejected` counts late ledger-guard refusals, not all proposals lost while a victim
+drains.
 
 ## Who wakes a parked worker, and how often
 
@@ -121,17 +121,21 @@ rung is reached at all.
 The kernel has no cancellation. So:
 
 - **When the completion instant is known at issue** (the ordinary store, which answers independently),
-  the executor schedules the response *or* the timeout — never both. A timeout costs no extra event.
+  the executor schedules the response *or* the timeout — never both, so there is no competing stale
+  outcome. A timed-out call still schedules one event at its store-completion instant to retire
+  occupancy.
 - **When it is not** (a modelled store with a queue, whose answer depends on what else is in flight),
-  both are armed and whichever fires second finds its subject already retired and returns. Those
-  second firings are dispatched events: they count against the run's event budget, and they are
-  counted (`events.stale`) so a budget can be sized including them rather than despite them.
+  the response and timeout are both armed. Whichever loses is still dispatched after the call has
+  resolved and is counted (`events.stale`); for a timeout, that armed response also retires occupancy
+  when the queued store work completes.
 
-A timed-out call keeps one further event either way, at the instant the *store* would have answered,
-which is where its occupancy is retired. A call the client has given up on is still work the store is
-doing and still crowds out the next one, so retiring it at the client's timeout would understate
-occupancy by exactly the calls a struggling store is struggling with — the one regime where a latency
-model that reads occupancy has anything to say. The two paths answer that question the same way.
+A timed-out call therefore keeps a store-completion event either way, at the instant the *store* would
+have answered, which is where its occupancy is retired. A call the client has given up on is still work
+the store is doing and still crowds out the next one, so retiring it at the client's timeout would
+understate occupancy by exactly the calls a struggling store is struggling with — the one regime where
+a latency model that reads occupancy has anything to say. In the known-completion branch this is a
+dedicated occupancy-retirement event, not a stale loser; in the queued branch it is the already-armed
+response.
 
 The stale mechanism also retires a park timer whose worker was woken early by any of the four signals
 above.
@@ -162,20 +166,24 @@ Distinct from the widenings above, which are the engine's current behaviour repr
 places where the executor knowingly does something the engine does not, and the entry exists so a
 result that turns on one is recognisable as such rather than surprising.
 
-- **A retried attempt keeps the base timeout; the engine escalates it.** `GaugedFetcher` raises a
-  fetch's per-attempt budget on consecutive attempt timeouts (base → 20 s → 40 s, via
-  `TransientRetryFetcher.escalationLevel`), so a real retry gets longer to answer than the attempt it
-  is retrying. Here every attempt in a chain is bounded by the same declared
-  `probeAttemptTimeoutNanos` / `workerAttemptTimeoutNanos`. The effect is confined to the storm
-  regime — where the engine would ride out a slow store that this executor gives up on, so a modelled
-  run in that regime **under**-states how much a real fleet recovers. The retry *count* is faithful:
-  the declared cap is spent in full on both the first attempt's timeout and every retried one.
+- **Retry timing is flat, while production escalates.** Consecutive attempt timeouts make production
+  raise the request's timeout escalation level (the store maps base → doubled → quadrupled), and
+  its full-jitter exponential backoff moves to a higher ceiling after the worker retry threshold under
+  `RIDE_OUT`. Here every attempt in a chain uses the same declared
+  `probeAttemptTimeoutNanos` / `workerAttemptTimeoutNanos` and the same flat
+  `transientRetryBackoffNanos`. Disposition still matters: simulated `BOUNDED` stops a worker after its
+  declared retry threshold, while simulated `RIDE_OUT` ignores that threshold and keeps retrying until
+  another run ceiling ends it. Production `RIDE_OUT` likewise does not stop at the threshold; it uses
+  consecutive timeouts and the over-threshold state to shape timeout and backoff. Simulated probe
+  chains are separate and remain bounded by their declared retry cap under both dispositions.
+  Production caps non-voting probe transients, while voting 503/5xx probes retry until cancellation.
+  Therefore worker cap spending is not a faithful invariant across dispositions.
 - **A rejected durable split records futility against its victim; the engine does not.** The
   `split_aborted` branch here calls `recordFutileSteal`, where `Thief.commit` restores the bound and
-  leaves the victim's futility tally alone (only the two earlier losers record it). Reachable at most
-  once in the runs measured so far — see the guard note above — so it has never moved a pacing
-  decision, and it is written down rather than quietly fixed because the fix is a behaviour change to
-  an executor whose whole claim is that it does what the engine does.
+  leaves the victim's futility tally alone (only the two earlier losers record it). The measured
+  evidence is one rejection in the disclosed external sweep and none in the measured in-repo cases;
+  it has not moved a measured pacing decision. It is written down rather than quietly fixed because
+  the fix is a runtime behaviour change rather than a documentation reconciliation.
 
 ## What is deliberately not modelled
 
