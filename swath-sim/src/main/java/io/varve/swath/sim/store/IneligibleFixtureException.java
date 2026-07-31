@@ -5,7 +5,6 @@
  */
 package io.varve.swath.sim.store;
 
-import io.varve.swath.replay.fixture.SortedEligibility;
 import java.nio.file.Path;
 import java.util.List;
 
