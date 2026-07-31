@@ -11,38 +11,15 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * An immutable, ascending, keys-only column: the whole key set of a fixture packed into
- * fixed-size byte <b>segments</b> plus a {@code long} offset table, searchable by unsigned byte
- * order without materialising a single key.
- *
- * <h2>Why segments</h2>
- * A Java {@code byte[]} cannot exceed 2 GiB, and a bucket's key bytes routinely can, so the keys
- * cannot live in one array. They are written end-to-end into {@link #SEGMENT_BYTES}-sized
- * segments and addressed by a global {@code long} offset; {@code offsets[i]} is where key
- * {@code i} starts and {@code offsets[i + 1]} where it ends, so the table is {@code n + 1} long
- * and the length of a key is a subtraction, never a second array. A key may straddle a segment
- * boundary — no padding, no per-segment key alignment; {@link #keyAt} and {@link #compareKeyAt}
- * walk the boundary.
- *
- * <h2>Why the capacity budget is in bytes</h2>
- * Keys are legal up to {@value #MAX_KEY_BYTES} bytes each, so key <em>count</em> says almost
- * nothing about footprint — two fixtures with the same count can differ by three orders of
- * magnitude. The builder is therefore bounded by {@linkplain #encodedBytes() encoded bytes} (key
- * bytes plus the offset table) and declines the append that would cross the budget, so a caller
- * learns the fixture does not fit without having to guess in advance.
- *
- * <p>Keys are stored raw. Front-coding a sorted key set commonly buys 3–5x, but that is an
- * optimisation to make against a measured fixture, not one to assume here.
+ * Immutable whole-fixture key column: ascending on-heap key bytes in fixed segments plus
+ * {@code long} offsets. Keys may cross segment boundaries and are searched in unsigned order.
  */
 final class KeyArena {
 
-    /** The largest key S3 accepts, and the largest this arena will store (algorithms.md §11.13). */
+    /** The largest key S3 accepts and this arena stores. */
     static final int MAX_KEY_BYTES = 1024;
 
-    /**
-     * Segment size. Large enough that the per-segment bookkeeping is noise at bucket scale, small
-     * enough that a modest fixture does not pay a huge floor; well under the 2 GiB array ceiling.
-     */
+    /** Production segment size, below the Java array limit. */
     static final int SEGMENT_BYTES = 1 << 24;
 
     private final List<byte[]> segments;
@@ -61,11 +38,7 @@ final class KeyArena {
         return new Builder(maxEncodedBytes, segmentBytes);
     }
 
-    /**
-     * The encoded footprint of {@code count} keys totalling {@code keyBytes}: the key bytes plus
-     * the {@code count + 1} entry offset table. Segment slack is excluded — it is bounded by one
-     * segment, not by the fixture.
-     */
+    /** Key bytes plus the {@code count + 1} offset table; segment slack is excluded and bounded. */
     static long encodedBytes(long keyBytes, long count) {
         return keyBytes + (count + 1) * Long.BYTES;
     }
@@ -74,7 +47,7 @@ final class KeyArena {
         return count;
     }
 
-    /** This arena's actual encoded footprint, the quantity the capacity budget is expressed in. */
+    /** Actual encoded footprint, the capacity-budget unit. */
     long encodedBytes() {
         return encodedBytes(offsets[count], count);
     }
@@ -104,11 +77,7 @@ final class KeyArena {
         return search(key, 1);
     }
 
-    /**
-     * Binary search for the first index whose key compares {@code >= bias} against {@code key}:
-     * {@code bias == 0} keeps an exact match (lower bound), {@code bias == 1} steps past it
-     * (upper bound). One implementation, so the two bounds cannot drift apart.
-     */
+    /** Shared lower/upper-bound search so their ordering cannot diverge. */
     private int search(byte[] key, int bias) {
         int low = 0;
         int high = count;
@@ -135,11 +104,7 @@ final class KeyArena {
         }
     }
 
-    /**
-     * Unsigned comparison of the {@code length} stored bytes at global offset {@code from} against
-     * {@code other}, walking segment boundaries. Shared by the finished arena's {@link #compareKeyAt}
-     * and the builder's ascending-order check, so a boundary bug cannot exist on one side only.
-     */
+    /** Unsigned comparison across segment boundaries, shared by lookup and the builder. */
     private static int compareStored(List<byte[]> segments, int segmentBytes, long from, int length,
                                      byte[] other) {
         int remaining = length;
@@ -161,11 +126,7 @@ final class KeyArena {
         return Integer.compare(remaining, other.length - otherPos);
     }
 
-    /**
-     * Appends keys in ascending order, refusing the first one that would push the arena past its
-     * encoded-byte budget. Single-threaded by construction: an arena is built once, at load, and
-     * is immutable afterwards.
-     */
+    /** Builds an immutable arena from one strictly ascending source. */
     static final class Builder {
 
         private static final int INITIAL_OFFSET_CAPACITY = 1024;
@@ -177,8 +138,7 @@ final class KeyArena {
         private int count;
         private long used;
 
-        // segmentBytes is a parameter so a test can force multi-segment (and boundary-straddling)
-        // layouts without allocating production-sized segments.
+        // Test seam for boundary-spanning layouts; production always uses SEGMENT_BYTES.
         Builder(long maxEncodedBytes, int segmentBytes) {
             if (maxEncodedBytes < 1) {
                 throw new IllegalArgumentException("arena max-encoded-bytes must be at least 1, got "
@@ -193,12 +153,10 @@ final class KeyArena {
         }
 
         /**
-         * Appends {@code key}, or returns {@code false} without appending when it would exceed the
-         * budget. Once {@code false} is returned the arena is over budget for good — the caller
-         * abandons it rather than skipping a key and silently serving an incomplete fixture.
+         * Appends {@code key}, or returns {@code false} before changing the arena when it exceeds
+         * the byte budget; callers must abandon the incomplete fixture.
          *
-         * @throws IllegalArgumentException when {@code key} is over-long, or not strictly above its
-         *                                  predecessor
+         * @throws IllegalArgumentException when {@code key} is over-long or not strictly ascending
          */
         boolean append(byte[] key) {
             if (key.length > MAX_KEY_BYTES) {
@@ -226,13 +184,7 @@ final class KeyArena {
                     Arrays.copyOf(offsets, count + 1), count);
         }
 
-        /**
-         * Every lookup this arena answers is a binary search, so a source that hands back a
-         * duplicate or an out-of-order key does not merely degrade it — it corrupts every later
-         * search, and the store then reports confident wrong answers. Fail loudly instead. The
-         * hazard is concrete: {@link ArenaListingStore#loadWithin} resumes each batch exclusively
-         * from the previous batch's last key, which is sound only for a strictly ascending source.
-         */
+        /** Strict order is required by binary search and exclusive batch resumption. */
         private void requireAscending(byte[] key) {
             if (count == 0) {
                 return;
