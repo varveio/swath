@@ -396,10 +396,12 @@ A counter says a gate fired *n* times; it cannot say which reading made it fire,
 run and a real one disagree that is the only question worth asking. `-Dswath.sim.gate-dump=<path>`
 turns on a per-decision dump: one TSV row per `OwnerSplitGovernor.decide` past the open-frontier
 early-out, and — at `<path>.scans.tsv` — one per `ThiefPolicy.selectVictim` pass. The columns are the
-engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which are also what the engine emits
-as its `owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7), so the two
-sides diff **row for row against a replay-server trace of the same listing** and a divergence lands on
-the gate and the reading that produced it. The decision file carries `virtual_time_ns`, `node_id`,
+engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which also feed the engine's
+`owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7). The schemas are not
+identical: the simulator adds key bounds and omits production's `worker_count`, so comparison requires
+normalization. No end-to-end same-fixture golden comparison currently validates row-for-row parity;
+the dump provides the inputs needed to build and localize one. The decision file carries
+`virtual_time_ns`, `node_id`,
 `reason`, `est`, `pages_since_last_self_split`, `outstanding`, `far_ahead_fraction`, `density_ratio`,
 `keys_emitted`, then the decided range's own `lo`, `cursor_to` and `hi` — the bounds, because sim node
 ids and a replay run's node ids are different id spaces and a tail range is matched by *keys*. The scan

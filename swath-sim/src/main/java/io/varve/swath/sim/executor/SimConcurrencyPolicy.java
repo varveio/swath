@@ -13,60 +13,27 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 
 /**
- * The simulator's own faithful implementation of the adaptive-concurrency controller — the one
- * mechanism the policy seam defines as a <b>port</b> rather than an extraction, because the shipped
- * controller is a lock-free machine of CAS loops, jittered windows and racing timestamps whose whole
- * shape exists to survive concurrency the simulator does not have.
+ * Single-threaded, virtual-time behavioral port of the production adaptive-concurrency controller.
+ * It is not a shared implementation, and its tests do not prove equivalence under production
+ * concurrency. Callers supply every instant and the shed-window random stream; this class reads no
+ * ambient clock or randomness. Virtual time starts at zero, so timestamps use the explicit
+ * {@link #UNARMED} sentinel rather than treating zero as "never".
  *
- * <p>Every reactive signal arrives with its own instant, so this class reads no clock; the shed
- * window's jitter is drawn from a supplied stream, so it reads no ambient randomness either. Both
- * substitutions are forced: a virtual-time run has no wall clock to read and no thread-local generator
- * that would be reproducible if it did.
- *
- * <p><b>A third difference, and it is not cosmetic.</b> The shipped controller uses {@code 0} as the
- * "never happened yet" value for its pacing timestamps, which works only because it reads a clock whose
- * values are enormous: a zero there is unreachably far in the past, so the first growth step after a
- * cool-down fires immediately, exactly as its own comment intends. A virtual run starts at zero. Reusing
- * that sentinel here would invert its meaning — the first success of every run would be paced out, and a
- * relaxation valve paced at thirty seconds could never open in a run shorter than thirty virtual
- * seconds, which is precisely the length of the runs that exercise it. Every timestamp here therefore
- * carries an explicit {@link #UNARMED} value that is never confused with an instant, and every read of
- * one checks for it rather than doing arithmetic against it.
- *
- * <h2>The behaviour this reproduces</h2>
+ * <p>The port preserves these controller contracts:
  * <ul>
- *   <li><b>Slow start, then additive growth.</b> A run begins at four workers (or the ceiling, if
- *       lower), and growth doubles until the first congestion signal of the run — a worker attempt
- *       timeout, a throttle, or a shed — latches it permanently to {@code +1}. Growth is paced, not
- *       per-success, so recovery ramps rather than rebounding into the condition it just left.</li>
- *   <li><b>Exactly two ways down, both multiplicative, both floored at one.</b> A store throttle takes
- *       the target to 70% of itself; a sustained-timeout shed takes it to half, at most once per
- *       jittered window, and only when a timeout-volume gate <em>and</em> a starved-progress gate both
- *       hold. Nothing else ever lowers the target.</li>
- *   <li><b>Two freezes, neither of which is a decrease.</b> A high worker-timeout rate in the trailing
- *       window suppresses growth outright. An inflated successful-attempt latency (against a rolling
- *       minimum baseline) is the softer one: it holds growth too, but a valve admits a single paced
- *       step while the run is demonstrably making progress and is not also timeout-frozen.</li>
- *   <li><b>Probe timeouts are excluded</b> from both the shed gate and the growth freeze — a probe
- *       carries no backpressure signal, and a pure probe storm that froze growth could never trip the
- *       shed that would end it. They are counted, for attribution only.</li>
- *   <li><b>Latency samples come only from successful attempts.</b> A timed-out attempt is a censored
- *       observation; feeding it to the baseline would poison exactly the signal the freeze reads.</li>
- *   <li><b>Steal pausing tracks the decrease paths, not the freezes.</b> Steals pause on a real
- *       decrease and resume when the clean window elapses, whether or not growth is still frozen.</li>
+ *   <li>growth starts at {@code min(4, tMax)}, doubles until the first congestion signal, then grows
+ *       additively and at a configured pace;</li>
+ *   <li>throttles reduce the target to 70%, while starvation-gated sustained worker timeouts reduce it
+ *       to 50% at most once per jittered window; both decreases floor at one;</li>
+ *   <li>worker-timeout and successful-latency freezes do not decrease the target; the latency freeze
+ *       uses a rolling-minimum baseline and permits a paced progress-gated valve step;</li>
+ *   <li>probe-class transients are excluded from congestion, freeze, and shed decisions but retained
+ *       for attribution, and latency samples represent successful attempts only;</li>
+ *   <li>decrease signals pause steals, including floor no-ops; only a numeric reduction monotonically
+ *       re-arms the clean-window cooldown. A floor no-op may resume on the next eligible success.</li>
  * </ul>
- *
- * <h2>What a reader may not conclude from this class being green</h2>
- * None of the above is mechanically checkable against the shipped controller — the two share no code
- * by design, and the purity walk that guards the engine's decision path never reaches an
- * implementation of this interface. Its correctness rests on review against the controller's own
- * documented guarantees and on the shape tests beside it, and it is a reimplementation, so a change to
- * the shipped controller is a change that has to be made here too.
- *
- * <p>Counters are accumulated internally, in name order, rather than written through a context: the
- * interface hands this class an instant and nothing else, and threading a mutable context in purely to
- * count would be the ambient coupling every other seam here removes. The executor folds
- * {@link #counters()} into the run's own at the end.
+ * Shed jitter belongs to the supplied fleet stream, and engagement counters are accumulated here for
+ * the executor to fold into the run via {@link #counters()}.
  */
 public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
 
@@ -91,13 +58,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     /** Smoothing factor of the trailing EWMA of successful-attempt latency. */
     static final double LATENCY_EWMA_ALPHA = 0.2;
 
-    /**
-     * The "this has never happened" value for every timestamp below. Explicit, and deliberately not
-     * {@code 0}: zero is a perfectly ordinary instant on a virtual clock — it is the instant every run
-     * begins at — so a zero sentinel would make "never" and "at the very start" the same value, and the
-     * two have opposite meanings for every window and pace this class keeps. Never used in arithmetic;
-     * every site tests for it first, which also avoids the overflow that subtracting it would cause.
-     */
+    /** Unarmed timestamp; zero is a valid virtual instant. Checked before timestamp arithmetic. */
     private static final long UNARMED = Long.MIN_VALUE;
 
     private final int tMax;
@@ -121,8 +82,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     private int shedWindowSuccesses;
     private int shedWindowWorkerTimeouts;
     private int shedWindowProbeTimeouts;
-    /** The window a shed most recently fired in; {@link #UNARMED} until one has. Every path that reads
-     *  it has already rolled the window, so it can never be compared against an unarmed start. */
+    /** Start of the window that last shed, or {@link #UNARMED}; reads follow window rolling. */
     private long shedFiredWindowNanos = UNARMED;
 
     private long latencyBaselineNanos;
@@ -134,9 +94,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
      * @param tMax       the configured concurrency ceiling
      * @param budgets    the run's declared windows (clean window, growth pace, timeout windows, shed
      *                   window bounds, latency decay, valve pace)
-     * @param shedJitter the fleet's shed-window draw stream — one instrument, one tape, drawn on the
-     *                   reserved fleet actor so a window's length never depends on which worker
-     *                   happened to roll it
+     * @param shedJitter the fleet-owned shed-window stream, independent of the worker that rolls it
      */
     public SimConcurrencyPolicy(int tMax, EngineTimeBudgets budgets, SimRng shedJitter) {
         if (tMax <= 0) {
@@ -146,12 +104,8 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         this.budgets = budgets;
         this.shedJitter = shedJitter;
         this.effectiveT = Math.min(SLOW_START_INITIAL_T, tMax);
-        // No window is drawn here, unlike the shipped controller, which seeds one so that a co-runner
-        // computing `now - start <= 0` against a freshly published start cannot roll the window twice
-        // before the winner's reset becomes visible. That race needs two threads. This kernel has one,
-        // the window start is UNARMED until the first roll, and the first roll always redraws — so a
-        // constructor draw would be a value nothing could ever read as a window length, taken off the
-        // fleet's jitter tape ahead of every value that is read as one.
+        // Production pre-draws to prevent a concurrent re-roll. This single-threaded port leaves the
+        // window unarmed so the first roll owns the first jitter draw.
     }
 
     @Override
@@ -166,8 +120,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
             count("AIMD.growth_blocked_cooldown");
             return;
         }
-        // Backpressure has cleared, whatever the freezes below say: the flag tracks throttling, and
-        // re-coupling it to a timeout-shaped freeze would keep a healthy fleet under-parallelised.
+        // The pause tracks decreases, not either growth freeze.
         stealingAllowed = true;
         boolean latencyFrozen = latencyFrozen();
         if (latencyFrozen) {
@@ -178,14 +131,14 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
             count("FREEZE.transient_timeouts");
         }
         if (growthFrozen) {
-            return;   // a worker-timeout storm is a hard freeze; the valve never relaxes it
+            return;   // The timeout freeze is hard; the latency valve cannot relax it.
         }
         if (latencyFrozen) {
             growThroughValve(atNanos);
             return;
         }
         if (lastGrowthNanos != UNARMED && atNanos - lastGrowthNanos < budgets.aimd().growthPaceNanos()) {
-            return;   // paced
+            return;   // Growth is paced, not per-success.
         }
         lastGrowthNanos = atNanos;
         int next = congestionSeen
@@ -205,8 +158,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     @Override
     public void onTransientTimeout(long atNanos, boolean workerClass) {
         if (!workerClass) {
-            // Excluded from the congestion latch and the growth freeze entirely; it still rolls the
-            // window and feeds the attribution split, so a mixed storm's probe share is never lost.
+            // Probe-class transients affect attribution, not congestion or the freeze/shed gates.
             rollShedWindowIfElapsed(atNanos);
             shedWindowProbeTimeouts++;
             count("GROWTH.probe_timeout_excluded");
@@ -229,7 +181,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     @Override
     public void onAttemptLatency(long atNanos, long latencyNanos) {
         if (latencyNanos <= 0L) {
-            return;   // a non-positive latency carries no signal
+            return;   // A non-positive latency carries no signal.
         }
         updateLatencyBaseline(atNanos, latencyNanos);
         latencyEwmaNanos = latencyEwmaNanos == 0L
@@ -247,29 +199,23 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         return stealingAllowed;
     }
 
-    /** This controller's engagement counters, in name order, for folding into the run's own. */
+    /** Returns engagement counters in name order for folding into the run's counters. */
     public SortedMap<String, Long> counters() {
         return Collections.unmodifiableSortedMap(new TreeMap<>(counters));
     }
 
-    /** The rolling-minimum latency baseline the freeze rung measures against; zero until a sample lands. */
+    /** Rolling-minimum latency baseline, or zero before the first sample. */
     long latencyBaselineNanos() {
         return latencyBaselineNanos;
     }
 
-    /**
-     * The jittered length drawn for the current shed window, or zero before the first window is rolled.
-     * Package-private: the draw is a property a test has to be able to read directly, since a
-     * controller that always drew the same length would behave identically to a correct one on every
-     * other observable.
-     */
+    /** Current jittered shed-window length, or zero before the first roll. */
     long shedWindowLengthNanos() {
         return shedWindowLengthNanos;
     }
 
     private void growThroughValve(long atNanos) {
-        // A latency-inflation-only freeze is a damper, not a latch: one paced step, and only while the
-        // run is demonstrably progressing (the exact complement of the shed's starvation gate).
+        // The latency valve admits one paced step only while progress exceeds the shed starvation gate.
         int successGate = Math.max(1, effectiveT / SHED_SUCCESS_DIVISOR);
         if (shedWindowSuccesses <= successGate) {
             return;
@@ -312,18 +258,13 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         }
         int next = Math.max(1, (int) (effectiveT * factor));
         if (next >= effectiveT) {
-            // At the floor, or rounding produced no change: removing zero concurrency buys no fresh
-            // cool-down, so the recovery window is deliberately NOT re-armed here.
-            // Both names, as the shipped controller records them: one says a decrease removed nothing,
-            // the other that it therefore bought no fresh recovery window. A comparison against a real
-            // run reads whichever it knows, and a missing name reads as a silent zero.
+            // A no-op decrease buys no new cooldown, so do not re-arm it.
             count("AIMD.floor_noop_rearm");
             count("AIMD.floor_rearm_suppressed");
             return;
         }
         effectiveT = next;
-        // Monotonic, so a late signal carrying an older instant cannot walk a real decrease's recovery
-        // window backwards. UNARMED loses that comparison by construction.
+        // A late signal must not move an existing cooldown backwards.
         lastThrottleNanos = Math.max(lastThrottleNanos, atNanos);
     }
 
@@ -351,12 +292,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         shedWindowProbeTimeouts = 0;
     }
 
-    /**
-     * One jittered window length in the declared bounds. The live controller draws this to desynchronise
-     * a fleet of separate processes; here it keeps a single run's windows from lining up with any
-     * periodicity the workload happens to have, and it comes off the fleet's own tape so its values do
-     * not depend on which worker rolled the window.
-     */
+    /** Draws one bounded window length from the fleet-owned deterministic stream. */
     private long drawShedWindow() {
         long min = budgets.aimd().shedWindowMinNanos();
         long span = budgets.aimd().shedWindowMaxNanos() - min + 1L;
@@ -366,7 +302,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
     private boolean growthFrozen(long atNanos) {
         if (transientWindowStartNanos == UNARMED
                 || atNanos - transientWindowStartNanos > budgets.aimd().transientTimeoutWindowNanos()) {
-            return false;   // never armed, or elapsed with no fresh timeouts: thaw
+            return false;   // Unarmed or elapsed without fresh timeouts: thaw.
         }
         return transientWindowCount >= TRANSIENT_FREEZE_THRESHOLD;
     }
@@ -378,10 +314,7 @@ public final class SimConcurrencyPolicy implements ConcurrencyPolicy {
         return (double) latencyEwmaNanos > LATENCY_FREEZE_FACTOR * (double) latencyBaselineNanos;
     }
 
-    /**
-     * The rolling minimum: a new low floors it at once, and at each decay boundary it is re-floored to
-     * the elapsed window's minimum, so a baseline rises only if the environment's true minimum has.
-     */
+    /** Updates the immediate low-water mark and the decay-window minimum. */
     private void updateLatencyBaseline(long atNanos, long sample) {
         if (latencyBaselineNanos == 0L) {
             latencyBaselineNanos = sample;
