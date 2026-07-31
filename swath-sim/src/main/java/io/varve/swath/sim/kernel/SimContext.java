@@ -8,14 +8,8 @@ package io.varve.swath.sim.kernel;
 import io.varve.swath.sim.model.EngineTimeBudgets;
 
 /**
- * Everything a running {@link SimAction} may reach: the clock, its own draw streams, the schedule,
- * the trace, the counters, and the run's declared time budgets. It is the <b>only</b> ambient
- * surface inside the simulator, and every member of it is a function of the scenario and the seed —
- * which is what makes a run reproducible.
- *
- * <p>The instance an action receives is valid only for the duration of that call: the kernel reuses
- * one context and re-points {@link #actorId()} before each dispatch, so an action must not retain it
- * past its own body (retain the values, not the context).
+ * The sole scenario- and seed-derived ambient surface available to a {@link SimAction}. The kernel
+ * reuses it and changes {@link #actorId()} on dispatch; actions must not retain the context.
  */
 public interface SimContext {
 
