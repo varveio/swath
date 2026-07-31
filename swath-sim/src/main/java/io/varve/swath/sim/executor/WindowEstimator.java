@@ -8,13 +8,10 @@ package io.varve.swath.sim.executor;
 import io.varve.swath.engine.StealMath;
 
 /**
- * The incumbent: local density times remaining span, both measured over the byte window anchored at
- * the divergence of a range's own bounds. Every method delegates to the engine's public arithmetic,
- * so a control leg is the shipped algorithm and not a re-implementation of it that could drift.
- *
- * <p>Its two degenerate readings are the ones the position-sensor work named: a zero estimate, which
- * takes a candidate out of selection; and a zero consumed span, which leaves the estimate a raw width
- * with the range's emitted keys discarded.
+ * Legacy WINDOW control, delegated to core {@link StealMath}: local density times remaining span in
+ * the range-bound window. A zero estimate removes a bounded candidate from selection; a zero consumed
+ * span falls back to raw width, discarding emitted mass. Cursor advances within one fraction reading
+ * are invisible.
  */
 final class WindowEstimator implements RemainingWorkEstimator {
 
