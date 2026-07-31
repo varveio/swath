@@ -6,50 +6,11 @@
 package io.varve.swath.sim.kernel;
 
 /**
- * One SplitMix64 draw stream. Every random number a simulated run consumes comes from one of these,
- * and every one of them is derived from the run's single base seed — there is no ambient randomness
- * anywhere in the simulator (enforced by the module's source guard test).
- *
- * <p><b>Per-actor, per-purpose streams, not one shared generator.</b> A single stream drawn from by
- * every actor would make each actor's sequence depend on the order the kernel happened to interleave
- * them, which is the opposite of reproducible under a policy change: adding one extra decision to
- * actor 3 would shift every subsequent draw of actors 0..N. Each (actor, purpose) pair instead owns
- * its own stream, so a change confined to one actor's latency draws cannot move another actor's
- * decision draws.
- *
- * <p><b>How far that isolation goes, precisely.</b> It is <em>between</em> (actor, purpose) pairs, not
- * within one. Inside a single pair the tape is consumed in event order, so an actor that reaches a
- * given draw one event later than it used to gets a different value — the {@code n}-th draw of a tape
- * is fixed, but which decision is the {@code n}-th is not. This is the same property the engine's own
- * per-worker generator has, and it is why the determinism claim is stated as "one scenario at one seed
- * reproduces itself", never as "a draw is pinned to a decision". Reading it more strongly than that
- * would make an ordinary policy change look like a defect.
- *
- * <p><b>Parity contract with the live engine: the same derivation shape, not the same tape.</b> This
- * derivation deliberately mirrors {@code io.varve.swath.engine.SeededDecisionRng#deriveWorkerSeed} in
- * swath-core: the same SplitMix64 mixing constants, the same golden-ratio offset per identity, and the
- * same refusal to read the worker/actor <em>count</em>. The two are separate implementations on
- * purpose — the sim must not depend on an engine-internal class, and the engine's own seeding must
- * stay opt-in and unchanged — so the parity is a convention, and each side's javadoc names the other
- * so that a change to one is visibly a change that has to be made to both.
- *
- * <p>What that parity does <b>not</b> claim is that the two sides hand out the same values to the same
- * decisions. It never could: the engine's worker makes a different sequence of calls than a simulated
- * actor does, so the {@code n}-th draw is not the {@code n}-th decision on both sides. The simulator
- * additionally splits its decision draws per mechanism ({@link SimRngStream}), so even the stream key
- * differs from the engine's single per-worker generator. Read the parity as "an actor id is turned
- * into a seed the same way on both sides"; any cross-instrument comparison compares call sequences and
- * pages, never draw values.
- *
- * <p><b>Why a mixed derivation rather than {@code baseSeed + actorId}.</b> {@link #forStream} runs
- * SplitMix64's mixing/finalizer step over the base seed offset by the actor id and again over the
- * result offset by the stream index, so adjacent actors get well-separated, decorrelated streams
- * rather than adjacent {@code java.util.Random}-style seeds. The derivation reads only the actor's
- * own id, never the actor <em>count</em>, so growing or shrinking a scenario's worker count adds or
- * removes streams without reshuffling the ones that stay — which is what lets a concurrency-scaling
- * sweep attribute a difference to concurrency rather than to a different random tape.
- *
- * <p>Not thread-safe, and deliberately not: the kernel is single-threaded.
+ * A deterministic SplitMix64 stream derived from the run seed, actor id, and stream purpose. Its
+ * derivation deliberately mirrors
+ * {@code io.varve.swath.engine.SeededDecisionRng#deriveWorkerSeed} as a compatibility seam; it does
+ * not claim draw-for-draw parity with the engine. Not thread-safe because the kernel is
+ * single-threaded.
  */
 public final class SimRng {
 
