@@ -10,30 +10,22 @@ import io.varve.swath.sim.kernel.SimAction;
 import io.varve.swath.sim.kernel.SimContext;
 
 /**
- * The contended form: every page queues for a shared, finite-capacity resource, so a page's
- * client-side cost is its own service time plus however long it waited behind everyone else's. Two
- * pages arriving at once at a single-capacity resource cost two pages' worth of elapsed time.
+ * Charges pages through a finite-capacity FIFO shared by the run's actors.
  *
- * <p>See {@link ClientCostModel} for when this form is the right one. Note that it is <em>not</em>
- * simply "the pessimistic version" of the independent form: at low occupancy the queue is empty and
- * the two agree exactly, so choosing this form does not uniformly slow a run down — it makes the
- * cost depend on arrival burstiness, which is the property being modelled.
- *
- * <p>The resource is stateful and is shared by every actor in a run, so one instance belongs to one
- * run. Constructing a scenario with a model instance already used by another run would carry that
- * run's queue over, which the driver prevents by taking the model per run.
+ * <p>When no request waits, it agrees with {@link IidClientCost}; queueing models bursty arrivals.
+ * Run entry points call {@link #requireReadyForNewRun()} to reject FIFO residue from an earlier run.
  */
 public final class ContendedClientCost implements ClientCostModel {
 
-    /** The resource name its counters and completion events are recorded under. */
+    /** Prefix for this resource's counters and events. */
     public static final String RESOURCE_NAME = "client_cost.server";
 
     private final ClientCostTerm term;
     private final FifoServer server;
 
     /**
-     * @param term     the per-page/per-key service time of the shared resource
-     * @param capacity how many pages it processes at once — {@code 1} for a single serial stage
+     * @param term per-page and per-key service time
+     * @param capacity concurrent pages; {@code 1} is serial
      */
     public ContendedClientCost(ClientCostTerm term, int capacity) {
         if (term == null) {
@@ -64,7 +56,7 @@ public final class ContendedClientCost implements ClientCostModel {
         }
     }
 
-    /** Pages waiting for the resource right now — the depth a saturation assertion reads. */
+    /** Current queued-page count. */
     public int queueDepth() {
         return server.queueDepth();
     }
