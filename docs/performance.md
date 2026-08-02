@@ -91,15 +91,20 @@ against the best old one, the least favourable reading available, it is still 10
 123-fixture capture corpus (465M keys total, every fixture ≤20M keys) against the
 real engine. **114 of the 123 completed.** Across those 114, the emitted key set was
 byte-identical between arms on every one — the pair changes scheduling, never output —
-and total API calls moved −0.4%. Ten fixtures gained ≥1.5×.
+and total API calls moved −0.4%. Ten fixtures gained ≥1.5×. **Twelve fixtures
+regressed 5–23%** under the new defaults, verified serially on a quiet box: one shared
+mechanism (on those shapes the pair splits work more aggressively than the extra
+parallelism pays back). Output is byte-identical on every one; an opt-in recovery
+mechanism has been measured and is tracked separately.
 
-The remaining **nine fixtures produced no result on either arm**: each stalled during
-seeding in the *pre-flip* arm and was aborted by the liveness watchdog, so the run
-never reached the arm under test. The cause was traced to the replay harness rather
-than the engine — a single delimiter rollup on those keyspaces takes ~70s of server
-compute against a ~3s client probe budget — and is tracked separately. They are a
-coverage gap: the correctness claim above covers 114 fixtures, not 123, and nothing is
-claimed about the nine either way.
+Nine further fixtures initially produced no result on either arm. The cause was a
+replay-*harness* defect, not the engine — the server answered a root delimiter rollup
+by walking ~1,000 per-prefix queries (~70s) against a ~3s client probe budget — and
+fixing it (the server's native skip-scan now serves open-upper-bound rollups; 70.34s →
+0.054s, responses byte-identical to the walk's) restored all nine: **18/18 runs
+complete, zero keyset differences**, so the byte-identical claim covers the full
+123-fixture corpus. Eight of the nine are roughly arm-neutral; one deep-nested
+forecast bucket is near-serial pre-flip and **2.0×** under the 0.2.0 defaults.
 
 **Honest limits.** The pair cures the wide-flat tail; it does not make every
 bucket parallel. Keyspaces that are deep and narrow enough that a pivot has almost
@@ -115,6 +120,34 @@ No output changes either way, so switching arms is safe mid-campaign.
 _Measured 2026-07-28 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box; live arm
 against S3 `us-east-2`, replay arm against the bundled replay server at a
 uniform latency profile. Public data only._
+
+## The 0.2.0 seed change: the scope-closing sentinel
+
+The seed pass tiles its cut-points as `(⊥,c1], …, (c_last, null]`, and the owner-split
+governor refuses to split any range whose upper bound is open — so whatever mass sorts
+past the last cut drains on **one worker, serially, however large it is**. On one real
+4.97M-key geoscience bucket, 95.2% of the keys sat under the *last* top-level prefix:
+the seed's own tiling made almost the whole bucket unsplittable.
+
+0.2.0 closes the scope when doing so is provable: if the top level was listed to
+completion and its greatest returned item is a common prefix `p/`, every key in scope
+is strictly below `prefixCeil(p/)`, and that bound is appended as one final cut — zero
+extra probes, one extra cut, the mass-bearing range gains a finite upper bound and the
+runtime splitter takes it from there. The bound is verified, never assumed (a direct
+object sorting past the last prefix declines it), and every decline reason is a named
+counter.
+
+On that bucket, replayed from a captured listing at a compressed latency profile
+(64 workers): open-frontier key share **0.952 → 0.000**, serial fraction 0.945 →
+0.001, runtime splits 15 → **482**, wall **−36%**, at *fewer* API calls (6,736 →
+5,797). Emitted key sets are byte-identical, there and across a 9-fixture control
+smoke whose walls all sit within measurement noise. The one disclosed cost: the final
+tile is empty by construction but still exists — one LIST spent, and a known small
+distortion of victim scoring, tracked separately.
+
+_Measured 2026-07-29 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box, bundled replay
+server over captured public-bucket listings; wall change is relative within the
+bench's compressed latency profile, never an absolute claim. Public data only._
 
 ## Where swath is slow (honest limits)
 
