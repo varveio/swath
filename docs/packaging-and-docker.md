@@ -82,8 +82,8 @@ runnable file. It is built with the
 It does **not** relocate or minimize classes: `sqlite-jdbc` extracts a native
 library from its packaged resource path at runtime, and relocation would break
 that lookup. This uber-jar is the same artifact the Docker image uses (§5).
-v0.1 does not publish Java-library artifacts to Maven; future release packaging
-remains a separate release-engineering decision.
+Releases do not publish Java-library artifacts to Maven; whether to is a
+separate release-engineering decision.
 
 ### installDist (`bin/swath`)
 
@@ -221,8 +221,9 @@ docker pull ghcr.io/varveio/swath@sha256:<digest>
 ```
 
 The release workflow prints the pushed manifest's digest to its run summary, so
-a consumer can copy the exact digest to pin against. **No release has been
-published yet** — until the first `vX.Y.Z` tag ships, build from source (§3–§5).
+a consumer can copy the exact digest to pin against; each GitHub release also
+ships the signed, attested assets to verify against
+([install.md §Verifying a download](install.md#verifying-a-download)).
 
 ### Tags & versioning
 

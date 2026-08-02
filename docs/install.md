@@ -1,13 +1,12 @@
 # Install & quickstart
 
-`swath` ships three ways once a release exists: a Docker image, an uber-jar,
-and JDK-requiring application-distribution archives. All three are built from the
-same Gradle output and signed with [sigstore](https://www.sigstore.dev/)
-keyless signing (GitHub OIDC, no key custody).
-
-**No release has been cut yet.** Until the first `vX.Y.Z` tag ships,
-**build from source** (below) is the only path. This page states the shape the
-other install paths take, so it does not have to change once they land.
+`swath` ships three ways: a Docker image, an uber-jar, and JDK-requiring
+application-distribution archives. All three are built from the same Gradle
+output by the tagged-release workflow, signed with
+[sigstore](https://www.sigstore.dev/) keyless signing (GitHub OIDC, no key
+custody), and attached to the
+[releases page](https://github.com/varveio/swath/releases) — pick the newest
+`vX.Y.Z`. Building from source (below) remains fully supported.
 
 ## Docker
 
@@ -17,15 +16,19 @@ docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath \
   --format parquet -o /out/data
 ```
 
-Images are published to `ghcr.io/varveio/swath` from the first release onward.
-Drop `--no-sign-request` and add credentials for a private bucket. See
+Images are published to `ghcr.io/varveio/swath`; `:latest` and the `X.Y.Z`
+semver tags are owned solely by releases, and a bare image name resolves to
+`:latest`. Drop `--no-sign-request` and add credentials for a private bucket. See
 [`packaging-and-docker.md`](packaging-and-docker.md) for the image's signal
 handling, tag scheme, and how to pin a digest rather than a mutable tag.
 
 ## Uber-jar
 
+Download `swath-X.Y.Z.jar` from the
+[releases page](https://github.com/varveio/swath/releases), then:
+
 ```
-java -jar swath.jar list s3://my-bucket/prefix/ --format parquet -o out/
+java -jar swath-X.Y.Z.jar list s3://my-bucket/prefix/ --format parquet -o out/
 ```
 
 A single self-contained file — nothing else needs to be on the classpath.
@@ -102,7 +105,7 @@ uploaded assets before it publishes, so a release that cannot be verified never 
 is the point of the check, so paste it exactly.
 
 ```sh
-TAG=v0.1.0
+TAG=v0.2.0   # the release you downloaded
 IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
 ISSUER=https://token.actions.githubusercontent.com
 

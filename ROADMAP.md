@@ -27,7 +27,7 @@ commitments; issues track the ones that are actionable today.
   for it in v1.
 - **Express One Zone (directory-bucket) listing.** Directory buckets (name suffix
   `--x-s3`) do not expose a single global lexicographic order, so range-splitting
-  is unsafe. v0.1 fails closed on that suffix before checkpoint creation or the
+  is unsafe. Current releases fail closed on that suffix before checkpoint creation or the
   first LIST request. The planned treatment is an opaque-continuation-token
   sequential path (one `(⊥, null]` worker, no stealing); the engine-side design
   is in [`docs/internals/algorithms.md`](docs/internals/algorithms.md) §10.

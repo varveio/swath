@@ -29,15 +29,23 @@ supported), distributed as a self-contained jar and an installable launcher.
 including globally sorted Parquet output and crash-safe checkpoint/resume. Still
 planned: the `inspect` and `diff` subcommands, versioned-bucket listing, and
 object stores beyond S3 (there are internal design seams, but no supported
-backend SPI in v0.1) — see
+backend SPI yet) — see
 [`ROADMAP.md`](ROADMAP.md). Flags and output schemas may still change before 1.0.
 
 ## Quickstart
 
-Until the first tagged release, build from source; released artifacts (a Docker
-image, an uber-jar, and prebuilt binaries) are on the way. See
-[`docs/install.md`](docs/install.md) for every install path and a fuller
-quickstart.
+Tagged releases ship a signed multi-arch Docker image, a self-contained
+uber-jar, and application-distribution archives — grab the newest from the
+[releases page](https://github.com/varveio/swath/releases). See
+[`docs/install.md`](docs/install.md) for every install path, download
+verification, and a fuller quickstart.
+
+```bash
+docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:latest \
+  list s3://my-bucket/prefix/ --no-sign-request --format parquet -o /out/data
+```
+
+Or from source:
 
 ```bash
 ./gradlew :swath-cli:installDist

@@ -4,7 +4,7 @@
 > this repository's Gradle project and is a supported thing to use; it is simply shipped separately
 > from the `swath` CLI rather than inside it. Its wire behavior — what it serves for a given fixture
 > — is stable and conformance-tested. Its *operational* surface (diagnostics, logging destinations,
-> JVM launcher settings) is still being smoothed and is not yet a v0.1 user contract.
+> JVM launcher settings) is still being smoothed and is not yet a stable user contract.
 
 The swath replay server serves a swath Parquet listing as an HTTP endpoint
 that looks like S3 `ListObjectsV2` — the only wire protocol it speaks today;
