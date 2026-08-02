@@ -70,6 +70,22 @@ build-independent step, **Instrumentation-drift guard**, before the Gradle build
 table in `docs/internals/metrics-internals.md`, or if that table carries a ghost row no
 code emits.
 
+### Before pushing an engine change
+
+`./gradlew build -PnoIntegration` is **not** sufficient — two CI gates live outside it, and each
+fails on a change the default build happily accepts:
+
+```bash
+./gradlew build -PnoIntegration          # fast tier + spotless
+./gradlew :swath-core:test -Pdeep        # deep tier is OPT-IN; it pins seed cut counts
+                                         #   (ShapeRegressionCorpusTest) among other things
+./scripts/ci/check-instrumentation-drift.sh   # a shell step, NOT a Gradle task
+```
+
+Both were learned the hard way on the same PR: a new counter that was not yet in the §5 registry,
+and a deep-tier `W`-cap assertion, each caught only after pushing. Any change that adds a counter
+or moves a seed cut count should assume the default build cannot see it.
+
 > **Doc gap — RSS budget.** Contract §7.2 documents a per-format peak-**heap** budget but
 > **no RSS budget**. PERF-2 therefore asserts RSS against a *derived* bound (heap budget +
 > ~2 GB JVM/native headroom), flagged in `ParquetPerf2Test` for a spec follow-up so the test

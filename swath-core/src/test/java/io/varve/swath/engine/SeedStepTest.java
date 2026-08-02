@@ -256,14 +256,21 @@ final class SeedStepTest {
         // Tiled along the observed key=value partition prefixes, capped at W — never a ~90-way ASCII
         // fan-out and never one range per leaf directory (4000 dirs).
         assertThat(specs.size())
-                .as("key=value fan-out tiled along observed prefixes, W-capped (not ASCII, not per-dir)")
+                .as("key=value fan-out tiled along observed prefixes, W-capped (not ASCII, not per-dir); "
+                        + "+1 for the scope-closing sentinel's empty final tile")
                 .isGreaterThan(1)
-                .isLessThanOrEqualTo(workers + 2);
+                .isLessThanOrEqualTo(workers + 3);
         // Every synthesized cut is an OBSERVED directory prefix ending in '/', never a one-byte ASCII
         // radix scalar appended inside a directory (the flat-tail subdivision this test's name pins).
+        //
+        // The seed's scope-closing sentinel is exempt, and is not a counter-example: it is
+        // prefixCeil(observed prefix), so its last byte is the '/' incremented to '0' by construction.
+        // It subdivides nothing — it bounds the whole scan scope so the final range stops being
+        // owner-split-ineligible. Requiring '/' of it would be requiring a prefix, which a ceiling is
+        // deliberately not.
         for (NodeSpec s : specs) {
             byte[] hi = s.rangeEnd();
-            if (hi != null) {
+            if (hi != null && !Arrays.equals(hi, scopeCeilingOf("crawl=2024/"))) {
                 assertThat(hi[hi.length - 1])
                         .as("tiled cut is a '/'-terminated directory prefix, not a synthesized ASCII scalar")
                         .isEqualTo((byte) '/');
@@ -536,8 +543,9 @@ final class SeedStepTest {
         RunSummary plainSummary = plainMetrics.summary(Duration.ofMillis(1), "WORK_STEALING", 0L, 0L);
         assertThat(plainSummary.seed()).isNotNull();
         assertThat(plainSummary.seed().mode()).isEqualTo("shallow");
-        assertThat(plainSummary.seed().cutPoints()).isEqualTo(3L);   // a/, b/, c/
-        assertThat(plainSummary.seed().ranges()).isEqualTo(4L);      // 3 cuts + final open range
+        assertThat(plainSummary.seed().cutPoints()).isEqualTo(4L);   // a/, b/, c/ + the scope-closing sentinel
+        // 4 cuts + the (sentinel, null] tile, which is empty by construction.
+        assertThat(plainSummary.seed().ranges()).isEqualTo(5L);
 
         // (c) A resumed/never-seeded run: RunMetrics without any recordSeedSummary call renders
         // seed() == null (the JSON writer's null-safety guard, exercised in JsonRunSummaryWriterTest).
@@ -599,8 +607,9 @@ final class SeedStepTest {
         MockPageFetcher onFetcher = MockPageFetcher.builder().keys(keyspace).build();
         List<NodeSpec> tiled = SeedSteps.of(onFetcher, NO_PREFIX, workers, on, EngineToggles.DEFAULT)
                 .seedSpecs(1L, SeedMode.SHALLOW);
-        assertThat(tiled.size()).as("ON: Hive key=value fan-out tiled to ~W ranges")
-                .isGreaterThan(8).isLessThanOrEqualTo(workers + 2);
+        assertThat(tiled.size()).as("ON: Hive key=value fan-out tiled to ~W ranges (+1 for the "
+                        + "scope-closing sentinel's empty final tile)")
+                .isGreaterThan(8).isLessThanOrEqualTo(workers + 3);
         assertThat(on.diagnostics(Duration.ZERO).stealReasons().getOrDefault("SEED.fanout_tiled", 0L))
                 .as("ON: SEED.fanout_tiled engagement counter fired").isPositive();
         // Exact I2/I3 tiling preserved.
@@ -1001,4 +1010,19 @@ final class SeedStepTest {
             return delegate.capabilities();
         }
     }
+
+    /**
+     * The ONE cut this fixture's scope-closing sentinel may be: {@code prefixCeil(topPrefix)}.
+     *
+     * <p>Deliberately derived from the fixture's own top-level prefix rather than recognised by
+     * shape. A structural test ("last byte is the successor of {@code '/'}, and re-ceiling the bytes
+     * with {@code '/'} restored reproduces it") is <b>tautologically true of every cut ending in
+     * {@code '0'}</b> — including a synthesized one-byte ASCII radix scalar like {@code shard/0},
+     * which is exactly what this test exists to reject. Naming the single legitimate value keeps the
+     * exemption from swallowing the regression it guards against.
+     */
+    private static byte[] scopeCeilingOf(String topPrefix) {
+        return StealMath.prefixCeil(topPrefix.getBytes(StandardCharsets.UTF_8));
+    }
+
 }
