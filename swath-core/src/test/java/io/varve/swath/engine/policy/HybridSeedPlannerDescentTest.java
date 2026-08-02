@@ -135,9 +135,9 @@ final class HybridSeedPlannerDescentTest {
 
     /**
      * TOP (page-capped, non-empty cuts) -> TOP_EXTRA (the bounded +1-page pagination), which recovers
-     * no further cuts here, then falls straight to finalize (the descent loop is skipped entirely,
-     * since a page-capped top never descends — algorithms.md §8). Exercises TOP and TOP_EXTRA without
-     * ever reaching DESCENT.
+     * one further cut, then falls straight to finalize (the descent loop is skipped entirely, since a
+     * page-capped top never descends — algorithms.md §8). Exercises TOP and TOP_EXTRA without ever
+     * reaching DESCENT, and the scope-closing sentinel firing off the recovered page's own bound.
      */
     @Test
     void topExtraPaginationRecoversTheTopLevelPastItsFirstPage() {
@@ -155,9 +155,12 @@ final class HybridSeedPlannerDescentTest {
             // outcome.commonPrefixes() from the TOP_EXTRA response into the accumulated cut set) still
             // satisfied the previous, all-empty-second-page fixture, since page 2 contributed nothing
             // either way -- an independent review's finding. "c/c/" here is a real, distinct cut this
-            // test now depends on actually reaching plan.cuts().
+            // test depends on actually reaching plan.cuts(). lastKey reports "c/c/" too: by contract
+            // (SeedStep#lastSeenKey) it is the page's own combined maximum over objects and prefixes,
+            // and a page that returns the prefix "c/c/" must report it as such — an outcome that left it
+            // null would be a malformed store response, not a legitimate declined-sentinel case.
             if ("c/".equals(p) && "c/b/".equals(after)) {
-                return new SeedProbeOutcome(List.of(b("c/c/")), false, 0, null);
+                return new SeedProbeOutcome(List.of(b("c/c/")), false, 0, b("c/c/"));
             }
             throw new AssertionError("unscripted probe: prefix=" + p + " startAfter=" + after);
         };
@@ -172,14 +175,17 @@ final class HybridSeedPlannerDescentTest {
         assertThat(plan.probes()).isEqualTo(2);
 
         assertThat(plan.cuts().stream().map(c -> new String(c, StandardCharsets.UTF_8)))
-                .containsExactly("c/a/", "c/b/", "c/c/");
+                .as("the recovered page's own cut, plus the sentinel closing the scope at "
+                        + "prefixCeil(\"c/c/\")")
+                .containsExactly("c/a/", "c/b/", "c/c/", "c/c0");
         assertThat(plan.decisions().stream().map(HybridSeedPlannerDescentTest::describe).toList())
                 .containsExactly(
                         describe(prefix, 2, true, "tiny_leaf_explosion", 2, 0),
                         describe(prefix, 1, false, "top_probe_paginated", 1, 0));
 
         assertThat(reasons(engagements))
-                .containsExactly("top_probe_paginated", "open_tile_sentinel_declined_direct_object_tail", "tiny_leaf_explosion", "top_truncated");
+                .containsExactly("top_probe_paginated", "open_tile_sentinel_appended", "tiny_leaf_explosion",
+                        "top_truncated");
     }
 
     /**

@@ -610,10 +610,17 @@ public final class HybridSeedPlanner implements SeedPlanner {
          * DYNAMIC splitter, which is the mechanism a corpus smoke proved load-bearing when more static
          * cuts regressed 6 of 10 fixtures.
          *
-         * <p><b>Every precondition below is load-bearing:</b>
+         * <p><b>Every precondition below is load-bearing</b> (checked in this order; each refusal
+         * marks its own counter):
          * <ul>
-         *   <li>{@code !topPageCapped} — a truncated top means unseen siblings may sort past what we
-         *       saw, so no bound is provable. Do nothing.</li>
+         *   <li>the top is complete — either never page-capped, or page-capped and RECOVERED by the
+         *       {@code TOP_EXTRA} continuation. A truncated, unrecovered top means unseen siblings
+         *       may sort past what we saw, so no bound is provable. Do nothing.</li>
+         *   <li>a greatest {@code CommonPrefix} exists — a flat scope offers no rolled-up prefix
+         *       whose ceiling could bound it.</li>
+         *   <li>a combined greatest returned item exists — with none reported there is nothing to
+         *       verify the bound against. Distinct from the direct-object case below: that one KNOWS
+         *       a key sorts past the prefix; this one knows nothing at all.</li>
          *   <li>the greatest item IS the greatest common prefix — if a direct object sorts past the
          *       last rolled-up prefix, {@code prefixCeil} of that prefix would NOT bound it, and the
          *       sentinel would cut the keyspace short. This is the correctness guard; it is a
@@ -622,6 +629,8 @@ public final class HybridSeedPlanner implements SeedPlanner {
          *       sentinel. Replacing the maximal cut instead of appending would merge two useful
          *       regions and spend the freed slot on an empty range: same cardinality, less initial
          *       parallelism.</li>
+         *   <li>{@code prefixCeil} is bounded — an all-{@code 0xFF} prefix has no ceiling, so there
+         *       is nothing to append.</li>
          *   <li>{@code u} strictly above the current last cut — otherwise it is a duplicate or would
          *       break sort order, and it buys nothing.</li>
          * </ul>

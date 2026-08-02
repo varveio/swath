@@ -147,11 +147,58 @@ final class SeedOpenTileSentinelTest {
      * mechanism did) declines every paginated-top bucket for no reason — and paginated tops are exactly
      * the wide-shaped buckets whose tails are worth bounding.
      *
-     * <p>Asserted through the counter rather than the tiling, because what is being pinned is which
-     * precondition the planner evaluated, not merely the outcome.
+     * <p>The fixture is direct objects sorting BELOW a handful of prefixes: {@code a0000_obj} through
+     * {@code a0994_obj} fill the first page's 1000-item cap before any {@code p0/}…{@code p9/} common
+     * prefix is reached, so page one is truncated with only the first few prefixes rolled up and
+     * {@code TOP_EXTRA} recovers the rest. That leaves the fan-out at 10 cuts, far under the 32-seed
+     * budget, so — unlike a fixture that pages solely because of prefix VOLUME — there is a spare slot
+     * left for the sentinel to actually close the scope, and the appended case this test's name promises
+     * is exercised for real rather than declined for a different reason.
      */
     @Test
     void aTruncatedTopRecoveredByPaginationStillGetsItsScopeClosed() throws Exception {
+        List<byte[]> keys = new ArrayList<>();
+        for (int i = 0; i < 995; i++) {
+            keys.add(b("a%04d_obj".formatted(i)));
+        }
+        for (int i = 0; i < 10; i++) {
+            keys.add(b("p%d/obj".formatted(i)));
+        }
+
+        Seeded run = seed(keys);
+        List<NodeSpec> tiles = run.tiles();
+
+        assertThat(run.reasons().getOrDefault("SEED.top_probe_paginated", 0L))
+                .as("the fixture must actually paginate the top for this test to mean anything")
+                .isEqualTo(1L);
+        assertThat(run.declined("top_truncated"))
+                .as("a RECOVERED top must not be refused as truncated — that was the original defect")
+                .isZero();
+        assertThat(run.appended())
+                .as("with a spare slot and a bound in hand, the scope is actually closed, not merely "
+                        + "not-declined-for-truncation")
+                .isEqualTo(1L);
+        assertThat(lastHi(tiles)).as("the final tile is still the open one").isNull();
+        byte[] penultimate = tiles.get(tiles.size() - 2).rangeEnd();
+        assertThat(penultimate)
+                .as("the tile before it is bounded by prefixCeil of the greatest recovered prefix, "
+                        + "p9/'s trailing 0x2F rolled to 0x30")
+                .isEqualTo(b("p90"));
+        assertTilesCoverKeyspace(tiles);
+    }
+
+    /**
+     * <b>The structural limitation the mechanism cannot lift:</b> a top that is ALL prefixes pages
+     * because there are simply more of them than the 32-seed budget, not because objects crowded the
+     * first page. {@code subsampleEvenly}/{@code massWeightedSubsample} return exactly {@code
+     * targetSeeds} cuts once the observed set is over-full, so by the time {@link
+     * io.varve.swath.engine.policy.HybridSeedPlanner}'s scope-closing sentinel runs, every slot is
+     * already spent on a real boundary. The sentinel's own spare-slot precondition — never evict a
+     * real cut for an empty range — then declines it correctly: recovery made the bound provable, but
+     * a fully-subscribed seed set leaves nothing to spend it on.
+     */
+    @Test
+    void aRecoveredTopWhosePrefixFanoutFillsTheSeedBudgetGetsNoSentinel() throws Exception {
         // >1000 top-level prefixes truncates the first page; the sorted tail is recovered by TOP_EXTRA.
         List<byte[]> keys = new ArrayList<>();
         for (int i = 0; i < 1400; i++) {
@@ -165,6 +212,13 @@ final class SeedOpenTileSentinelTest {
                 .isEqualTo(1L);
         assertThat(run.declined("top_truncated"))
                 .as("a RECOVERED top must not be refused as truncated — that was the original defect")
+                .isZero();
+        assertThat(run.declined("no_spare_slot"))
+                .as("1400 recovered prefixes subsample down to exactly the 32-seed budget, so no slot "
+                        + "remains for the sentinel")
+                .isEqualTo(1L);
+        assertThat(run.appended())
+                .as("a full seed set cannot take a sentinel without evicting a real cut")
                 .isZero();
         assertTilesCoverKeyspace(run.tiles());
     }

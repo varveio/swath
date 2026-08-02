@@ -1363,9 +1363,12 @@ component map for the package split.
   range is then EMPTY by construction and the mass-bearing range has a finite `hi`, making it
   eligible for owner self-split and for the thief's delimiter-structure path. Costs no probe and
   adds exactly one cut, so the static tiling is not enlarged — the region is handed to the
-  dynamic splitter. Declined (with a per-reason counter, §5) when the top is truncated and
-  unrecovered, when a direct object sorts past `pk` so the ceiling would not bound it, when the
-  cut set already fills `targetSeeds`, or when the bound is not strictly above the last cut.
+  dynamic splitter. Declined (each refusal with its own counter, §5) when the top is truncated
+  and unrecovered, when the scope returned no `CommonPrefixes` at all, when it reported no
+  combined greatest returned item to verify the bound against, when a direct object sorts past
+  `pk` so the ceiling would not bound it, when the cut set already fills `targetSeeds`, when
+  `prefixCeil(pk)` is unbounded (an all-`0xFF` prefix), or when the bound is not strictly above
+  the last cut.
   Note the empty final range is not free — see the open-tile follow-up issue. Now
   every range except the last has a finite `hi`, so exact byte-midpoint
   applies almost everywhere and only one range is ever open-ended. This is
@@ -1452,7 +1455,8 @@ component map for the package split.
     seed pass uses only the `CommonPrefixes` as cut-points and discards its
     `Contents`** (the scope-closing sentinel above is the one cut-point NOT taken
     verbatim from a `CommonPrefix` — it is `prefixCeil` of the greatest one, and its
-    derivation reads the greatest `Contents` key only to verify the bound holds)
+    derivation reads the combined greatest returned item, prefix or object, only to
+    verify that greatest `CommonPrefix` bounds everything the scope returned)
     (the top-level objects it also returns): it is a structure probe, not an
     emitting pass. Every object — including top-level ones — is (re-)listed by
     a range worker, so there is no double-emit between the seed and the ranges.
