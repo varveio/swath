@@ -152,10 +152,11 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
   *depends on* `swath-core` — reaching it from `swath-core`'s own test source set
   would need a dependency cycle, so it cannot be wired in from here as this module
   is laid out today. If this gap is worth closing, the goldens (or a
-  replay-server-backed variant of them) belong in a module that can depend on
-  both, or the replay-server fixture data would need to move somewhere
-  `swath-core` can reach without inverting the dependency graph. This is a
-  standing limitation, not a deferral with a planned follow-up.
+  replay-server-backed variant of them) cannot live in `swath-core`. `swath-sim`
+  now depends on both core and the replay server and is the available home for
+  such a check, but no end-to-end real-fixture golden trace-parity test exists
+  there today. This is a standing coverage gap, not a claim that the simulator's
+  current deterministic policy tests close it.
 - **Synthetic generators cannot reproduce real irregular key distributions.**
   Even setting the module-cycle problem aside, `Keyspaces.*`'s generators are
   parametric (uniform-within-shape, seeded PRNGs) — they cannot reproduce the

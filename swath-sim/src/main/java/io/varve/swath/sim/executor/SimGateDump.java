@@ -21,44 +21,24 @@ import java.nio.file.StandardOpenOption;
 import java.util.HexFormat;
 
 /**
- * A write-only dump of the readings a run's two gate chains actually read: one TSV row per
- * {@code OwnerSplitGovernor.decide} and one per {@code ThiefPolicy.selectVictim} pass. The columns
- * are the engine's own {@link OwnerSplitGateInputs} and {@link VictimScan} payloads — the same
- * numbers the engine emits as its {@code owner_split_decision} and {@code victim_scan} trace events
- * (docs/internals/metrics-internals.md §7) — so a simulated run's inputs can be diffed row for row
- * against a replay-server trace of the same listing, which is the only way to localise a sim-vs-engine
- * divergence to the gate that produced it.
+ * Opt-in, write-only TSV dump of owner decisions and victim scans using engine policy payloads and
+ * caller-supplied virtual instants. It supports local and future simulator/engine parity diagnosis;
+ * no end-to-end real-fixture row-for-row comparison currently validates that parity.
  *
- * <p><b>An observer, never a participant.</b> Nothing here is read back by the executor and nothing
- * here mutates anything a decision sees: a run with the dump on takes exactly the decisions it takes
- * with the dump off. It is off unless {@value #DUMP_PATH_PROPERTY} names a path, and off means
- * <em>absent</em> rather than disabled — {@link #fromSystemProperties()} returns {@code null} and the
- * executor's call sites are guarded on it, so a run that is not dumping does not format a row, render
- * a key, or read the clock for one.
- *
- * <p><b>Time is the run's own.</b> Every row is stamped with the virtual instant the deciding actor
- * was at, taken from {@code SimContext.nowNanos()} and handed in — this class never reaches for a
- * clock, which is the module-wide rule {@code SimAmbientSourceGuardTest} enforces.
- *
- * <p><b>It fails loudly or not at all.</b> The files are opened {@link StandardOpenOption#CREATE_NEW},
- * so a dump can never truncate the one before it, and every IO failure — on open, on write, on close —
- * is rethrown as an {@link UncheckedIOException} that fails the run. A diagnosis artifact that
- * silently stops halfway is worse than none: the analysis it feeds would read the truncation as a
- * finding.
+ * <p>Without {@value #DUMP_PATH_PROPERTY}, {@link #fromSystemProperties()} returns {@code null} and
+ * guarded call sites perform no dump work. Enabled dumps create both files and headers with
+ * {@link StandardOpenOption#CREATE_NEW}; open, write, flush, and close failures are reported as
+ * {@link UncheckedIOException}. If the second file cannot be opened, the first writer is closed.
  */
 public final class SimGateDump implements AutoCloseable {
 
-    /**
-     * The system property naming where the owner-decision TSV is written; absent or blank means no
-     * dump. Follows the {@code swath.sim.*} property idiom the store configuration already uses —
-     * these tools sit outside swath's CLI config system.
-     */
+    /** Owner-decision TSV path; absent or blank disables dumping. */
     public static final String DUMP_PATH_PROPERTY = "swath.sim.gate-dump";
 
-    /** What the victim-scan TSV's path adds to {@value #DUMP_PATH_PROPERTY}'s. */
+    /** Suffix appended to the configured path for the victim-scan TSV. */
     public static final String SCAN_PATH_SUFFIX = ".scans.tsv";
 
-    /** The {@code chosen_node_id} of a scan that refused, matching the engine's own trace value (§7). */
+    /** Refusal sentinel for {@code chosen_node_id}. */
     public static final long NO_CHOSEN_VICTIM = -1L;
 
     static final String DECISION_HEADER = "virtual_time_ns\tnode_id\treason\test"
@@ -77,11 +57,7 @@ public final class SimGateDump implements AutoCloseable {
         this.scans = scans;
     }
 
-    /**
-     * The dump {@value #DUMP_PATH_PROPERTY} asks for, or {@code null} when it names nothing. Both
-     * files are created and given their headers here, so a run that cannot write its dump fails
-     * before it has produced a single number.
-     */
+    /** Creates both dump files and headers, or returns {@code null} when dumping is disabled. */
     static SimGateDump fromSystemProperties() {
         String path = System.getProperty(DUMP_PATH_PROPERTY);
         if (path == null || path.isBlank()) {
@@ -103,18 +79,14 @@ public final class SimGateDump implements AutoCloseable {
     }
 
     /**
-     * One owner-split gate chain outcome, blocked or carved, against the range it decided on.
-     *
-     * <p>Writes nothing when {@code inputs} is {@code null}, which is exactly the open-frontier
-     * early-out: it reads no gate and the engine emits no {@code owner_split_decision} event for it
-     * either, so a row here would be a row the trace it is diffed against does not have.
+     * Writes one owner-split outcome. A null {@code inputs} value intentionally emits no row.
      *
      * @param virtualTimeNanos the deciding worker's own virtual instant
-     * @param nodeId           the ledger's id for the decided range, so tail-range rows can be isolated
-     * @param inputs           what the chain read on its way to its terminal gate
+     * @param nodeId           the ledger id for the decided range
+     * @param inputs           gate inputs, or {@code null} for an omitted early-out
      * @param lo               the decided range's lower bound
-     * @param cursorTo         the cursor the commit left, which is where a carve would divide
-     * @param hi               its upper bound, {@code null} on an open frontier
+     * @param cursorTo         the post-commit cursor
+     * @param hi               the upper bound, or {@code null} for an open frontier
      */
     void ownerDecision(long virtualTimeNanos, long nodeId, OwnerSplitGateInputs inputs,
                        byte[] lo, byte[] cursorTo, byte[] hi) {
@@ -138,15 +110,16 @@ public final class SimGateDump implements AutoCloseable {
     }
 
     /**
-     * One victim-selection pass over the live pool, with the bounds of whichever candidate it chose.
+     * Writes one victim scan. Refusals use {@link #NO_CHOSEN_VICTIM}, a non-null reason, and null
+     * chosen-key fields; a chosen open-frontier victim may also have a null upper bound.
      *
      * @param virtualTimeNanos the scanning thief's own virtual instant
-     * @param scan             the aggregate tallies the pass produced
-     * @param chosenNodeId     the winner's ledger id, or {@link #NO_CHOSEN_VICTIM} when it refused
-     * @param reason           the {@code NoVictimReason} code on a refusal, {@code null} on a hit
-     * @param chosenLo         the winner's lower bound, {@code null} on a refusal
-     * @param chosenCursor     the winner's cursor as the scan left it, {@code null} on a refusal
-     * @param chosenHi         the winner's upper bound, {@code null} on a refusal or an open frontier
+     * @param scan             aggregate scan tallies
+     * @param chosenNodeId     winner id or the refusal sentinel
+     * @param reason           refusal reason, or {@code null} on a hit
+     * @param chosenLo         winner lower bound, or {@code null} on refusal
+     * @param chosenCursor     winner cursor, or {@code null} on refusal
+     * @param chosenHi         winner upper bound, or {@code null} on refusal/open frontier
      */
     void victimScan(long virtualTimeNanos, VictimScan scan, long chosenNodeId, String reason,
                     byte[] chosenLo, byte[] chosenCursor, byte[] chosenHi) {
@@ -165,7 +138,7 @@ public final class SimGateDump implements AutoCloseable {
         write(scans, row);
     }
 
-    /** Flushes and closes both files; a failure to flush is a truncated dump and is thrown, not logged. */
+    /** Flushes and closes both files, throwing on any I/O failure. */
     @Override
     public void close() {
         try (BufferedWriter closingDecisions = decisions; BufferedWriter closingScans = scans) {
@@ -177,12 +150,7 @@ public final class SimGateDump implements AutoCloseable {
         }
     }
 
-    /**
-     * Appends one key column verbatim. Keys are object keys, and the dump is a private diagnosis
-     * artifact, so they are written as text rather than encoded — but a key carrying a column or row
-     * separator would shift every field after it with nothing to show for it, so that is refused
-     * rather than written.
-     */
+    /** Appends a UTF-8 key column, rejecting invalid text and TSV tab/newline separators. */
     private static void appendKey(StringBuilder row, byte[] key) {
         row.append('\t');
         if (key == null) {

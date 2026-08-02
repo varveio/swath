@@ -10,20 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The ordered trace of everything that happened in a run, and the artifact the determinism claim is
- * made against: two runs of one scenario at one seed must produce <b>byte-identical</b>
- * {@link #canonicalBytes()}. Comparing bytes rather than a summary is deliberate — a wall time and a
- * call count can agree while the interleaving that produced them differs, and it is the interleaving
- * that decides which racing actor wins.
- *
- * <p><b>Recording is opt-in</b> ({@link #recording()} / {@link #disabled()}). A run over a large
- * fixture processes events in the tens of millions, so a sweep leg keeps the log off and asserts on
- * counters; an invariant or determinism test turns it on. A disabled log accepts and drops every
- * entry, so no caller needs a null check or a conditional around a {@code record} call.
- *
- * <p>Every field of an entry is a number or a caller-supplied label. Nothing derived from the host —
- * no wall time, no thread name, no identity hash — may enter one, or the byte comparison would fail
- * for reasons that have nothing to do with the model.
+ * An optional ordered trace whose canonical UTF-8 bytes are the simulator's determinism artifact.
+ * Ordinals totally order entries at the same virtual instant. Host-derived fields are forbidden,
+ * and disabling recording must not alter simulated results.
  */
 public final class SimEventLog {
 
@@ -65,13 +54,7 @@ public final class SimEventLog {
         return entries != null;
     }
 
-    /**
-     * Appends one entry, assigning it the next ordinal. A disabled log drops it.
-     *
-     * <p>Separators are rejected here, on the way in, rather than only when the trace is serialized:
-     * a caller bug that is caught at write time names the event that caused it, whereas one caught at
-     * {@link #canonicalBytes()} has already let an unserializable trace survive an entire run.
-     */
+    /** Appends an entry, rejecting ambiguous separators immediately. A disabled log drops it. */
     void append(long atNanos, int actorId, String kind, String detail) {
         if (entries == null) {
             return;
@@ -87,11 +70,9 @@ public final class SimEventLog {
     }
 
     /**
-     * The canonical serialization: one UTF-8 line per entry,
-     * {@code atNanos \t ordinal \t actorId \t kind \t detail}, in trace order. A field's own
-     * separators are rejected at write time rather than escaped — a kind or detail containing a tab
-     * or a newline is a caller bug, and silently escaping it would let two different traces
-     * serialize to the same bytes.
+     * Serializes entries as UTF-8 lines of
+     * {@code atNanos \t ordinal \t actorId \t kind \t detail}. Tabs and newlines in fields are
+     * rejected rather than escaped so the encoding remains unambiguous.
      */
     public byte[] canonicalBytes() {
         StringBuilder out = new StringBuilder();

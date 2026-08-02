@@ -12,11 +12,7 @@ import java.util.Map;
 /**
  * One fixed service time per call class, drawing nothing.
  *
- * <p>This is the model the kernel's closed-form invariants are stated in. With constant latency and
- * client costs explicitly zeroed, a run's wall time is an arithmetic consequence of the fixture and
- * the driver — so a disagreement is a defect in the kernel, not a plausible difference of opinion
- * about physics. Every other model form is validated against a real system; this one is validated
- * against algebra.
+ * <p>This algebraic model anchors the kernel's closed-form checks when client costs are zero.
  */
 public final class ConstantLatencyModel implements LatencyModel {
 
@@ -26,7 +22,7 @@ public final class ConstantLatencyModel implements LatencyModel {
         this.perClass = perClass;
     }
 
-    /** The same service time for every class. */
+    /** Creates a model with the same service time for every call class. */
     public static ConstantLatencyModel uniform(long nanos) {
         requireNonNegative(nanos);
         EnumMap<CallClass, Long> all = new EnumMap<>(CallClass.class);
@@ -36,11 +32,7 @@ public final class ConstantLatencyModel implements LatencyModel {
         return new ConstantLatencyModel(all);
     }
 
-    /**
-     * A service time per class. Every class must be present — a partially-specified latency model
-     * would silently answer zero for the class a scenario forgot, which is the exact shape of a
-     * result that looks like a policy win and is a missing input.
-     */
+    /** Creates a per-class model; every {@link CallClass} must be present. */
     public static ConstantLatencyModel perClass(Map<CallClass, Long> nanosByClass) {
         EnumMap<CallClass, Long> copy = new EnumMap<>(CallClass.class);
         for (CallClass callClass : CallClass.values()) {

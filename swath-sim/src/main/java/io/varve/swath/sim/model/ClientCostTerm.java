@@ -6,20 +6,9 @@
 package io.varve.swath.sim.model;
 
 /**
- * What a page costs the client after it arrives: parsing it, emitting its rows, and committing the
- * cursor that covers them. A first-class term of the model, on the same footing as network latency.
+ * Per-page and per-key client cost, with provenance for interpreting results.
  *
- * <p><b>Why it is first-class, and why it may not default.</b> A listing client that is fast enough
- * on the wire becomes bound by what it does with each page, and at that point the ranking of two
- * strategies is decided almost entirely by this term. Omit it and the simulator will happily
- * "discover" strategies that are impossible — ones whose whole advantage is fetching pages the client
- * could never have processed. A term is therefore always supplied explicitly, and always carries
- * where it came from ({@link Provenance}), so a result can be read together with the confidence of
- * the input that produced it.
- *
- * <p>Zeroing the term is legal and sometimes necessary — the kernel's exact-mode invariants require
- * it — but only through {@link #zeroedForExactMode(String)}, which records that the zero was chosen
- * rather than defaulted, and marks any run using it as an arithmetic check rather than a prediction.
+ * <p>Terms are explicit. A zero term is allowed only for an exact-mode check and is not predictive.
  *
  * @param provenance  how much weight a result computed with this term can bear
  * @param perPageNanos client-side cost charged once per page returned
@@ -28,15 +17,15 @@ package io.varve.swath.sim.model;
  */
 public record ClientCostTerm(Provenance provenance, long perPageNanos, long perKeyNanos, String sourceLabel) {
 
-    /** How far a term can be trusted, and what a run using it may be used to claim. */
+    /** What claims a run using this term can support. */
     public enum Provenance {
-        /** Measured, cross-checked, and inside its predeclared acceptance band. */
+        /** Measured, cross-checked, and within its predeclared acceptance band. */
         FINAL,
-        /** Measured, but published as an interim value — usable to build against, not to conclude from. */
+        /** Measured interim value; usable for development, not conclusions. */
         PROVISIONAL,
-        /** Measured and failed at least one of its own cross-checks; the failure travels with the term. */
+        /** Measured value with a failed cross-check; not quotable as a finding. */
         PROVISIONAL_WITH_DEFECT,
-        /** Deliberately zero, so that an analytic invariant is exact. Never a prediction. */
+        /** Deliberately zero for an exact-mode check; never predictive. */
         ZEROED_FOR_EXACT_MODE
     }
 
@@ -63,26 +52,23 @@ public record ClientCostTerm(Provenance provenance, long perPageNanos, long perK
     }
 
     /**
-     * A deliberately zero term, for a run whose point is a closed-form equality rather than a
-     * prediction.
+     * Returns a deliberate zero term for an exact-mode check.
      *
-     * @param why the invariant being checked, recorded so a stray zeroed run is identifiable later
+     * @param why the checked invariant, retained in the run record
      */
     public static ClientCostTerm zeroedForExactMode(String why) {
         return new ClientCostTerm(Provenance.ZEROED_FOR_EXACT_MODE, 0, 0, why);
     }
 
-    /** Whether a result computed with this term may be quoted as a prediction about the real system. */
+    /** Whether this term models real-system cost rather than exact-mode arithmetic; see its provenance for confidence. */
     public boolean isPredictive() {
         return provenance != Provenance.ZEROED_FOR_EXACT_MODE;
     }
 
     /**
-     * The total client-side cost of one page of {@code keys} keys.
+     * Returns the client-side cost of a page with {@code keys} keys.
      *
-     * <p>The arithmetic is checked rather than wrapping: a cost that overflowed would come back
-     * negative, and a negative charge is scheduled as a delay into the past, so an unusable
-     * parameterisation would surface as a corrupt timeline rather than as an error about its input.
+     * <p>Checked arithmetic prevents overflow from becoming a negative virtual-time delay.
      */
     public long costNanos(int keys) {
         if (keys < 0) {

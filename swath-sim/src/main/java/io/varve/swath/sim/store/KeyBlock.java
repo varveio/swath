@@ -13,39 +13,13 @@ import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 
 /**
- * One row group's keys, decoded once into <b>off-heap</b> memory: a contiguous run of key bytes plus
- * an {@code int64} offset per key, searchable by unsigned byte order without materialising a key.
- * {@link StreamingListingStore}'s unit of residency.
- *
- * <h2>Why two buffers, and why off-heap</h2>
- * The layout is deliberately the plainest one that can be written to a file and read back by
- * pointing at it: {@code offsets[i]} is where key {@code i} starts and {@code offsets[i + 1]} where
- * it ends, over one byte buffer holding every key end to end. That is exactly Arrow's
- * {@code LargeBinary} shape, so the door stays open to decoding a fixture <em>once ever</em> into a
- * sidecar file and memory-mapping it on later runs ({@link java.nio.channels.FileChannel#map} yields
- * a {@link MemorySegment} over the same two buffers) instead of re-decoding Parquet per run. Nothing
- * here holds an in-process pointer, an object reference, or any other state that would not survive a
- * round trip through a file — a constraint on the layout, not a promise that the sidecar exists.
- *
- * <p>Off-heap, via {@link Arena}, for two reasons beyond that. A {@link java.lang.foreign.MemorySegment}
- * is {@code long}-indexed, so there is no 2 GiB block-splitting to do and a key can never straddle a
- * block boundary. And a tier whose whole claim is a bounded, promptly-released working set wants
- * memory it frees when it evicts, not when a collector next runs — {@link #close()} releases a
- * block's bytes at the moment the residency budget says they are gone.
- *
- * <p><b>Distinct from {@link KeyArena} on purpose.</b> That is the arena tier's single, on-heap,
- * whole-fixture key column, built once at load and never evicted; this is a per-row-group block, one
- * of many, faulted and dropped as cursors move. They share a shape (sorted keys plus an offset table,
- * searched by binary search) but not a lifecycle, an allocation strategy, or an addressing scheme,
- * and the arena tier is not rebuilt on this one.
+ * One row group's immutable, off-heap keys: contiguous bytes plus {@code long} offsets, searched
+ * copy-free in unsigned order. It is {@link StreamingListingStore}'s promptly closable residency
+ * unit, unlike {@link KeyArena}'s on-heap whole-fixture lifetime.
  */
 final class KeyBlock implements AutoCloseable {
 
-    /**
-     * Bytes per key the builder's staging buffer starts at. Comfortably above real key lengths (a
-     * measured giant fixture averages ~102), so a decode normally never grows and pays one copy into
-     * its exactly-sized final buffer; the staging buffer is transient either way.
-     */
+    /** Initial staging capacity per key; staging is discarded after the exact-size copy. */
     private static final long STAGING_BYTES_PER_KEY = 128;
 
     private final Arena arena;
@@ -73,7 +47,7 @@ final class KeyBlock implements AutoCloseable {
         return count;
     }
 
-    /** This block's off-heap footprint: the key bytes plus the {@code count + 1} entry offset table. */
+    /** Exact resident footprint: key bytes plus the {@code count + 1} offset table. */
     long residentBytes() {
         return keys.byteSize() + offsets.byteSize();
     }
@@ -102,12 +76,7 @@ final class KeyBlock implements AutoCloseable {
         arena.close();
     }
 
-    /**
-     * Binary search for the first index whose key compares {@code >= bias} against {@code key}:
-     * {@code bias == 0} keeps an exact match (lower bound), {@code bias == 1} steps past it (upper
-     * bound). The target is wrapped as a heap segment once per search, not once per comparison, so
-     * the whole search costs one wrapper and no key copies.
-     */
+    /** Shared lower/upper-bound search; wraps the target once and makes no key copies. */
     private int search(byte[] key, int bias) {
         MemorySegment target = MemorySegment.ofArray(key);
         int low = 0;
@@ -123,12 +92,7 @@ final class KeyBlock implements AutoCloseable {
         return low;
     }
 
-    /**
-     * Unsigned byte-order comparison of key {@code index} against {@code target}, copy-free.
-     * {@link MemorySegment#mismatch} does the scan (an intrinsic) and reports the smaller length when
-     * one key is a prefix of the other, which is exactly the case unsigned lexicographic order
-     * resolves by length.
-     */
+    /** Copy-free unsigned comparison; a prefix sorts by length. */
     private int compareKeyAt(int index, MemorySegment target) {
         long from = start(index);
         long to = start(index + 1);
@@ -150,15 +114,8 @@ final class KeyBlock implements AutoCloseable {
     }
 
     /**
-     * Appends a row group's keys in ascending order. Single-threaded by construction: a block is
-     * built inside one decode and is immutable afterwards.
-     *
-     * <p>The offset table is allocated once, exactly, from the row count the routing index already
-     * carries. Only the key bytes are unknown up front, so they are staged in a temporary
-     * {@linkplain Arena#ofConfined() confined arena} — grown by doubling, released the moment
-     * {@link #build()} has copied them into an exactly-sized buffer. Trimming rather than keeping the
-     * staging buffer costs one copy per decode and buys a block whose footprint is what it says it
-     * is, which is what makes the residency budget a real bound rather than an approximate one.
+     * Builds one declared-size row group in ascending order. The fixed offset table and trimmed
+     * final key buffer make {@link #residentBytes()} an exact residency charge.
      */
     static final class Builder {
 
@@ -188,12 +145,11 @@ final class KeyBlock implements AutoCloseable {
         }
 
         /**
-         * Appends {@code key}, or returns {@code false} without appending when the block would exceed
-         * {@code maxBytes}. Once {@code false} is returned the block is over budget for good — the
-         * caller abandons it rather than serving a row group with keys missing from the middle.
+         * Appends {@code key}, or returns {@code false} without changing the block when it exceeds
+         * {@code maxBytes}; callers must abandon that row group rather than create a hole.
          *
          * @throws RowGroupOrderException when {@code key} is not strictly above its predecessor
-         * @throws IllegalStateException  when more keys arrive than the row group declared
+         * @throws IllegalStateException when more keys arrive than declared
          */
         boolean append(byte[] key) {
             if (count == rowCount) {
@@ -214,11 +170,7 @@ final class KeyBlock implements AutoCloseable {
             return true;
         }
 
-        /**
-         * @throws IllegalStateException when fewer keys arrived than the row group declared — the
-         *                               offset table would then be part-written and every search over
-         *                               the block's tail would read a zero offset as a real one
-         */
+        /** @throws IllegalStateException when fewer keys arrived than declared */
         KeyBlock build() {
             if (count != rowCount) {
                 throw new IllegalStateException("row group declared " + rowCount + " rows but only "
@@ -234,8 +186,7 @@ final class KeyBlock implements AutoCloseable {
             return new KeyBlock(arena, keys, offsets, count);
         }
 
-        /** Releases everything allocated so far, for a build abandoned part-way (an over-budget row
-         *  group, or a decode that threw). */
+        /** Releases allocations for an over-budget or failed decode. */
         void discard() {
             if (staging != null) {
                 staging.close();
@@ -246,20 +197,11 @@ final class KeyBlock implements AutoCloseable {
         }
 
         /**
-         * Every lookup a block answers is a binary search, so a row group that hands back a duplicate
-         * or an out-of-order key does not merely degrade it — it corrupts every later search, and the
-         * store then reports confident wrong answers. Sorted-serving eligibility proved the ascent of
-         * row-group <em>first</em> keys only; this is what proves it within a group.
-         *
-         * <p>Raised {@linkplain RowGroupOrderException#atRow unlocated}: a block knows its own row
-         * ordinal and nothing about the fixture it came from, and {@link StreamingListingStore}'s
-         * decode adds the file and row group — the same typed reason the replay server's skip-scan
-         * raises, so a sweep classifies a disorder exclusion identically on both sides.
+         * Binary search requires strict within-group order. The block reports its row ordinal; the
+         * store adds fixture and row-group context to the typed failure.
          */
         private void requireAscending(byte[] key) {
-            // The decoder hands over a fresh array per row and never reuses it, so retaining the
-            // previous one is a plain heap comparison — no read back out of the staging buffer, and
-            // no per-key segment wrapper on the hottest loop in the tier.
+            // Retain the decoder's fresh row array to avoid reading staging memory for this check.
             if (previousKey != null && Arrays.compareUnsigned(previousKey, key) >= 0) {
                 throw RowGroupOrderException.atRow(count,
                         "row group keys must arrive in strictly ascending unsigned order; key " + count

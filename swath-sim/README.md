@@ -17,31 +17,25 @@ the **discrete-event kernel** that drives it.
 
 The simulator does not run a listing and time it. It **computes** what the timings would be.
 
-The clock is a plain number of nanoseconds, and it only moves when the model says something
-happened. Alongside it is a queue of events scheduled for future instants — "this page request
-completes at t + 4.1 ms", "this worker's backoff expires at t + 5 ms". The kernel loops: take the
-earliest event in the queue, jump the clock straight to its instant, run it (which typically
-schedules more events), repeat until the queue is empty. All the time in between, in which nothing
+The clock is a plain number of nanoseconds. Alongside it is a queue of events scheduled for future
+instants — "this page request completes at t + 4.1 ms", "this worker's backoff expires at t + 5 ms".
+The kernel takes the earliest event, jumps the clock straight to its instant, and runs its body
+atomically; events at the same instant run in scheduling order. It repeats until the queue is empty
+or the scenario's duration or event ceiling stops the run. All the time in between, in which nothing
 happens, is skipped for free. That is what makes it fast: a modelled ten-minute listing costs
-whatever its few million events cost to process, not ten minutes.
+whatever its events cost to process, not ten minutes.
 
 Virtual time buys two things beyond speed.
 
 - **Reproducibility.** The kernel is single-threaded and events are totally ordered by
-  `(instant, scheduling sequence)`, so there is nothing for a host scheduler to decide. Every random
-  draw comes from a stream derived from the run's single seed, one stream per actor and purpose. Two
-  runs of one scenario at one seed therefore produce byte-identical event logs — and a policy change
-  shows up as a difference in the log rather than as noise. (This is determinism *inside the
-  simulator*; a real multi-worker run's thread scheduling stays outside anyone's control.)
-
-  The **byte-identity check** is stated on traces that fit in memory: the log accumulates entries on
-  the heap and serialises the whole trace to compare it, so it is enabled for invariant and
-  determinism runs and disabled for sweeps, where it would dominate the cost. A rolling digest would
-  lift that ceiling and is deliberately **not** built yet: the measured event volume of a run at
-  realistic scale (a few million events for a very large bucket, see below) is well inside what the
-  in-memory log handles, so the ceiling is not currently reached. The claim is therefore "identical
-  traces, on fixtures whose traces fit" — and a fixture large enough to need the digest needs it
-  built first, rather than needing this sentence reinterpreted.
+  `(instant, scheduling sequence)`, so there is nothing for a host scheduler to decide. Randomness
+  is derived from the run's single seed and isolated by actor (or the reserved fleet identity) and
+  purpose or policy mechanism. Adding actors does not re-seed existing actors, and consuming more
+  draws from one stream does not shift another stream. Within a stream, draws are consumed in event
+  order, so changing when that mechanism draws can change its later values. Two runs of one scenario
+  at one seed therefore produce byte-identical recorded event logs; recording can also be disabled
+  without changing the simulated result. This is determinism *inside the simulator*; a real
+  multi-worker run's thread scheduling stays outside anyone's control.
 - **Inputs you state rather than inherit.** Request latencies, the client-side cost of processing a
   page, and the engine's own time budgets (probe timeouts, pacing windows, run duration ceiling) are
   all **declared parameters** of a scenario, not properties of the machine the simulation runs on.
@@ -52,6 +46,15 @@ The price is honesty about what is modelled. Store answers are ground truth — 
 pagination, real truncation — but every duration in a result is only as good as the model that
 produced it, which is why the module refuses to run without an explicit client-cost term and why its
 own tests pin closed-form answers in the mode where the arithmetic is exact.
+
+> **Current model limits.** Ordinary `SimExecutor.run` defaults to `SensingVariant.CURRENT`, which
+> leaves the estimator seam `null` and therefore selects the legacy `WINDOW` sensor. Scenario toggles
+> still select `REACH_FLOORED` and the other current mechanisms, so an ordinary default scenario is a
+> `WINDOW` + `REACH_FLOORED` hybrid, not the production 0.2.0 defaults (rate-anchored sensing plus
+> `REACH_FLOORED`). `RATE_ANCHORED_FLOOR_QUARTER` delegates to production's promoted sensor. Also,
+> `EngineTimeBudgets.engineDefaults()` uses one 3 s probe-attempt budget for seed, pivot, and structure
+> calls; production uses 3 s for point-class pivot probes and 10 s for scan-class seed/structure calls.
+> Historical experiment results below remain measurements of the explicitly stated arms and budgets.
 
 ### Two instruments, not two attempts at one
 
@@ -91,7 +94,7 @@ backend per fixture, so a conformance or differential run could never compare th
 | Backend | What it is | Metadata |
 |---|---|---|
 | `ARENA` | Keys-only in-memory arena: segmented key-byte blocks plus long offsets, built once from any other `ListingStore` and then answered entirely from memory. For a fixture whose whole key set fits the configured budget. | **Stubbed** (sim-mode projection, below) |
-| `STREAMING` | Keys-only **decode-once** tier: each row group of a sorted fixture is decoded to off-heap keys the first time a cursor reaches it, then served from memory, and evicted behind the cursors. For fixtures too large for the arena. | **Stubbed** |
+| `STREAMING` | Keys-only **on-demand decoded-block** tier: a sorted fixture's row groups are decoded to off-heap keys when reached, cached while resident, and evicted behind the cursors. An evicted group is decoded again if revisited. For fixtures too large for the arena. | **Stubbed** |
 | `WINDOWED` | The replay module's sequential-window prefetch decorator (`WindowedListingStore`) wrapping its sorted-Parquet store, in process. **Forced-only** — see below. | Full |
 | `PARQUET` | The replay module's Parquet-backed store, unchanged. The differential reference. | Full |
 | `AUTO` | `ARENA` when the fixture's encoded key bytes fit the configured budget; else `STREAMING` when the fixture is sorted-eligible; else `PARQUET`. | Depends on the resolution |
@@ -168,23 +171,23 @@ pay for on every key of every fixture, so these tiers skip loading it altogether
 is explicit: **their responses are ground truth for keys, pagination and truncation only.**
 Anything that needs real metadata must use a `PARQUET`-backed backend.
 
-### The streaming tier: decode once, serve from memory, evict behind the cursors
+### The streaming tier: decode on demand, serve from residency, evict behind the cursors
 
 A simulated run issues on the order of 150,000 store calls, so anything the serving loop does per
 call is multiplied by 150,000. The streaming tier's whole design is to make *decode* not one of
 those things.
 
-- **A segment is one row group**, decoded keys-only the first time a read reaches it. A fixture's
+- **A segment is one row group**, decoded keys-only when a read faults it into residency. A fixture's
   row groups hold hundreds of thousands of rows, so one decode is amortised over hundreds of
-  1000-row pages; served calls after that are a binary search and a walk, the same shape (and the
-  same cost class) as the arena tier.
+  1000-row pages while resident; served calls are then a binary search and a walk, the same shape
+  (and the same cost class) as the arena tier. A later revisit after eviction decodes it again.
 - **Mid-keyspace starts seek, they do not scan.** A steal or a split starts a fresh cursor at an
   arbitrary key. The derived row-group index (`SortedFixtures`/`SortedEligibility`, shared with the
   replay server's sorted-serving path) locates the one row group containing that key by binary
   search, and decode begins there — nothing earlier in the file is touched. The
-  `swath.sim.store.streaming.segment.fault{kind}` counter separates these (`seek`) from a cursor
-  walking off the end of its current segment (`forward`), so a workload's access shape is readable
-  from the metrics alone.
+  `swath.sim.store.streaming.segment.fault{kind}` counter records `forward` when the preceding row
+  group is resident and `seek` otherwise. These are observable access-shape signals, not proof of
+  which cursor caused the fault.
 - **Memory is bounded by configuration, not by fixture size.** Decoded segments live in an
   access-ordered map bounded by `swath.sim.streaming.max-resident-bytes`; the least recently used is
   released once the budget is exceeded, which for N mostly-sequential cursors is exactly "evict
@@ -275,9 +278,12 @@ A timeout only means something relative to the latencies it bounds. Under a scal
 experiment those ratios move, which is how a timeout pathology disappears from a reproduction — the
 budget stayed at three seconds while the call it bounds got ten times faster. Virtual time can state
 the ratio exactly, so every one of them is a declared input: probe and worker attempt timeouts, the
-transient-retry ceilings, the pacing windows, and the adaptive controller's own windows. Defaults
-restate what the shipped engine uses, so a scenario that wants "today's engine" says so, and a
-scenario that wants a different ratio states the difference against a written reference.
+probe retry cap, the worker retry threshold, the pacing windows, and the adaptive controller's own
+windows. The worker threshold is a stopping ceiling only under simulated `BOUNDED`; simulated
+`RIDE_OUT` ignores it, while probe chains stay bounded under either disposition. Most defaults restate
+what the shipped engine uses, so a scenario can state its reference point and vary ratios deliberately.
+The current single probe-attempt field is the approximation disclosed in the model-limit note above,
+not an exact restatement of production's point/scan split.
 
 An action body runs atomically in virtual time — the clock does not move and no other actor runs
 inside it — which is how a lock hold is expressed without a lock. State read in one event and used
@@ -286,14 +292,14 @@ widened read window, and the race it permits, is expressed without a thread.
 
 ## Running the real policies
 
-The point of the module. `SimExecutor` runs swath's **actual** decision code — the seed planner, the
-owner-side split governor, the thief's victim selection and pivot cascade, the idle-steal pacing —
-against a fixture, in virtual time. Nothing is reimplemented: those modules are consumed exactly as the
-engine consumes them, as decisions over views that return actions and mutations. What the simulator
-supplies is the other half of that seam: it builds the views, issues what the decisions ask for,
-applies the mutations they return, and owns everything the policies deliberately never see — the clock,
-the concurrency target, the ranges' bookkeeping, and the check that decides whether a proposed split
-survives.
+The point of the module. `SimExecutor` runs swath's **shared decision policies** — the seed planner,
+the owner-side split governor, the thief's victim selection and pivot cascade, and the idle-steal
+pacing — against a fixture, in virtual time. Those modules are consumed exactly as the engine consumes
+them, as decisions over views that return actions and mutations. What the simulator supplies is the
+other half of that seam: it builds the views, issues what the decisions ask for, applies the mutations
+they return, and owns everything the policies deliberately never see — the clock, the ranges'
+bookkeeping, and the guarded split outcome. Adaptive concurrency is the explicit port described next,
+not shared implementation.
 
 One mechanism is a **port** rather than the real thing: the adaptive-concurrency controller. It is the
 most timing-coupled code in the engine — jittered windows, paced valves, a decaying latency baseline,
@@ -307,19 +313,23 @@ agree.
 placing a pivot, and by the time it proposes the split the victim may have drained past it. The
 proposal is then refused — exactly as in a real run, and for exactly the same reason. A simulator that
 let it through would report splits a real fleet never gets, on precisely the workloads where stealing
-is hardest. The full ordering contract, including the two disclosed timing widenings the executor
+is hardest. The full ordering contract, including the three disclosed timing widenings the executor
 models and what a cancelled timer costs a run's event budget, is in
 [`docs/executor-ordering.md`](docs/executor-ordering.md).
 
-**There are two losers of that race, and only one of them is where the losses are.** The engine
+**There are two guard stages, and the first is where ordinary footrace losses land.** The engine
 re-validates its pivot against the victim as it stands *now*, immediately before proposing the split,
-and then the durable split is guarded again on the same facts. The first check is where a thief that
-spent its probes on a drainer it cannot catch finds out — `RETRY.cursor_passed_pivot`,
-`RETRY.bound_moved`, reported as `splits_lost_revalidation`. The second can only fire when something
-changed *between* a re-validation that passed and the split it authorised, which needs a second
-proposer, and the fleet admits one steal attempt at a time. So `splits_rejected` sits at zero on runs
-that are losing four proposals in five, and that zero is a fact about the ordering rather than a
-simulator that cannot lose. Both are in the run record, named apart, for exactly that reason.
+and then the ledger guards the expected bound and cursor again and additionally rejects an already
+completed node. The first check is where a thief that spent its probes on a drainer it cannot catch
+usually finds out — `RETRY.cursor_passed_pivot`, `RETRY.bound_moved`, reported as
+`splits_lost_revalidation`. The completion guard needs no mutation between that re-validation and the
+serial ledger call: a final non-empty page marks the ledger node complete before its client-side cost
+is charged, while its progress-eligible worker remains in `livePool` until that cost finishes. A
+proposal whose pivot is still above the final cursor can pass the in-memory checks during that interval
+and be rejected by the ledger. The single steal-attempt slot makes a concurrent second proposer
+unavailable in the modelled fleet. Thus `splits_rejected` is a counter for this late guard, not for all
+lost races; the ordering doc reports the measured rejection and zero-rejection cases. Both stages are
+in the run record, named apart, for exactly that reason.
 
 **How often that race is lost turns on one ratio the scenario declares: what a probe costs relative to
 a page.** This README used to say the opposite — that the loss share is a property of the keyspace and
@@ -383,7 +393,7 @@ Two parts of that record are worth naming, because a counter total cannot expres
   it was given. Nothing in swath-core changes to produce them, because whether a sensor works is a
   property of the keys, and a fixture that defeats it needs to be able to say so in numbers. They are
   read **through whichever sensor the run steers on** (below): the question a counter answers is whether
-  *this* run's sensor could see *this* keyspace, so reading the shipped arithmetic under a candidate
+  *this* run's sensor could see *this* keyspace, so reading the legacy-window arithmetic under a candidate
   would report the disease while the cure was running.
 
 ### Dumping what the gates read
@@ -392,10 +402,12 @@ A counter says a gate fired *n* times; it cannot say which reading made it fire,
 run and a real one disagree that is the only question worth asking. `-Dswath.sim.gate-dump=<path>`
 turns on a per-decision dump: one TSV row per `OwnerSplitGovernor.decide` past the open-frontier
 early-out, and — at `<path>.scans.tsv` — one per `ThiefPolicy.selectVictim` pass. The columns are the
-engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which are also what the engine emits
-as its `owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7), so the two
-sides diff **row for row against a replay-server trace of the same listing** and a divergence lands on
-the gate and the reading that produced it. The decision file carries `virtual_time_ns`, `node_id`,
+engine's own `OwnerSplitGateInputs` and `VictimScan` payloads, which also feed the engine's
+`owner_split_decision` and `victim_scan` trace events (metrics-internals.md §7). The schemas are not
+identical: the simulator adds key bounds and omits production's `worker_count`, so comparison requires
+normalization. No end-to-end same-fixture golden comparison currently validates row-for-row parity;
+the dump provides the inputs needed to build and localize one. The decision file carries
+`virtual_time_ns`, `node_id`,
 `reason`, `est`, `pages_since_last_self_split`, `outstanding`, `far_ahead_fraction`, `density_ratio`,
 `keys_emitted`, then the decided range's own `lo`, `cursor_to` and `hi` — the bounds, because sim node
 ids and a replay run's node ids are different id spaces and a tail range is matched by *keys*. The scan
@@ -414,32 +426,31 @@ rather than at one it has already written.
 ### Swapping the position sensor
 
 Victim choice, pivot mass floors, the owner's self-split and the density feedback all steer on one
-quantity: estimated remaining work on a range. The engine computes it one way — a local density times a
-remaining span, both measured in a byte window anchored at the divergence of the range's own bounds —
-and on a deep-nested keyspace that reading is degenerate. `SensingVariant` makes the quantity swappable
-*here*, so a candidate cure can be run against a fixture without the engine changing at all:
+quantity: estimated remaining work on a range. The legacy `WINDOW` sensor computes a local density
+times a remaining span in the range-bounds window and is degenerate on deep-nested keyspaces.
+`SensingVariant` makes the quantity swappable here so alternatives remain reproducible:
 
 | variant | reading |
 |---|---|
-| `CURRENT` | the shipped one; delegates to the engine's own public `StealMath`, so a control leg is the algorithm and not a copy of it |
+| `CURRENT` | the legacy `WINDOW` control selected by the simulator's null estimator seam; it delegates to the engine's `StealMath`, but is not production's 0.2.0 default sensor |
 | `RATE` | remaining work is what the range has already produced. No key-shape inference; the only byte comparison is the exact test for a cursor that has reached its bound |
-| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the shipped one exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside the shipped window's own width, reads an order of magnitude lower |
+| `CURSOR_ANCHORED` | the same density-times-span reading, in a window anchored at the cursor's own divergence from `lo`. Byte-identical to the legacy window exactly where the cursor leaves `lo` at the byte `hi` does, and not one byte wider — a cursor that diverges deeper still, but inside that window's own width, reads an order of magnitude lower |
 | `RATE_CURSOR_ANCHORED` | the rate estimate, which the anchored geometry may adjust within a stated band |
-| `RATE_ANCHORED_FLOOR_QUARTER` | the same, with the band's lower half cut short at a quarter — **the arm the corpus race promoted**. Its composition lives in the engine (`io.varve.swath.engine.RateAnchoredEstimator`, selectable on a real run with `--engine-toggle rate_anchored_sensing=on`) and this arm delegates to it, exactly as `CURRENT` delegates to `StealMath`, so neither side can drift from the reading that was measured |
+| `RATE_ANCHORED_FLOOR_QUARTER` | the same, with the band's lower half cut short at a quarter — **the arm the corpus race promoted and production now defaults to**. Its composition lives in the engine (`io.varve.swath.engine.RateAnchoredEstimator`) and this arm delegates to it, so neither side can drift from the reading that was measured |
 | `RATE_ANCHORED_LIFT_ONLY` | the same, with the band's lower half removed: geometry may **lift** a range's proven mass and never cut it. A factor below one asserts that less remains than has already come out, which is the inference the rate reading exists to refuse — and it is what refused a straggler's carve at the owner's remaining-work floor until the range had emitted 64 pages (`CarveAdmissionRaceProtocol`) |
 
-`SimExecutor.run` takes one, defaulting to `CURRENT`; every other run, sweep and golden is therefore on
-the shipped sensor and reads exactly what it read before. The rungs of the geometry-floor ladder the
+`SimExecutor.run` takes one, defaulting to `CURRENT`; an unqualified run is therefore on the legacy
+control sensor, with its scenario's independently selected toggles. The geometry-floor rungs that the
 sweep rejected (`..._EIGHTH`, `..._HALF`, the symmetric `RATE_CURSOR_ANCHORED` and lift-only ends) are
 kept so those races stay reproducible; they run through the promoted arm's engine object at their own
 floor rather than through a second implementation of it. Victim selection, the owner-split gate chain
 and the whole pivot cascade are **the engine's own classes**, consumed through the estimator seam they
 already have (#68): an arm is a `RemainingWorkEstimator` handed to `OwnerSplitGovernor` and
-`ThiefPolicy`, and no mirror of either remains in this module — so a variant run and a deployed run
-differ in the sensor and in nothing else. `SensingVariantParityTest` drives the battery through that
+`ThiefPolicy`, and no mirror of either remains in this module. Within those policy objects, variant
+arms differ only in the sensor. `SensingVariantParityTest` drives the battery through that
 chain under every arm (decisions complete and stable; the observed-mass floor's structural zero visible
-under each), and pins `CURRENT` against a chain nobody steered — which is what says the sensor seam
-carries the shipped path unchanged. The route itself is instrumented like every other algo path here: a
+under each), and pins `CURRENT` against an unsteered legacy-window chain. The route itself is
+instrumented like every other algo path here: a
 run counts `SENSING_ROUTE.owner_split_*` and `SENSING_ROUTE.thief_*` once each, off whether an estimator
 was actually installed, so which sensor a table's legs were taken through is a reading of the run rather
 than an inference from its `sensing` field. A run on a rate+anchored arm also emits the engine's own
@@ -626,7 +637,7 @@ Three choices decide what its numbers mean, and all three are visible in the out
 - **Two screening seeds, four where it matters.** Four seeds is the verdict standard; the sweep
   screens at two and escalates to all four on any fixture whose screen *diverged* — a collapsed leg
   (serial fraction above ½) at any arm or seed, steals mostly finding no victim at any arm and either
-  seed, or a duration gap either way between the shipped sensor and **any** candidate arm, read both
+  seed, or a duration gap either way between the `CURRENT` control and **any** candidate arm, read both
   over the two screening seeds' mean **and at each seed on its own**. Both halves of that last one
   matter: screening against a single candidate leaves a divergence only the other candidate shows
   unexamined, and a mean over two seeds is the reading least able to see a bimodal fixture — one leg
@@ -705,7 +716,7 @@ placed by a structure probe (219 probes, zero wins), against three on the same m
 accession, and the estimate discards its victim's emitted keys for 72% of the victims it is computed
 over.
 
-Its readings are pinned in two places, both as characterizations of *current* behaviour that a change
+Its readings are pinned in two places, both as characterizations of *legacy-window control* behaviour that a change
 to how remaining work is measured is expected to break. `PositionSensorCharacterizationTest` runs it
 against the hash-fanned corpus at the same size, and against *itself under a uniform mass* — which is
 what separates the two claims: the same geometry is just as blind (94% of commits invisible) and costs

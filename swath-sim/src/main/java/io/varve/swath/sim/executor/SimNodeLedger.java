@@ -13,44 +13,26 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The simulator's stand-in for the two things a real run's durable checkpoint provides: the ready
- * queue of claimable ranges, and the compare-and-set that decides whether a proposed split is allowed
- * to become a node.
+ * Single-event-loop, in-memory stand-in for claimable ranges, outstanding work, and the guarded
+ * durable-split outcome. It models neither persistence nor resume.
  *
- * <p><b>The CAS is the back-stop, not the race.</b> A thief picks its pivot against a snapshot it read
- * earlier, without holding anything; between that read and the split the victim may have advanced past
- * the pivot, or another thief may have narrowed the same bound. The durable split is guarded on all
- * three facts — the bound is still the one the proposal was made against, the cursor has not reached
- * the pivot, and the node has not completed — and rejects the proposal otherwise.
+ * <p>A split proposal is accepted only when its expected bound still matches, the cursor remains
+ * before the pivot, and the parent is incomplete. Thief proposals arrive after explicit executor
+ * revalidation; owner proposals rely on invariants established in the same event body.
+ * {@link #splitsAborted()} counts every ledger-guard rejection, not all lost races.
  *
- * <p>The engine checks the first two of those <em>again</em>, immediately before proposing, and that
- * earlier check is where a lost race is normally observed ({@code RETRY.cursor_passed_pivot} /
- * {@code bound_moved}). What reaches this guard is only what survived it, so a rejection here needs a
- * change between the two — a second proposer, or a node that completed in between. The fleet admits one
- * steal attempt at a time, so {@link #splitsAborted()} stays at or near zero on runs that are losing
- * most of their steals: it is the late loser, and reading it as the run's footrace record is a mistake
- * (see {@code PolicyRunResult#splitsLostAtRevalidation()}). The guard is reproduced anyway because the
- * engine has it and because the completion case is genuinely reachable.
- *
- * <p>What is deliberately <b>not</b> modelled: durability itself. Writing a row costs time, and that
- * time is charged by the client-cost model's checkpoint stage, which is where it belongs; the ledger
- * only decides outcomes. Nothing here is persisted, so nothing here can be resumed — a simulated run
- * is one process's lifetime by construction.
- *
- * <p>Single-threaded, like everything else the kernel dispatches: the ordering that would need locks in
- * a real executor is provided here by the fact that an event body runs alone.
+ * <p>Serial event execution supplies ordering here; this class does not model the thread-safe CAS
+ * implementation used by the production executor.
  */
 final class SimNodeLedger {
 
-    /** What {@link #splitNode} returns when the guard rejects the proposal. */
+    /** Returned when the split guard rejects a proposal. */
     static final long SPLIT_ABORTED = -1L;
 
     /**
-     * A claimable range: the node's id, its immutable start, its resume cursor, and its bound.
+     * A claimable range. {@code nodeId} is its identity.
      *
-     * <p>Its {@code byte[]} components make the generated {@code equals}/{@code hashCode} compare array
-     * <em>references</em>, so read a claim's fields — never key a map or a set by one. {@code nodeId} is
-     * the identity to look a range up by.
+     * <p>Its byte arrays make generated equality and hashing reference-based.
      */
     record Claim(long nodeId, byte[] lo, byte[] cursor, byte[] hi) {
     }
@@ -75,7 +57,7 @@ final class SimNodeLedger {
     private long splitsCommitted;
     private long splitsAborted;
 
-    /** Adds one seed range and counts it outstanding. */
+    /** Creates one ready seed and counts it as outstanding. */
     long addSeed(byte[] lo, byte[] hi) {
         long id = nextNodeId++;
         nodes.put(id, new Node(lo, lo, hi));
@@ -84,28 +66,28 @@ final class SimNodeLedger {
         return id;
     }
 
-    /** The next claimable range, or {@code null} when none is ready right now. */
+    /** Removes the next ready claim, or returns {@code null}. */
     Claim poll() {
         return ready.poll();
     }
 
-    /** Ranges neither completed nor yet created-and-completed — the quiescence counter. */
+    /** Live nodes not yet accounted complete; this is the quiescence counter. */
     long outstanding() {
         return outstanding;
     }
 
-    /** Whether the run is finished: nothing ready and nothing outstanding. */
+    /** Whether no live nodes remain. */
     boolean quiescent() {
         return outstanding == 0L;
     }
 
-    /** One range finished; returns what remains. */
+    /** Accounts one completed node and returns the remaining live-node count. */
     long decrement() {
         outstanding--;
         return outstanding;
     }
 
-    /** A node's durable cursor advance, and its completion when its last page lands. */
+    /** Advances the simulated committed cursor and optionally marks the node complete. */
     void commitPage(long nodeId, byte[] cursorTo, boolean completed) {
         Node node = nodes.get(nodeId);
         if (cursorTo != null) {
@@ -117,8 +99,8 @@ final class SimNodeLedger {
     }
 
     /**
-     * The guarded durable split of {@code nodeId} at {@code pivot}, proposed against the bound
-     * {@code expectedHi} the proposer read earlier.
+     * Narrows the parent and creates a child only if {@code expectedHi} still matches, the cursor is
+     * before {@code pivot}, and the parent is incomplete.
      *
      * @return the new child's id, or {@link #SPLIT_ABORTED} when the guard rejects the proposal
      */
@@ -138,27 +120,25 @@ final class SimNodeLedger {
     }
 
     /**
-     * Publishes a freshly split child to the ready queue and counts it outstanding. Separate from
-     * {@link #splitNode} because the real engine publishes under the parent's lock, after the durable
-     * split returns and before the lock is released — the ordering that stops quiescence from ever
-     * observing a moment where a parent has given up its tail and the child is uncounted.
+     * Publishes a split child as ready and outstanding. The caller performs this after
+     * {@link #splitNode} and before parent completion can expose a false quiescent gap.
      */
     void enqueueChild(long childId, byte[] lo, byte[] hi) {
         ready.add(new Claim(childId, lo, lo, hi));
         outstanding++;
     }
 
-    /** Durable splits that committed. */
+    /** Accepted split proposals; each narrowed a parent and created one child. */
     long splitsCommitted() {
         return splitsCommitted;
     }
 
-    /** Split proposals the guard rejected — the late loser; see the class note for why it is rare. */
+    /** Proposals rejected by the ledger guard. */
     long splitsAborted() {
         return splitsAborted;
     }
 
-    /** Nodes ever created, seeds included. */
+    /** Seed and split-child nodes ever created. */
     long nodesCreated() {
         return nextNodeId - 1L;
     }

@@ -12,33 +12,9 @@ import java.util.PriorityQueue;
 import java.util.TreeMap;
 
 /**
- * The discrete-event kernel: a virtual clock, a queue of future events, and a single-threaded loop
- * that repeatedly pops the earliest event, jumps the clock to it, and runs it. Nothing happens
- * between events, so the time in which nothing happens costs nothing to simulate — that is the whole
- * speed argument, and it is why a run's wall time is a modelled quantity rather than a measured one.
- *
- * <h2>The total order, and why it is the interesting part</h2>
- * Events are ordered by {@code (atNanos, sequence)}, where {@code sequence} is a global counter
- * stamped at schedule time. That is a strict total order over every event ever scheduled, so there
- * is never a tie for the kernel to break arbitrarily, and the dispatch order is a pure function of
- * the scenario and the seed.
- *
- * <p>Two actors can nonetheless sit at the same instant, and the order between them is then "whoever
- * scheduled first". This is not a technicality to be smoothed over: it is the mechanism by which a
- * simulated race has a winner and a loser. An actor that reads shared state in one event and acts on
- * it in a later one is exposed to every event another actor manages to run in between — precisely
- * the widened read window a real engine has between snapshotting a victim's cursor and re-validating
- * it under a compare-and-set, and precisely why the loser's re-validation legitimately fails.
- * Conversely, everything one event body does is atomic with respect to every other actor (see
- * {@link SimAction}), which is how a lock hold is expressed. Between those two shapes the kernel can
- * state any interleaving a real executor's locking discipline permits, without a lock, a thread, or
- * a memory model.
- *
- * <h2>No framework</h2>
- * The kernel is deliberately this small and fused to the models it drives. A general-purpose
- * simulation library brings its own clock, its own process abstraction and its own randomness, all
- * of which stand between a scenario and the closed-form invariants this module asserts in the modes
- * where they are exact.
+ * A single-threaded discrete-event kernel. Events dispatch in {@code (atNanos, sequence)} order;
+ * each event body is atomic with respect to other actors, and work it schedules runs only after the
+ * body returns.
  */
 public final class SimKernel implements SimContext {
 
@@ -46,15 +22,9 @@ public final class SimKernel implements SimContext {
     public static final int NO_ACTOR = -1;
 
     /**
-     * The reserved actor id a <b>fleet-wide</b> instrument draws on — one that belongs to the whole
-     * run rather than to any actor (the AIMD controller's shed-window jitter is the case that exists).
-     * Such a draw must not be attributed to whichever actor happened to trigger it, or its value would
-     * become a function of the interleaving, which is exactly what per-actor tapes exist to prevent.
-     *
-     * <p>Deliberately <b>not</b> {@link #NO_ACTOR}: that value is also what {@link #actorId()} reports
-     * outside any dispatch, so keying fleet streams on it would let a stray out-of-dispatch
-     * {@link #rng(SimRngStream)} silently share a tape with the fleet's own. A distinct id makes the
-     * two impossible to collide, and the out-of-dispatch call is rejected outright below.
+     * Reserved for fleet-wide draws, so their values do not depend on which worker triggered them.
+     * Distinct from {@link #NO_ACTOR} so fleet streams cannot collide with rejected out-of-dispatch
+     * draws.
      */
     public static final int FLEET_ACTOR = -2;
 

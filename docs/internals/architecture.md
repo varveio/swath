@@ -49,6 +49,9 @@ dependency rules, and the decisions behind them — see
 | `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
 | `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
 
+`swath-sim` is a present consumer of the policy seam: `SimExecutor` drives `HybridSeedPlanner`,
+`OwnerSplitGovernor`, `IdleStealPacingPolicy`, and `ThiefPolicy` in virtual time.
+
 **Known seam exceptions:** four, all closed. `engine.policy`'s convention is that a policy is a
 deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
 and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
@@ -66,8 +69,8 @@ The four CLOSED exceptions:
   `ThreadLocalRandom.current()` (issue #20) — the draw is now injected as a `DecisionRng`
   (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live default as
   `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source as before, so
-  live-run behavior is unchanged (goldens verified byte-identical) — while tests and a future
-  simulator inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
+  live-run behavior is unchanged (goldens verified byte-identical) — while tests and the simulator
+  inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
   proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
   `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
   `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded generator for
@@ -119,16 +122,14 @@ both `observe(byte[])` and `maskWords()` while the other three checks stay green
 blind spots (a mutator that returns a value; a value type aliasing an array its caller keeps
 writing to) are disclosed in the test's javadoc.
 
-**Port defined, not wired: `ConcurrencyPolicy`.** Unlike the five `engine.policy` types listed in the
-table row above, `ConcurrencyPolicy` (algorithms.md §5) has no engine implementation behind it —
-`ConcurrencyGauge` (`engine`, AIMD) stays exactly as it is, and nothing constructs, holds, or calls
-this interface. It exists solely so a simulator can carry its own faithful port of the AIMD
-controller behind a documented shape; extraction of the real controller is deliberately deferred
-(AIMD's clean-window cooldowns, shed windows, and valve pacing are the most timing-coupled mechanism
-in the engine, and the divergence risk of a simulator-side port was judged low). Because nothing
-holds it as a field, `DecisionPathPurityTest`'s closure walk never reaches an implementation of it —
-see that test's "Known gaps" javadoc and `ConcurrencyPolicy`'s own javadoc for what is, and is not,
-mechanically checked.
+**Simulator port present, production port not wired: `ConcurrencyPolicy`.** `SimExecutor` constructs
+`SimConcurrencyPolicy`, which implements this interface as a virtual-time port of the AIMD controller.
+Production still uses `ConcurrencyGauge` directly; nothing in production constructs, holds, or calls a
+`ConcurrencyPolicy`. Extracting the real controller remains deferred because its clean-window
+cooldowns, shed windows, valve pacing, and latency baseline race under CAS. The simulator tests the
+port's deterministic signals and documented transitions, but no test proves it equivalent under
+production concurrency. `DecisionPathPurityTest` also does not reach the simulator implementation;
+see that test's "Known gaps" javadoc and `ConcurrencyPolicy`'s own javadoc for the exact audit boundary.
 
 **Dormant seams (built but not active in v0.1):**
 - `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.

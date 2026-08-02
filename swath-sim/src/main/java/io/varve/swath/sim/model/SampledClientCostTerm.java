@@ -8,44 +8,13 @@ package io.varve.swath.sim.model;
 import io.varve.swath.sim.kernel.SimRng;
 
 /**
- * A {@link ClientCostTerm} that can be <b>drawn from</b> rather than only averaged: the same
- * provenance-carrying magnitude, plus an optional ladder of measured quantiles a run samples through
- * its own client-cost tape.
+ * A {@link ClientCostTerm} charged as a scalar or sampled per page from measured quantiles.
  *
- * <p><b>Why a mean is not always enough.</b> Two of the measured client-side stages have a heavy
- * upper tail — a short common case with occasional work an order of magnitude larger (a rotation, a
- * flush, a stalled commit). Their mean sits several times above their median, so charging every page
- * the mean makes every page equally slow and erases the tail entirely: the run's total is roughly
- * right while its distribution is wrong, and it is the distribution that decides whether a policy
- * that bursts pays for the burst. Sampling reproduces both.
- *
- * <p><b>What the ladder is, exactly.</b> An empirical inverse CDF through the published quantiles,
- * linear between neighbours, flat below the lowest and flat above the highest. It deliberately does
- * <b>not</b> invent values outside the measured range in either direction: nothing was measured out
- * there, and a simulator that fabricates its own tail — or its own floor — is making a claim the data
- * does not support.
- *
- * <p><b>The bias that buys, stated in both directions.</b> Holding the ladder flat outside its ends is
- * not free, and it is not one-sided:
- *
- * <ul>
- *   <li><b>Above the top quantile it understates.</b> Beyond the last measured point every draw returns
- *       that point, so the extreme tail is truncated. The measured maxima are several times the
- *       published p99, so a run's very worst pages are cheaper here than they were in reality.</li>
- *   <li><b>Below the bottom quantile it overstates.</b> No minimum was published, so every draw under
- *       the lowest quantile returns that quantile — the entire lower half of the distribution is
- *       charged at its median. This is the larger of the two effects.</li>
- * </ul>
- *
- * <p>Concretely, for the measured worker term (median 4.30, p90 9.55, p99 18.45 ms/page): the ladder's
- * own mean is <b>≈6.36 ms/page against a published mean of 5.85</b>, i.e. <b>+8.8%</b>. A run charged
- * through it is therefore slightly pessimistic per page, and deliberately so — the alternative was
- * inventing a floor. A caller that needs the published mean exactly asks for {@link #scalar} instead
- * and gives up the shape; a caller that needs both takes the two runs and reads the difference. A test
- * pins the ≈6.36 figure, so a change to the ladder that moves this bias cannot pass silently.
- *
- * <p>Sampling is per <b>page</b>. The per-key component of the underlying term (if any) is added
- * unsampled: it is a linear cost of the page's size, not a random quantity.
+ * <p>The empirical inverse-CDF ladder interpolates between strictly ascending quantiles and is flat
+ * outside them: it avoids inventing an unmeasured floor or tail, at the cost of overstating below the
+ * first point and understating above the last. The pinned worker ladder consequently averages about
+ * 6.36 ms/page rather than its published 5.85 ms/page (+8.8%). Inputs are validated and copied;
+ * per-key cost remains unsampled.
  */
 public final class SampledClientCostTerm {
 
@@ -59,10 +28,7 @@ public final class SampledClientCostTerm {
         this.nanos = nanos;
     }
 
-    /**
-     * A term charged at its mean, drawing nothing — the right form for a stage whose measured
-     * distribution is tight, and the only form available for one published as a mean alone.
-     */
+    /** A term charged at its scalar cost, consuming no random draw. */
     public static SampledClientCostTerm scalar(ClientCostTerm term) {
         if (term == null) {
             throw new MissingSimDependencyException("client cost term (per-page client service cost)");
@@ -103,20 +69,17 @@ public final class SampledClientCostTerm {
         return new SampledClientCostTerm(term, fractions.clone(), nanos.clone());
     }
 
-    /** The underlying term, with the provenance a result has to be read against. */
+    /** The underlying term and its provenance. */
     public ClientCostTerm term() {
         return term;
     }
 
-    /** Whether this term draws (has a ladder) or is charged at its mean. */
+    /** Whether this term has a quantile ladder. */
     public boolean isSampled() {
         return fractions != null;
     }
 
-    /**
-     * This term's cost for one page of {@code keys} keys, drawn from {@code rng} when the term is
-     * sampled and returned as the flat mean when it is not.
-     */
+    /** Draws this page's cost when sampled; otherwise returns its scalar cost. */
     public long drawNanos(int keys, SimRng rng) {
         if (fractions == null) {
             return term.costNanos(keys);
@@ -125,7 +88,7 @@ public final class SampledClientCostTerm {
         return Math.addExact(perPage, term.costNanos(keys) - term.perPageNanos());
     }
 
-    /** The ladder's value at {@code u}; package-private so the interpolation is directly testable. */
+    /** Returns the ladder value at {@code u}; package-private for interpolation tests. */
     long sample(double u) {
         if (u <= fractions[0]) {
             return nanos[0];

@@ -14,25 +14,13 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * A {@link ListingStore} that answers every range read from a {@link KeyArena} held in memory:
- * one binary search for the lower bound, then a walk. No query engine, no I/O, no decode — the
- * per-call cost a simulator needs when it issues millions of list requests per sweep, where a
- * bounded Parquet query's tens of milliseconds would dominate the whole run.
- *
- * <h2>The sim-mode projection: keys are ground truth, metadata is not</h2>
- * The arena loads <b>keys only</b> and answers through {@link SimModeRows}, which states that
- * contract for every keys-only tier in this module.
- *
- * <h2>No {@code delimitedRollup} override</h2>
- * {@link ListingStore#delimitedRollup} exists because a store with a high fixed per-call cost
- * turns a wide {@code delimiter=/} probe into hundreds of round trips. This store has no fixed
- * per-call cost worth amortising: the pager's range walk is a binary search and a scan over an
- * in-memory array. Declining keeps every delimiter rule in the pager, where the differential
- * suite can attribute a disagreement to a store by construction.
+ * Keys-only {@link ListingStore} backed by a {@link KeyArena}. Rows use {@link SimModeRows}, so
+ * metadata is stubbed and {@link Projection} is ignored. Range bounds use binary search; delimiter
+ * rollup stays in the pager, where no store round trip needs amortising.
  */
 public final class ArenaListingStore implements ListingStore {
 
-    /** Rows pulled per source read while loading. Large enough that load is a scan, not a ping-pong. */
+    /** Rows fetched per source read while loading. */
     static final int LOAD_BATCH_ROWS = 65_536;
 
     private final KeyArena arena;
@@ -42,25 +30,14 @@ public final class ArenaListingStore implements ListingStore {
     }
 
     /**
-     * Streams every key out of {@code source} — any {@link ListingStore}, so an arena can be built
-     * over whichever backend can read the fixture on disk — and packs it into an arena, returning
-     * empty when the result would exceed {@code maxEncodedBytes}.
-     *
-     * <p>The budget is checked as keys arrive rather than predicted up front: an exact answer,
-     * whose wasted work is bounded by the budget itself, beats estimating a mean key length. The
-     * caller is left to decide what an over-budget fixture means — a hard failure for an
-     * explicitly requested arena, a fall back to another backend for an automatic choice.
-     *
-     * <p>{@code source} is read, not adopted: this store does not close it and does not reference
-     * it afterwards.
+     * Loads source keys in exclusive-resume batches, returning empty if their exact encoded size
+     * exceeds {@code maxEncodedBytes}. This store borrows and never closes {@code source}.
      */
     public static Optional<ArenaListingStore> loadWithin(ListingStore source, long maxEncodedBytes) {
         return loadWithin(source, maxEncodedBytes, KeyArena.SEGMENT_BYTES);
     }
 
-    // segmentBytes is a seam, not a knob: production always uses KeyArena.SEGMENT_BYTES, and a test
-    // pins it small so cross-segment keys are exercised end-to-end through the pager rather than
-    // only in the arena's own unit tests.
+    // Test seam; production always uses KeyArena.SEGMENT_BYTES.
     static Optional<ArenaListingStore> loadWithin(ListingStore source, long maxEncodedBytes, int segmentBytes) {
         KeyArena.Builder builder = KeyArena.builder(maxEncodedBytes, segmentBytes);
         ByteKey cursor = null;
@@ -83,7 +60,7 @@ public final class ArenaListingStore implements ListingStore {
         return arena.size();
     }
 
-    /** This arena's encoded footprint in bytes — the quantity the capacity budget is measured in. */
+    /** This arena's encoded footprint in the capacity-budget unit. */
     public long encodedBytes() {
         return arena.encodedBytes();
     }
@@ -95,8 +72,7 @@ public final class ArenaListingStore implements ListingStore {
             return List.of();
         }
         int start = start(from, fromInclusive);
-        // The exclusive upper bound is one more binary search, not a comparison per row: both ends
-        // of the half-open range are resolved to indices before a single key is materialised.
+        // Resolve the lower and exclusive upper indices before materialising keys.
         int end = toExclusive == null ? arena.size() : arena.lowerBound(toExclusive.toByteArray());
         if (end <= start) {
             return List.of();
@@ -110,7 +86,7 @@ public final class ArenaListingStore implements ListingStore {
 
     @Override
     public void close() {
-        // Nothing to release: the arena is plain heap, reclaimed with this store.
+        // No owned external resource.
     }
 
     private int start(ByteKey from, boolean fromInclusive) {

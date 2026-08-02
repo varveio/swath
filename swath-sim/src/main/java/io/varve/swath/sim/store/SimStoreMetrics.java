@@ -12,60 +12,43 @@ import io.micrometer.core.instrument.Timer;
 import java.util.Locale;
 import java.util.function.Supplier;
 
-/**
- * The simulator store's own signals: which backend {@link SimStoreFactory} resolved and why it
- * declined the ones above it (mirroring the replay server's {@code serving.path} /
- * {@code serving.fallback} pair), plus how the {@link SimStoreBackend#STREAMING} tier behaved while
- * serving. Both must be answerable from a sweep's metrics alone — otherwise a result set carries no
- * record of what produced it, and a threshold or residency regression looks like a throughput
- * regression.
- */
+/** Backend selection and streaming-tier metrics for simulator sweeps. */
 public final class SimStoreMetrics {
 
     /** Bumped once per resolved store, tagged with the backend that will serve the fixture. */
     public static final String BACKEND_METRIC = "swath.sim.store.backend";
 
-    /** Bumped when an {@link SimStoreBackend#AUTO} resolution declines the arena tier. */
+    /** Auto-resolution decline of the arena tier. */
     public static final String ARENA_DECLINE_METRIC = "swath.sim.store.arena.decline";
 
     /** {@link #ARENA_DECLINE_METRIC} reason: the fixture's keys exceed the configured byte budget. */
     public static final String DECLINE_OVER_BUDGET = "over-budget";
 
-    /** Bumped when an {@link SimStoreBackend#AUTO} resolution declines the streaming tier (the fixture
-     *  is not sorted-eligible), tagged with the {@code io.varve.swath.replay.fixture.SortedFixtures}
-     *  eligibility reason that fired. */
+    /** Auto-resolution decline of streaming, tagged with its sorted-eligibility reason. */
     public static final String STREAMING_DECLINE_METRIC = "swath.sim.store.streaming.decline";
 
-    /** Bumped once per already-decoded segment a range read touches — a read spanning several
-     *  segments can bump this once per segment and still bump {@link #SEGMENT_FAULT_METRIC} for
-     *  another one of them, so the two are not mutually exclusive outcomes of a single read. */
+    /** Already-decoded segments touched; a read may also fault a different segment. */
     public static final String SEGMENT_HIT_METRIC = "swath.sim.store.streaming.segment.hit";
 
     /** Bumped once per segment fault, tagged {@link #FAULT_FORWARD} or {@link #FAULT_SEEK}. */
     public static final String SEGMENT_FAULT_METRIC = "swath.sim.store.streaming.segment.fault";
 
-    /** {@link #SEGMENT_FAULT_METRIC} kind: a cursor walked off the end of the segment it was served
-     *  from, so the preceding row group is still resident — the sequential-stream shape. */
+    /** Fault with the preceding row group resident, usually from a cursor walking forward. */
     public static final String FAULT_FORWARD = "forward";
 
-    /** {@link #SEGMENT_FAULT_METRIC} kind: nothing precedes the faulted row group in the resident set
-     *  — a cursor started mid-keyspace (a steal or a split), or the first touch of a run. */
+    /** Fault with no preceding resident row group, such as a split, steal, or first touch. */
     public static final String FAULT_SEEK = "seek";
 
     /** Wall time of one segment decode; its count is the fault count and its sum the decode total. */
     public static final String SEGMENT_DECODE_METRIC = "swath.sim.store.streaming.segment.decode";
 
-    /** Rows decoded across every segment fault — the numerator of the decode-once claim. */
+    /** Rows decoded across all segment faults, including refaults after eviction. */
     public static final String SEGMENT_DECODE_ROWS_METRIC = "swath.sim.store.streaming.segment.decode.rows";
 
     /** Bumped per decoded segment dropped to stay inside the residency budget. */
     public static final String SEGMENT_EVICT_METRIC = "swath.sim.store.streaming.segment.evict";
 
-    /** Bumped when a segment decode refuses the row group it was reading, tagged with the typed
-     *  reason ({@code io.varve.swath.sort.RowGroupOrderException#ROW_GROUP_DISORDER}). A decline
-     *  above ({@link #STREAMING_DECLINE_METRIC}) means another tier served the fixture; this one
-     *  means nothing can, so a sweep must be able to tell the two apart — and to tell a disorder
-     *  exclusion from any other read failure without matching a message. */
+    /** Decode refusal, tagged with a typed reason; unlike a decline, no fallback tier served it. */
     public static final String SEGMENT_REFUSED_METRIC = "swath.sim.store.streaming.segment.refused";
 
     /** The decoded segments' current footprint in bytes. */
@@ -118,20 +101,14 @@ public final class SimStoreMetrics {
         Counter.builder(SEGMENT_DECODE_ROWS_METRIC).register(registry).increment(rows);
     }
 
-    /**
-     * Publishes {@code residentBytes} as {@link #RESIDENT_BYTES_METRIC}. A gauge, not a counter: the
-     * quantity a residency budget is checked against is the value right now, not a total.
-     */
+    /** Publishes current residency as a gauge. */
     public void registerStreamingResidentBytes(Supplier<Number> residentBytes) {
-        // Micrometer's Gauge normally holds only a weak reference to its value source, but the
-        // registered Meter holds `residentBytes` (here a bound method reference onto the store
-        // itself) strongly, and the gauge is never explicitly deregistered. Safe only because each
-        // SimStoreFactory.open() call gets its own fresh, unshared MeterRegistry and untagged name,
-        // so the gauge's lifetime is the registry's (and the store's, which it keeps alive).
+        // The registered gauge keeps this supplier (and its store) strongly. Each open has an
+        // unshared registry, so that lifetime is bounded by the store's registry.
         Gauge.builder(RESIDENT_BYTES_METRIC, residentBytes).register(registry);
     }
 
-    /** The lowercase spelling of a backend, matching how the replay server tags its serving path. */
+    /** Lowercase backend tag value. */
     public static String tagValue(SimStoreBackend backend) {
         return backend.name().toLowerCase(Locale.ROOT);
     }

@@ -7,9 +7,8 @@ package io.varve.swath.sim.driver;
 
 import io.varve.swath.replay.protocol.ByteKey;
 
-/**
- * A half-open span of the keyspace, {@code [fromInclusive, toExclusive)} in unsigned byte order — the
- * unit of work a simulated worker claims and lists to exhaustion.
+/** A half-open unsigned-byte key range, {@code [fromInclusive, toExclusive)}; null bounds are open.
+ * Empty and inverted ranges are rejected.
  *
  * @param fromInclusive lower bound, {@code null} for open (start of the keyspace)
  * @param toExclusive   upper bound, {@code null} for open (end of the keyspace)
@@ -23,7 +22,7 @@ public record KeyRange(ByteKey fromInclusive, ByteKey toExclusive) {
         }
     }
 
-    /** The whole keyspace, both bounds open. */
+    /** Returns the whole keyspace. */
     public static KeyRange wholeKeyspace() {
         return new KeyRange(null, null);
     }

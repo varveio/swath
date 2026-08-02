@@ -19,29 +19,15 @@ import java.util.TreeMap;
 import java.util.function.Supplier;
 
 /**
- * Runs many scenarios against <b>one open store</b>, which is the only shape in which a sweep is
- * affordable: opening a large fixture costs more than a whole run does, so a sweep that opened per leg
- * would spend most of its time doing the one thing every leg has in common.
+ * Runs scenarios in order against one caller-owned open store.
  *
- * <p>Reusing the handle is what makes the two rules below necessary, and both are the kind of mistake
- * that produces plausible numbers rather than an error:
- *
- * <ul>
- *   <li><b>A fresh client-cost model per leg.</b> The composite and contended forms own queues. A run
- *       cut short by a ceiling leaves work in them, and carrying that into the next leg would make one
- *       leg's result depend on its predecessor's — the single thing a reproducible simulator may not
- *       do. This class takes a supplier, not a model, so there is no way to pass one twice.</li>
- *   <li><b>Store metrics are per-open, not per-run.</b> The meter registry belongs to the handle, so
- *       every leg after the first reads counters that include its predecessors'. Each leg's result
- *       therefore carries the <em>delta</em> over that leg, taken here, rather than a cumulative
- *       reading that would silently attribute the whole sweep's store work to its last leg.</li>
- * </ul>
- *
- * <p>The handle is the caller's throughout: this class uses it, never opens it, never closes it.
+ * <p>Each leg receives a fresh client-cost model: some implementations retain queues. Store metrics
+ * belong to the open handle, so each result reports its counter and timer deltas rather than cumulative
+ * values.
  */
 public final class SimSweep {
 
-    /** One leg's outcome: what the run produced, and what the store did during it. */
+    /** A run result and its per-leg store counter/timer deltas. */
     public record Leg(PolicyRunResult run, SortedMap<String, Double> storeMetricsDelta) {
 
         public Leg {
@@ -55,9 +41,8 @@ public final class SimSweep {
     /**
      * Runs every scenario in {@code legs} against {@code store}, in order.
      *
-     * @param freshClientCost supplies a new client-cost model per leg (see the class note)
-     * @param registry        the store handle's own meter registry, or {@code null} when the caller has
-     *                        none — an in-memory test fixture, typically
+     * @param freshClientCost supplies a new client-cost model per leg
+     * @param registry        the store handle's meter registry, or {@code null} when it has none
      * @param storeLabel      what served the sweep, recorded on every leg's run record
      */
     public static List<Leg> run(List<PolicyScenario> legs, Supplier<ClientCostModel> freshClientCost,
@@ -80,12 +65,8 @@ public final class SimSweep {
     }
 
     /**
-     * Every counter and timer count in {@code registry}, by name, or an empty map when there is none.
-     *
-     * <p>Counters and timers only: a gauge is a level, not an accumulation, so subtracting one leg's
-     * reading from the next would produce a "delta" with no meaning — a store's open-file gauge that
-     * read the same at both ends would report zero change over a leg that opened and closed a hundred.
-     * Levels are deliberately absent rather than silently differenced.
+     * Snapshots counters and timer counts by name, or returns an empty map for no registry.
+     * Gauges are levels, not accumulations, and are deliberately not differenced.
      */
     private static SortedMap<String, Double> snapshot(MeterRegistry registry) {
         TreeMap<String, Double> values = new TreeMap<>();
