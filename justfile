@@ -138,6 +138,7 @@ release VERSION NEXT="":
     if [[ ! "$next" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
         echo "error: NEXT must be a stable X.Y.Z (the -SNAPSHOT suffix is added for you); got '$next'" >&2; exit 2
     fi
+    ./scripts/ci/verify-release-notes.sh "{{VERSION}}" docs/ops/dev/RELEASE_NOTES.md
     sed -i -E 's/^version=.*/version={{VERSION}}/' gradle.properties
     git add gradle.properties
     git commit -m "Release v{{VERSION}}"

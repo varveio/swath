@@ -199,6 +199,18 @@ arbitrary SQLite path.
   is in flight. It is deleted on clean completion, so a finished dataset carries no
   checkpoint bookkeeping — only the artifacts above.
 
+Any pre-existing dataset root or `data/`, `_staging/`, and `.swath/` entry must
+not be a symbolic link; those three managed child entries must also be
+directories when present. swath's fixed checkpoint, marker, and
+atomic-temporary files must not be symbolic links. swath checks these paths
+without following links and refuses a link planted before startup, before it
+validates, creates, opens, lists, truncates, or deletes managed contents; remove
+the link or choose another output directory. Directory datasets use a
+single-process ownership model: concurrently replacing entries while swath is
+running is outside the supported threat model, so this startup refusal is not a
+claim of race safety against a hostile process mutating the dataset at the same
+time.
+
 **The output is a directory of parts — read it as one dataset.** The files
 under `data/` plus `manifest.json` *are* the deliverable, in the standard
 multi-part columnar layout every query engine reads transparently

@@ -10,7 +10,11 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
@@ -50,6 +54,7 @@ import org.slf4j.LoggerFactory;
 final class DatasetDirGuard {
 
     private static final Logger log = LoggerFactory.getLogger(DatasetDirGuard.class);
+    private static final String ATOMIC_WRITE_TMP_SUFFIX = ".tmp";
 
     private DatasetDirGuard() {
     }
@@ -78,10 +83,11 @@ final class DatasetDirGuard {
      */
     static void guardFreshRunDatasetDir(Path outputDir, boolean overwrite, boolean restart)
             throws InvalidArgsException, IOException {
-        if (!Files.exists(outputDir)) {
+        requireNoManagedSymlinks(outputDir);
+        if (!Files.exists(outputDir, LinkOption.NOFOLLOW_LINKS)) {
             return;   // absent -> created + run
         }
-        if (!Files.isDirectory(outputDir)) {
+        if (!Files.isDirectory(outputDir, LinkOption.NOFOLLOW_LINKS)) {
             throw new InvalidArgsException("-o " + outputDir + " is a file, not a dataset directory; "
                     + "point -o at a new or empty directory (or a .parquet single-file destination)");
         }
@@ -123,6 +129,97 @@ final class DatasetDirGuard {
         throw new InvalidArgsException(outputDir + " is not empty and holds no swath dataset (no "
                 + "valid manifest.json or .swath-state.json); refusing to write into it — point -o at "
                 + "a new or empty directory, or remove its contents first");
+    }
+
+    /**
+     * Refuse a pre-existing symbolic link at the managed dataset root, at a managed directory, or
+     * at a fixed file path that swath may open or truncate. The attributes are deliberately read
+     * with {@link LinkOption#NOFOLLOW_LINKS}: following first and checking the target would turn a
+     * link to a directory into an apparently-valid dataset and let validation, checkpoint creation, or a
+     * lifecycle sweep escape the requested root.
+     *
+     * <p>This is the common precondition for every managed-path entry point in this class and for
+     * {@link ListCommand}'s checkpoint opening. It protects the supported case of links planted
+     * before swath starts. It is not a claim that a concurrently-hostile process cannot swap a
+     * checked directory entry afterward; directory datasets have a single-process ownership model.
+     */
+    static void requireNoManagedSymlinks(Path outputDir)
+            throws InvalidArgsException, IOException {
+        BasicFileAttributes rootAttributes = readAttributesNoFollowIfExists(outputDir);
+        if (rootAttributes == null) {
+            return;
+        }
+        if (rootAttributes.isSymbolicLink()) {
+            throw symlinkRefusal(outputDir, "dataset root");
+        }
+        if (!rootAttributes.isDirectory()) {
+            return;   // guardFreshRunDatasetDir supplies the more specific file-vs-directory steer
+        }
+        DatasetLayout layout = DatasetLayout.of(outputDir);
+        List<Path> managedDirectories = List.of(
+                layout.dataDir(),
+                outputDir.resolve(ListCommand.SORT_STAGING_DIR),
+                outputDir.resolve(CheckpointOptions.COLOCATED_DIR));
+        for (Path managedPath : managedDirectories) {
+            BasicFileAttributes attributes = readAttributesNoFollowIfExists(managedPath);
+            if (attributes != null && attributes.isSymbolicLink()) {
+                throw symlinkRefusal(managedPath, "managed dataset directory");
+            }
+            if (attributes != null && !attributes.isDirectory()) {
+                throw new InvalidArgsException("managed dataset path " + managedPath
+                        + " is not a directory; refusing to use it as swath-managed storage — "
+                        + "remove the file and restore a real directory, or choose a different -o directory");
+            }
+        }
+
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+        for (Path sqliteFile : List.of(
+                checkpoint,
+                withSuffix(checkpoint, "-wal"),
+                withSuffix(checkpoint, "-shm"),
+                withSuffix(checkpoint, "-journal"))) {
+            requireNotSymlink(sqliteFile, "managed checkpoint file");
+        }
+
+        // Atomic writers truncate their fixed .tmp path before renaming it over the final marker.
+        // The final manifest/state markers are also read during validation and resume. Check both
+        // forms without following them so neither read nor truncate can escape the dataset root.
+        List<Path> rootArtifacts = List.of(
+                layout.manifest(), layout.state(), layout.success(), layout.symlink());
+        for (Path artifact : rootArtifacts) {
+            requireNotSymlink(artifact, "managed dataset artifact");
+            requireNotSymlink(withSuffix(artifact, ATOMIC_WRITE_TMP_SUFFIX),
+                    "managed dataset atomic-write temporary file");
+        }
+        requireNotSymlink(
+                outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME + ATOMIC_WRITE_TMP_SUFFIX),
+                "managed dataset summary temporary file");
+    }
+
+    private static void requireNotSymlink(Path path, String role)
+            throws InvalidArgsException, IOException {
+        BasicFileAttributes attributes = readAttributesNoFollowIfExists(path);
+        if (attributes != null && attributes.isSymbolicLink()) {
+            throw symlinkRefusal(path, role);
+        }
+    }
+
+    private static Path withSuffix(Path path, String suffix) {
+        return path.resolveSibling(path.getFileName().toString() + suffix);
+    }
+
+    private static BasicFileAttributes readAttributesNoFollowIfExists(Path path) throws IOException {
+        try {
+            return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException e) {
+            return null;
+        }
+    }
+
+    private static InvalidArgsException symlinkRefusal(Path path, String role) {
+        return new InvalidArgsException(role + " " + path + " is a symbolic link; refusing to "
+                + "access it as swath-managed storage — remove the link and restore a real directory, "
+                + "or choose a different -o directory");
     }
 
     private static boolean isEmptyDir(Path dir) throws IOException {
@@ -172,11 +269,19 @@ final class DatasetDirGuard {
     }
 
     private static boolean dataDirHoldsOnlyOwnedParts(Path dataDir) throws IOException {
-        if (!Files.isDirectory(dataDir)) {
+        BasicFileAttributes dataAttributes = readAttributesNoFollowIfExists(dataDir);
+        if (dataAttributes == null || !dataAttributes.isDirectory()) {
             return false;   // data/ is a plain file -> foreign
         }
         try (Stream<Path> parts = Files.list(dataDir)) {
-            return parts.allMatch(p -> isSwathOwnedPart(p.getFileName().toString()));
+            for (Path part : parts.toList()) {
+                BasicFileAttributes attributes = readAttributesNoFollowIfExists(part);
+                if (attributes == null || attributes.isSymbolicLink()
+                        || !isSwathOwnedPart(part.getFileName().toString())) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 
@@ -192,7 +297,8 @@ final class DatasetDirGuard {
      * sort path owns it). The foreign/damaged-dir refusal ({@link #guardFreshRunDatasetDir}) has
      * already run for a genuine CLI invocation, so by here the dataset is swath-owned or empty.
      */
-    static void clearDatasetForFreshRun(Path outputDir) throws IOException {
+    static void clearDatasetForFreshRun(Path outputDir) throws IOException, InvalidArgsException {
+        requireNoManagedSymlinks(outputDir);
         DatasetLayout layout =
                 DatasetLayout.of(outputDir);
         Files.deleteIfExists(layout.success());
@@ -251,6 +357,12 @@ final class DatasetDirGuard {
             return;
         }
         Path outputDir = Path.of(destination);
+        try {
+            requireNoManagedSymlinks(outputDir);
+        } catch (InvalidArgsException | IOException e) {
+            log.warn("colocated_checkpoint_delete_refused path={} message={}", dbPath, e.getMessage());
+            return;
+        }
         Path colocated = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir)
                 .toAbsolutePath().normalize();
         if (!colocated.equals(dbPath.toAbsolutePath().normalize()) || !isCompletedDataset(outputDir)) {
