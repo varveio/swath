@@ -37,7 +37,11 @@ class AppCliTest {
         int[] exit = new int[1];
         String text = run(exit, "--version");
         assertThat(exit[0]).isZero();
-        assertThat(text).isEqualTo("swath development" + System.lineSeparator());
+        assertThat(text).startsWith("swath development" + System.lineSeparator())
+                .contains("Built by Varve: https://varve.io")
+                .contains("Source: https://github.com/varveio/swath")
+                .contains("Commit: unavailable")
+                .contains("Runtime: ");
     }
 
     @Test
@@ -108,6 +112,7 @@ class AppCliTest {
         assertThat(exit[0]).isZero();
         assertThat(text).contains("list").contains("resume");
         assertThat(text).doesNotContain("completion");
+        assertThat(text).endsWith("Built by Varve: https://varve.io" + System.lineSeparator());
     }
 
     @Test

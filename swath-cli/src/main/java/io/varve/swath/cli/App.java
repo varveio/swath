@@ -31,6 +31,7 @@ import picocli.CommandLine.UnmatchedArgumentException;
         mixinStandardHelpOptions = true,
         versionProvider = App.VersionProvider.class,
         description = "High-performance object-store lister.",
+        footer = "Built by Varve: https://varve.io",
         subcommands = {
                 ListCommand.class,
                 ResumeCommand.class,
@@ -39,7 +40,10 @@ import picocli.CommandLine.UnmatchedArgumentException;
         })
 public final class App implements Callable<Integer>, GlobalOptions.Carrier {
 
-    /** Keeps {@code --version} aligned with the Gradle archive manifest. */
+    /**
+     * Provides the five factual {@code --version} lines: stable name/version, Varve attribution,
+     * source repository, commit, and Java runtime.
+     */
     public static final class VersionProvider implements CommandLine.IVersionProvider {
         /** Manifest attribute stamped by the build (see {@code swath.java-conventions.gradle.kts}). */
         private static final String COMMIT_ATTRIBUTE = "Implementation-Commit";
@@ -47,26 +51,43 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
         /** Displayed commit length — enough to be unambiguous, short enough to read. */
         private static final int SHORT_COMMIT_LENGTH = 12;
 
+        private static final String BRAND_LINE = "Built by Varve: https://varve.io";
+        private static final String SOURCE_LINE = "Source: https://github.com/varveio/swath";
+
         @Override
         public String[] getVersion() {
-            return new String[] {
-                format(App.class.getPackage().getImplementationVersion(), readCommit())
-            };
+            return format(App.class.getPackage().getImplementationVersion(), readCommit(), runtimeVersion());
         }
 
         /**
-         * Renders the version line. Package-private and pure so the formatting is testable
-         * without a packaged jar to read a manifest from.
+         * Renders the five version-information lines. The first is stable ASCII {@code swath
+         * X.Y.Z}; a missing commit is rendered as {@code Commit: unavailable}. Package-private
+         * and pure so the formatting is testable without a packaged jar to read a manifest from.
          *
          * @param version the manifest's {@code Implementation-Version}, or null outside a jar
          * @param commit the manifest's {@code Implementation-Commit}, or null when unavailable
+         * @param runtime the current Java runtime version
          */
-        static String format(String version, String commit) {
+        static String[] format(String version, String commit, String runtime) {
             String line = "swath " + (version == null ? "development" : version);
+            return new String[] {
+                line,
+                BRAND_LINE,
+                SOURCE_LINE,
+                "Commit: " + displayCommit(commit),
+                "Runtime: " + runtime,
+            };
+        }
+
+        private static String displayCommit(String commit) {
             if (commit == null || commit.isBlank() || commit.equals("unknown")) {
-                return line;
+                return "unavailable";
             }
-            return line + " (" + commit.substring(0, Math.min(SHORT_COMMIT_LENGTH, commit.length())) + ")";
+            return commit.substring(0, Math.min(SHORT_COMMIT_LENGTH, commit.length()));
+        }
+
+        private static String runtimeVersion() {
+            return System.getProperty("java.runtime.version", System.getProperty("java.version"));
         }
 
         /**
@@ -74,8 +95,8 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
          *
          * <p>{@code Package.getImplementationVersion()} only exposes the standard version
          * attribute, so the manifest is opened directly. Running from a classes directory
-         * (development, tests) has no jar and yields null, which {@link #format} renders as a
-         * bare version line — so this degrades rather than failing.
+         * (development, tests) has no jar and yields null, which {@link #format} renders as
+         * {@code Commit: unavailable}; version reporting therefore degrades rather than failing.
          */
         private static String readCommit() {
             try {
