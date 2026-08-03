@@ -587,6 +587,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // first LIST is otherwise invisible, since RunProgressReporter only starts once ListRunner's
         // engine dispatch is entered (well after seeding).
         long runStartedNs = System.nanoTime();
+        // A managed directory's co-located checkpoint is the first path runWithCheckpoint touches.
+        // Refuse a pre-existing link at the root/data/_staging/.swath boundary before mode.resolve
+        // derives <dir>/.swath/checkpoint.sqlite and before createDirectories/open can follow it.
+        // swath resume supplies the run handle explicitly even though its output destination is
+        // restored later from the checkpoint.
+        Path preCheckpointDatasetDir = resumeCommandRunHandle;
+        if (preCheckpointDatasetDir == null && resolved == OutputFormat.PARQUET
+                && output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
+                && output.destination != null) {
+            preCheckpointDatasetDir = Path.of(output.destination);
+        }
+        if (preCheckpointDatasetDir != null) {
+            DatasetDirGuard.requireNoManagedSymlinks(preCheckpointDatasetDir);
+        }
         Path dbPath = mode.resolve(output.destination, output.resolvedKind);
         boolean ephemeral = dbPath == null;
         // The start marker now carries W (max_parallel_listings) and whether every engine
@@ -704,6 +718,15 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 && output.resolvedKind != OutputOptions.DestinationKind.STDOUT)) {
                     output.echoResolvedOutput(new OutputOptions.Resolved(resolved, output.resolvedKind),
                             System.err, quiet);
+                }
+                // An explicit checkpoint can restore its output directory only after the DB opens.
+                // It is not managed checkpoint storage, but its restored dataset paths still are:
+                // reject them before summary, staging, part validation, or output access.
+                if (resumeCommandRunHandle == null
+                        && resolved == OutputFormat.PARQUET
+                        && output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
+                        && output.destination != null) {
+                    DatasetDirGuard.requireNoManagedSymlinks(Path.of(output.destination));
                 }
             }
             // Build config AFTER any resume-context restore (region/profile/no-sign), and BEFORE the
@@ -1326,10 +1349,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
         ctx.metrics().registerDiskFreeGauge(outputDir);
+        Path stagingDir = outputDir.resolve(SORT_STAGING_DIR);
         if (!run.resumed()) {
             DatasetDirGuard.clearDatasetForFreshRun(outputDir);   // never inherit a stale dataset's markers/parts
+            // A fresh/--restart run owns no prior staging entry. Unlink the old run's immediate
+            // entries before deterministic segment writers can open any name with TRUNCATE_EXISTING;
+            // this is deliberately fresh-only, so resume retains checkpoint-finalized segments.
+            clearSortStagingContents(outputDir, stagingDir);
         }
-        Path stagingDir = outputDir.resolve(SORT_STAGING_DIR);
         Files.createDirectories(stagingDir);
         ListRunner.ParquetSpec parquetSpec = parquetSpec(s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
         SortConfig sortConfig = SortConfig.fromSystemProperties();
@@ -1423,19 +1450,32 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
-     * PUBLISHED re-entry clean-up (contract §6): a crash between the manifest write and the staging
-     * deletion leaves double data — remove the staging segments and any stale {@code part-*.tmp}.
-     * The sorter only ever deletes content it owns inside the staging dir. The stale
-     * {@code *.tmp} finals live under {@code <root>/data/} (the pure-parquet subdir).
+     * Unlink every immediate entry in the sorter-owned staging directory. A fresh/--restart run
+     * calls this before any deterministic segment name can be opened; a PUBLISHED re-entry uses it
+     * to remove the prior run's durable segments. Resume-mid-listing does not call it because its
+     * checkpoint-finalized segments must survive.
      */
-    static void cleanSortStagingAndStaleTmp(Path outputDir,
-                                            Path stagingDir) throws IOException {
+    private static void clearSortStagingContents(Path outputDir, Path stagingDir)
+            throws IOException, InvalidArgsException {
+        DatasetDirGuard.requireNoManagedSymlinks(outputDir);
         if (Files.isDirectory(stagingDir)) {
             try (Stream<Path> entries = Files.list(stagingDir)) {
                 for (Path p : entries.toList()) {
                     Files.deleteIfExists(p);
                 }
             }
+        }
+    }
+
+    /**
+     * PUBLISHED re-entry clean-up (contract §6): a crash between the manifest write and the staging
+     * deletion leaves double data — remove staging and any stale {@code part-*.tmp} finals under the
+     * pure-parquet {@code <root>/data/} directory.
+     */
+    static void cleanSortStagingAndStaleTmp(Path outputDir,
+                                            Path stagingDir) throws IOException, InvalidArgsException {
+        clearSortStagingContents(outputDir, stagingDir);
+        if (Files.isDirectory(stagingDir)) {
             Files.deleteIfExists(stagingDir);
         }
         Path dataDir = DatasetLayout.of(outputDir).dataDir();

@@ -129,6 +129,10 @@ public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Car
         }
 
         if (directory != null) {
+            // The run handle and its .swath/ child are managed storage. Refuse a pre-existing
+            // symbolic link before even deriving/probing checkpoint.sqlite, so resume never reads
+            // a checkpoint outside the requested dataset through either link.
+            DatasetDirGuard.requireNoManagedSymlinks(directory);
             Path colocated = CheckpointOptions.CheckpointMode.colocatedCheckpoint(directory);
             if (!Files.isRegularFile(colocated) || Files.size(colocated) == 0L) {
                 // No live checkpoint under the run handle: a COMPLETE dataset (its checkpoint was
