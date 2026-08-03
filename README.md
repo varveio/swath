@@ -5,6 +5,11 @@
 **Lists very large S3 buckets in parallel, working out how to split the keyspace
 while it lists.**
 
+![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)
+
+**Real 39.6-million-object run:** interrupt the listing, resume it from checkpoint,
+then query the Parquet inventory with DuckDB.
+
 S3 lists a bucket one page at a time: 1000 keys per request, strictly in
 lexicographic order. You can start anywhere by handing it a `start-after` token,
 and that token doesn't have to be a key that exists — but nothing tells you how
