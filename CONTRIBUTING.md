@@ -13,17 +13,18 @@ submit changes.
 
 ## Building and testing
 
-swath is a multi-module Gradle build on **Java 25**. The Gradle wrapper pins the
-toolchain, so you do not need a matching JDK installed globally.
+swath is a multi-module Gradle build that requires **JDK 25**. The Gradle wrapper
+selects the project's toolchain, but you must have JDK 25 available to Gradle.
 
 ```sh
-./gradlew build          # compile + run the fast test tier + assemble artifacts
-./gradlew test           # fast test tier only
-./gradlew spotlessApply  # apply the SPDX license header to new/changed sources
+./gradlew build -PnoIntegration  # Docker-free fast contributor gate
+./gradlew build                  # ordinary integration gate (requires Docker/LocalStack)
+./gradlew test                   # fast test tier only
+./gradlew spotlessApply          # apply the SPDX license header to new/changed sources
 ```
 
 Some tests are gated behind opt-in tiers (`-Pdeep`, `-Pperf`, integration tests
-via Testcontainers). The fast tier is what runs per commit; see
+via Testcontainers). The Docker-free contributor gate is what to run per commit; see
 `docs/ops/dev/TESTING.md` for the full tier map.
 
 ## License headers
@@ -64,5 +65,5 @@ By contributing, you agree that your contributions are licensed under the
 
 1. Fork the repository and create a topic branch.
 2. Make your change with tests; keep commits focused and signed off (`-s`).
-3. Run `./gradlew build` and confirm it is green.
+3. Run `./gradlew build -PnoIntegration` and confirm the per-commit Docker-free gate is green.
 4. Open a pull request describing what changed and why.

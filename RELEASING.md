@@ -51,9 +51,14 @@ actually work.
 
 ## Cutting a release
 
-1. Make sure `main` is green and you are on a clean checkout of the commit you want to
+1. Draft the human summary in
+   [`docs/ops/dev/RELEASE_NOTES.md`](docs/ops/dev/RELEASE_NOTES.md): replace the version
+   in its title, fill all three sections, and commit it. Lead with what users will notice,
+   then the evidence for the release and its honest limits. The release recipe and workflow
+   reject an untouched or incomplete template.
+2. Make sure `main` is green and you are on a clean checkout of the commit you want to
    release.
-2. Prepare the release commits and tag:
+3. Prepare the release commits and tag:
    ```sh
    just release 0.2.0
    ```
@@ -66,16 +71,18 @@ actually work.
    second argument (`just release 0.2.0 0.3.0`); after an `-rc.N` the default returns to the
    same `X.Y.Z-SNAPSHOT`, since development continues toward that release. It does **not**
    push — review both commits first.
-3. Push to trigger the release pipeline — this sends both commits and the tag together:
-   ```
+4. Push to trigger the release pipeline — this sends both commits and the tag together:
+   ```sh
    git push origin main v0.2.0
    ```
-4. The `Release` workflow builds the assets once, generates checksums and an SBOM, and
-   then waits on the protected `public-release` environment. **Approve it.** The publish
-   job then pushes the image by digest, smokes that digest, tags it, signs and attests
-   everything, creates the GitHub release as a **draft**, runs the verification commands
-   below against what it just published, and only then un-drafts it. If verification
-   fails the release stays a draft — fix and re-tag rather than publishing by hand.
+5. The `Release` workflow first proves the tag commit is an ancestor of `origin/main`,
+   then runs the fast, integration, and deep tiers on that exact tag SHA. It builds the
+   assets once, generates checksums and an SBOM, and then waits on the protected
+   `public-release` environment. **Approve it.** The publish job then pushes the image by
+   digest, smokes that digest, tags it, signs and attests everything, creates the GitHub
+   release as a **draft**, runs the verification commands below against what it just
+   published, and only then un-drafts it. If verification fails the release stays a draft
+   — fix and re-tag rather than publishing by hand.
 
 ## What the pipeline produces
 
@@ -86,12 +93,14 @@ For each `vX.Y.Z` tag, once the environment is approved:
 - a `SHA256SUMS` file plus a per-asset keyless (cosign) signature bundle;
 - a multi-arch (`linux/amd64,linux/arm64`) container image built from the exact tested
   jar, signed and attested;
-- a GitHub release with auto-generated notes from the merged pull requests.
+- a GitHub release led by the repository-owned human summary, followed by generated notes
+  from the merged pull requests.
 
 ## Notes
 
-- Release notes are generated from merged PRs (`--generate-notes`); write PR titles with
-  that in mind.
+- GitHub appends generated merged-PR notes (`--generate-notes`) after the human summary;
+  write PR titles with that in mind, but do not use them as a substitute for the summary's
+  user-facing changes, evidence, and limits.
 - Choosing the version is manual by design (the canonical version lives in
   `gradle.properties`); `just release` wraps the mechanical steps so the tag and version
   cannot drift, and reopens the next `-SNAPSHOT` cycle in the same invocation.

@@ -12,21 +12,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Release guard self-tests
+        run: |
+          ./scripts/ci/release-assets.sh --self-test
+          ./scripts/ci/verify-release-source.sh --self-test
+          ./scripts/ci/verify-release-notes.sh --self-test
+
+      # A release tag may point at main's parent because `just release` pushes the
+      # tagged release commit and the following SNAPSHOT commit together. Ancestor,
+      # rather than equality with origin/main, captures that intended topology.
+      - name: Verify tag SHA and origin/main ancestry
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+${GITHUB_REF}:refs/remotes/release/event-tag" \
+            +refs/heads/main:refs/remotes/origin/main
+          ./scripts/ci/verify-release-source.sh \
+            "$GITHUB_SHA" refs/remotes/release/event-tag refs/remotes/origin/main
+
+  fast-tests:
+    needs: source
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Assert exact tag SHA checkout
+        run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+
+      - name: Instrumentation-drift guard (§5)
+        run: ./scripts/ci/check-instrumentation-drift.sh
+
+      - name: Instrumentation-drift guard self-test (§5)
+        run: ./scripts/ci/check-instrumentation-drift.sh --self-test
 
       - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
         with:
           distribution: temurin
           java-version: "25"
 
+      # gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+
       # gradle/actions/setup-gradle@v4
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        with:
+          cache-disabled: true
 
       # -PnoIntegration matches ci.yml's fast-tests EXACTLY, and that is the point: this
       # must be an invocation CI runs on every PR and every merge, so a release cannot
@@ -40,19 +86,32 @@ jobs:
       # release build flaky by construction: the first two v0.1.0 attempts failed on two
       # DIFFERENT timing assertions that both pass on main. See issue #62.
       #
-      # Integration coverage for the released commit comes from ci.yml's integration-tests
-      # job on main, and deep coverage from deep-tests — neither of which the release build
-      # ran even before this change.
+      # The sibling jobs below independently run integration and deep coverage on the
+      # same tag SHA; publish names all three jobs in its mechanical `needs` gate.
       - name: Verify tag and build the release once
         run: |
           ./gradlew verifyReleaseVersion build -PnoIntegration \
             :swath-cli:shadowJar :swath-cli:distZip :swath-cli:distTar \
             -PreleaseTag="${GITHUB_REF_NAME}" --no-daemon --stacktrace
 
+      - name: License compliance gate (allow-list)
+        run: ./gradlew checkLicense --no-daemon --stacktrace
+
       - id: version
         name: Read canonical version
         run: |
-          echo "version=$(./gradlew -q properties | sed -n 's/^version: //p' | head -1)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          version=$(./gradlew -q properties | sed -n 's/^version: //p')
+          if [[ -z "$version" || "$version" == *$'\n'* ]]; then
+            echo "expected exactly one non-empty canonical Gradle version" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify human release-note summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/ci/verify-release-notes.sh "$VERSION" docs/ops/dev/RELEASE_NOTES.md
 
       - name: Prepare container-promotion payload
         run: ./scripts/ci/prepare-container-promotion.sh promote
@@ -60,15 +119,9 @@ jobs:
       - name: Stage release assets
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          mkdir -p release-assets
-          # Versioned asset name: a bare swath.jar collides across releases in a
-          # download folder and makes SHA256SUMS lines ambiguous once several
-          # releases exist. The build output keeps its fixed name — the container
-          # promotion path depends on it (see the Dockerfile COPY).
-          cp swath-cli/build/libs/swath.jar "release-assets/swath-${VERSION}.jar"
-          cp swath-cli/build/distributions/swath-*.zip release-assets/
-          cp swath-cli/build/distributions/swath-*.tar.gz release-assets/
+        # Copies named application outputs only. Shadow's similarly named
+        # distributions are intentionally outside the public asset contract (#65).
+        run: ./scripts/ci/release-assets.sh stage "$VERSION" release-assets
 
       - name: Generate SPDX SBOM from the shipped jar
         # anchore/sbom-action@v0
@@ -79,7 +132,9 @@ jobs:
           output-file: release-assets/swath-${{ steps.version.outputs.version }}.spdx.json
 
       - name: Write SHA256SUMS for release assets
-        run: (cd release-assets && sha256sum swath-*.jar swath-*.zip swath-*.tar.gz *.spdx.json > SHA256SUMS)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/ci/release-assets.sh checksums "$VERSION" release-assets
 
       # actions/upload-artifact@v4
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -95,8 +150,98 @@ jobs:
           path: promote
           if-no-files-found: error
 
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-reports-release-fast
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
+  integration-tests:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Assert exact tag SHA checkout
+        run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        with:
+          cache-disabled: true
+
+      - name: Install DuckDB CLI
+        run: |
+          curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.1.3/duckdb_cli-linux-amd64.zip -o /tmp/duckdb.zip
+          echo "efd0fccdb1a28d9ec7a6ebfcde59900068b8ba43a846c9b553c0fd2bbe4acf43  /tmp/duckdb.zip" | sha256sum --check -
+          unzip -o /tmp/duckdb.zip -d /tmp/duckdb
+          sudo install /tmp/duckdb/duckdb /usr/local/bin/duckdb
+          duckdb --version
+
+      - name: Integration tests only (Docker/LocalStack tier)
+        run: ./gradlew test -PonlyIntegration --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-reports-release-integration
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
+  deep-tests:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Assert exact tag SHA checkout
+        run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+
+      - uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      # gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d
+        with:
+          cache-disabled: true
+
+      - name: Deep tier (schedule-sensitive + latency tests, serial)
+        run: ./gradlew test -Pdeep -PtestMaxParallelForks=1 --no-daemon --stacktrace
+
+      - name: Real kill -9 -> --resume exactly-once
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeProcessIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      - name: Real kill -9 matrix -> --resume identical-to-clean
+        run: ./gradlew :swath-cli:test --tests "io.varve.swath.cli.HardCrashSigkillResumeMatrixIT" -Dswath.it.sigkill=true --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-reports-release-deep
+          path: "*/build/reports/tests/"
+          if-no-files-found: ignore
+
   publish:
-    needs: build
+    needs: [source, fast-tests, integration-tests, deep-tests]
     # Publishing requires the repository to be public AND the PUBLIC_RELEASE_ENABLED
     # variable, which stays in place as an emergency kill-switch: unset it and tags
     # build assets without publishing anything, no code change required.
@@ -115,6 +260,12 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Assert exact tag SHA checkout
+        run: test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
 
       # actions/download-artifact@v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -130,10 +281,10 @@ jobs:
 
       - name: Verify promoted artifacts
         env:
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
           ./scripts/ci/verify-container-promotion.sh promote "release-assets/swath-${VERSION}.jar"
-          (cd release-assets && sha256sum --check SHA256SUMS)
+          ./scripts/ci/release-assets.sh verify-unsigned "$VERSION" release-assets
 
       # docker/setup-buildx-action@v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
@@ -153,7 +304,7 @@ jobs:
       - id: kind
         name: Classify the release
         env:
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
           set -euo pipefail
           if [[ "$VERSION" == *-rc.* ]]; then
@@ -186,7 +337,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           labels: |
-            org.opencontainers.image.version=${{ needs.build.outputs.version }}
+            org.opencontainers.image.version=${{ needs.fast-tests.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           sbom: true
@@ -224,7 +375,7 @@ jobs:
           ARGS=()
           for tag in $TAGS; do ARGS+=(--tag "$tag"); done
           docker buildx imagetools create "${ARGS[@]}" "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
-          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${{ needs.build.outputs.version }}"
+          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${{ needs.fast-tests.outputs.version }}"
 
       - name: Install cosign
         # sigstore/cosign-installer@v3
@@ -238,14 +389,17 @@ jobs:
       # No COSIGN_EXPERIMENTAL: keyless has been GA since cosign 2.0 (2023) and the
       # variable is a no-op that only misleads readers.
       - name: Keylessly sign release assets and the image digest
+        env:
+          VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
           set -euo pipefail
-          for asset in release-assets/swath-*.jar release-assets/swath-*.zip \
-                       release-assets/swath-*.tar.gz release-assets/*.spdx.json \
-                       release-assets/SHA256SUMS; do
+          asset_list=$(./scripts/ci/release-assets.sh list-signable "$VERSION" release-assets)
+          mapfile -t assets <<< "$asset_list"
+          for asset in "${assets[@]}"; do
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"
           done
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
+          ./scripts/ci/release-assets.sh verify-signed "$VERSION" release-assets
 
       # Attestations answer a different question from the signatures above: not "are
       # these the bytes that were signed" but "which workflow, in which repo, at which
@@ -256,9 +410,9 @@ jobs:
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-path: |
-            release-assets/swath-*.jar
-            release-assets/swath-*.zip
-            release-assets/swath-*.tar.gz
+            release-assets/swath-${{ needs.fast-tests.outputs.version }}.jar
+            release-assets/swath-${{ needs.fast-tests.outputs.version }}.zip
+            release-assets/swath-${{ needs.fast-tests.outputs.version }}.tar.gz
             release-assets/SHA256SUMS
 
       # actions/attest-build-provenance@v4
@@ -273,8 +427,8 @@ jobs:
       - name: Attest the SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e
         with:
-          subject-path: release-assets/swath-${{ needs.build.outputs.version }}.jar
-          sbom-path: release-assets/swath-${{ needs.build.outputs.version }}.spdx.json
+          subject-path: release-assets/swath-${{ needs.fast-tests.outputs.version }}.jar
+          sbom-path: release-assets/swath-${{ needs.fast-tests.outputs.version }}.spdx.json
 
       # Created as a DRAFT. `gh release create` publishes the release and then uploads
       # assets, so a failure mid-upload would otherwise leave a live, incomplete
@@ -283,13 +437,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.kind.outputs.prerelease }}
+          VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
           set -euo pipefail
-          ARGS=(--draft --title "swath ${{ needs.build.outputs.version }}" --generate-notes)
+          release_notes=$(<docs/ops/dev/RELEASE_NOTES.md)
+          ARGS=(--draft --verify-tag --title "swath ${VERSION}" --generate-notes \
+                --notes "$release_notes")
           if [[ "$PRERELEASE" == "true" ]]; then
             ARGS+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" release-assets/* "${ARGS[@]}"
+          asset_list=$(./scripts/ci/release-assets.sh list-release "$VERSION" release-assets)
+          mapfile -t assets <<< "$asset_list"
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${ARGS[@]}"
 
       # Run the exact commands the docs tell users to run. If verification would fail
       # in a user's terminal, the release should be red here instead — a signature
@@ -301,6 +460,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ steps.image.outputs.digest }}
           IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+          VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
           set -euo pipefail
           # Verify what GitHub actually STORED, not the local copies we uploaded from.
@@ -309,6 +469,8 @@ jobs:
           # to catch. Download the draft's assets into a fresh directory and verify there.
           rm -rf release-verify
           gh release download "$GITHUB_REF_NAME" --dir release-verify
+
+          ./scripts/ci/release-assets.sh verify-signed "$VERSION" release-verify
 
           echo "::group::checksums (downloaded copies)"
           (cd release-verify && sha256sum --check SHA256SUMS)
