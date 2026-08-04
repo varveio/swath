@@ -933,14 +933,41 @@ per-event fields). This table is versioned by hand.
 
 ### Reading a trace, visually
 
-Two committed renderers turn a `--trace` file into pictures:
-`trace-to-perfetto.py` emits Chrome Trace Event Format for https://ui.perfetto.dev (zoomable
-worker timeline: range drains as slices, steals/splits as instant events); `trace-viz.py` emits
-a self-contained HTML page adding the keyspace×time carving map. Reading signatures: a healthy
-run is confetti (many short drains, everyone busy) and a map of wide/short rectangles; a dense
-serial tail is a single tall thin column outliving the run; a thief probe storm is a blizzard of
-steal-attempt markers; owner-split confetti is a stack of hairline rectangles in one keyspace
-region. The HTML page embeds this guide so every generated trace self-explains.
+`scripts/trace/trace-viz.py` (stdlib-only, like the CI drift guard) turns a `--trace` file into a
+self-contained HTML page:
+
+```
+scripts/trace/trace-viz.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
+scripts/trace/trace-viz.py --self-test
+```
+
+Two views over the same reduction. A **replayable keyspace strip** — the run's ranges carving
+the keyspace over time, under a key-density profile measured from `page_committed`'s
+`(cursor, keys)` pairs, so where the mass actually sat is visible rather than inferred. And a
+static **keyspace×time map** — horizontal is keyspace, vertical is time downward, each rectangle
+one range over the span it owned — which is the faster of the two to diagnose from, because the
+whole run is on screen at once.
+
+The keyspace axis is anchored on the run's own **range boundaries** (the distinct `lo`/`hi`/
+`pivot` keys), evenly spread, with cursors interpolated inside their enclosing interval. Neither
+obvious alternative works: a raw byte-value axis collapses a deep-prefix bucket like Common
+Crawl onto a hairline, and a rank axis over every observed key spaces the axis by key count and
+flattens the density profile by construction. The cost is that equal screen distance means an
+equal number of boundaries, not an equal byte range; the page says so too.
+
+Reading signatures: a healthy run is confetti (many short drains, everyone busy) and a map of
+wide/short rectangles; a dense serial tail is a single tall thin column outliving the run; a
+thief probe storm is a blizzard of steal-attempt markers with few splits behind them;
+owner-split confetti is a stack of hairline rectangles in one keyspace region. The page embeds
+this guide, plus per-mechanism split counts and per-reason steal outcomes, so every generated
+trace self-explains.
+
+Traces carry real key names (the sensitivity note above), and so does the rendered page —
+`--anonymize` emits positions and counts only, for a picture that needs to travel further than
+the trace does.
+
+A Perfetto exporter (Chrome Trace Event Format, for a zoomable worker timeline at
+https://ui.perfetto.dev) is the still-planned V2; no such script ships today.
 
 ---
 
