@@ -941,19 +941,24 @@ scripts/trace/trace-viz.py run.trace.jsonl -o run.html [--title s3://bucket] [--
 scripts/trace/trace-viz.py --self-test
 ```
 
-Two views over the same reduction. A **replayable keyspace strip** — the run's ranges carving
-the keyspace over time, under a key-density profile measured from `page_committed`'s
-`(cursor, keys)` pairs, so where the mass actually sat is visible rather than inferred. And a
-static **keyspace×time map** — horizontal is keyspace, vertical is time downward, each rectangle
-one range over the span it owned — which is the faster of the two to diagnose from, because the
-whole run is on screen at once.
+The page is an **explainer, not a dashboard**: it computes the run's findings and states them in
+prose — which seed guess turned out to be wrong and by how much, when the engine noticed, what it
+did — then backs each one with a figure. The narrative is generated from the events, so it
+describes whichever run the tool is pointed at. Sections: the seed guesses ranked by the objects
+actually found behind them (weight rolled up through the split genealogy, so each bar is the work
+that guess was really responsible for); throughput and live-range count over time; the owner-split
+gate ledger; the pivot cascade with sample pivots verbatim; a static keyspace×time map; a
+replayable version of the same; and a conservation check (`seeds + splits == claimed == completed`).
 
-The keyspace axis is anchored on the run's own **range boundaries** (the distinct `lo`/`hi`/
-`pivot` keys), evenly spread, with cursors interpolated inside their enclosing interval. Neither
-obvious alternative works: a raw byte-value axis collapses a deep-prefix bucket like Common
-Crawl onto a hairline, and a rank axis over every observed key spaces the axis by key count and
-flattens the density profile by construction. The cost is that equal screen distance means an
-equal number of boundaries, not an equal byte range; the page says so too.
+The keyspace axis is the **measured key-mass CDF**, built from `page_committed`'s `(cursor, keys)`
+pairs: **equal width means an equal number of objects**, so a range's area is proportional to the
+work it did and a region holding two thirds of a bucket gets two thirds of the picture. Neither
+obvious alternative survives real data — a raw byte-value axis collapses a deep-prefix bucket onto
+a hairline, and an axis anchored on range boundaries gives every boundary equal width, so a run
+seeded into hundreds of ranges renders as hundreds of identical slivers and width encodes nothing.
+The cost, stated on the page too: screen distance is not byte distance, and empty keyspace takes no
+width. Colour is **seed lineage**, not worker id — a reader cares which original guess the work
+descends from, not which of N threads ran it.
 
 Reading signatures: a healthy run is confetti (many short drains, everyone busy) and a map of
 wide/short rectangles; a dense serial tail is a single tall thin column outliving the run; a
