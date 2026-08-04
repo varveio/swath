@@ -9,16 +9,22 @@ const fs = require('fs'), path = require('path');
   await pg.goto(url, {waitUntil:'networkidle'});
   await pg.waitForFunction('window.__seek !== undefined');
   const dur = await pg.evaluate('window.__duration');
+  const pre = await pg.evaluate('window.__preroll || 0');
   const total = FPS*SECONDS;
+  const PRE = pre ? FPS*4 : 0;                    // watch the seed cuts land
+  for (let i=0;i<PRE;i++){
+    await pg.evaluate(`window.__seek(${-pre + (i/PRE)*pre})`);
+    await pg.screenshot({path: path.join(OUT, `f${String(i).padStart(5,'0')}.png`)});
+  }
   for (let i=0;i<total;i++){
     const u = i/(total-1), e = 3*u*u - 2*u*u*u;   // ease: more frames on the busy middle
     await pg.evaluate(`window.__seek(${e*dur})`);
-    await pg.screenshot({path: path.join(OUT, `f${String(i).padStart(5,'0')}.png`)});
+    await pg.screenshot({path: path.join(OUT, `f${String(i+PRE).padStart(5,'0')}.png`)});
     if (i%90===0) console.log(`  ${i}/${total}`);
   }
   await pg.evaluate(`window.__seek(${dur})`);
   for (let j=total;j<total+FPS*HOLD;j++)
-    await pg.screenshot({path: path.join(OUT, `f${String(j).padStart(5,'0')}.png`)});
+    await pg.screenshot({path: path.join(OUT, `f${String(j+PRE).padStart(5,'0')}.png`)});
   await b.close();
   console.log('frames:', fs.readdirSync(OUT).length);
 })();

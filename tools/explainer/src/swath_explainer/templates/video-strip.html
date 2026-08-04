@@ -29,6 +29,7 @@
 <body><div class="stage">
   <div class="top"><h1 id="h1"></h1><div class="clock" id="clock"></div></div>
   <div class="act"><div class="n" id="actn"></div><div class="t" id="actt"></div></div>
+  <canvas id="tl" width="976" height="58"></canvas>
   <div class="lbl" id="l1">the keyspace, weighted by objects</div>
   <canvas id="strip" width="976" height="300"></canvas>
   <div class="lbl">the 64 workers &mdash; colour is which guess they are working inside</div>
@@ -51,6 +52,7 @@
                                       : (ms/1000).toFixed(1)+"s"; }
   document.getElementById("h1").textContent = meta.title||"swath";
   var D=meta.durationMs, firstSteal=F.firstStealMs===null?D*0.35:F.firstStealMs;
+  var SEEDMS=Math.max(6000, D*0.06);   // video-time budget for the seeding beat
 
   var ACTS=[
     {at:0,n:"the guess",t:"One request asks S3 where the directories are. swath cuts the keyspace "+
@@ -69,6 +71,7 @@
       F.reqPer1k.toFixed(2)+"</b> requests per thousand. No gaps. No overlaps."}
   ];
 
+  var tc=document.getElementById("tl").getContext("2d");
   var sc=document.getElementById("strip").getContext("2d");
   var pc=document.getElementById("pool").getContext("2d");
   var hc=document.getElementById("hist").getContext("2d");
@@ -90,7 +93,52 @@
   var CUTS=[]; for(var q=0;q<stream.length;q++){ if(stream[q][1]===K_SEED) CUTS.push(stream[q][3]); }
   var NAMED=(M.seeds||[]).filter(function(x){ return x.lo && x.x1-x.x0 > 0.06; }).slice(0,5);
 
+  // Phases, in run time. Seeding is a beat before the clock starts: 257 ranges land within
+  // milliseconds, so it gets its own slot rather than being invisible at video scale.
+  var PHASES=[
+    {a:-SEEDMS, b:0,          n:"seed",     c:"#6FBBD0"},
+    {a:0,       b:firstSteal, n:"parallel", c:"#56C9B1"},
+    {a:firstSteal, b:D,       n:"stealing", c:"#E0AC55"}
+  ];
+  function drawTimeline(t){
+    var W=976,H=58, span=D+SEEDMS, y=16, h=16;
+    tc.clearRect(0,0,W,H);
+    function tx(v){ return ((v+SEEDMS)/span)*W; }
+    PHASES.forEach(function(ph){
+      var x0=tx(ph.a), x1=tx(ph.b);
+      tc.fillStyle=ph.c; tc.globalAlpha = (t>=ph.a? .85 : .18);
+      tc.fillRect(x0, y, Math.max(2,x1-x0-2), h); tc.globalAlpha=1;
+      tc.font="15px ui-monospace,monospace"; tc.textAlign="left";
+      tc.fillStyle = (t>=ph.a && t<ph.b) ? ph.c : "#74807A";
+      tc.fillText(ph.n, x0+2, y+h+18);
+    });
+    var px=tx(t);
+    tc.strokeStyle="#E7EBE3"; tc.lineWidth=2;
+    tc.beginPath(); tc.moveTo(px,y-6); tc.lineTo(px,y+h+6); tc.stroke();
+    tc.fillStyle="#E7EBE3"; tc.beginPath();
+    tc.moveTo(px,y-7); tc.lineTo(px-5,y-14); tc.lineTo(px+5,y-14); tc.closePath(); tc.fill();
+  }
+
   function seek(t){
+    drawTimeline(t);
+    if (t < 0) {                       // the seeding beat, expanded so it can be watched
+      var prog = 1 - (t / -SEEDMS);
+      sc.clearRect(0,0,SW,SH); sc.fillStyle="#161D1B"; sc.fillRect(0,26,SW,SH-26);
+      sc.strokeStyle="#6FBBD0"; sc.lineWidth=2;
+      var shown=Math.floor(prog*CUTS.length);
+      for(var q=0;q<shown;q++){ var qx=CUTS[q]*SW;
+        sc.beginPath(); sc.moveTo(qx,26); sc.lineTo(qx,SH); sc.stroke(); }
+      pc.clearRect(0,0,SW,PH); hc.clearRect(0,0,SW,HH);
+      document.getElementById("actn").textContent="the guess";
+      document.getElementById("actt").innerHTML=
+        "One <b>delimiter=/</b> request asks S3 where the directories are. swath cuts the "+
+        "keyspace into <b>"+fmt(F.seedCount)+" ranges</b> on that answer alone \u2014 "+
+        fmt(shown)+" so far.";
+      document.getElementById("clock").textContent="seeding";
+      dds[0].textContent="0"; dds[1].textContent="1"; dds[2].textContent=fmt(shown);
+      dds[3].textContent="0";
+      return;
+    }
     var nodes={}, busy={}, keys=0, pages=0, splits=0, steals=0, marks=[], i;
     for(i=0;i<stream.length;i++){
       var e=stream[i]; if(e[0]>t) break;
@@ -187,6 +235,6 @@
     dds[0].textContent=fmt(keys); dds[1].textContent=fmt(pages);
     dds[2].textContent=fmt(live); dds[3].textContent=fmt(splits);
   }
-  window.__seek=seek; window.__duration=D; seek(0);
+  window.__seek=seek; window.__duration=D; window.__preroll=SEEDMS; seek(-SEEDMS);
 })();
 </script></body></html>
