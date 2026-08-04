@@ -190,6 +190,7 @@ def build_model(events, skipped, title, anonymize):
                       "keys": int(seed_keys.get(node, 0)),
                       "splits": int(seed_splits.get(node, 0)),
                       "workers": len(seed_workers.get(node, ()))})
+    seed_spans = [[s["x0"], s["x1"], s["keys"], s["id"]] for s in seeds]
     by_mass = sorted(seeds, key=lambda s: -s["keys"])
     seeded_total = sum(s["keys"] for s in seeds) or 1
     top = by_mass[0] if by_mass else None
@@ -239,6 +240,7 @@ def build_model(events, skipped, title, anonymize):
                  "cdfPoints": axis.count, "anonymized": anonymize},
         "findings": findings,
         "seeds": by_mass[:14],
+        "seedSpans": seed_spans,
         "lineage": lineage_slot,
         "families": [{"name": k, "dirs": len(family_dirs[k]), "keys": int(v),
                       "x0": round(family_span.get(k, (0.0, 0.0))[0], 5),

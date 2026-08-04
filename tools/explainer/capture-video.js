@@ -11,7 +11,7 @@ const fs = require('fs'), path = require('path');
   const dur = await pg.evaluate('window.__duration');
   const pre = await pg.evaluate('window.__preroll || 0');
   const total = FPS*SECONDS;
-  const PRE = pre ? FPS*4 : 0;                    // watch the seed cuts land
+  const PRE = pre ? FPS*9 : 0;                    // watch the seed cuts land
   for (let i=0;i<PRE;i++){
     await pg.evaluate(`window.__seek(${-pre + (i/PRE)*pre})`);
     await pg.screenshot({path: path.join(OUT, `f${String(i).padStart(5,'0')}.png`)});

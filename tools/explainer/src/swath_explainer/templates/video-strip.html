@@ -19,11 +19,12 @@
   .lbl { font-size:15px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink3);
          margin:18px 0 8px; }
   canvas { display:block; }
-  .stats { margin-top:auto; display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+  .stats { margin-top:auto; display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
            background:var(--rule); border:1px solid var(--rule); }
   .stats div { background:var(--paper); padding:13px 18px; }
   .stats dt { font-size:14px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); }
   .stats dd { font-size:33px; font-variant-numeric:tabular-nums; letter-spacing:-.02em; margin-top:3px; }
+  .foot b { color:#E7EBE3; }
   .foot { margin-top:14px; font-size:14px; color:var(--ink3); line-height:1.5; }
 </style></head>
 <body><div class="stage">
@@ -53,6 +54,7 @@
   document.getElementById("h1").textContent = meta.title||"swath";
   var D=meta.durationMs, firstSteal=F.firstStealMs===null?D*0.35:F.firstStealMs;
   var SEEDMS=Math.max(6000, D*0.06);   // video-time budget for the seeding beat
+  var MORPHMS=SEEDMS*0.9;              // and for the guessed -> actual reveal that follows it
 
   var ACTS=[
     {at:0,n:"the guess",t:"One request asks S3 where the directories are. swath cuts the keyspace "+
@@ -77,7 +79,7 @@
   var hc=document.getElementById("hist").getContext("2d");
   var SW=976, SH=300, PH=150, HH=150;
   var stats=document.getElementById("stats"), dds=[];
-  [["objects"],["requests"],["live ranges"],["splits"]].forEach(function(l){
+  [["objects listed"],["busy workers"],["splits committed"]].forEach(function(l){
     var d=document.createElement("div"),dt=document.createElement("dt"),dd=document.createElement("dd");
     dt.textContent=l[0]; dd.textContent="0"; d.appendChild(dt); d.appendChild(dd);
     stats.appendChild(d); dds.push(dd); });
@@ -121,8 +123,36 @@
 
   function seek(t){
     drawTimeline(t);
+    if (t < 0 && t >= -MORPHMS) {      // the reveal: what was guessed, vs what was there
+      var mp = 1 - (t / -MORPHMS), ease = mp*mp*(3-2*mp);
+      var SP = M.seedSpans || [], N = SP.length || 1;
+      sc.clearRect(0,0,SW,SH); sc.fillStyle="#161D1B"; sc.fillRect(0,26,SW,SH-26);
+      var heavy = 0;
+      for (var z=0; z<N; z++){ if (SP[z][2] > SP[heavy][2]) heavy = z; }
+      for (z=0; z<N; z++){
+        var gx0=(z/N)*SW, gx1=((z+1)/N)*SW;                 // what the engine believed
+        var ax0=SP[z][0]*SW, ax1=SP[z][1]*SW;               // what the objects say
+        var x0=gx0+(ax0-gx0)*ease, x1=gx1+(ax1-gx1)*ease;
+        sc.fillStyle = (z===heavy) ? "#E4826A" : "#3E4E48";
+        sc.globalAlpha = (z===heavy) ? .92 : .70;
+        sc.fillRect(x0, 30, Math.max(1, x1-x0-0.5), SH-34);
+      }
+      sc.globalAlpha=1;
+      pc.clearRect(0,0,SW,PH); hc.clearRect(0,0,SW,HH);
+      document.getElementById("actn").textContent =
+        ease<0.5 ? "what swath guessed" : "what was actually there";
+      document.getElementById("actt").innerHTML = ease<0.5
+        ? "<b>"+fmt(F.seedCount)+" ranges</b>, and no way to tell whether any of them is bigger "+
+          "than the rest. Widths here are the guess: evenly spread."
+        : "Now widen each range to the objects it really held. <i>One guess held "+
+          F.topShare+"% of the bucket</i> \u2014 "+fmt(F.topKeys)+" objects, "+fmt(F.ratio)+
+          "\u00d7 the median of the other "+fmt(F.seedCount-1)+".";
+      document.getElementById("clock").textContent="the reveal";
+      dds[0].textContent="0"; dds[1].textContent="0 / "+fmt(meta.workers); dds[2].textContent="0";
+      return;
+    }
     if (t < 0) {                       // the seeding beat, expanded so it can be watched
-      var prog = 1 - (t / -SEEDMS);
+      var prog = 1 - ((t + MORPHMS) / -(SEEDMS - MORPHMS));
       sc.clearRect(0,0,SW,SH); sc.fillStyle="#161D1B"; sc.fillRect(0,26,SW,SH-26);
       sc.strokeStyle="#6FBBD0"; sc.lineWidth=2;
       var shown=Math.floor(prog*CUTS.length);
@@ -135,8 +165,8 @@
         "keyspace into <b>"+fmt(F.seedCount)+" ranges</b> on that answer alone \u2014 "+
         fmt(shown)+" so far.";
       document.getElementById("clock").textContent="seeding";
-      dds[0].textContent="0"; dds[1].textContent="1"; dds[2].textContent=fmt(shown);
-      dds[3].textContent="0";
+      dds[0].textContent="0"; dds[1].textContent="0 / "+fmt(meta.workers);
+      dds[2].textContent="0";
       return;
     }
     var nodes={}, busy={}, keys=0, pages=0, splits=0, steals=0, marks=[], i;
@@ -232,9 +262,16 @@
     document.getElementById("actn").textContent=act.n;
     document.getElementById("actt").innerHTML=act.t;
     document.getElementById("clock").textContent=secs(t)+" / "+secs(D);
-    dds[0].textContent=fmt(keys); dds[1].textContent=fmt(pages);
-    dds[2].textContent=fmt(live); dds[3].textContent=fmt(splits);
+    dds[0].textContent=fmt(keys);
+    dds[1].textContent=fmt(nbusy)+" / "+fmt(meta.workers);
+    dds[2].textContent=fmt(splits);
   }
   window.__seek=seek; window.__duration=D; window.__preroll=SEEDMS; seek(-SEEDMS);
+  // Provenance, on screen for the whole clip: this is a rendering of a recorded execution.
+  document.getElementById("foot").innerHTML =
+    "<b>Every split shown here happened in the real run.</b> source: actual "+
+    (meta.title||"run")+" \u00b7 "+fmt(meta.events)+" trace events \u00b7 rendered by "+
+    "tools/explainer. Horizontal = keyspace weighted by objects; colour = which original "+
+    "guess the work descends from.";
 })();
 </script></body></html>
