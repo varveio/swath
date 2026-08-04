@@ -234,6 +234,7 @@ def build_model(events, skipped, title, anonymize):
                                                        collections.Counter())
     mech_pivots = collections.defaultdict(list)
     family_dirs = collections.defaultdict(set)
+    family_span = {}
     seed_keys, seed_splits, seed_workers = (collections.Counter(),
                                             collections.Counter(),
                                             collections.defaultdict(set))
@@ -242,7 +243,7 @@ def build_model(events, skipped, title, anonymize):
     busy_bin = [0] * TIME_BINS
     workers = set()
     claimed = completed = failed = 0
-    pages_seen = pages_kept = total_keys = pending_keys = 0
+    pages_seen = pages_kept = total_keys = pending_keys = pending_pages = 0
     first_steal_ms = first_split_ms = None
     live = peak_live = 0
     peak_live_ms = 0.0
@@ -307,10 +308,17 @@ def build_model(events, skipped, title, anonymize):
                 fam = family_of(event["cursor"])
                 families[fam] += keys
                 family_dirs[fam].add(event["cursor"].split("/")[0])
+                # Where this family sits on the axis, so a label can be drawn over its own
+                # objects rather than in a legend the reader has to cross-reference.
+                span = family_span.get(fam)
+                family_span[fam] = (min(span[0], new), max(span[1], new)) if span else (new, new)
             pending_keys += keys
+            pending_pages += 1
             if pages_seen % keep_every == 0 or event.get("completed"):
-                stream.append([t, K_PAGE, node, worker, new, pending_keys])
-                pending_keys = 0
+                # Carry BOTH the keys and the pages the dropped events stood for, so a
+                # downsampled replay still ends on the run's true totals.
+                stream.append([t, K_PAGE, node, worker, new, pending_keys, pending_pages])
+                pending_keys = pending_pages = 0
                 pages_kept += 1
 
         elif kind in ("split", "owner_split"):
@@ -351,8 +359,8 @@ def build_model(events, skipped, title, anonymize):
         elif kind == "owner_split_decision":
             gate_count[event.get("reason") or "?"] += 1
 
-    if pending_keys:
-        stream.append([ms(events[-1]), K_PAGE, -1, -1, 1.0, pending_keys])
+    if pending_keys or pending_pages:
+        stream.append([ms(events[-1]), K_PAGE, -1, -1, 1.0, pending_keys, pending_pages])
     end = ms(events[-1])
     for node in list(open_seg):
         close_segment(node, end)
@@ -416,7 +424,9 @@ def build_model(events, skipped, title, anonymize):
         "findings": findings,
         "seeds": by_mass[:14],
         "lineage": lineage_slot,
-        "families": [{"name": k, "dirs": len(family_dirs[k]), "keys": int(v)}
+        "families": [{"name": k, "dirs": len(family_dirs[k]), "keys": int(v),
+                      "x0": round(family_span.get(k, (0.0, 0.0))[0], 5),
+                      "x1": round(family_span.get(k, (0.0, 0.0))[1], 5)}
                      for k, v in families.most_common(10)],
         "rate": [round(v / peak_rate, 4) for v in keys_bin],
         "busy": busy_bin,
@@ -895,7 +905,7 @@ TEMPLATE = r"""<!doctype html>
     else if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={});
       n.lo=e[4]; n.hi=e[6]; n.cur=e[5]; n.worker=e[3]; n.root=e[7]; n.state="live";
       stats.busy[e[3]]=(stats.busy[e[3]]||0)+1; }
-    else if(k===K_PAGE){ stats.keys+=e[5]; stats.pages++; n=nodes[e[2]]; if(n){ n.cur=e[4]; } }
+    else if(k===K_PAGE){ stats.keys+=e[5]; stats.pages+=(e[6]||1); n=nodes[e[2]]; if(n){ n.cur=e[4]; } }
     else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
       nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],state:"pending"};
       marks.push({x:e[5],age:0,owner:k===K_OWNER}); stats.splits++; }
@@ -1010,6 +1020,163 @@ TEMPLATE = r"""<!doctype html>
 """
 
 
+# --------------------------------------------------------------------------- video
+
+
+def render_video(model):
+    """A capture-oriented page: fixed 1080x1350, big type, one deterministic seek hook.
+
+    LinkedIn's feed gives a 4:5 portrait the most vertical real estate of any ratio it
+    accepts, and it autoplays muted — so the frame has to carry its own narration. The page
+    exposes ``window.__seek(ms)`` and draws synchronously, which lets a screenshot driver
+    step it frame by frame instead of racing a live animation.
+    """
+    return VIDEO_TEMPLATE.replace("/*__MODEL__*/null",
+                                  json.dumps(model, separators=(",", ":")))
+
+
+VIDEO_TEMPLATE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>swath</title>
+<style>
+  :root { --paper:#0E1312; --panel:#161D1B; --deep:#1E2724; --ink:#E7EBE3; --ink2:#9BA69F;
+          --ink3:#74807A; --rule:#29332F; --accent:#56C9B1; --signal:#E0AC55; --alert:#E4826A;
+          --mono:ui-monospace,"SFMono-Regular","Cascadia Mono",Menlo,Consolas,monospace; }
+  * { box-sizing:border-box; margin:0; }
+  html,body { width:1080px; height:1350px; overflow:hidden; background:var(--paper);
+              color:var(--ink); font-family:var(--mono); }
+  .stage { width:1080px; height:1350px; padding:44px 52px; display:flex; flex-direction:column; }
+  .top { display:flex; justify-content:space-between; align-items:flex-start; }
+  h1 { font-size:44px; font-weight:500; letter-spacing:-.035em; line-height:1.05; }
+  .bkt { color:var(--accent); }
+  .clock { font-size:26px; color:var(--ink3); font-variant-numeric:tabular-nums; }
+  .act { margin-top:26px; min-height:104px; }
+  .act .n { font-size:15px; letter-spacing:.22em; text-transform:uppercase; color:var(--signal); }
+  .act .t { font-size:31px; line-height:1.25; margin-top:9px; max-width:960px; letter-spacing:-.02em; }
+  .act .t b { color:var(--accent); font-weight:600; }
+  .act .t i { font-style:normal; color:var(--alert); font-weight:600; }
+  .ribbon { margin-top:14px; height:76px; position:relative; }
+  .ribbon .seg { position:absolute; top:0; height:26px; border-radius:2px; opacity:.55; }
+  .ribbon .lab { position:absolute; top:30px; font-size:15px; color:var(--ink2);
+                 white-space:nowrap; overflow:hidden; }
+  canvas { display:block; margin-top:12px; border:1px solid var(--rule); background:var(--panel); }
+  .stats { margin-top:auto; display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
+           background:var(--rule); border:1px solid var(--rule); }
+  .stats div { background:var(--paper); padding:14px 18px; }
+  .stats dt { font-size:14px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); }
+  .stats dd { font-size:34px; font-variant-numeric:tabular-nums; letter-spacing:-.02em; margin-top:4px; }
+  .foot { margin-top:16px; font-size:15px; color:var(--ink3); line-height:1.5; }
+</style></head>
+<body><div class="stage">
+  <div class="top"><h1 id="h1"></h1><div class="clock" id="clock"></div></div>
+  <div class="act"><div class="n" id="actn"></div><div class="t" id="actt"></div></div>
+  <div class="ribbon" id="ribbon"></div>
+  <canvas id="map" width="976" height="620"></canvas>
+  <dl class="stats" id="stats"></dl>
+  <div class="foot" id="foot"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+  var M = /*__MODEL__*/null; if(!M) return;
+  var meta=M.meta, F=M.findings, stream=M.stream;
+  var K_PAGE=2,K_SPLIT=3,K_OWNER=4,K_CLAIM=1,K_DONE=5,K_FAIL=6,K_STEAL=7;
+  var LIN=["#E4826A","#56C9B1","#6FBBD0","#BCC076","#7FA8CE"], REST="#5E6B65";
+  function lin(r){ var s=M.lineage[r]; return s===undefined?REST:LIN[s]; }
+  function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
+  function secs(ms){ return ms>=60000 ? Math.floor(ms/60000)+"m"+String(Math.round(ms%60000/1000)).padStart(2,"0")+"s"
+                                      : (ms/1000).toFixed(1)+"s"; }
+
+  document.getElementById("h1").innerHTML =
+    '<span class="bkt">'+(meta.title||"swath")+'</span>';
+
+  // ---- prefix ribbon: labels sit over the objects they describe ----------
+  var rb=document.getElementById("ribbon"), W=976;
+  var row=0;
+  (M.families||[]).filter(function(f){ return f.x1-f.x0 > 0.035; }).slice(0,7).forEach(function(f){
+    var x0=f.x0*W, w=Math.max(4,(f.x1-f.x0)*W);
+    var seg=document.createElement("div"); seg.className="seg";
+    seg.style.left=x0+"px"; seg.style.width=w+"px"; seg.style.background=LIN[1];
+    seg.style.opacity = String(0.22+0.5*Math.min(1,f.keys/(meta.totalKeys||1)*2));
+    rb.appendChild(seg);
+    var txt=f.name+"  "+(100*f.keys/(meta.totalKeys||1)).toFixed(0)+"%";
+    if (w < txt.length*8.4) { return; }           // no room to say it honestly — say nothing
+    var lab=document.createElement("div"); lab.className="lab";
+    lab.style.left=x0+"px"; lab.style.maxWidth=w+"px";
+    lab.style.top=(row++%2?52:30)+"px";
+    lab.textContent=txt; rb.appendChild(lab);
+  });
+
+  // ---- acts, derived from the run's own findings -------------------------
+  var D=meta.durationMs, firstSteal=F.firstStealMs===null?D*0.35:F.firstStealMs;
+  var ACTS=[
+    {at:0, n:"one request", t:"swath asks S3 where the directories are — <b>once</b> — and turns "+
+      "the answer into <b>"+fmt(F.seedCount)+" ranges</b> to scan in parallel."},
+    {at:Math.min(D*0.08,4000), n:"all hands", t:"Every one of <b>"+fmt(meta.workers)+
+      " workers</b> gets its own slice of the keyspace. Nothing to coordinate. Nothing to steal."},
+    {at:firstSteal*0.55, n:"draining", t:"A directory name says nothing about how many objects "+
+      "are behind it. The engine is finding out the only way there is — by listing."},
+    {at:firstSteal, n:"the guesses run out", t:"The well-guessed ranges finish. One did not: "+
+      "<i>"+F.topShare+"% of the whole bucket</i> sat behind a single guess."},
+    {at:firstSteal+(D-firstSteal)*0.25, n:"stealing", t:"Idle workers carve the survivor apart at "+
+      "boundaries they invent — <b>keys that do not exist</b> are still valid fences."},
+    {at:firstSteal+(D-firstSteal)*0.62, n:"converging", t:"<b>"+fmt(F.topSplits)+" splits</b> into "+
+      "that one range. All <b>"+fmt(F.topWorkers)+"</b> workers end up inside it."},
+    {at:D*0.985, n:"done", t:"<b>"+fmt(meta.totalKeys)+" objects</b> in "+secs(D)+
+      ", at <b>"+F.reqPer1k.toFixed(2)+"</b> requests per thousand. No gaps. No overlaps."}
+  ];
+
+  // ---- accumulating keyspace x time map ---------------------------------
+  var cv=document.getElementById("map"), g=cv.getContext("2d");
+  var CW=cv.width, CH=cv.height, ML=8, MT=8, IW=CW-16, IH=CH-16;
+  function sx(p){ return ML+p*IW; } function sy(t){ return MT+(t/Math.max(1,D))*IH; }
+
+  var stats=document.getElementById("stats"), dds=[];
+  [["objects"],["requests"],["live ranges"],["splits"]].forEach(function(l){
+    var d=document.createElement("div"), dt=document.createElement("dt"), dd=document.createElement("dd");
+    dt.textContent=l[0]; dd.textContent="0"; d.appendChild(dt); d.appendChild(dd);
+    stats.appendChild(d); dds.push(dd); });
+  document.getElementById("foot").textContent =
+    "Generated from this run's own --trace event log by scripts/trace/trace-viz.py. "+
+    "Horizontal = keyspace weighted by objects, so equal width is equal objects. "+
+    "Vertical = time. Colour = which original guess the work descends from.";
+
+  function seek(t){
+    var i, live=0, keys=0, pages=0, splits=0;
+    g.clearRect(0,0,CW,CH);
+    for(i=0;i<M.segments.length;i++){
+      var s=M.segments[i]; if(s[2]>t) continue;
+      var y1=Math.min(s[3],t);
+      var x0=sx(s[0]), w=Math.max(1,sx(s[1])-x0), y0=sy(s[2]), h=Math.max(1,sy(y1)-y0);
+      g.globalAlpha=.34; g.fillStyle=lin(s[4]); g.fillRect(x0,y0,w,h);
+      g.globalAlpha=1; g.strokeStyle=lin(s[4]); g.lineWidth=.5; g.strokeRect(x0+.25,y0+.25,w,h);
+      if(s[3]>t) live++;
+    }
+    for(i=0;i<stream.length;i++){
+      var e=stream[i]; if(e[0]>t) break;
+      if(e[1]===K_PAGE){ keys+=e[5]; pages+=(e[6]||1); }
+      else if(e[1]===K_SPLIT||e[1]===K_OWNER){ splits++;
+        g.beginPath(); g.arc(sx(e[5]),sy(e[0]),e[1]===K_OWNER?2.4:1.9,0,6.284);
+        g.fillStyle="#E0AC55"; g.globalAlpha=.8; g.fill(); g.globalAlpha=1; }
+    }
+    g.strokeStyle="#56C9B1"; g.lineWidth=2; g.globalAlpha=.9;
+    g.beginPath(); g.moveTo(ML,sy(t)); g.lineTo(ML+IW,sy(t)); g.stroke(); g.globalAlpha=1;
+
+    var act=ACTS[0];
+    for(i=0;i<ACTS.length;i++){ if(t>=ACTS[i].at) act=ACTS[i]; }
+    document.getElementById("actn").textContent=act.n;
+    document.getElementById("actt").innerHTML=act.t;
+    document.getElementById("clock").textContent=secs(t)+" / "+secs(D);
+    dds[0].textContent=fmt(keys); dds[1].textContent=fmt(pages);
+    dds[2].textContent=fmt(live); dds[3].textContent=fmt(splits);
+  }
+  window.__seek=seek;          // the capture driver's only entry point
+  window.__duration=D;
+  seek(0);
+})();
+</script></body></html>
+"""
+
+
 # --------------------------------------------------------------------------- self-test
 
 
@@ -1118,6 +1285,9 @@ def main(argv=None):
     parser.add_argument("--title", help="page heading (default: the trace file's stem)")
     parser.add_argument("--anonymize", action="store_true",
                         help="withhold every key name; emit positions and counts only")
+    parser.add_argument("--video", action="store_true",
+                        help="emit a 1080x1350 capture page for recording a share-ready clip; "
+                             "drive it via window.__seek(ms) and encode the frames")
     parser.add_argument("--self-test", action="store_true", help="run internal checks and exit")
     args = parser.parse_args(argv)
 
@@ -1141,7 +1311,7 @@ def main(argv=None):
 
     model = build_model(events, skipped, args.title or args.trace.stem, args.anonymize)
     out = args.out or args.trace.with_suffix(".html")
-    out.write_text(render(model), encoding="utf-8")
+    out.write_text((render_video if args.video else render)(model), encoding="utf-8")
 
     meta, F = model["meta"], model["findings"]
     print("trace-viz: %s -> %s" % (args.trace, out), file=sys.stderr)
