@@ -162,8 +162,7 @@
     <div class="card" id="steal-card">
       <h3>How each thief attempt ended</h3>
       <table><tbody id="steal-table"></tbody></table>
-      <p class="cap">Many retries against few committed children means idle workers were probing
-      without finding anything splittable.</p>
+      <p class="cap" id="steal-cap"></p>
     </div>
   </div>
 
@@ -277,11 +276,20 @@
       "had its own structurally disjoint slice, bought with a single request."]);
   }
   if (F.totalSplits>0) {
-    finding("calm","Pivots came from evidence, not from the middle",[
-      fmt(F.totalSplits-F.uniformSplits)+" of "+fmt(F.totalSplits)+" splits ("+
-      pct(F.totalSplits-F.uniformSplits,F.totalSplits)+"%) placed their pivot from something the "+
-      "run had observed — drained density, a real directory boundary, the alphabet seen in "+
-      "returned keys. Only "+fmt(F.uniformSplits)+" used the plain byte midpoint."]);
+    var ev=F.totalSplits-F.uniformSplits, evShare=ev/F.totalSplits;
+    if (evShare >= 0.8) {
+      finding("calm","Pivots came from evidence, not from the middle",[
+        fmt(ev)+" of "+fmt(F.totalSplits)+" splits ("+pct(ev,F.totalSplits)+
+        "%) placed their pivot from something the run had observed — drained density, a real "+
+        "directory boundary, the alphabet seen in returned keys. Only "+fmt(F.uniformSplits)+
+        " used the plain byte midpoint."]);
+    } else {
+      finding("","Most pivots fell back to the uniform midpoint",[
+        fmt(F.uniformSplits)+" of "+fmt(F.totalSplits)+" splits ("+
+        pct(F.uniformSplits,F.totalSplits)+"%) used the plain byte midpoint rather than an "+
+        "estimate conditioned on observed mass. On a skewed bucket that tends to aim pivots "+
+        "into empty keyspace — worth checking why the mass-aware paths did not engage."]);
+    }
   }
 
   // ---- bar lists ----------------------------------------------------------
@@ -362,11 +370,17 @@
     tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); gt.appendChild(tr); });
   if (!M.gateRows.length) { document.getElementById("gate-card").hidden=true; }
   else {
+    var carved=F.ownerSplits||0, consults=F.gateTotal||0;
+    var refusedShare = consults ? (consults-carved)/consults : 0;
     document.getElementById("gate-cap").textContent =
-      "The owner-side split gate was consulted "+fmt(F.gateTotal)+" times and mostly said no. "+
-      "That is the design working: the split mechanism is global, but its trigger is local and "+
-      "demand-driven, so while every worker is busy there is no reason to shed work and the gate "+
-      "stays shut.";
+      "The owner-side split gate was consulted "+fmt(consults)+" times and carved "+fmt(carved)+
+      " times — it refused "+(100*refusedShare).toFixed(1)+"% of the time. " +
+      (refusedShare > 0.9
+        ? "That is the design working: the split mechanism is global, but its trigger is local "+
+          "and demand-driven, so while every worker is busy there is no reason to shed work and "+
+          "the gate stays shut."
+        : "The gate admitted a large share of what it was asked, which is worth checking against "+
+          "the demand signal — a trigger that rarely refuses is not gating much.");
   }
 
   // ---- mechanisms ---------------------------------------------------------
@@ -392,7 +406,23 @@
   var st=document.getElementById("steal-table");
   M.outcomeRows.forEach(function(r){ var tr=el("tr");
     tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); st.appendChild(tr); });
-  if(!M.outcomeRows.length) document.getElementById("steal-card").hidden=true;
+  if(!M.outcomeRows.length) { document.getElementById("steal-card").hidden=true; }
+  else {
+    var attempts=M.outcomeRows.reduce(function(a,r){ return a+r.n; },0);
+    var made=M.outcomeRows.filter(function(r){ return /CHILD_CREATED/.test(r.name); })
+                          .reduce(function(a,r){ return a+r.n; },0);
+    var hit = attempts ? made/attempts : 0;
+    document.getElementById("steal-cap").textContent =
+      fmt(attempts)+" thief attempts produced "+fmt(made)+" child ranges ("+
+      (100*hit).toFixed(0)+"%). " + (
+        hit < 0.25
+          ? "Many attempts against few children: idle workers were probing without finding "+
+            "anything splittable — the probe-storm signature."
+          : attempts < (F.totalSplits||1)*0.2
+            ? "Note how few attempts there were relative to "+fmt(F.totalSplits)+" total splits: "+
+              "the worklist was refilled mostly by owner-side splitting, not by thieves."
+            : "A high hit rate: when a thief looked for work, it usually found something to take.");
+  }
 
   // ---- static map ---------------------------------------------------------
   var sv=document.getElementById("static"), sc=sv.getContext("2d");
@@ -529,6 +559,16 @@
     clockMs=(Number(scrub.value)/1000)*meta.durationMs; reset(); seekTo(clockMs); draw(); readout(); });
 
   // ---- ledger + provenance ------------------------------------------------
+  if (F.speedupPct !== null && F.speedupPct !== undefined) {
+    finding(F.speedupPct >= 75 ? "calm" : "", "How close to perfect this run got", [
+      "The fleet was occupied for "+fmt(F.busySec)+" worker-seconds. Spread perfectly across "+
+      meta.workers+" workers that is "+fmt(F.idealSec)+"s of wall clock; the run actually took "+
+      Math.round(meta.durationMs/1000)+"s — <B>"+F.speedupPct+"% of perfect speedup</B>.",
+      "The gap is "+fmt(F.idleSec)+" idle worker-seconds. That is the honest cost of not knowing "+
+      "where the objects were: workers with nothing to do while the partition was still being "+
+      "corrected. Watch the live-range trace above to see when it was spent."
+    ].map(function(x){ return x.replace(/<B>|<\/B>/g,""); }));
+  }
   document.getElementById("ledger-lede").textContent =
     fmt(F.seedCount)+" seed ranges plus "+fmt(F.totalSplits)+" splits is "+
     fmt(F.seedCount+F.totalSplits)+" ranges; the trace records "+fmt(F.claimed)+" claimed and "+

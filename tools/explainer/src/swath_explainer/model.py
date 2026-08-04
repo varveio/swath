@@ -201,6 +201,13 @@ def build_model(events, skipped, title, anonymize):
     palette_ids = [s["id"] for s in by_mass[:5]]
     lineage_slot = {nid: i for i, nid in enumerate(palette_ids)}
 
+    # Busy worker-time: every segment is one node held by one worker for a stretch, so their
+    # durations sum to the fleet's occupied time. Against the wall clock that gives the honest
+    # speedup number — and, more usefully, where the shortfall went.
+    busy_ms = sum(seg[3] - seg[2] for seg in segments)
+    ideal_ms = busy_ms / float(len(workers)) if workers else 0.0
+    idle_ms = max(0.0, duration * len(workers) - busy_ms)
+
     total_splits = sum(mech_count.values())
     owner_splits = sum(n for (k, m), n in mech_count.items() if k == "owner_split")
     uniform = sum(n for (k, m), n in mech_count.items()
@@ -228,6 +235,10 @@ def build_model(events, skipped, title, anonymize):
         "claimed": claimed, "completed": completed, "failed": failed,
         "ledgerOk": (len(seeds) + total_splits == claimed == completed) and failed == 0,
         "reqPer1k": round(1000.0 * pages_seen / total_keys, 3) if total_keys else None,
+        "busySec": round(busy_ms / 1000.0, 1),
+        "idealSec": round(ideal_ms / 1000.0, 1),
+        "idleSec": round(idle_ms / 1000.0, 1),
+        "speedupPct": round(100.0 * ideal_ms / duration, 1) if duration else None,
         "floorPages": (total_keys + 999) // 1000 if total_keys else 0,
     }
 
