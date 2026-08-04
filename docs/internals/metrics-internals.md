@@ -933,12 +933,12 @@ per-event fields). This table is versioned by hand.
 
 ### Reading a trace, visually
 
-`scripts/trace/trace-viz.py` (stdlib-only, like the CI drift guard) turns a `--trace` file into a
+`tools/explainer/explainer.py` (stdlib-only, like the CI drift guard) turns a `--trace` file into a
 self-contained HTML page:
 
 ```
-scripts/trace/trace-viz.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
-scripts/trace/trace-viz.py --self-test
+tools/explainer/explainer.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
+tools/explainer/explainer.py --self-test
 ```
 
 The page is an **explainer, not a dashboard**: it computes the run's findings and states them in

@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>swath run trace</title>
+<style>
+  :root {
+    --paper:#F1F2EB; --panel:#E7E9DF; --deep:#DDE0D3;
+    --ink:#131A18; --ink2:#4E5A55; --ink3:#7C8781; --rule:#CBD0C2;
+    --accent:#0D6E60; --signal:#9A6710; --alert:#A33F28;
+    --accent-sub:#0D6E6014; --signal-sub:#9A671018; --alert-sub:#A33F2814;
+    --mono:ui-monospace,"SFMono-Regular","Cascadia Mono",Menlo,Consolas,monospace;
+    --serif:Charter,"Bitstream Charter","Sitka Text",Cambria,Georgia,serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0E1312; --panel:#161D1B; --deep:#1E2724;
+      --ink:#E7EBE3; --ink2:#9BA69F; --ink3:#74807A; --rule:#29332F;
+      --accent:#56C9B1; --signal:#E0AC55; --alert:#E4826A;
+      --accent-sub:#56C9B11A; --signal-sub:#E0AC551A; --alert-sub:#E4826A1A;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--serif);
+         font-size:16.5px; line-height:1.6; overflow-x:hidden; }
+  .wrap { max-width:64rem; margin:0 auto; padding:2.4rem 1.5rem 5rem; }
+  .col { max-width:36rem; }
+  h1 { font-family:var(--mono); font-weight:500; font-size:clamp(1.55rem,4vw,2.25rem);
+       letter-spacing:-.035em; margin:0 0 .35rem; text-wrap:balance; }
+  .sub { font-family:var(--mono); font-size:.72rem; color:var(--ink3); margin-bottom:1.5rem; }
+  h2 { font-family:var(--mono); font-weight:500; font-size:1.22rem; letter-spacing:-.025em;
+       margin:0; text-wrap:balance; }
+  .sec { padding-top:2.6rem; }
+  .sec-head { display:flex; align-items:baseline; gap:.9rem; border-top:2px solid var(--ink);
+              padding-top:.6rem; margin-bottom:1rem; }
+  .eyebrow { font-family:var(--mono); font-size:.63rem; letter-spacing:.15em;
+             text-transform:uppercase; color:var(--ink3); white-space:nowrap; }
+  p { margin:0 0 1em; }
+  code { font-family:var(--mono); font-size:.85em; background:var(--panel); padding:.08em .32em;
+         border-radius:3px; border:1px solid var(--rule); word-break:break-all; }
+  b.hl { box-shadow: inset 0 -.4em 0 var(--accent-sub); font-weight:600; }
+
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(8.2rem,1fr));
+           gap:1px; background:var(--rule); border:1px solid var(--rule); margin-bottom:1.5rem; }
+  .tiles > div { background:var(--paper); padding:.6rem .85rem; }
+  .tiles dt { font-family:var(--mono); font-size:.59rem; letter-spacing:.13em;
+              text-transform:uppercase; color:var(--ink3); margin-bottom:.12rem; }
+  .tiles dd { margin:0; font-family:var(--mono); font-size:1.05rem;
+              font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+
+  .finding { border-left:3px solid var(--alert); background:var(--alert-sub);
+             padding:.95rem 1.15rem; margin:1.2rem 0; }
+  .finding .lbl { font-family:var(--mono); font-size:.62rem; letter-spacing:.14em;
+                  text-transform:uppercase; color:var(--alert); display:block; margin-bottom:.3rem; }
+  .finding p { margin:0 0 .55em; max-width:46rem; } .finding p:last-child { margin-bottom:0; }
+  .finding.calm { border-left-color:var(--accent); background:var(--accent-sub); }
+  .finding.calm .lbl { color:var(--accent); }
+
+  .card { background:var(--panel); border:1px solid var(--rule); border-radius:2px;
+          padding:1rem 1.15rem; margin:1.1rem 0; overflow-x:auto; }
+  .card h3 { font-family:var(--mono); font-size:.68rem; letter-spacing:.13em;
+             text-transform:uppercase; color:var(--ink3); margin:0 0 .6rem; font-weight:600; }
+  canvas { display:block; width:100%; }
+  .row { display:grid; grid-template-columns:minmax(8rem,17rem) 1fr auto; gap:.7rem;
+         align-items:center; font-family:var(--mono); font-size:.74rem; padding:.2rem 0; }
+  .row .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--ink2); }
+  .row .tr { background:var(--deep); height:13px; position:relative; }
+  .row .fl { position:absolute; inset:0 auto 0 0; }
+  .row .vl { font-variant-numeric:tabular-nums; color:var(--ink2); white-space:nowrap; }
+
+  table { border-collapse:collapse; width:100%; font-size:.82rem; }
+  th,td { text-align:left; padding:.38rem .8rem .38rem 0; border-bottom:1px solid var(--rule);
+          vertical-align:top; }
+  th { font-family:var(--mono); font-size:.59rem; letter-spacing:.12em; text-transform:uppercase;
+       color:var(--ink3); }
+  td.k { font-family:var(--mono); font-size:.75rem; white-space:nowrap; }
+  td.n { font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums; }
+  td.pv { font-family:var(--mono); font-size:.71rem; color:var(--ink2); word-break:break-all; }
+  td.pv div { padding:.05rem 0; }
+  tr:last-child td { border-bottom:0; }
+
+  .bar { display:flex; align-items:center; gap:.75rem; flex-wrap:wrap; padding:.5rem 0 .7rem; }
+  button { font-family:var(--mono); font-size:.7rem; padding:.28rem .68rem; background:var(--paper);
+           color:var(--ink); border:1px solid var(--rule); border-radius:2px; cursor:pointer; }
+  button:hover { border-color:var(--ink2); }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  input[type=range] { flex:1 1 9rem; min-width:6rem; accent-color:var(--accent); }
+  .clock { font-family:var(--mono); font-size:.71rem; color:var(--ink2);
+           font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .cap { font-family:var(--mono); font-size:.7rem; color:var(--ink2); line-height:1.55;
+         max-width:60ch; margin:.6rem 0 0; }
+  .key { display:flex; flex-wrap:wrap; gap:.9rem; font-family:var(--mono); font-size:.7rem;
+         color:var(--ink2); margin-top:.6rem; }
+  .key span { display:inline-flex; align-items:center; gap:.35rem; }
+  .key i { width:.7rem; height:.7rem; display:inline-block; border-radius:2px; }
+  footer { margin-top:3rem; padding-top:1.3rem; border-top:2px solid var(--ink);
+           font-family:var(--mono); font-size:.69rem; color:var(--ink2); line-height:1.7; }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration:.001ms !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">swath run trace</h1>
+  <div class="sub" id="subtitle"></div>
+  <dl class="tiles" id="tiles"></dl>
+  <div id="findings"></div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§1</span><h2>The guesses, and how they turned out</h2></div>
+    <div class="col">
+      <p>Before any worker starts, swath spends one <code>delimiter=/</code> request asking S3
+      where the directories are, and turns the answer into starting ranges. A directory name says
+      nothing about how many objects are behind it, so this is a guess — and it is the only free
+      information the engine will ever get.</p>
+      <p id="seed-lede"></p>
+    </div>
+    <div class="card">
+      <h3>Seed ranges, by objects actually found behind them</h3>
+      <div id="seed-bars"></div>
+      <p class="cap" id="seed-cap"></p>
+    </div>
+    <div class="card" id="fam-card">
+      <h3>Objects by top-level directory</h3>
+      <div id="fam-bars"></div>
+      <p class="cap">Grouped by first path segment, with runs of six or more digits generalized so
+      dated sibling directories collapse into one row — a grouping choice for this table only.</p>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§2</span><h2>What the run actually felt like</h2></div>
+    <div class="col"><p id="time-lede"></p></div>
+    <div class="card">
+      <h3>Objects listed per second, and live ranges, over the run</h3>
+      <canvas id="rate" role="img" aria-label="Two series over the run's duration: objects listed per second, and the number of live ranges."></canvas>
+      <p class="cap" id="rate-cap"></p>
+    </div>
+    <div class="card" id="gate-card">
+      <h3>Owner-split gate decisions</h3>
+      <table><thead><tr><th>Gate outcome</th><th style="text-align:right">Times</th></tr></thead>
+      <tbody id="gate-table"></tbody></table>
+      <p class="cap" id="gate-cap"></p>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§3</span><h2>Most of these keys do not exist</h2></div>
+    <div class="col">
+      <p id="mech-lede"></p>
+      <p>To split a range swath needs a boundary key, and it does <b>not</b> need one that exists —
+      <code>start-after</code> accepts any byte string. The pivots below are verbatim from this
+      run. The odd-looking ones are synthesized coordinates, not object names: a trailing
+      <code>:</code> is one byte past <code>9</code>, so it means "past every key ending in a
+      digit here".</p>
+    </div>
+    <div class="card">
+      <table><thead><tr><th>Mechanism</th><th style="text-align:right">Splits</th><th>Sample pivots, verbatim</th></tr></thead>
+      <tbody id="mech-table"></tbody></table>
+      <p class="cap" id="mech-cap"></p>
+    </div>
+    <div class="card" id="steal-card">
+      <h3>How each thief attempt ended</h3>
+      <table><tbody id="steal-table"></tbody></table>
+      <p class="cap">Many retries against few committed children means idle workers were probing
+      without finding anything splittable.</p>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§4</span><h2>The whole run, on one map</h2></div>
+    <div class="col">
+      <p>Horizontal is the keyspace weighted by objects — <b class="hl">equal width means an equal
+      number of objects</b> — and vertical is time running downward. Each rectangle is one range
+      over the slice it owned and the time it owned it, coloured by which original seed guess it
+      descends from. Because width is objects, a rectangle's <em>area</em> is roughly the work it
+      did.</p>
+      <p><b>Wide and short</b> is a big slice eaten fast. <b>A tall thin column</b> is a serial
+      tail — a dense region that could not be divided, outliving everything around it.</p>
+    </div>
+    <div class="card">
+      <canvas id="static" role="img" aria-label="Keyspace over time: each range drawn as a rectangle whose width is the share of objects it owned and whose height is how long it owned them, coloured by seed lineage."></canvas>
+      <div class="key" id="static-key"></div>
+      <p class="cap" id="static-cap"></p>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§5</span><h2>Watch it happen</h2></div>
+    <div class="col"><p>The same events replayed in order, on the same axis. Bands are live ranges,
+    filled to each worker's cursor; ticks are split pivots as they commit.</p></div>
+    <div class="card">
+      <div class="bar">
+        <button id="play" type="button">Pause</button>
+        <button id="restart" type="button">Restart</button>
+        <button id="speed" type="button">1&times;</button>
+        <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Scrub through the run">
+        <span class="clock" id="clock">0s</span>
+      </div>
+      <canvas id="map" role="img" aria-label="Replay of the run: live ranges across the object-weighted keyspace, with split pivots marked as they commit."></canvas>
+      <dl class="tiles" id="live-tiles" style="margin-top:.8rem"></dl>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-head"><span class="eyebrow">§6</span><h2>The ledger</h2></div>
+    <div class="col"><p id="ledger-lede"></p></div>
+  </div>
+
+  <footer id="provenance"></footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var M = /*__MODEL__*/null;
+  if (!M) { return; }
+  var meta=M.meta, F=M.findings, stream=M.stream;
+  var K_SEED=0,K_CLAIM=1,K_PAGE=2,K_SPLIT=3,K_OWNER=4,K_DONE=5,K_FAIL=6,K_STEAL=7;
+
+  var LIN_L=["#A33F28","#0D6E60","#2E7C86","#6E7B3C","#38617E"], REST_L="#9AA79F";
+  var LIN_D=["#E4826A","#56C9B1","#6FBBD0","#BCC076","#7FA8CE"], REST_D="#5E6B65";
+  function css(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function dark(){ return window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches; }
+  function lineage(root){
+    var slot=M.lineage[root]; var t=dark()?LIN_D:LIN_L;
+    return slot===undefined ? (dark()?REST_D:REST_L) : t[slot];
+  }
+  function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
+  function compact(n){ return n>=1e6 ? (n/1e6).toFixed(1)+"M"
+                     : n>=1e3 ? Math.round(n/1e3)+"k" : String(Math.round(n)); }
+  function secs(ms){ return ms>=60000 ? Math.floor(ms/60000)+"m"+String(Math.round(ms%60000/1000)).padStart(2,"0")+"s"
+                                      : (ms/1000).toFixed(ms<10000?1:0)+"s"; }
+  function el(t,c,x){ var e=document.createElement(t); if(c)e.className=c;
+    if(x!==undefined)e.textContent=x; return e; }
+  // Never round a near-miss up to a flat 100% — "100%" next to a nonzero remainder reads as a bug.
+  function pct(a,b){ if(!b) return 0; var v=100*a/b;
+    return (v>99.5&&a<b)||(v<0.5&&a>0) ? v.toFixed(1) : Math.round(v); }
+
+  document.getElementById("title").textContent = meta.title||"swath run trace";
+  document.getElementById("subtitle").textContent =
+    [fmt(meta.totalKeys)+" objects", fmt(meta.pagesSeen)+" LIST requests",
+     meta.workers+" workers", secs(meta.durationMs)].join("  ·  ");
+
+  var tw=document.getElementById("tiles");
+  [["Objects",fmt(meta.totalKeys)],["Wall time",secs(meta.durationMs)],
+   ["LIST requests",fmt(meta.pagesSeen)],
+   ["Requests / 1k",F.reqPer1k===null?"—":F.reqPer1k.toFixed(2)],
+   ["Workers",fmt(meta.workers)],["Splits",fmt(F.totalSplits)]].forEach(function(t){
+    var d=el("div"); d.appendChild(el("dt",null,t[0])); d.appendChild(el("dd",null,t[1])); tw.appendChild(d); });
+
+  // ---- findings, written from the data -----------------------------------
+  var fw=document.getElementById("findings");
+  function finding(cls,label,paras){ var d=el("div","finding"+(cls?" "+cls:""));
+    d.appendChild(el("span","lbl",label));
+    paras.forEach(function(p){ d.appendChild(el("p",null,p)); }); fw.appendChild(d); }
+
+  if (F.topShare>=25 && F.seedCount>1) {
+    finding("","The guess that was wrong",[
+      "The seed produced "+fmt(F.seedCount)+" ranges. One of them held "+fmt(F.topKeys)+
+      " objects — "+F.topShare+"% of everything this run listed"+
+      (F.ratio>4 ? ", about "+fmt(F.ratio)+"× the median of the rest" : "")+
+      ". Nothing about its bounds said so; the only way to find out was to list it.",
+      F.topSplits>0
+        ? "Work-stealing took it apart at runtime: "+fmt(F.topSplits)+" of the run's "+
+          fmt(F.totalSplits)+" splits ("+pct(F.topSplits,F.totalSplits)+
+          "%) were carved out of that one range and its descendants, and "+fmt(F.topWorkers)+
+          " of the "+fmt(meta.workers)+" workers ended up inside it."
+        : "No split ever divided it, so it drained on a single worker for as long as it took."
+    ]);
+  }
+  if (F.firstStealMs!==null && F.peakLive>0) {
+    finding("calm","Seeding alone carried the start",[
+      "Every worker was busy within "+secs(F.peakLiveMs)+" ("+fmt(F.peakLive)+
+      " ranges live at once), and the first steal attempt did not happen until "+
+      secs(F.firstStealMs)+". For that whole stretch there was nothing to steal — every worker "+
+      "had its own structurally disjoint slice, bought with a single request."]);
+  }
+  if (F.totalSplits>0) {
+    finding("calm","Pivots came from evidence, not from the middle",[
+      fmt(F.totalSplits-F.uniformSplits)+" of "+fmt(F.totalSplits)+" splits ("+
+      pct(F.totalSplits-F.uniformSplits,F.totalSplits)+"%) placed their pivot from something the "+
+      "run had observed — drained density, a real directory boundary, the alphabet seen in "+
+      "returned keys. Only "+fmt(F.uniformSplits)+" used the plain byte midpoint."]);
+  }
+
+  // ---- bar lists ----------------------------------------------------------
+  function bars(host, rows, total, colorFn){
+    var max=rows.reduce(function(a,r){return Math.max(a,r.value);},0)||1;
+    rows.forEach(function(r,i){
+      var row=el("div","row"); row.appendChild(el("div","nm",r.label));
+      var tr=el("div","tr"), fl=el("div","fl");
+      fl.style.width=(100*r.value/max).toFixed(2)+"%";
+      fl.style.background=colorFn?colorFn(r,i):css("--accent");
+      fl.style.opacity=".72"; tr.appendChild(fl); row.appendChild(tr);
+      row.appendChild(el("div","vl",fmt(r.value)+(total?"  ·  "+(100*r.value/total).toFixed(1)+"%":"")));
+      host.appendChild(row);
+    });
+  }
+  var seedTotal=meta.totalKeys||1;
+  bars(document.getElementById("seed-bars"),
+       M.seeds.map(function(s){
+         var nm = s.lo===null ? ("range at "+(100*s.x0).toFixed(1)+"%")
+                : ((s.lo===""?"⊥":s.lo)+" → "+(s.open?"∅ (open frontier)":(s.hi===null?"?":s.hi)));
+         return {label:nm, value:s.keys, id:s.id};
+       }), seedTotal, function(r){ return lineage(r.id); });
+  document.getElementById("seed-cap").textContent =
+    "The "+M.seeds.length+" heaviest of "+fmt(F.seedCount)+" seed ranges, labelled by their "+
+    "bounds. Weight includes every range later split off it, traced through the split "+
+    "genealogy — so this is the work each original guess was really responsible for. "+
+    fmt(F.emptySeeds)+" seed ranges held no objects at all.";
+  document.getElementById("seed-lede").textContent =
+    "This run's seed produced "+fmt(F.seedCount)+" ranges. They were not equal: the heaviest held "+
+    F.topShare+"% of the objects"+(F.medianKeys? ", against a median of "+fmt(F.medianKeys)+
+    " for the rest":"")+", and "+fmt(F.emptySeeds)+" were empty.";
+
+  if (M.families.length && !meta.anonymized) {
+    var famTotal=M.families.reduce(function(a,f){return a+f.keys;},0)||1;
+    bars(document.getElementById("fam-bars"), M.families.map(function(f){
+      return {label:f.name+(f.dirs>1?"  ("+fmt(f.dirs)+" dirs)":""), value:f.keys};
+    }), famTotal, null);
+  } else { document.getElementById("fam-card").hidden=true; }
+
+  // ---- rate + concurrency chart ------------------------------------------
+  var rc=document.getElementById("rate"), rx=rc.getContext("2d");
+  function drawRate(){
+    var dpr=window.devicePixelRatio||1, w=Math.max(300,rc.getBoundingClientRect().width), h=150;
+    rc.style.height=h+"px"; rc.width=Math.round(w*dpr); rc.height=Math.round(h*dpr);
+    rx.setTransform(dpr,0,0,dpr,0,0); rx.clearRect(0,0,w,h);
+    var L=58,R=12,T=22,B=22, iw=w-L-R, ih=h-T-B, n=M.rate.length;
+    rx.font="10px "+css("--mono"); rx.strokeStyle=css("--rule"); rx.lineWidth=1;
+    rx.beginPath(); rx.moveTo(L,T+ih); rx.lineTo(L+iw,T+ih); rx.stroke();
+    rx.beginPath(); rx.moveTo(L,T+ih);
+    for(var i=0;i<n;i++){ rx.lineTo(L+iw*(i+.5)/n, T+ih-M.rate[i]*ih*0.92); }
+    rx.lineTo(L+iw,T+ih); rx.closePath();
+    rx.fillStyle=css("--accent"); rx.globalAlpha=.22; rx.fill(); rx.globalAlpha=1;
+    rx.strokeStyle=css("--accent"); rx.lineWidth=1.4; rx.beginPath();
+    for(i=0;i<n;i++){ var x=L+iw*(i+.5)/n, y=T+ih-M.rate[i]*ih*0.92;
+      if(i===0) rx.moveTo(x,y); else rx.lineTo(x,y); } rx.stroke();
+    var mb=Math.max.apply(null,M.busy)||1;
+    rx.strokeStyle=css("--signal"); rx.lineWidth=1.2; rx.setLineDash([3,2]); rx.beginPath();
+    for(i=0;i<n;i++){ x=L+iw*(i+.5)/n; y=T+ih-(M.busy[i]/mb)*ih*0.92;
+      if(i===0) rx.moveTo(x,y); else rx.lineTo(x,y); } rx.stroke(); rx.setLineDash([]);
+    rx.fillStyle=css("--ink3"); rx.textAlign="right";
+    rx.fillText(compact(M.peakRate)+"/s", L-6, T+8); rx.fillText("0", L-6, T+ih+3);
+    rx.textAlign="left"; rx.fillText("0s", L, T+ih+16);
+    rx.textAlign="right"; rx.fillText(secs(meta.durationMs), L+iw, T+ih+16);
+    rx.textAlign="left"; rx.fillStyle=css("--accent"); rx.fillText("objects/s", L, T-9);
+    rx.fillStyle=css("--signal"); rx.fillText("live ranges (peak "+fmt(mb)+")", L+66, T-9);
+  }
+  document.getElementById("rate-cap").textContent =
+    "Binned into "+M.rate.length+" intervals across the run. Peak observed rate ~"+
+    fmt(M.peakRate)+" objects/s.";
+  document.getElementById("time-lede").textContent =
+    "Parallelism is not constant. Watch for a trough: it is what a run looks like when the easy, "+
+    "well-guessed ranges have all finished and one badly-guessed one is still going — the moment "+
+    "stealing has to earn its keep."+
+    (F.firstSplitMs!==null? " The first split of this run committed at "+secs(F.firstSplitMs)+".":"");
+
+  var gt=document.getElementById("gate-table");
+  M.gateRows.forEach(function(r){ var tr=el("tr");
+    tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); gt.appendChild(tr); });
+  if (!M.gateRows.length) { document.getElementById("gate-card").hidden=true; }
+  else {
+    document.getElementById("gate-cap").textContent =
+      "The owner-side split gate was consulted "+fmt(F.gateTotal)+" times and mostly said no. "+
+      "That is the design working: the split mechanism is global, but its trigger is local and "+
+      "demand-driven, so while every worker is busy there is no reason to shed work and the gate "+
+      "stays shut.";
+  }
+
+  // ---- mechanisms ---------------------------------------------------------
+  var mt=document.getElementById("mech-table");
+  M.mechRows.forEach(function(r){
+    var tr=el("tr"), td=el("td","k"); td.textContent=r.name;
+    if(r.kind==="owner_split"){ td.appendChild(el("div","cap","owner-side")); }
+    tr.appendChild(td); tr.appendChild(el("td","n",fmt(r.n)));
+    var pv=el("td","pv");
+    (r.pivots||[]).forEach(function(p){ if(p!==null) pv.appendChild(el("div",null,p)); });
+    if(!pv.childNodes.length) pv.textContent = meta.anonymized?"(withheld)":"—";
+    tr.appendChild(pv); mt.appendChild(tr);
+  });
+  document.getElementById("mech-cap").textContent =
+    "Ordered by how often each rung of the pivot cascade fired. Owner-side splits are placed by a "+
+    "range's own worker ahead of its cursor; the rest are taken by idle thieves.";
+  document.getElementById("mech-lede").textContent =
+    "This run committed "+fmt(F.totalSplits)+" splits. "+fmt(F.ownerSplits)+
+    " were owner-side — a range's own worker carving ahead of its cursor, because on a dense "+
+    "fast-draining range a thief loses the race to the pivot — and "+fmt(F.totalSplits-F.ownerSplits)+
+    " were taken by idle thieves.";
+
+  var st=document.getElementById("steal-table");
+  M.outcomeRows.forEach(function(r){ var tr=el("tr");
+    tr.appendChild(el("td","k",r.name)); tr.appendChild(el("td","n",fmt(r.n))); st.appendChild(tr); });
+  if(!M.outcomeRows.length) document.getElementById("steal-card").hidden=true;
+
+  // ---- static map ---------------------------------------------------------
+  var sv=document.getElementById("static"), sc=sv.getContext("2d");
+  var PL=48,PR=14,PT=14,PB=26;
+  function drawStatic(){
+    var dpr=window.devicePixelRatio||1, w=Math.max(320,sv.getBoundingClientRect().width);
+    var h=Math.min(560,Math.max(260,w*0.52));
+    sv.style.height=h+"px"; sv.width=Math.round(w*dpr); sv.height=Math.round(h*dpr);
+    sc.setTransform(dpr,0,0,dpr,0,0); sc.clearRect(0,0,w,h);
+    var iw=w-PL-PR, ih=h-PT-PB, dur=Math.max(1,meta.durationMs);
+    function sx(p){ return PL+p*iw; } function sy(t){ return PT+(t/dur)*ih; }
+    sc.font="10px "+css("--mono"); sc.strokeStyle=css("--rule"); sc.lineWidth=1; sc.fillStyle=css("--ink3");
+    for(var i=0;i<=6;i++){ var t=(dur/6)*i, y=sy(t);
+      sc.beginPath(); sc.moveTo(PL,y); sc.lineTo(PL+iw,y); sc.stroke();
+      sc.textAlign="right"; sc.fillText(secs(t),PL-6,y+3); }
+    sc.textAlign="center";
+    for(i=0;i<=4;i++){ sc.fillText((i*25)+"%",sx(i/4),PT+ih+16); }
+    M.segments.forEach(function(s){
+      var x0=sx(s[0]),x1=sx(s[1]),y0=sy(s[2]),y1=sy(s[3]);
+      var bw=Math.max(1,x1-x0), bh=Math.max(1,y1-y0), col=lineage(s[4]);
+      sc.globalAlpha=.34; sc.fillStyle=col; sc.fillRect(x0,y0,bw,bh);
+      sc.globalAlpha=1; sc.strokeStyle=col; sc.lineWidth=.5; sc.strokeRect(x0+.25,y0+.25,bw,bh);
+    });
+    stream.forEach(function(e){
+      if(e[1]!==K_SPLIT&&e[1]!==K_OWNER) return;
+      sc.beginPath(); sc.arc(sx(e[5]),sy(e[0]),e[1]===K_OWNER?2.6:2.0,0,6.284);
+      sc.fillStyle=css("--signal"); sc.globalAlpha=.75; sc.fill(); sc.globalAlpha=1;
+    });
+    if(!M.segments.length){ sc.textAlign="center"; sc.fillStyle=css("--ink3");
+      sc.fillText("no completed range in this trace",w/2,PT+ih/2); }
+  }
+  var ky=document.getElementById("static-key");
+  M.seeds.slice(0,5).forEach(function(s){
+    if(M.lineage[s.id]===undefined) return;
+    var sp=el("span"); var sw=el("i"); sw.style.background=lineage(s.id); sp.appendChild(sw);
+    sp.appendChild(document.createTextNode(
+      (s.lo===null? "range at "+(100*s.x0).toFixed(0)+"%" : (s.lo===""?"⊥":s.lo))+
+      "  ·  "+(100*s.keys/(meta.totalKeys||1)).toFixed(1)+"%"));
+    ky.appendChild(sp);
+  });
+  var rest=el("span"); var rw=el("i"); rw.style.background=dark()?REST_D:REST_L;
+  rest.appendChild(rw); rest.appendChild(document.createTextNode("all other seed lineages"));
+  ky.appendChild(rest);
+  document.getElementById("static-cap").textContent =
+    fmt(M.segments.length)+" range-lifetimes drawn, coloured by seed lineage; ochre dots are split "+
+    "pivots. Horizontal position is the share of objects below a key, measured from this run's "+
+    fmt(meta.cdfPoints)+" page commits — so equal width is equal objects, and byte distance is "+
+    "NOT preserved.";
+
+  // ---- replay -------------------------------------------------------------
+  var nodes,live,marks,cursor,stats,clockMs=0,running=true,rate=1,last=0;
+  function reset(){ nodes={}; live=0; marks=[]; cursor=0;
+    stats={keys:0,pages:0,splits:0,steals:0,busy:{}}; }
+  function apply(e){
+    var k=e[1],n;
+    if(k===K_SEED){ nodes[e[2]]={lo:e[3],hi:e[4],cur:e[3],root:e[2],state:"pending"}; }
+    else if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={});
+      n.lo=e[4]; n.hi=e[6]; n.cur=e[5]; n.worker=e[3]; n.root=e[7]; n.state="live";
+      stats.busy[e[3]]=(stats.busy[e[3]]||0)+1; }
+    else if(k===K_PAGE){ stats.keys+=e[5]; stats.pages+=(e[6]||1); n=nodes[e[2]]; if(n){ n.cur=e[4]; } }
+    else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
+      nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],state:"pending"};
+      marks.push({x:e[5],age:0,owner:k===K_OWNER}); stats.splits++; }
+    else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
+      if(n){ n.state=k===K_DONE?"done":"failed";
+        if(n.worker>=0){ stats.busy[n.worker]--; if(stats.busy[n.worker]<=0) delete stats.busy[n.worker]; } } }
+    else if(k===K_STEAL){ stats.steals++; }
+  }
+  function seekTo(t){ if(t<clockMs) reset();
+    while(cursor<stream.length && stream[cursor][0]<=t) apply(stream[cursor++]);
+    live=0; for(var id in nodes){ var s=nodes[id].state; if(s==="live"||s==="pending") live++; } }
+
+  var cv=document.getElementById("map"), ctx=cv.getContext("2d");
+  var W=0,H=0,PAD=22;
+  function resize(){ var dpr=window.devicePixelRatio||1,r=cv.getBoundingClientRect();
+    W=Math.max(300,r.width); H=W<640?190:160; cv.style.height=H+"px";
+    cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr); ctx.setTransform(dpr,0,0,dpr,0,0); }
+  function px(x){ return PAD+x*(W-PAD*2); }
+  function draw(){
+    ctx.clearRect(0,0,W,H); ctx.font="10px "+css("--mono");
+    ctx.fillStyle=css("--ink3"); ctx.textAlign="left";
+    ctx.fillText("keyspace, weighted by objects →",px(0),12);
+    var top=34,bh=30,doneY=top,actY=top+8;
+    ctx.strokeStyle=css("--rule");
+    ctx.beginPath(); ctx.moveTo(px(0),top-6); ctx.lineTo(px(1),top-6); ctx.stroke();
+    for(var id in nodes){
+      var n=nodes[id],x0=px(n.lo),x1=px(n.hi),w=Math.max(1,x1-x0);
+      if(n.state==="done"||n.state==="failed"){
+        ctx.globalAlpha=.4; ctx.fillStyle=n.state==="done"?lineage(n.root):css("--alert");
+        ctx.fillRect(x0,doneY,w-.5,4); ctx.globalAlpha=1;
+      } else if(n.state==="pending"){
+        ctx.strokeStyle=css("--ink3"); ctx.lineWidth=1; ctx.setLineDash([3,2]);
+        ctx.strokeRect(x0+.5,actY+.5,Math.max(2,w)-1,bh-1); ctx.setLineDash([]);
+      } else {
+        var c=lineage(n.root),xc=px(n.cur);
+        ctx.strokeStyle=c; ctx.lineWidth=1.1; ctx.strokeRect(x0+.5,actY+.5,Math.max(2,w)-1,bh-1);
+        ctx.fillStyle=c; ctx.globalAlpha=.32; ctx.fillRect(x0+1,actY+1,Math.max(0,xc-x0)-1,bh-2);
+        ctx.globalAlpha=1; ctx.fillRect(Math.max(x0,xc-1),actY,2,bh);
+      }
+    }
+    for(var m=marks.length-1;m>=0;m--){ var k=marks[m]; k.age++;
+      if(k.age>34){ marks.splice(m,1); continue; }
+      ctx.globalAlpha=1-k.age/34; ctx.strokeStyle=css("--signal"); ctx.lineWidth=k.owner?2:1.3;
+      ctx.beginPath(); ctx.moveTo(px(k.x),actY-6); ctx.lineTo(px(k.x),actY+bh+5); ctx.stroke();
+      ctx.globalAlpha=1; }
+  }
+  var lt=document.getElementById("live-tiles");
+  var liveDd=[["Objects"],["Requests"],["Live ranges"],["Busy"],["Splits"],["Steals"]].map(function(d){
+    var w=el("div"); w.appendChild(el("dt",null,d[0]));
+    var dd=el("dd",null,"0"); w.appendChild(dd); lt.appendChild(w); return dd; });
+  var scrub=document.getElementById("scrub"), playBtn=document.getElementById("play");
+  function readout(){
+    liveDd[0].textContent=fmt(stats.keys); liveDd[1].textContent=fmt(stats.pages);
+    liveDd[2].textContent=fmt(live);
+    liveDd[3].textContent=fmt(Object.keys(stats.busy).length)+" / "+meta.workers;
+    liveDd[4].textContent=fmt(stats.splits); liveDd[5].textContent=fmt(stats.steals);
+    document.getElementById("clock").textContent=secs(clockMs)+" / "+secs(meta.durationMs);
+    scrub.value=String(Math.round(1000*clockMs/Math.max(1,meta.durationMs)));
+  }
+  var BASE=Math.max(1,meta.durationMs/30000), SPEEDS=[1,4,16,64], si=0;
+  function frame(ts){ requestAnimationFrame(frame); if(!last) last=ts; var dt=ts-last; last=ts;
+    if(running){ clockMs=Math.min(meta.durationMs,clockMs+dt*BASE*rate); seekTo(clockMs);
+      if(clockMs>=meta.durationMs){ running=false; playBtn.textContent="Replay"; } }
+    draw(); readout(); }
+  playBtn.addEventListener("click",function(){
+    if(clockMs>=meta.durationMs){ clockMs=0; reset(); seekTo(0); }
+    running=!running; playBtn.textContent=running?"Pause":"Play"; });
+  document.getElementById("restart").addEventListener("click",function(){
+    clockMs=0; reset(); seekTo(0); running=true; playBtn.textContent="Pause"; });
+  document.getElementById("speed").addEventListener("click",function(){
+    si=(si+1)%SPEEDS.length; rate=SPEEDS[si];
+    document.getElementById("speed").innerHTML=rate+"&times;"; });
+  scrub.addEventListener("input",function(){ running=false; playBtn.textContent="Play";
+    clockMs=(Number(scrub.value)/1000)*meta.durationMs; reset(); seekTo(clockMs); draw(); readout(); });
+
+  // ---- ledger + provenance ------------------------------------------------
+  document.getElementById("ledger-lede").textContent =
+    fmt(F.seedCount)+" seed ranges plus "+fmt(F.totalSplits)+" splits is "+
+    fmt(F.seedCount+F.totalSplits)+" ranges; the trace records "+fmt(F.claimed)+" claimed and "+
+    fmt(F.completed)+" completed, with "+fmt(F.failed)+" failed."+
+    (F.ledgerOk ? " Those balance exactly — every range that was created was claimed, and every "+
+      "range that was claimed finished. No gap, no overlap, nothing lost."
+                : " Those do not balance, which is expected if the run was interrupted or the "+
+      "trace is a partial prefix.")+
+    (F.floorPages ? " The run spent "+fmt(meta.pagesSeen)+" LIST requests against a theoretical "+
+      "floor of "+fmt(F.floorPages)+" for this many objects — "+
+      (100*meta.pagesSeen/F.floorPages-100).toFixed(1)+"% overhead for the parallelism." : "");
+
+  var prov=["Rendered from a swath --trace JSONL file by tools/explainer/explainer.py",
+            fmt(meta.events)+" events parsed"];
+  if(meta.skippedLines) prov.push(meta.skippedLines+" unparseable line(s) skipped");
+  if(meta.keepEvery>1) prov.push("the replay is downsampled "+meta.keepEvery+":1 ("+
+    fmt(meta.pagesPlotted)+" of "+fmt(meta.pagesSeen)+" page events); every figure, count and "+
+    "finding above uses all of them");
+  if(meta.anonymized) prov.push("ANONYMIZED — key names withheld");
+  prov.push("Two stated aggregation choices: the horizontal axis is the measured key-mass CDF "+
+            "(equal width = equal objects, not equal bytes), and colour is seed lineage, not worker");
+  prov.push("Where this page and the trace disagree, the trace wins");
+  document.getElementById("provenance").textContent=prov.join(". ")+".";
+
+  window.addEventListener("resize",function(){ resize(); draw(); drawStatic(); drawRate(); });
+  if(window.matchMedia){ var mq=window.matchMedia("(prefers-color-scheme: dark)");
+    if(mq.addEventListener) mq.addEventListener("change",function(){ draw(); drawStatic(); drawRate(); }); }
+  resize(); reset(); drawStatic(); drawRate();
+  if(window.matchMedia("(prefers-reduced-motion: reduce)").matches){
+    running=false; playBtn.textContent="Play"; clockMs=meta.durationMs; seekTo(clockMs); }
+  draw(); readout(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
