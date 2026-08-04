@@ -68,14 +68,16 @@
   var HEAVY_ID = SP.length ? SP[HEAVY][3] : -1;
 
   // ---- the strip: guesses, the morph, and the real run --------------------
-  function drawGuess(ease){
+  function drawGuess(ease, wipe, hi){
+    wipe = (wipe===undefined)?1:wipe; hi=(hi===undefined)?1:hi;
     sc.clearRect(0,0,SW,SH);
     var N=SP.length||1, i;
     for(i=0;i<N;i++){
       var g0=(i/N)*SW, g1=((i+1)/N)*SW, a0=SP[i][0]*SW, a1=SP[i][1]*SW;
       var x0=g0+(a0-g0)*ease, x1=g1+(a1-g1)*ease, w=Math.max(0.8,x1-x0);
+      if(x0 > wipe*SW) continue;
       sc.fillStyle = (i===HEAVY) ? css("--rust") : css("--pale");
-      sc.fillRect(x0,0,w,SH);
+      sc.fillRect(x0,0,Math.min(w, wipe*SW-x0),SH);
       if(w>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1;
                  sc.strokeRect(x0+0.5,0.5,w-1,SH-1); }
     }
@@ -84,16 +86,17 @@
       sc.strokeStyle=css("--rust"); sc.lineWidth=4;
       sc.strokeRect(hx-4,-2,hw+8,SH+4);
     }
-    if(ease>0.92){                     // name the block from inside it
+    if(ease>0.92 && hi>0.35){                     // name the block from inside it
       var bx=SP[HEAVY][0]*SW, bw=(SP[HEAVY][1]-SP[HEAVY][0])*SW;
       var pw=Math.min(bw-56, 500);
       if(pw>240){
-        sc.fillStyle="#FFFFFF"; sc.globalAlpha=.88;
+        sc.fillStyle="#FFFFFF"; sc.globalAlpha=.88*Math.min(1,(hi-0.35)/0.3);
         sc.fillRect(bx+28, SH/2-70, pw, 140); sc.globalAlpha=1;
+        sc.globalAlpha=Math.min(1,(hi-0.35)/0.3);
         sc.fillStyle=css("--rust"); sc.font="600 50px "+css("--mono");
-        sc.fillText(mm(SP[HEAVY][2])+" objects", bx+52, SH/2-10);
+        sc.fillText(mm(SP[HEAVY][2]*Math.min(1,(hi-0.35)/0.65))+" objects", bx+52, SH/2-10);
         sc.font="25px "+css("--mono"); sc.fillStyle=css("--ink2");
-        sc.fillText(fmt(F.ratio)+"× the median guess", bx+52, SH/2+32);
+        sc.fillText(fmt(F.ratio)+"× the median guess", bx+52, SH/2+32); sc.globalAlpha=1;
       }
     }
   }
@@ -169,30 +172,32 @@
            '<div class="sub" id="sub"></div>';
 
   var SCENES=[
-   {t:1600, f:function(){ $("head").innerHTML=HEAD; show("axis",0); show("poolrow",0);
+   {t:1300, f:function(u){ $("head").innerHTML=HEAD; show("axis",0); show("poolrow",0);
      $("strip").style.visibility="hidden";
      say("", "<span class='r'>"+fmt(F.seedCount)+" guesses.</span><br>One held <span class='r'>"+
          F.topShare+"%</span> of the bucket.",
          "An actual swath run · "+mm(meta.totalKeys)+" S3 objects"); }},
-   {t:3600, f:function(){ $("strip").style.visibility="visible"; show("axis",1);
+   {t:3000, f:function(u){ $("strip").style.visibility="visible"; show("axis",1);
      $("axis").textContent="initial plan — "+fmt(F.seedCount)+" equal guesses";
      say("1 · guess", "S3 would not say where the work was.", "");
-     drawGuess(0); }},
-   {t:4600, f:function(u){ $("axis").textContent="measuring what was really there…";
-     say("1 · guess", "So swath guessed.", ""); drawGuess(u*u*(3-2*u)); }},
-   {t:7200, f:function(){ $("axis").textContent="real work — width = objects";
-     say("2 · discover", "One guess held <span class='r'>"+F.topShare+
-         "%</span> of the bucket.", ""); drawGuess(1); }},
-   {t:11000, f:function(u){ show("poolrow",1);
+     drawGuess(0, Math.min(1, u*1.6)); }},
+   {t:3900, f:function(u){ $("axis").textContent="measuring what was really there…";
+     say("2 · discover", "Now widen each guess to what it really held.", "");
+     drawGuess(u*u*(3-2*u), 1); }},
+   {t:6200, f:function(u){ $("axis").textContent="real work — width = objects";
+     say("2 · discover", "One guess held <span class='r'>"+
+         (F.topShare*Math.min(1,u*2.2)).toFixed(0)+"%</span> of the bucket.", "");
+     drawGuess(1, 1, Math.min(1, u*2.2)); }},
+   {t:9200, f:function(u){ show("poolrow",1);
      $("axis").textContent="the real run — width = objects";
-     var S=state(u*firstSteal*0.5), n=drawPool(S); drawRun(S);
+     var S=state(u*firstSteal*0.62), n=drawPool(S); drawRun(S);
      $("poolnum").textContent=n+" / "+meta.workers; $("poolcap").textContent="workers busy";
      say("3 · rebalance", meta.workers+" workers start in parallel.", ""); }},
-   {t:15000, f:function(u){ var S=state(firstSteal*(0.5+0.5*u)), n=drawPool(S); drawRun(S);
+   {t:12600, f:function(u){ var S=state(firstSteal*(0.62+0.38*u)), n=drawPool(S); drawRun(S);
      $("poolnum").textContent=n+" / "+meta.workers; $("poolcap").textContent="workers busy";
      say("3 · rebalance", "The easy guesses finish first.",
          "Most of the fleet has nothing left to do."); }},
-   {t:18500, f:function(u){
+   {t:15600, f:function(u){
      if(!FIRST_SPLIT){ return; }
      var lo=Math.max(0,FIRST_SPLIT[5]-0.09), hi=Math.min(1,FIRST_SPLIT[6]+0.015);
      var S=state(FIRST_SPLIT[0]+(u>0.45?600:-600));
@@ -204,11 +209,11 @@
      $("axis").textContent="one split, close up";
      say("3 · rebalance", "An idle worker cuts the survivor in two.",
          "The boundary need not be a key that exists."); }},
-   {t:28500, f:function(u){ var S=state(firstSteal+(D-firstSteal)*u*u), n=drawPool(S);
+   {t:29000, f:function(u){ var S=state(firstSteal+(D-firstSteal)*u), n=drawPool(S);
      drawRun(S); $("axis").textContent="the real run — width = objects";
      $("poolnum").textContent=fmt(S.splits); $("poolcap").textContent="splits committed";
      say("3 · rebalance", fmt(S.splits)+" splits later…",
-         n>=meta.workers-3 ? "…all "+meta.workers+
+         (S.splits > F.topSplits*0.6 && n>=meta.workers-4) ? "…all "+meta.workers+
            " workers are inside one original guess." : ""); }},
    {t:34000, f:function(){ show("axis",0); show("poolrow",0);
      $("strip").style.visibility="hidden"; $("head").innerHTML=CARD; }}
