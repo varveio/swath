@@ -117,7 +117,10 @@
         n.root=e[7]; n.st=1; n.w=e[3]; busy[e[3]]=e[7]; }
       else if(k===K_PAGE){ keys+=e[5]; n=nodes[e[2]]; if(n) n.cur=e[4]; }
       else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
-        nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],st:0,w:-1}; splits++;
+        var c=nodes[e[3]];
+        if(c){ c.root=e[8]; }                  // already claimed — keep its worker and state
+        else nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],st:0,w:-1};
+        splits++;
         if(e[8]===HEAVY_ID) hsplits++;
         if(t-e[0]<2200) marks.push({x:e[5],a:1-(t-e[0])/2200}); }
       else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
@@ -137,34 +140,37 @@
          without this the opening shows 64 bands while the caption says 257. */
       for(var q=0;q<SP.length;q++){
         var qx=X(SP[q][0]), qw=Math.max(0.8,X(SP[q][1])-qx);
-        sc.globalAlpha=.13; sc.fillStyle=(q===HEAVY)?css("--rust"):css("--pale");
+        sc.globalAlpha=.07; sc.fillStyle=css("--pale");
         sc.fillRect(qx,0,qw,BH); sc.globalAlpha=1;
-        if(qw>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1;
+        if(qw>2.2){ sc.strokeStyle=css("--rule"); sc.lineWidth=1;
                     sc.strokeRect(qx+0.5,0.5,qw-1,BH-1); }
       }
     }
     for(var id in S.nodes){
       var d=S.nodes[id], x0=X(d.lo), x1=X(d.hi);
       if(x1<-20||x0>SW+20) continue;
-      var heavy=(d.root===HEAVY_ID), w=Math.max(1,x1-x0);
-      /* Teal means working — the same thing it means in the worker grid below, so state
-         reads across both canvases. Lineage still owns the heavy range's colour. Pale on
-         paper cannot carry a 4px band, which is what made the sweep look like nothing. */
-      var col = heavy ? css("--rust") : (d.st===1 ? css("--teal") : css("--pale"));
+      var w=Math.max(1,x1-x0);
+      /* One channel per question. FILL answers "is this being listed right now" — solid for
+         active, pale for finished, nothing for unclaimed. Lineage is annotated separately by
+         the rail below, so a screen full of the overloaded lineage reads as work in progress
+         rather than as a screen full of alarm colour. */
+      var col = (d.st===1) ? css("--teal") : css("--pale");
       /* State has to out-read lineage here, or "145 finished, one has not" is invisible.
          An active range is the brightest thing on the strip from the moment it is claimed —
          the old base alpha meant a just-claimed range read fainter than a finished one. */
-      if(d.st===2){ sc.globalAlpha=.26; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
-      else if(d.st===0){ sc.globalAlpha=.16; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
+      if(d.st===2){ sc.globalAlpha=.34; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
+      else if(d.st===0){ sc.globalAlpha=.10; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
       else { sc.globalAlpha=.55; sc.fillStyle=col; sc.fillRect(x0,0,w,BH);
              sc.globalAlpha=.98; sc.fillRect(x0,0,Math.max(0,X(d.cur)-x0),SH); }
       sc.globalAlpha=1;
       if(w>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1; sc.strokeRect(x0+.5,.5,w-1,BH-1); }
     }
-    if(!zoom && g<0.55 && SP.length){        // one seed in 257 is a hairline; ring it
+    if(!zoom && SP.length){
+      /* The rail marks the one guess this story is about, and every range split out of it.
+         It is an annotation over the geometry, never a fill inside it. */
       var hx=X(SP[HEAVY][0]), hw=Math.max(3,X(SP[HEAVY][1])-hx);
-      sc.strokeStyle=css("--rust"); sc.lineWidth=4; sc.globalAlpha=1-g/0.55;
-      sc.strokeRect(hx-4,-2,hw+8,BH+4); sc.globalAlpha=1;
+      sc.fillStyle=css("--rust"); sc.fillRect(hx,0,hw,7);
+      sc.fillRect(hx,0,2.5,BH); sc.fillRect(hx+hw-2.5,0,2.5,BH);
     }
     for(var i=0;i<S.marks.length;i++){
       var mk=S.marks[i], mx=X(mk.x); if(mx<-2||mx>SW+2) continue;
@@ -178,9 +184,14 @@
     var N=meta.workers||1, cols=16, rows=Math.ceil(N/cols), cw=PW/cols, ch=PH/rows, n=0;
     for(var i=0;i<N;i++){
       var cx=(i%cols)*cw, cy=Math.floor(i/cols)*ch, root=S.busy[i];
-      if(root===undefined){ pc.fillStyle=css("--rule"); pc.globalAlpha=.55; }
-      else { n++; pc.fillStyle=(root===HEAVY_ID)?css("--rust"):css("--teal"); pc.globalAlpha=.92; }
+      if(root===undefined){ pc.fillStyle=css("--rule"); pc.globalAlpha=.40; }
+      else { n++; pc.fillStyle=css("--teal"); pc.globalAlpha=.92; }
       pc.fillRect(cx+2,cy+2,cw-4,ch-4); pc.globalAlpha=1;
+      if(root===HEAVY_ID){
+        pc.fillStyle=css("--rust");
+        pc.beginPath(); pc.moveTo(cx+cw-2,cy+2); pc.lineTo(cx+cw-2,cy+2+Math.min(9,ch*0.45));
+        pc.lineTo(cx+cw-2-Math.min(9,cw*0.45),cy+2); pc.closePath(); pc.fill();
+      }
     }
     if(ring && ring.w>=0 && ring.a>0){       // which cell just took the upper piece
       var rx=(ring.w%cols)*cw, ry=Math.floor(ring.w/cols)*ch;
@@ -229,6 +240,24 @@
   /* The tag rides the heavy range through the whole deformation: it reads "1 of 257"
      while the range is a sliver and becomes the share once the range is wide enough to
      hold it. Naming the thing before it moves is what makes the movement mean something. */
+  function keyStrip(a){
+    if(a<=0) return;
+    var items=[[css("--teal"),.92,"listing now"],[css("--pale"),.34,"finished"],
+               [null,0,"not started"]], x=6, y=BH-30;
+    sc.globalAlpha=a; sc.font="19px "+css("--mono");
+    for(var i=0;i<items.length;i++){
+      if(items[i][0]){ sc.fillStyle=items[i][0]; sc.globalAlpha=a*items[i][1];
+                       sc.fillRect(x,y,20,20); sc.globalAlpha=a; }
+      else { sc.strokeStyle=css("--rule"); sc.lineWidth=1; sc.strokeRect(x+0.5,y+0.5,19,19); }
+      sc.fillStyle=css("--ink-2")||css("--ink2"); sc.fillStyle=css("--ink2");
+      sc.fillText(items[i][2], x+28, y+15);
+      x += 28 + items[i][2].length*11.4 + 26;
+    }
+    sc.fillStyle=css("--rust"); sc.fillRect(x,y+3,20,6);
+    sc.fillStyle=css("--ink2"); sc.fillText("the guess this is about", x+28, y+15);
+    sc.globalAlpha=1;
+  }
+
   function heavyTag(g, land){
     if(!SP.length) return;
     var bx=pos(SP[HEAVY][0],g)*SW, bw=(pos(SP[HEAVY][1],g)-pos(SP[HEAVY][0],g))*SW;
@@ -268,17 +297,14 @@
     var bx=pos(SP[HEAVY][0],1)*SW, bw=(pos(SP[HEAVY][1],1)-pos(SP[HEAVY][0],1))*SW;
     sc.globalAlpha=a*0.90; sc.fillStyle=css("--paper");
     sc.fillRect(bx+12, BH*0.20, bw-24, BH*0.56); sc.globalAlpha=a;
-    sc.strokeStyle=css("--rust"); sc.lineWidth=3; sc.setLineDash([12,8]);
-    sc.strokeRect(bx+12, BH*0.20, bw-24, BH*0.56); sc.setLineDash([]);
+    sc.strokeStyle=css("--ink"); sc.lineWidth=2.5; sc.setLineDash([11,9]);
+    sc.strokeRect(bx+12, BH*0.26, bw-24, BH*0.42); sc.setLineDash([]);
     sc.textAlign="center";
     var cx=bx+bw/2;
     sc.font="20px "+css("--mono"); sc.fillStyle=css("--ink3");
-    sc.fillText("IF THE PLAN WERE FINAL — DERIVED, NOT RECORDED", cx, BH*0.20+38);
-    sc.font="600 92px "+css("--mono"); sc.fillStyle=css("--rust");
-    sc.fillText("1 worker", cx, BH*0.20+140);
-    sc.font="26px "+css("--mono"); sc.fillStyle=css("--ink2");
-    sc.fillText("owns "+mm(SP[HEAVY][2])+" files, start to finish", cx, BH*0.20+186);
-    sc.fillText((meta.workers-1)+" others finish and go idle", cx, BH*0.20+224);
+    sc.fillText("DERIVED FROM RANGE OWNERSHIP · NOT A RECORDED RUN", cx, BH*0.26+40);
+    sc.font="600 104px "+css("--mono"); sc.fillStyle=css("--ink");
+    sc.fillText("1 worker", cx, BH*0.26+150);
     sc.textAlign="start"; sc.globalAlpha=1;
   }
 
@@ -348,7 +374,12 @@
     $("poolrow").classList.remove("gone"); $("foot").classList.remove("gone"); }
   /* Copy dissolves rather than pops. A hard textContent swap is itself a cut, which is
      most of why a fixed canvas still read as a slideshow. */
-  function fade(u){ $("head").style.opacity = Math.min(clamp(u/0.10), clamp((1-u)/0.07)); }
+  function fade(u){
+    var a = Math.min(clamp(u/0.09), clamp((1-u)/0.07));
+    $("head").style.opacity = a;
+    $("axis").style.opacity = a; $("strip").style.opacity = a;
+    $("poolrow").style.opacity = a;
+  }
   function meter(n,cap){ $("poolnum").textContent=n; $("poolcap").textContent=cap; }
   function foot(t){ $("foot").textContent=t; }
   var FOOT_RUN="Rendered from the actual run trace. Every split shown really happened.";
@@ -359,8 +390,23 @@
   /* The close-up must be a split that happens AFTER the starvation it answers. Showing the
      first split against a later background rewound the worker grid by 22s, so the fleet
      appeared to recover before the mechanism that recovers it. */
-  var SPLIT_EV=(function(){ for(var i=0;i<stream.length;i++){ var e=stream[i];
-    if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END) return e; }
+  var SPLIT_EV=(function(){
+    /* The close-up has to stand up to being paused on. Pick a split whose child a worker
+       actually held and listed from — the earliest ones are often claimed and completed
+       within a few hundred ms having committed nothing. */
+    function childWorked(id, from){
+      var pages=0, doneAt=null;
+      for(var j=0;j<stream.length;j++){ var x=stream[j];
+        if(x[0]<from) continue;
+        if(x[1]===K_PAGE && x[2]===id) pages++;
+        if((x[1]===K_DONE||x[1]===K_FAIL) && x[2]===id){ doneAt=x[0]; break; } }
+      return pages>0 && (doneAt===null || doneAt-from>2000);
+    }
+    for(var i=0;i<stream.length;i++){ var e=stream[i];
+      if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END
+         && childWorked(e[3], e[0])) return e; }
+    for(i=0;i<stream.length;i++){ e=stream[i];
+      if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END) return e; }
     return FIRST_SPLIT; })();
   var SPLIT_TAKER=(function(){ if(!SPLIT_EV) return -1;
     for(var i=0;i<stream.length;i++){ var e=stream[i];
@@ -369,7 +415,7 @@
   var SCENES=[
    // ---- orient: what this is, on the plan's own geometry -------------------
    {t:3200, f:function(u){ stage(1); fade(u);
-     var S=state(A1_END*0.40*u), n=drawPool(S); drawRun(S,null,0); axisKeys(0);
+     var S=state(A1_END*0.55*ease(u)), n=drawPool(S); drawRun(S,null,0); axisKeys(0);
      $("axis").textContent="one bucket · first key → last key";
      meter(n+" / "+meta.workers, "each square = one worker");
      say("swath · one real S3 listing",
@@ -378,13 +424,15 @@
          "spread across the bucket."); }},
 
    {t:6300, f:function(u){ stage(1); fade(u);
-     var S=state(A1_END*(0.40+0.60*u)), n=drawPool(S);
+     var S=state(A1_END*(0.55+0.45*u)), n=drawPool(S);
      drawRun(S,null,0); heavyTag(0,0); axisKeys(0);
      $("axis").textContent="plan view — "+fmt(F.seedCount)+" guesses shown equally";
+     keyStrip(clamp((u-0.15)/0.2));
      meter(fmt(S.done), "guesses finished");
      say("swath · one real S3 listing",
          fmt(F.seedCount)+" guessed places to start.",
-         "Teal is being listed now. Most finish quickly. The marked one keeps going."); }},
+         "Each gives one worker somewhere to begin. Most finish quickly. "+
+         "The railed one keeps going."); }},
 
    // ---- the reveal: hold, deform, land, hold ------------------------------
    {t:11500, f:function(u){ stage(1); fade(u);
@@ -402,18 +450,17 @@
          g<0.30 ? "Re-drawing so that width is file count." : ""); }},
 
    // ---- why that matters: what ownership alone would have meant ------------
-   {t:13600, f:function(u){ stage(1); fade(u);
-     var S=state(A1_END), n=drawPool(S);
-     drawRun(S,null,1); axisKeys(1); counterfactual(ease(clamp(u*2.2))); foot(FOOT_DERIVED);
-     $("axis").textContent="measured view — width = file count";
-     meter("1", "worker would own it");
-     say("if the plan were final",
-         "One worker would own all of it.",
-         "The other "+(meta.workers-1)+" finish their guesses and cannot help. "+
-         "A range belongs to whoever claimed it."); }},
+   {t:14600, f:function(u){ stage(0); fade(u);
+     var S=state(A1_END);
+     drawRun(S,null,1); axisKeys(1); counterfactual(ease(clamp(u/0.28))); foot(FOOT_DERIVED);
+     $("axis").textContent="counterfactual · not recorded";
+     say("counterfactual · not recorded",
+         mm(SP[HEAVY][2])+" files stay serial.",
+         "One worker owns this range start to finish. The other "+(meta.workers-1)+
+         " cannot share it, because a range belongs to whoever claimed it."); }},
 
    // ---- and that is what the recorded run starts to do ---------------------
-   {t:17000, f:function(u){ stage(1); fade(u);
+   {t:18000, f:function(u){ stage(1); fade(u);
      var S=state(firstSteal+(IDLE_END-firstSteal)*u), n=drawPool(S);
      drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · measured view";
@@ -425,11 +472,11 @@
          starved ? "Nearly everything left is inside that one guess and its descendants." : ""); }},
 
    // ---- the mechanism, at the moment it is needed --------------------------
-   {t:21500, f:function(u){
+   {t:22500, f:function(u){
      if(!SPLIT_EV){ return; }
      stage(1); fade(u);
      var a=ease(clamp(u/0.26));
-     var committed = u>0.50;
+     var commit = clamp((u-0.50)/0.055), committed = u>0.50;
      var tNow = SPLIT_EV[0]+(committed?1200:-700);
      var S=state(tNow), n=drawPool(S, committed?{w:SPLIT_TAKER,a:1}:null);
      var half=Math.min(0.05, Math.max(0.012,(SPLIT_EV[6]-SPLIT_EV[5])*0.9));
@@ -439,7 +486,7 @@
      magnifier(a, lo, hi, S, function(lo,hi,S){
        drawRun(S,[lo,hi]);
        var mx=((SPLIT_EV[5]-lo)/(hi-lo))*SW;
-       sc.strokeStyle=css("--ochre"); sc.lineWidth=10;
+       sc.strokeStyle=css("--ochre"); sc.lineWidth=committed?(6+8*commit):10;
        if(!committed) sc.setLineDash([26,18]);
        sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.setLineDash([]);
        if(committed){
@@ -457,8 +504,9 @@
                    : "Ochre marks the new boundary."); }},
 
    // ---- recovery: the payoff is the fleet, not the split count ------------
-   {t:27500, f:function(u){ stage(1); fade(u);
-     var S=state(SPLIT_EV[0]+(D-SPLIT_EV[0])*ease(u)), n=drawPool(S);
+   {t:28500, f:function(u){ stage(1); fade(u);
+     var RECOV=SPLIT_EV[0]+1200;
+     var S=state(RECOV+(D-RECOV)*ease(u)), n=drawPool(S);
      drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · measured view";
      meter(n+" / "+meta.workers, "workers helping");
@@ -466,7 +514,7 @@
          "It keeps cutting until everyone can help.",
          fmt(S.hsplits)+" splits inside that one guess."); }},
 
-   {t:29800, f:function(u){ stage(1); fade(u);
+   {t:31000, f:function(u){ stage(1); fade(u);
      var S=state(D), n=drawPool(S); drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · every range completed";
      meter(fmt(S.done), "ranges completed");
@@ -474,7 +522,8 @@
          "One bad guess no longer strands the fleet.",
          F.ledgerOk ? "Every range accounted for. No gaps, no overlaps." : ""); }},
 
-   {t:36000, f:function(u){
+   {t:33500, f:function(u){
+     $("head").style.opacity=1;
      $("axis").classList.add("gone"); $("strip").classList.add("gone");
      $("poolrow").classList.add("gone"); $("foot").classList.add("gone");
      $("head").style.opacity=1;
@@ -486,7 +535,7 @@
   /* Only one hard break survives: the move out of the run and into the result.
      Everything earlier is carried by the geometry, so a whip there just erased
      the spatial memory the viewer was still assembling. */
-  var ACTS=[29800], WHIP=120;
+  var ACTS=[31000], WHIP=120;
   function veilAt(vt){ var a=0;
     for(var i=0;i<ACTS.length;i++){ var d=Math.abs(vt-ACTS[i]);
       if(d<WHIP) a=Math.max(a, 1-d/WHIP); }
@@ -505,6 +554,6 @@
     }
     $("veil").style.opacity=veilAt(vt);
   }
-  window.__seek=seek; window.__duration=36000; window.__videoTime=true; seek(0);
+  window.__seek=seek; window.__duration=33500; window.__videoTime=true; seek(0);
 })();
 </script></body></html>

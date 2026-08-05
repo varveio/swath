@@ -42,6 +42,17 @@ def build_model(events, skipped, title, anonymize):
 
     # ---- pass 2: replay ---------------------------------------------------------
     bounds, open_seg, root_of, seed_info = {}, {}, {}, {}
+    parent_of = {}
+    for e in events:
+        if e.get("event") in ("split", "owner_split") and e.get("child_node_id") is not None:
+            parent_of[e["child_node_id"]] = e.get("node_id")
+
+    def ancestor(node):
+        seen, cur = set(), node
+        while cur in parent_of and cur not in seen:
+            seen.add(cur)
+            cur = parent_of[cur]
+        return cur
     segments, stream = [], []
     mechanisms = []
     mech_count, outcome_count, gate_count, families = (collections.Counter(),
@@ -104,7 +115,7 @@ def build_model(events, skipped, title, anonymize):
             lo, hi = at(event, "lo", 0.0), at(event, "hi", 1.0)
             cur = at(event, "cursor", lo)
             bounds[node] = (lo, hi)
-            root_of.setdefault(node, node)
+            root_of.setdefault(node, ancestor(node))
             open_seg[node] = [lo, hi, t, root_of[node]]
             seed_workers[root_of[node]].add(worker)
             live += 1
@@ -119,7 +130,7 @@ def build_model(events, skipped, title, anonymize):
             keys_bin[b] += keys
             busy_bin[b] = max(busy_bin[b], live)
             new = at(event, "cursor", 0.0)
-            seed_keys[root_of.get(node, node)] += keys
+            seed_keys[root_of.get(node) or ancestor(node)] += keys
             if not anonymize and event.get("cursor"):
                 fam = family_of(event["cursor"])
                 families[fam] += keys
@@ -147,7 +158,7 @@ def build_model(events, skipped, title, anonymize):
             child = event.get("child_node_id", -1)
             pivot, hi = at(event, "pivot", 0.0), at(event, "hi", 1.0)
             bounds[child] = (pivot, hi)
-            root = root_of.get(node, node)
+            root = root_of.get(node) or ancestor(node)
             root_of[child] = root
             seed_splits[root] += 1
             prior = close_segment(node, t)
