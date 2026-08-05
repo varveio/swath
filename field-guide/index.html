@@ -874,8 +874,9 @@
           Everything in this plate is a <strong>deliberately simplified model</strong>: an
           illustrative lumpy key distribution, 12 workers rather than 128, and a flat
           directory placed at the end so the serial floor is certain to appear. It runs the
-          same <em>sequence of decisions</em> the engine makes, at a speed and scale you can
-          watch. Its counters are not measurements of anything.
+          same <em>kinds of decisions</em> in the same order — seed, drain, estimate, split,
+          claim, finish — at a speed and scale you can watch, not the engine's actual
+          policies. Its counters are not measurements of anything.
           For measured behaviour, Plate 1 above and
           <a href="#run">the recorded 39.7-million-file run</a> below are the real thing.
         </p>
@@ -2516,7 +2517,7 @@
   }
 
   /* ── loop ──────────────────────────────────────────────────── */
-  var running = true, raf = null, last = 0;
+  var running = false, raf = null, last = 0;
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   function frame(ts) {
@@ -2543,12 +2544,25 @@
     readPalette(); resize(); reset();
     if (reduce.matches) {
       /* render a representative mid-run state rather than animating */
-      running = false;
       startScan();
       for (var i = 0; i < 240; i++) step();
-      setBtn();
+    } else if ("IntersectionObserver" in window) {
+      /* start only when the plate scrolls into view, so a reader who lingers
+         on Plate 1 does not arrive at a model that has already finished */
+      var io = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (entries[i].isIntersecting) {
+            if (!running && !done) { running = true; last = 0; setBtn(); }
+            io.disconnect();
+            break;
+          }
+        }
+      }, { threshold: 0.25 });
+      io.observe(cv);
+    } else {
+      running = true;
     }
-    draw(); readout();
+    setBtn(); draw(); readout();
     raf = requestAnimationFrame(frame);
   }
 
