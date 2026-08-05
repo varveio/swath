@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>swath — parallel S3 listing that rebalances itself while it runs</title>
+<meta name="description" content="swath divides an unknown S3 keyspace into guessed ranges, corrects the guesses while listing, and writes JSONL, TSV, or crash-resumable Parquet.">
+
+<link rel="canonical" href="https://swath.varve.io/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="swath">
+<meta property="og:title" content="swath — parallel S3 listing that rebalances itself while it runs">
+<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. An open-source lister that discovers the imbalance mid-run and splits until every worker can help.">
+<meta property="og:url" content="https://swath.varve.io/">
+<meta property="og:image" content="https://swath.varve.io/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%23F1F2EB'/%3E%3Crect x='8' y='18' width='6' height='28' fill='%234E5A55' opacity='.5'/%3E%3Crect x='17' y='18' width='26' height='28' fill='%239A6710'/%3E%3Crect x='46' y='18' width='3' height='28' fill='%234E5A55' opacity='.5'/%3E%3Crect x='52' y='18' width='4' height='28' fill='%234E5A55' opacity='.5'/%3E%3C/svg%3E">
+
+<style>
+  :root {
+    --paper:  #F1F2EB;
+    --paper-2:#E7E9DF;
+    --paper-3:#DDE0D3;
+    --ink:    #131A18;
+    --ink-2:  #4E5A55;
+    --ink-3:  #7C8781;
+    --rule:   #CBD0C2;
+    --accent: #0D6E60;
+    --signal: #9A6710;
+    --shadow: 0 1px 0 #FFFFFF80, 0 1px 3px #131A1810;
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0E1312; --paper-2:#161D1B; --paper-3:#1E2724;
+      --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#74807A; --rule:#29332F;
+      --accent:#56C9B1; --signal:#E0AC55;
+      --shadow: 0 1px 3px #00000060;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--serif); font-size: 17px; line-height: 1.6;
+    padding: 3.4rem 1.4rem 2rem;
+  }
+  .wrap { max-width: 44rem; margin: 0 auto; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  .mono { font-family: var(--mono); }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.685rem;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .eyebrow a { color: inherit; text-decoration: none; }
+  .eyebrow a:hover { text-decoration: underline; }
+
+  h1 {
+    font-family: var(--mono); font-weight: 600;
+    font-size: clamp(2.6rem, 7vw, 3.6rem); letter-spacing: -0.01em;
+    margin: 0.9rem 0 0.2rem;
+  }
+  .tag {
+    font-family: var(--mono); font-size: clamp(1rem, 2.6vw, 1.15rem);
+    color: var(--ink-2); margin-bottom: 1.3rem;
+  }
+  .what { max-width: 36rem; }
+  .what strong { color: var(--ink); }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 1.5rem 0 2.4rem; }
+  .cta a {
+    font-family: var(--mono); font-size: 0.82rem; text-decoration: none;
+    padding: 0.62rem 1.05rem; border: 1px solid var(--rule);
+    background: var(--paper-2); color: var(--ink); box-shadow: var(--shadow);
+  }
+  .cta a.primary { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+  .cta a:hover { filter: brightness(1.05); }
+
+  .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-bottom: 2.6rem; }
+  @media (max-width: 40rem) { .doors { grid-template-columns: 1fr; } }
+  .door {
+    display: block; text-decoration: none; color: inherit;
+    border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+    background: var(--paper-2); box-shadow: var(--shadow);
+    padding: 1rem 1.1rem 1.05rem;
+  }
+  .door:hover { background: var(--paper-3); }
+  .door .k {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 0.35rem;
+  }
+  .door.run { border-left-color: var(--signal); }
+  .door.run .k { color: var(--signal); }
+  .door h2 { font-family: var(--mono); font-size: 1.02rem; font-weight: 600; margin-bottom: 0.3rem; }
+  .door p { font-size: 0.92rem; color: var(--ink-2); }
+
+  .filmbox { margin-bottom: 2.6rem; }
+  .filmbox .k {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 0.55rem;
+  }
+  video {
+    display: block; width: 100%; max-width: 24rem; height: auto;
+    border: 1px solid var(--rule); box-shadow: var(--shadow); background: var(--paper-2);
+  }
+  .filmbox figcaption { font-size: 0.85rem; color: var(--ink-2); margin-top: 0.5rem; max-width: 36rem; }
+
+  footer {
+    margin-top: 1rem; padding-top: 1.3rem; border-top: 2px solid var(--ink);
+    font-family: var(--mono); font-size: 0.75rem; color: var(--ink-2); line-height: 1.7;
+  }
+  footer .colophon { margin-top: 0.9rem; display: flex; align-items: center; gap: 0.55rem; }
+  footer .colophon svg { flex: none; width: 20px; height: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow"><a href="https://varve.io">Varve</a> · open source</div>
+  <h1>swath</h1>
+  <p class="tag">Parallel, resumable S3 listing for very large buckets.</p>
+
+  <p class="what">
+    swath divides an unknown S3 keyspace into guessed ranges, <strong>corrects the guesses
+    while it lists</strong> — splitting overloaded ranges so idle workers can take the
+    other half — and writes JSONL, TSV, or crash-resumable Parquet. It never reads object
+    contents, and <span class="mono">--concurrency</span> is a ceiling, not a target.
+  </p>
+
+  <div class="cta">
+    <a class="primary" href="https://github.com/varveio/swath">View on GitHub</a>
+    <a href="https://github.com/varveio/swath#install">Quick start</a>
+  </div>
+
+  <div class="doors">
+    <a class="door" href="field-guide/">
+      <div class="k">See how it works</div>
+      <h2>The visual field guide</h2>
+      <p>Why parallel listing is a guessing problem, the range algebra that keeps splits
+      safe, and where swath honestly loses.</p>
+    </a>
+    <a class="door run" href="runs/noaa-gestofs-pds/">
+      <div class="k">Interrogate a real run</div>
+      <h2>39.7M objects · 128 workers</h2>
+      <p>One recorded listing of <span class="mono">s3://noaa-gestofs-pds</span>, rendered
+      from its 89,230-event trace: replay, seed distribution, mechanism ledgers.</p>
+    </a>
+  </div>
+
+  <figure class="filmbox">
+    <div class="k">36 seconds of that run</div>
+    <video controls muted playsinline preload="metadata" poster="assets/poster.png"
+      src="assets/swath-noaa-gestofs.mp4"></video>
+    <figcaption>
+      One guess out of 513 secretly held 68% of the bucket. Every frame is rendered from
+      the run's own trace — the one derived panel says so on screen.
+    </figcaption>
+  </figure>
+
+  <footer>
+    swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
+    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
+    stores beyond S3 are roadmap. Flags and output schemas may still change.
+    <div class="colophon">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
+          <path d="M8 15 L32 28 L56 15"/>
+          <path d="M13 24 L32 35 L51 24"/>
+          <path d="M18 33 L32 42 L46 33"/>
+          <path d="M23 42 L32 49 L41 42"/>
+        </g>
+      </svg>
+      <span>swath is built at <a href="https://varve.io">Varve</a> — a system of record for object storage.</span>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

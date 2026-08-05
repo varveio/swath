@@ -1,0 +1,2567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>swath — a field guide to parallel S3 listing</title>
+<meta name="description" content="How swath divides an S3 keyspace it cannot see: blind range guesses, work stealing that corrects them mid-sweep, and crash-safe Parquet output.">
+
+<!-- Publication URLs — this is the one place to change them.
+     Live site: https://swath.varve.io (GitHub Pages, gh-pages branch of varveio/swath) -->
+<link rel="canonical" href="https://swath.varve.io/field-guide/">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="swath">
+<meta property="og:title" content="How swath maps an S3 bucket it cannot see">
+<meta property="og:description" content="513 blind guesses. One held 68% of the bucket. A visual guide to adaptive parallel S3 listing, from range algebra to crash-safe Parquet.">
+<meta property="og:url" content="https://swath.varve.io/field-guide/">
+<meta property="og:image" content="https://swath.varve.io/card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Two strips of an S3 keyspace: 513 evenly guessed ranges above, and below the same ranges at their measured sizes, one swelling to two thirds of the bucket.">
+<meta name="twitter:card" content="summary_large_image">
+
+<style>
+  /* ─────────────────────────────────────────────────────────
+     TOKENS
+     Ground: cool bone / plotting-paper. Ink: blue-black.
+     Accent: deep sea-green (a swath). Signal: ochre (a split).
+     Alert: rust (a refusal, a serial floor).
+     ───────────────────────────────────────────────────────── */
+  :root {
+    --paper:      #F1F2EB;
+    --paper-2:    #E7E9DF;
+    --paper-3:    #DDE0D3;
+    --ink:        #131A18;
+    --ink-2:      #4E5A55;
+    --ink-3:      #7C8781;
+    --rule:       #CBD0C2;
+    --accent:     #0D6E60;
+    --accent-sub: #0D6E6014;
+    --signal:     #9A6710;
+    --signal-sub: #9A671018;
+    --alert:      #A33F28;
+    --alert-sub:  #A33F2814;
+
+    --w1: #0D6E60;  --w2: #2E7C86;  --w3: #46765A;
+    --w4: #6E7B3C;  --w5: #38617E;  --w6: #7A6A46;
+
+    --shadow: 0 1px 0 #FFFFFF80, 0 1px 3px #131A1810;
+
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
+
+    --measure: 34rem;
+    --plate: 60rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0E1312;
+      --paper-2:    #161D1B;
+      --paper-3:    #1E2724;
+      --ink:        #E7EBE3;
+      --ink-2:      #9BA69F;
+      --ink-3:      #74807A;
+      --rule:       #29332F;
+      --accent:     #56C9B1;
+      --accent-sub: #56C9B11A;
+      --signal:     #E0AC55;
+      --signal-sub: #E0AC551A;
+      --alert:      #E4826A;
+      --alert-sub:  #E4826A1A;
+
+      --w1: #56C9B1;  --w2: #6FBBD0;  --w3: #86C495;
+      --w4: #BCC076;  --w5: #7FA8CE;  --w6: #C7B187;
+
+      --shadow: 0 1px 3px #00000060;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper:#F1F2EB; --paper-2:#E7E9DF; --paper-3:#DDE0D3;
+    --ink:#131A18; --ink-2:#4E5A55; --ink-3:#7C8781; --rule:#CBD0C2;
+    --accent:#0D6E60; --accent-sub:#0D6E6014;
+    --signal:#9A6710; --signal-sub:#9A671018;
+    --alert:#A33F28; --alert-sub:#A33F2814;
+    --w1:#0D6E60; --w2:#2E7C86; --w3:#46765A; --w4:#6E7B3C; --w5:#38617E; --w6:#7A6A46;
+    --shadow: 0 1px 0 #FFFFFF80, 0 1px 3px #131A1810;
+  }
+  :root[data-theme="dark"] {
+    --paper:#0E1312; --paper-2:#161D1B; --paper-3:#1E2724;
+    --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#74807A; --rule:#29332F;
+    --accent:#56C9B1; --accent-sub:#56C9B11A;
+    --signal:#E0AC55; --signal-sub:#E0AC551A;
+    --alert:#E4826A; --alert-sub:#E4826A1A;
+    --w1:#56C9B1; --w2:#6FBBD0; --w3:#86C495; --w4:#BCC076; --w5:#7FA8CE; --w6:#C7B187;
+    --shadow: 0 1px 3px #00000060;
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     BASE
+     ───────────────────────────────────────────────────────── */
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  .wrap {
+    max-width: var(--plate);
+    margin: 0 auto;
+    padding: 0 1.5rem 6rem;
+  }
+
+  /* Reading column inside the wide plate column */
+  .col { max-width: var(--measure); }
+
+  p { margin: 0 0 1.05em; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code, .mono { font-family: var(--mono); }
+  code {
+    font-size: 0.85em;
+    background: var(--paper-2);
+    padding: 0.1em 0.34em;
+    border-radius: 3px;
+    border: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+
+  em.term {
+    font-style: normal;
+    font-weight: 600;
+    border-bottom: 1.5px solid var(--accent-sub);
+    box-shadow: inset 0 -0.4em 0 var(--accent-sub);
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     MASTHEAD
+     ───────────────────────────────────────────────────────── */
+  header.mast {
+    border-bottom: 1px solid var(--rule);
+    padding: 2.4rem 0 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.685rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .eyebrow a { color: inherit; text-decoration: none; }
+  .eyebrow a:hover { text-decoration: underline; }
+
+  h1 {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: clamp(2.6rem, 8vw, 4.6rem);
+    letter-spacing: -0.045em;
+    line-height: 0.94;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1 .sub {
+    display: block;
+    font-size: clamp(0.95rem, 2.4vw, 1.25rem);
+    letter-spacing: -0.01em;
+    color: var(--ink-2);
+    margin-top: 1.1rem;
+    font-weight: 400;
+    max-width: 46ch;
+    line-height: 1.45;
+  }
+
+  .standfirst {
+    font-size: 1.14rem;
+    line-height: 1.55;
+    max-width: 42rem;
+    color: var(--ink);
+  }
+  .standfirst strong { font-weight: 600; }
+
+  /* ─────────────────────────────────────────────────────────
+     SECTIONS
+     ───────────────────────────────────────────────────────── */
+  section { padding-top: 3.6rem; }
+
+  h2 {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: clamp(1.45rem, 3.4vw, 1.95rem);
+    letter-spacing: -0.03em;
+    line-height: 1.14;
+    margin: 0 0 1.2rem;
+    text-wrap: balance;
+    max-width: 24ch;
+  }
+  h3 {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 0.98rem;
+    letter-spacing: -0.01em;
+    margin: 2rem 0 0.6rem;
+  }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 1.4rem;
+    border-top: 2px solid var(--ink);
+    padding-top: 0.7rem;
+  }
+  .sec-head .eyebrow { flex: none; }
+  .sec-head h2 { margin: 0; }
+
+  /* ─────────────────────────────────────────────────────────
+     PLATES (figures)
+     ───────────────────────────────────────────────────────── */
+  figure {
+    margin: 2rem 0 2.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .plate-body {
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 1.3rem;
+    overflow-x: auto;
+  }
+  figure svg { display: block; width: 100%; height: auto; min-width: 460px; }
+  figcaption {
+    font-family: var(--mono);
+    font-size: 0.755rem;
+    line-height: 1.55;
+    color: var(--ink-2);
+    max-width: 56ch;
+  }
+  figcaption b {
+    color: var(--ink);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.9em;
+    margin-right: 0.55em;
+  }
+
+  /* SVG semantics */
+  .s-ink   { stroke: currentColor; }
+  .f-ink   { fill: currentColor; }
+  .s-rule  { stroke: var(--rule); }
+  .s-acc   { stroke: var(--accent); }
+  .f-acc   { fill: var(--accent); }
+  .s-sig   { stroke: var(--signal); }
+  .f-sig   { fill: var(--signal); }
+  .s-alert { stroke: var(--alert); }
+  .f-alert { fill: var(--alert); }
+  .f-dim   { fill: var(--ink-2); }
+  .f-paper { fill: var(--paper); }
+  .f-panel { fill: var(--paper-3); }
+  text {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    fill: currentColor;
+  }
+  text.sm { font-size: 10px; fill: var(--ink-2); }
+  text.hd { font-size: 12px; font-weight: 600; }
+
+  /* ─────────────────────────────────────────────────────────
+     THE LIVE PLATE — keyspace simulator
+     ───────────────────────────────────────────────────────── */
+  .sim {
+    margin: 2.4rem 0 0;
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    border-radius: 2px;
+  }
+  .sim-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .phase {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 0.22rem 0.55rem;
+    border-radius: 2px;
+    background: var(--accent-sub);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    white-space: nowrap;
+  }
+  .phase[data-p="floor"] {
+    background: var(--alert-sub); color: var(--alert); border-color: var(--alert);
+  }
+  .sim-note {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-2);
+    flex: 1 1 16rem;
+    min-width: 0;
+  }
+  button {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    padding: 0.34rem 0.75rem;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--ink-2); }
+
+  #strip { display: block; width: 100%; height: 232px; }
+
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    border-top: 1px solid var(--rule);
+  }
+  .readout div {
+    padding: 0.7rem 1rem;
+    border-right: 1px solid var(--rule);
+  }
+  .readout div:last-child { border-right: 0; }
+  .readout dt {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 0.2rem;
+  }
+  .readout dd {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 1.12rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     CARDS / TABLES / CALLOUTS
+     ───────────────────────────────────────────────────────── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 1.8rem 0 2rem;
+  }
+  .cards > div {
+    background: var(--paper);
+    padding: 1rem 1.1rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .cards dt {
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .cards dd {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
+
+  .tbl-scroll { overflow-x: auto; margin: 1.6rem 0 2rem; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 34rem;
+    font-size: 0.88rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.9rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--ink-2);
+    white-space: nowrap;
+  }
+  td.k { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
+  td.k b { font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+
+  .note {
+    border-left: 2px solid var(--signal);
+    background: var(--signal-sub);
+    padding: 0.9rem 1.1rem;
+    margin: 1.7rem 0;
+    font-size: 0.95rem;
+    max-width: 44rem;
+  }
+  .note .lbl {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--signal);
+    display: block;
+    margin-bottom: 0.3rem;
+  }
+  .note p:last-child { margin-bottom: 0; }
+
+  .note.stop { border-left-color: var(--alert); background: var(--alert-sub); }
+  .note.stop .lbl { color: var(--alert); }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.65;
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    margin: 1.4rem 0;
+  }
+  pre .c { color: var(--ink-3); }
+  pre .h { color: var(--accent); }
+  pre .g { color: var(--signal); }
+
+  ul.tight { padding-left: 1.1rem; margin: 0 0 1.1em; }
+  ul.tight li { margin-bottom: 0.45em; }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.6rem;
+    border-top: 2px solid var(--ink);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-2);
+    line-height: 1.7;
+  }
+  footer .colophon {
+    margin-top: 1.1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+  footer .colophon svg { flex: none; width: 20px; height: 20px; }
+
+  /* ─────────────────────────────────────────────────────────
+     HERO — the opening claim, its evidence, and the two doors
+     ───────────────────────────────────────────────────────── */
+  .whatis {
+    font-size: 1.02rem;
+    line-height: 1.55;
+    max-width: 44rem;
+    color: var(--ink-2);
+    margin: 0;
+    padding-left: 0.9rem;
+    border-left: 3px solid var(--accent);
+  }
+  .whatis strong { color: var(--ink); font-weight: 600; }
+
+  .hero-q {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: clamp(1.5rem, 3.3vw, 2.15rem);
+    letter-spacing: -0.035em;
+    line-height: 1.14;
+    margin: 0;
+    max-width: 30ch;
+    text-wrap: balance;
+  }
+
+  .metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 2.4rem;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--rule);
+    padding: 0.9rem 0;
+    margin: 0;
+  }
+  .metrics div { flex: 0 0 auto; }
+  .metrics dt {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .metrics dd {
+    font-family: var(--mono);
+    font-size: 1.32rem;
+    letter-spacing: -0.03em;
+    margin: 0.15rem 0 0;
+  }
+  .metrics dd.hot { color: var(--signal); }
+  .prov {
+    font-family: var(--mono);
+    font-size: 0.62em;
+    vertical-align: super;
+    text-decoration: none;
+    color: var(--ink-3);
+  }
+  .prov-note {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.6;
+    color: var(--ink-3);
+    max-width: 52ch;
+    margin: -0.5rem 0 0;
+  }
+  .prov-note a { color: var(--ink-3); }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+  .cta a {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    text-decoration: none;
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    color: var(--ink);
+    padding: 0.6rem 1rem;
+    border-radius: 2px;
+    box-shadow: var(--shadow);
+  }
+  .cta a:hover { border-color: var(--ink-2); }
+  .cta a.primary { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+  .cta a.primary:hover { filter: brightness(1.08); }
+
+  /* ─────────────────────────────────────────────────────────
+     CONTENTS + DEEP DIVES
+     ───────────────────────────────────────────────────────── */
+  .toc {
+    border-top: 1px solid var(--rule);
+    margin-top: 0.6rem;
+    padding-top: 0.9rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+  }
+  .toc > summary {
+    cursor: pointer;
+    font-size: 0.685rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .toc-cols { display: flex; flex-wrap: wrap; gap: 1.4rem 3.5rem; margin-top: 1rem; }
+  .toc h3 {
+    font-size: 0.685rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 0.5rem;
+  }
+  .toc ol { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin-bottom: 0.35em; }
+  .toc a { text-decoration: none; color: var(--ink); }
+  .toc a:hover { color: var(--accent); text-decoration: underline; }
+
+  details.dive {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    background: var(--paper-2);
+    border-radius: 2px;
+    padding: 0.9rem 1.1rem;
+    margin: 1.8rem 0 2.2rem;
+  }
+  /* Collapsed dives are a list, not a run of sections — drop the section rhythm. */
+  #dive-pipeline, #dive-aimd, #dive-modules, #dive-glossary { padding-top: 0; }
+  #dive-pipeline details.dive, #dive-aimd details.dive,
+  #dive-modules details.dive, #dive-glossary details.dive { margin: 0 0 0.7rem; }
+  details.dive > summary {
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    color: var(--ink);
+    list-style: none;
+  }
+  details.dive > summary::-webkit-details-marker { display: none; }
+  details.dive > summary::before {
+    content: "▸";
+    color: var(--accent);
+    margin-right: 0.55em;
+    display: inline-block;
+  }
+  details.dive[open] > summary::before { content: "▾"; }
+  details.dive[open] > summary {
+    padding-bottom: 0.8rem;
+    margin-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  details.dive > summary .hint {
+    color: var(--ink-3);
+    font-size: 0.9em;
+    margin-left: 0.5em;
+  }
+  details.dive figure:first-of-type { margin-top: 0.4rem; }
+
+  /* Provenance line under a plate: where the claim can be audited. */
+  .src {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--ink-3);
+  }
+  .src a { color: var(--ink-3); }
+
+  /* ─────────────────────────────────────────────────────────
+     RESULT CARD — the closing figure
+     ───────────────────────────────────────────────────────── */
+  .result {
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--signal);
+    background: var(--paper-2);
+    border-radius: 2px;
+    padding: 1.6rem;
+    margin: 2rem 0;
+  }
+  .result dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1.1rem 1.6rem;
+    margin: 0;
+  }
+  .result dt {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .result dd {
+    font-family: var(--mono);
+    font-size: 1.16rem;
+    letter-spacing: -0.02em;
+    margin: 0.15rem 0 0;
+  }
+  .result dd.hot { color: var(--signal); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  /* ─────────────────────────────────────────────────────────
+     NARROW VIEWPORTS
+     The plates are drawn at a fixed 760-unit width and several are
+     too dense to survive being squeezed to a phone. They stay
+     pannable inside their own scroller — with an affordance saying so,
+     rather than silently clipping.
+     ───────────────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    body { font-size: 16px; }
+    .wrap { padding-left: 1rem; padding-right: 1rem; }
+    header.mast { padding-top: 2.2rem; gap: 1.2rem; }
+    section { padding-top: 2.6rem; }
+
+    .sec-head { display: block; }
+    .sec-head .eyebrow { display: block; margin-bottom: 0.4rem; }
+    h2 { max-width: none; }
+
+    .metrics { gap: 0 1.6rem; }
+    .metrics dd { font-size: 1.1rem; }
+    .cta a { flex: 1 1 100%; text-align: center; }
+
+    .plate-body { padding: 0.8rem; }
+    .plate-body::before {
+      content: "↔ drag to pan";
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+      margin-bottom: 0.55rem;
+    }
+    figcaption { max-width: none; }
+
+    code { white-space: normal; overflow-wrap: anywhere; }
+    pre { font-size: 0.72rem; }
+    .toc-cols { gap: 1.4rem; }
+    .toc-cols > div { flex: 1 1 100%; }
+    .readout { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow"><a href="https://varve.io">Varve</a> · <span class="mono">swath</span> · field guide to the engine</div>
+    <h1 class="hero-q">How do you divide 39.7 million files among 128 workers when S3 will not tell you where they are?</h1>
+    <p class="whatis">
+      <strong>swath</strong> is an open-source command-line tool that lists very large S3 buckets
+      in parallel and writes the result to Parquet you can resume after a crash. It is for anyone
+      who has waited on a bucket too big to enumerate one page at a time, and has no usable
+      Inventory report to fall back on. This page is how it works.
+    </p>
+    <p class="standfirst" style="margin-bottom:0;">
+      swath guessed <strong>513 adjacent ranges</strong> and started listing. One of those
+      guesses secretly held <strong>68% of the entire bucket</strong> — 1,281× the median guess,
+      and nothing could have revealed that in advance. The engine discovered the imbalance
+      while running, split that one range apart until every worker could help, and finished the
+      bucket. The name is the method: adjacent swaths, no gaps, no overlap.
+    </p>
+
+    <dl class="metrics">
+      <div><dt>Objects listed</dt><dd>39,651,850</dd></div>
+      <div><dt>Initial guesses</dt><dd>513</dd></div>
+      <div><dt>In one guess</dt><dd class="hot">68.0%</dd></div>
+      <div><dt>Workers</dt><dd>128</dd></div>
+      <div><dt>Wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="how it was measured">&#8224;</a></dd></div>
+    </dl>
+    <p class="prov-note">
+      <a href="#timings">&#8224; One recorded run</a>, from a dedicated cloud host at
+      <span class="mono">--concurrency 128</span>. A wall clock is a property of the machine and
+      the network; the distribution figures below are properties of the bucket.
+    </p>
+
+    <div class="cta">
+      <a class="primary" href="#reveal">See what it got wrong</a>
+      <a href="#how">How the engine works</a>
+      <a href="#run">See the measured run</a>
+    </div>
+
+    <details class="toc">
+      <summary>On this page</summary>
+      <div class="toc-cols">
+        <div>
+          <h3>The story · ~6 min</h3>
+          <ol>
+            <li><a href="#reveal">513 guesses, and the one that mattered</a></li>
+            <li><a href="#how">A miniature model of the mechanism</a></li>
+            <li><a href="#constraint">The constraint everything follows from</a></li>
+            <li><a href="#range">The range, and the one-key mistake</a></li>
+            <li><a href="#split">Two ways to split, neither enough alone</a></li>
+            <li><a href="#steal">The steal, and its ladder of evidence</a></li>
+            <li><a href="#laws">What the engine learned from real buckets</a></li>
+            <li><a href="#durability">Commit before emit, and the two cursors</a></li>
+            <li><a href="#limits">Where it honestly cannot win</a></li>
+            <li><a href="#run">The actual 39.7M run</a></li>
+          </ol>
+        </div>
+        <div>
+          <h3>Deep dives</h3>
+          <ol>
+            <li><a href="#dive-pipeline">The runtime pipeline</a></li>
+            <li><a href="#dive-aimd">Concurrency control</a></li>
+            <li><a href="#dive-modules">Repository architecture</a></li>
+            <li><a href="#dive-glossary">Glossary</a></li>
+          </ol>
+        </div>
+      </div>
+    </details>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="reveal">
+    <div class="sec-head">
+      <span class="eyebrow">Plate&nbsp;1 · measured</span>
+      <h2>513 guesses, and the one that mattered</h2>
+    </div>
+    <div class="col">
+      <p>
+        Before it lists anything, swath has to cut the keyspace into pieces. It has no
+        distribution to cut against, so it does what any blind partitioner does: one
+        <span class="mono">delimiter=/</span> probe for the top-level directories, then
+        ranges cut along the boundaries it returns — capped at four per worker and evenly
+        subsampled — each implicitly assumed to hold about as much as the next.
+        For this bucket that came to 513 ranges and an expectation of
+        <strong>0.195% of the files in each</strong>.
+      </p>
+      <p>
+        Below is that assumption on top, and what the run actually measured underneath.
+        Same 513 seeds, same order, same colour. Only the widths differ.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 300" role="img" aria-label="Two strips of the same keyspace. Above, 513 seed guesses at the uniform prior, every one an identical hairline. Below, the same 513 seeds at their measured object counts: one guess swells to two thirds of the strip while the remaining 512 compress into the right-hand quarter.">
+          <defs><pattern id="seedtick" width="1.3645" height="34" patternUnits="userSpaceOnUse">
+            <rect width="0.5645" height="34" class="f-dim" opacity=".38"/>
+          </pattern></defs>
+        
+          <text class="hd f-ink" x="40" y="26">What the engine guessed</text>
+          <text class="sm" x="740" y="26" text-anchor="end">513 ranges · 0.195% expected in each</text>
+          <rect x="40" y="38" width="700" height="34" fill="url(#seedtick)"/>
+          <rect x="44.1" y="38" width="1.4" height="34" class="f-sig"/>
+          <rect x="41.9" y="34" width="5.8" height="42" fill="none" class="s-sig" stroke-width="1.4"/>
+        
+          <path d="M44.1 76L74.7 184h475.7L45.5 76z" class="f-sig" opacity=".13"/>
+          <text class="sm" x="342" y="126" style="fill:var(--signal)">one of them held two thirds of the bucket</text>
+          <text class="sm" x="342" y="142">the engine could not know that until it listed</text>
+        
+          <rect x="36" y="163" width="176" height="18" style="fill:var(--paper-2)"/>
+          <text class="hd f-ink" x="40" y="176">What was actually there</text>
+          <text class="sm" x="740" y="176" text-anchor="end">measured, same 513 seeds, same order</text>
+          <path class="f-dim" opacity=".38" d="M40.0 188h0.5v34h-0.5zM40.0 188h0.5v34h-0.5zM40.1 188h34.6v34h-34.6zM550.4 188h0.5v34h-0.5zM550.6 188h0.5v34h-0.5zM550.9 188h0.5v34h-0.5zM551.3 188h0.5v34h-0.5zM551.7 188h0.5v34h-0.5zM552.0 188h0.5v34h-0.5zM552.4 188h0.5v34h-0.5zM552.8 188h0.5v34h-0.5zM553.0 188h0.5v34h-0.5zM553.4 188h0.5v34h-0.5zM553.8 188h0.5v34h-0.5zM554.1 188h0.5v34h-0.5zM554.5 188h0.5v34h-0.5zM554.9 188h0.5v34h-0.5zM555.2 188h0.5v34h-0.5zM555.6 188h0.5v34h-0.5zM556.0 188h0.5v34h-0.5zM556.3 188h0.5v34h-0.5zM556.6 188h0.5v34h-0.5zM557.0 188h0.5v34h-0.5zM557.3 188h0.5v34h-0.5zM557.7 188h0.5v34h-0.5zM558.1 188h0.5v34h-0.5zM558.4 188h0.5v34h-0.5zM558.8 188h0.5v34h-0.5zM559.2 188h0.5v34h-0.5zM559.5 188h0.5v34h-0.5zM559.9 188h0.5v34h-0.5zM560.3 188h0.5v34h-0.5zM560.6 188h0.5v34h-0.5zM560.9 188h0.5v34h-0.5zM561.3 188h0.5v34h-0.5zM561.7 188h0.5v34h-0.5zM562.0 188h0.5v34h-0.5zM562.4 188h0.5v34h-0.5zM562.8 188h0.5v34h-0.5zM563.1 188h0.5v34h-0.5zM563.5 188h0.5v34h-0.5zM563.9 188h0.5v34h-0.5zM564.1 188h0.5v34h-0.5zM564.5 188h0.5v34h-0.5zM564.9 188h0.5v34h-0.5zM565.2 188h0.5v34h-0.5zM565.6 188h0.5v34h-0.5zM566.0 188h0.5v34h-0.5zM566.3 188h0.5v34h-0.5zM566.7 188h0.5v34h-0.5zM567.1 188h0.5v34h-0.5zM567.4 188h0.5v34h-0.5zM567.8 188h0.5v34h-0.5zM568.1 188h0.5v34h-0.5zM568.4 188h0.5v34h-0.5zM568.8 188h0.5v34h-0.5zM569.2 188h0.5v34h-0.5zM569.5 188h0.5v34h-0.5zM569.9 188h0.5v34h-0.5zM570.3 188h0.5v34h-0.5zM570.7 188h0.5v34h-0.5zM571.0 188h0.5v34h-0.5zM571.4 188h0.5v34h-0.5zM571.7 188h0.5v34h-0.5zM572.0 188h0.5v34h-0.5zM572.3 188h0.5v34h-0.5zM572.7 188h0.5v34h-0.5zM573.0 188h0.5v34h-0.5zM573.4 188h0.5v34h-0.5zM573.8 188h0.5v34h-0.5zM574.1 188h0.5v34h-0.5zM574.5 188h0.5v34h-0.5zM574.9 188h0.5v34h-0.5zM575.2 188h0.5v34h-0.5zM575.5 188h0.5v34h-0.5zM575.9 188h0.5v34h-0.5zM576.3 188h0.5v34h-0.5zM576.6 188h0.5v34h-0.5zM577.0 188h0.5v34h-0.5zM577.4 188h0.5v34h-0.5zM577.7 188h0.5v34h-0.5zM578.1 188h0.5v34h-0.5zM578.5 188h0.5v34h-0.5zM578.8 188h0.5v34h-0.5zM579.1 188h0.5v34h-0.5zM579.5 188h0.5v34h-0.5zM579.9 188h0.5v34h-0.5zM580.2 188h0.5v34h-0.5zM580.6 188h0.5v34h-0.5zM581.0 188h0.5v34h-0.5zM581.3 188h0.5v34h-0.5zM581.7 188h0.5v34h-0.5zM582.1 188h0.5v34h-0.5zM582.4 188h0.5v34h-0.5zM582.7 188h0.5v34h-0.5zM583.1 188h0.5v34h-0.5zM583.4 188h0.5v34h-0.5zM583.8 188h0.5v34h-0.5zM584.2 188h0.5v34h-0.5zM584.6 188h0.5v34h-0.5zM584.9 188h0.5v34h-0.5zM585.3 188h0.5v34h-0.5zM585.7 188h0.5v34h-0.5zM586.0 188h0.5v34h-0.5zM586.4 188h0.5v34h-0.5zM586.7 188h0.5v34h-0.5zM587.0 188h0.5v34h-0.5zM587.4 188h0.5v34h-0.5zM587.8 188h0.5v34h-0.5zM588.2 188h0.5v34h-0.5zM588.5 188h0.5v34h-0.5zM588.9 188h0.5v34h-0.5zM589.3 188h0.5v34h-0.5zM589.6 188h0.5v34h-0.5zM590.0 188h0.5v34h-0.5zM590.3 188h0.5v34h-0.5zM590.6 188h0.5v34h-0.5zM591.0 188h0.5v34h-0.5zM591.4 188h0.5v34h-0.5zM591.7 188h0.5v34h-0.5zM592.1 188h0.5v34h-0.5zM592.5 188h0.5v34h-0.5zM592.9 188h0.5v34h-0.5zM593.2 188h0.5v34h-0.5zM593.6 188h0.5v34h-0.5zM594.0 188h0.5v34h-0.5zM594.2 188h0.5v34h-0.5zM594.6 188h0.5v34h-0.5zM595.0 188h0.5v34h-0.5zM595.3 188h0.5v34h-0.5zM595.7 188h0.5v34h-0.5zM596.1 188h0.5v34h-0.5zM596.4 188h0.5v34h-0.5zM596.8 188h0.5v34h-0.5zM597.2 188h0.5v34h-0.5zM597.6 188h0.5v34h-0.5zM597.8 188h0.5v34h-0.5zM598.2 188h0.5v34h-0.5zM598.6 188h0.5v34h-0.5zM598.9 188h0.5v34h-0.5zM599.3 188h0.5v34h-0.5zM599.7 188h0.5v34h-0.5zM600.0 188h0.5v34h-0.5zM600.4 188h0.5v34h-0.5zM600.8 188h0.5v34h-0.5zM601.2 188h0.5v34h-0.5zM601.5 188h0.5v34h-0.5zM601.8 188h0.5v34h-0.5zM602.2 188h0.5v34h-0.5zM602.5 188h0.5v34h-0.5zM602.9 188h0.5v34h-0.5zM603.3 188h0.5v34h-0.5zM603.6 188h0.5v34h-0.5zM604.0 188h0.5v34h-0.5zM604.4 188h0.5v34h-0.5zM604.7 188h0.5v34h-0.5zM605.1 188h0.5v34h-0.5zM605.4 188h0.5v34h-0.5zM605.8 188h0.5v34h-0.5zM606.1 188h0.5v34h-0.5zM606.5 188h0.5v34h-0.5zM606.9 188h0.5v34h-0.5zM607.2 188h0.5v34h-0.5zM607.6 188h0.5v34h-0.5zM608.0 188h0.5v34h-0.5zM608.3 188h0.5v34h-0.5zM608.7 188h0.5v34h-0.5zM609.0 188h0.5v34h-0.5zM609.4 188h0.5v34h-0.5zM609.7 188h0.5v34h-0.5zM610.1 188h0.5v34h-0.5zM610.5 188h0.5v34h-0.5zM610.8 188h0.5v34h-0.5zM611.2 188h0.5v34h-0.5zM611.6 188h0.5v34h-0.5zM611.9 188h0.5v34h-0.5zM612.3 188h0.5v34h-0.5zM612.7 188h0.5v34h-0.5zM613.0 188h0.5v34h-0.5zM613.3 188h0.5v34h-0.5zM613.7 188h0.5v34h-0.5zM614.1 188h0.5v34h-0.5zM614.4 188h0.5v34h-0.5zM614.8 188h0.5v34h-0.5zM615.2 188h0.5v34h-0.5zM615.5 188h0.5v34h-0.5zM615.9 188h0.5v34h-0.5zM616.3 188h0.5v34h-0.5zM616.6 188h0.5v34h-0.5zM616.9 188h0.5v34h-0.5zM617.3 188h0.5v34h-0.5zM617.7 188h0.5v34h-0.5zM618.0 188h0.5v34h-0.5zM618.4 188h0.5v34h-0.5zM618.8 188h0.5v34h-0.5zM618.9 188h0.5v34h-0.5zM619.3 188h0.5v34h-0.5zM619.7 188h0.5v34h-0.5zM620.0 188h0.5v34h-0.5zM620.3 188h0.5v34h-0.5zM620.7 188h0.5v34h-0.5zM621.1 188h0.5v34h-0.5zM621.4 188h0.5v34h-0.5zM621.8 188h0.5v34h-0.5zM622.2 188h0.5v34h-0.5zM622.5 188h0.5v34h-0.5zM622.9 188h0.5v34h-0.5zM623.3 188h0.5v34h-0.5zM623.7 188h0.5v34h-0.5zM623.9 188h0.5v34h-0.5zM624.3 188h0.5v34h-0.5zM624.7 188h0.5v34h-0.5zM625.0 188h0.5v34h-0.5zM625.4 188h0.5v34h-0.5zM625.8 188h0.5v34h-0.5zM626.2 188h0.5v34h-0.5zM626.5 188h0.5v34h-0.5zM626.9 188h0.5v34h-0.5zM627.3 188h0.5v34h-0.5zM627.6 188h0.5v34h-0.5zM627.9 188h0.5v34h-0.5zM628.3 188h0.5v34h-0.5zM628.7 188h0.5v34h-0.5zM629.0 188h0.5v34h-0.5zM629.4 188h0.5v34h-0.5zM629.8 188h0.5v34h-0.5zM630.2 188h0.5v34h-0.5zM630.5 188h0.5v34h-0.5zM630.9 188h0.5v34h-0.5zM631.3 188h0.5v34h-0.5zM631.5 188h0.5v34h-0.5zM631.9 188h0.5v34h-0.5zM632.3 188h0.5v34h-0.5zM632.7 188h0.5v34h-0.5zM633.0 188h0.5v34h-0.5zM633.4 188h0.5v34h-0.5zM633.8 188h0.5v34h-0.5zM634.1 188h0.5v34h-0.5zM634.5 188h0.5v34h-0.5zM634.9 188h0.5v34h-0.5zM635.2 188h0.5v34h-0.5zM635.5 188h0.5v34h-0.5zM635.9 188h0.5v34h-0.5zM636.3 188h0.5v34h-0.5zM636.6 188h0.5v34h-0.5zM637.0 188h0.5v34h-0.5zM637.4 188h0.5v34h-0.5zM637.8 188h0.5v34h-0.5zM638.1 188h0.5v34h-0.5zM638.5 188h0.5v34h-0.5zM638.9 188h0.5v34h-0.5zM639.2 188h0.5v34h-0.5zM639.5 188h0.5v34h-0.5zM639.9 188h0.5v34h-0.5zM640.3 188h0.5v34h-0.5zM640.6 188h0.5v34h-0.5zM641.0 188h0.5v34h-0.5zM641.4 188h0.5v34h-0.5zM641.8 188h0.5v34h-0.5zM642.1 188h0.5v34h-0.5zM642.5 188h0.5v34h-0.5zM642.8 188h0.5v34h-0.5zM643.1 188h0.5v34h-0.5zM643.5 188h0.5v34h-0.5zM643.9 188h0.5v34h-0.5zM644.3 188h0.5v34h-0.5zM644.6 188h0.5v34h-0.5zM645.0 188h0.5v34h-0.5zM645.4 188h0.5v34h-0.5zM645.7 188h0.5v34h-0.5zM646.1 188h0.5v34h-0.5zM646.5 188h0.5v34h-0.5zM646.8 188h0.5v34h-0.5zM647.1 188h0.5v34h-0.5zM647.5 188h0.5v34h-0.5zM647.9 188h0.5v34h-0.5zM648.2 188h0.5v34h-0.5zM648.6 188h0.5v34h-0.5zM649.0 188h0.5v34h-0.5zM649.4 188h0.5v34h-0.5zM649.7 188h0.5v34h-0.5zM650.1 188h0.5v34h-0.5zM650.4 188h0.5v34h-0.5zM650.8 188h0.5v34h-0.5zM651.1 188h0.5v34h-0.5zM651.5 188h0.5v34h-0.5zM651.9 188h0.5v34h-0.5zM652.2 188h0.5v34h-0.5zM652.6 188h0.5v34h-0.5zM653.0 188h0.5v34h-0.5zM653.3 188h0.5v34h-0.5zM653.7 188h0.5v34h-0.5zM654.1 188h0.5v34h-0.5zM654.4 188h0.5v34h-0.5zM654.7 188h0.5v34h-0.5zM655.1 188h0.5v34h-0.5zM655.5 188h0.5v34h-0.5zM655.9 188h0.5v34h-0.5zM656.2 188h0.5v34h-0.5zM656.6 188h0.5v34h-0.5zM657.0 188h0.5v34h-0.5zM657.3 188h0.5v34h-0.5zM657.7 188h0.5v34h-0.5zM658.0 188h0.5v34h-0.5zM658.4 188h0.5v34h-0.5zM658.7 188h0.5v34h-0.5zM659.1 188h0.5v34h-0.5zM659.5 188h0.5v34h-0.5zM659.8 188h0.5v34h-0.5zM660.2 188h0.5v34h-0.5zM660.6 188h0.5v34h-0.5zM661.0 188h0.5v34h-0.5zM661.3 188h0.5v34h-0.5zM661.6 188h0.5v34h-0.5zM662.0 188h0.5v34h-0.5zM662.4 188h0.5v34h-0.5zM662.7 188h0.5v34h-0.5zM663.1 188h0.5v34h-0.5zM663.5 188h0.5v34h-0.5zM663.8 188h0.5v34h-0.5zM664.2 188h0.5v34h-0.5zM664.6 188h0.5v34h-0.5zM664.9 188h0.5v34h-0.5zM665.3 188h0.5v34h-0.5zM665.6 188h0.5v34h-0.5zM666.0 188h0.5v34h-0.5zM666.3 188h0.5v34h-0.5zM666.7 188h0.5v34h-0.5zM667.1 188h0.5v34h-0.5zM667.5 188h0.5v34h-0.5zM667.8 188h0.5v34h-0.5zM668.2 188h0.5v34h-0.5zM668.6 188h0.5v34h-0.5zM668.9 188h0.5v34h-0.5zM669.2 188h0.5v34h-0.5zM669.6 188h0.5v34h-0.5zM670.0 188h0.5v34h-0.5zM670.3 188h0.5v34h-0.5zM670.7 188h0.5v34h-0.5zM671.1 188h0.5v34h-0.5zM671.4 188h0.5v34h-0.5zM671.8 188h0.5v34h-0.5zM672.2 188h0.5v34h-0.5zM672.6 188h0.5v34h-0.5zM672.9 188h0.5v34h-0.5zM673.2 188h0.5v34h-0.5zM673.6 188h0.5v34h-0.5zM674.0 188h0.5v34h-0.5zM674.3 188h0.5v34h-0.5zM674.7 188h0.5v34h-0.5zM675.1 188h0.5v34h-0.5zM675.4 188h0.5v34h-0.5zM675.8 188h0.5v34h-0.5zM676.2 188h0.5v34h-0.5zM676.6 188h0.5v34h-0.5zM676.8 188h0.5v34h-0.5zM677.2 188h0.5v34h-0.5zM677.6 188h0.5v34h-0.5zM677.9 188h0.5v34h-0.5zM678.3 188h0.5v34h-0.5zM678.7 188h0.5v34h-0.5zM679.1 188h0.5v34h-0.5zM679.4 188h0.5v34h-0.5zM679.8 188h0.5v34h-0.5zM680.2 188h0.5v34h-0.5zM680.5 188h0.5v34h-0.5zM680.8 188h0.5v34h-0.5zM681.2 188h0.5v34h-0.5zM681.6 188h0.5v34h-0.5zM681.9 188h0.5v34h-0.5zM682.3 188h0.5v34h-0.5zM682.7 188h0.5v34h-0.5zM683.1 188h0.5v34h-0.5zM683.4 188h0.5v34h-0.5zM683.8 188h0.5v34h-0.5zM684.2 188h0.5v34h-0.5zM684.4 188h0.5v34h-0.5zM684.8 188h0.5v34h-0.5zM685.2 188h0.5v34h-0.5zM685.6 188h0.5v34h-0.5zM685.9 188h0.5v34h-0.5zM686.3 188h0.5v34h-0.5zM686.7 188h0.5v34h-0.5zM687.0 188h0.5v34h-0.5zM687.4 188h0.5v34h-0.5zM687.8 188h0.5v34h-0.5zM688.1 188h0.5v34h-0.5zM688.4 188h0.5v34h-0.5zM688.8 188h0.5v34h-0.5zM689.2 188h0.5v34h-0.5zM689.6 188h0.5v34h-0.5zM689.9 188h0.5v34h-0.5zM690.3 188h0.5v34h-0.5zM690.7 188h0.5v34h-0.5zM691.0 188h0.5v34h-0.5zM691.4 188h0.5v34h-0.5zM691.8 188h0.5v34h-0.5zM692.1 188h0.5v34h-0.5zM692.4 188h0.5v34h-0.5zM692.8 188h0.5v34h-0.5zM693.2 188h0.5v34h-0.5zM693.5 188h0.5v34h-0.5zM693.9 188h0.5v34h-0.5zM694.3 188h0.5v34h-0.5zM694.7 188h0.5v34h-0.5zM695.0 188h0.5v34h-0.5zM695.4 188h0.5v34h-0.5zM695.7 188h0.5v34h-0.5zM696.1 188h0.5v34h-0.5zM696.4 188h0.5v34h-0.5zM696.8 188h0.5v34h-0.5zM697.2 188h0.5v34h-0.5zM697.5 188h0.5v34h-0.5zM697.9 188h0.5v34h-0.5zM698.3 188h0.5v34h-0.5zM698.7 188h0.5v34h-0.5zM699.0 188h0.5v34h-0.5zM699.4 188h0.5v34h-0.5zM699.7 188h0.5v34h-0.5zM700.0 188h0.5v34h-0.5zM700.4 188h0.5v34h-0.5zM700.8 188h0.5v34h-0.5zM701.2 188h0.5v34h-0.5zM701.5 188h0.5v34h-0.5zM701.9 188h0.5v34h-0.5zM702.3 188h0.5v34h-0.5zM702.6 188h0.5v34h-0.5zM703.0 188h0.5v34h-0.5zM703.3 188h0.5v34h-0.5zM703.7 188h0.5v34h-0.5zM704.0 188h0.5v34h-0.5zM704.4 188h0.5v34h-0.5zM704.8 188h0.5v34h-0.5zM705.2 188h0.5v34h-0.5zM705.5 188h0.5v34h-0.5zM705.9 188h0.5v34h-0.5zM706.3 188h0.5v34h-0.5zM706.6 188h0.5v34h-0.5zM707.0 188h0.5v34h-0.5zM707.3 188h0.5v34h-0.5zM707.7 188h0.5v34h-0.5zM708.0 188h0.5v34h-0.5zM708.4 188h0.5v34h-0.5zM708.8 188h0.5v34h-0.5zM709.1 188h0.5v34h-0.5zM709.5 188h0.5v34h-0.5zM709.9 188h0.5v34h-0.5zM710.3 188h0.5v34h-0.5zM710.6 188h0.5v34h-0.5zM710.9 188h0.5v34h-0.5zM711.3 188h0.5v34h-0.5zM711.7 188h0.5v34h-0.5zM712.0 188h0.5v34h-0.5zM712.4 188h0.5v34h-0.5zM712.8 188h0.5v34h-0.5zM713.1 188h0.5v34h-0.5zM713.5 188h0.5v34h-0.5zM713.9 188h0.5v34h-0.5zM714.3 188h0.5v34h-0.5zM714.5 188h0.5v34h-0.5zM714.9 188h0.5v34h-0.5zM715.3 188h0.5v34h-0.5zM715.6 188h0.5v34h-0.5zM716.0 188h0.5v34h-0.5zM716.4 188h0.5v34h-0.5zM716.8 188h0.5v34h-0.5zM717.1 188h0.5v34h-0.5zM717.5 188h0.5v34h-0.5zM717.9 188h0.5v34h-0.5zM718.2 188h0.5v34h-0.5zM718.5 188h0.5v34h-0.5zM718.9 188h0.5v34h-0.5zM719.3 188h0.5v34h-0.5zM719.6 188h0.5v34h-0.5zM720.0 188h0.5v34h-0.5zM720.4 188h0.5v34h-0.5zM720.8 188h0.5v34h-0.5zM721.1 188h0.5v34h-0.5zM721.5 188h0.5v34h-0.5zM721.9 188h0.5v34h-0.5zM722.1 188h0.5v34h-0.5zM722.5 188h0.5v34h-0.5zM722.9 188h0.5v34h-0.5zM723.3 188h0.5v34h-0.5zM723.6 188h0.5v34h-0.5zM724.0 188h0.5v34h-0.5zM724.4 188h0.5v34h-0.5zM724.7 188h0.5v34h-0.5zM725.1 188h0.5v34h-0.5zM725.5 188h0.5v34h-0.5zM725.9 188h0.5v34h-0.5zM726.1 188h0.5v34h-0.5zM726.5 188h0.5v34h-0.5zM726.9 188h0.5v34h-0.5zM727.3 188h0.5v34h-0.5zM727.6 188h0.5v34h-0.5zM728.0 188h0.5v34h-0.5zM728.4 188h0.5v34h-0.5zM728.7 188h0.5v34h-0.5zM729.1 188h0.5v34h-0.5zM729.5 188h0.5v34h-0.5zM729.8 188h0.5v34h-0.5zM730.1 188h0.5v34h-0.5zM730.5 188h0.5v34h-0.5zM730.9 188h0.5v34h-0.5zM731.2 188h0.5v34h-0.5zM731.6 188h0.5v34h-0.5zM732.0 188h0.5v34h-0.5zM732.4 188h0.5v34h-0.5zM732.7 188h0.5v34h-0.5zM733.1 188h0.5v34h-0.5zM733.5 188h6.5v34h-6.5z"/>
+          <rect x="74.7" y="188" width="475.7" height="34" class="f-sig"/>
+          <text class="sm" x="313" y="209" text-anchor="middle" style="fill:var(--paper)">26,946,179 files — 68.0%</text>
+          <text class="sm" x="738" y="240" text-anchor="end">↑ the other 512 guesses, together 32%</text>
+        
+          <line x1="40" y1="262" x2="740" y2="262" class="s-rule"/>
+          <text class="sm" x="40" y="282">1,281× the median guess · 510 of the 513 came in under the prior · none came back empty</text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Plate 1</b> The uniform prior against the measured key mass of
+        <span class="mono">s3://noaa-gestofs-pds</span>. Widths in the lower strip are object
+        counts, not byte distances. 510 of the 513 guesses came in <em>under</em> the prior;
+        one came in at 349× it. This is the shape every design decision in the rest of this
+        page is answering.
+      </figcaption>
+      <p class="src">
+        Drawn from the run's own event trace via
+        <span class="mono">tools/explainer</span> — not hand-placed.
+        <a href="#run">See the measured run below ↓</a>
+      </p>
+    </figure>
+
+    <div class="note">
+      <span class="lbl">Why this is the whole problem</span>
+      <p>
+        A partitioner that trusts the prior parks two thirds of the bucket behind a single
+        worker's ranges while the rest of the fleet runs dry, and the run takes as long as
+        that one worker takes.
+        Nothing about the guess can be improved by guessing harder — the information does not
+        exist until keys come back. So swath does not try to guess well. It guesses cheaply,
+        then <strong>corrects continuously while listing</strong>, which is what the rest of
+        this page is about.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="how">
+    <div class="sec-head">
+      <span class="eyebrow">Plate&nbsp;2 · model</span>
+      <h2>Watch a miniature model of the mechanism</h2>
+    </div>
+    <div class="col">
+      <div class="note">
+        <span class="lbl">This one is a drawing, not a measurement</span>
+        <p>
+          Everything in this plate is a <strong>deliberately simplified model</strong>: an
+          illustrative lumpy key distribution, 12 workers rather than 128, and a flat
+          directory placed at the end so the serial floor is certain to appear. It runs the
+          same <em>sequence of decisions</em> the engine makes, at a speed and scale you can
+          watch. Its counters are not measurements of anything.
+          For measured behaviour, Plate 1 above and
+          <a href="#run">the recorded 39.7-million-file run</a> below are the real thing.
+        </p>
+      </div>
+      <p>
+        The grey profile is <em class="term">mass</em> — where the keys sit in the keyspace.
+        Real buckets are wildly lumpy like this, as Plate 1 just showed, and the engine
+        cannot see the profile; it only ever learns it by listing.
+      </p>
+      <p>
+        Each colored band is one <em class="term">range</em> owned by one worker. The filled
+        part is what that worker has already listed. Watch for the ochre marks: those are
+        <em class="term">splits</em> — the moment an idle worker carves a busy one in half
+        and takes the upper piece.
+      </p>
+    </div>
+
+    <div class="sim">
+      <div class="sim-bar">
+        <span class="phase" id="phase" data-p="seed">Seeding</span>
+        <span class="sim-note" id="note">One delimiter=/ probe asks S3 where the directories are.</span>
+        <button id="toggle" type="button">Pause</button>
+        <button id="replay" type="button">Replay</button>
+      </div>
+      <canvas id="strip" role="img"
+        aria-label="Animated keyspace strip: a lumpy key-density profile is tiled into adjacent colored ranges, each drained by one worker; idle workers split busy ranges at ochre pivot marks, and the run ends with one dense flat directory draining alone."></canvas>
+      <dl class="readout">
+        <div><dt>Keys listed</dt><dd id="m-keys">0</dd></div>
+        <div><dt>LIST requests</dt><dd id="m-reqs">0</dd></div>
+        <div><dt>Live ranges</dt><dd id="m-ranges">0</dd></div>
+        <div><dt>Busy workers</dt><dd id="m-busy">0 / 12</dd></div>
+        <div><dt>Splits committed</dt><dd id="m-splits">0</dd></div>
+      </dl>
+    </div>
+    <p class="col" style="margin-top:1.2rem; color:var(--ink-2); font-size:0.94rem;">
+      Two things worth catching before you read on. Early, a worker in a sparse
+      region rips across a huge slice of the keyspace while a worker in a dense one
+      barely moves — <em class="term">progress in keyspace is not progress in keys</em>. Late,
+      one band goes red and everything else finishes around it: that is a single flat
+      directory with no internal structure to split on, and it is the one shape swath
+      genuinely cannot parallelize.
+    </p>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="constraint">
+    <div class="sec-head">
+      <span class="eyebrow">§1</span>
+      <h2>The constraint everything follows from</h2>
+    </div>
+    <div class="col">
+      <p>
+        S3's <code>ListObjectsV2</code> gives you one page — up to 1000 keys, in sorted
+        byte order — plus a way to ask for the next one. You can start anywhere by
+        sending <code>start-after=&lt;token&gt;</code>, and the token need not be a key that
+        exists. So <em class="term">splitting the keyspace is free.</em>
+      </p>
+      <p>
+        What no request will tell you is how many keys sit between two tokens. There is
+        no <span class="mono">count(prefix)</span> and no "give me keys 50,000–51,000".
+        The only way to find out how much work a range holds is to list it — which is
+        the work. That is the whole problem, and it is why parallel listing is a
+        <em class="term">guessing problem</em> rather than a partitioning one.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 200" role="img" aria-label="A keyspace line: pagination advances 1000 keys per request from a start-after token; picking any two arbitrary tokens A and B is free, but the number of keys between them is unknown until listed.">
+          <!-- top: sequential pagination -->
+          <text class="hd" x="0" y="14">Sequential pagination — what S3 actually gives you</text>
+          <line class="s-rule" x1="0" y1="46" x2="466" y2="46" stroke-width="1"/>
+          <g class="f-acc">
+            <rect x="0" y="34" width="150" height="24" rx="1" opacity="0.16"/>
+            <rect x="152" y="34" width="150" height="24" rx="1" opacity="0.16"/>
+            <rect x="304" y="34" width="150" height="24" rx="1" opacity="0.16"/>
+          </g>
+          <g class="s-acc" fill="none" stroke-width="1.4">
+            <rect x="0" y="34" width="150" height="24" rx="1"/>
+            <rect x="152" y="34" width="150" height="24" rx="1"/>
+            <rect x="304" y="34" width="150" height="24" rx="1"/>
+          </g>
+          <text class="sm" x="75" y="49" text-anchor="middle">1000 keys</text>
+          <text class="sm" x="227" y="49" text-anchor="middle">1000 keys</text>
+          <text class="sm" x="379" y="49" text-anchor="middle">1000 keys</text>
+          <text class="sm" x="470" y="49">…one round trip each…</text>
+          <g class="s-ink" stroke-width="1.2" marker-end="url(#ar)">
+            <line x1="150" y1="72" x2="150" y2="72"/>
+          </g>
+          <defs>
+            <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/>
+            </marker>
+            <marker id="ar-sig" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 z" fill="var(--signal)"/>
+            </marker>
+            <marker id="ar-acc" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 z" fill="var(--accent)"/>
+            </marker>
+            <marker id="ar-al" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 z" fill="var(--alert)"/>
+            </marker>
+          </defs>
+          <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
+            <path d="M148 62 q4 14 -70 14"/>
+            <path d="M300 62 q4 14 -70 14"/>
+          </g>
+          <text class="sm" x="78" y="88" text-anchor="middle">start-after = last key</text>
+          <text class="sm" x="230" y="88" text-anchor="middle">start-after = last key</text>
+
+          <!-- bottom: the unknown -->
+          <text class="hd" x="0" y="130">Arbitrary split points — free to name, impossible to price</text>
+          <line class="s-ink" x1="0" y1="162" x2="760" y2="162" stroke-width="1.4"/>
+          <g class="s-sig" stroke-width="1.6">
+            <line x1="180" y1="150" x2="180" y2="174"/>
+            <line x1="560" y1="150" x2="560" y2="174"/>
+          </g>
+          <text class="f-sig" x="180" y="145" text-anchor="middle">A</text>
+          <text class="f-sig" x="560" y="145" text-anchor="middle">B</text>
+          <g class="s-sig" fill="none" stroke-width="1.2" marker-end="url(#ar-sig)" marker-start="url(#ar-sig)">
+            <line x1="188" y1="192" x2="552" y2="192"/>
+          </g>
+          <text class="f-sig" x="370" y="185" text-anchor="middle">how many keys in here? nothing will tell you</text>
+          <text class="sm" x="0" y="152">⊥</text>
+          <text class="sm" x="752" y="152" text-anchor="end">⊤</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 3</b> Pagination is sequential and cheap to follow; boundaries are free to invent and impossible to price. Every mechanism in swath exists to price a range without paying for the listing first.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="range">
+    <div class="sec-head">
+      <span class="eyebrow">§2</span>
+      <h2>The range, and the one-key mistake</h2>
+    </div>
+    <div class="col">
+      <p>
+        Everything in the engine is expressed as a half-open range
+        <code>(A, B]</code>. Send <code>start-after = A</code> (S3 returns keys strictly
+        greater), emit each returned key while <span class="mono">k ≤ B</span>, and stop
+        at the first key past <span class="mono">B</span> without emitting it.
+        <span class="mono">B = null</span> means the open frontier — the rightmost range,
+        with no upper bound.
+      </p>
+      <p>
+        Which side owns the boundary key is the most load-bearing convention in the
+        system. swath's rule: <em class="term">the boundary belongs to the left</em>.
+        Get it wrong in either direction and every single split silently corrupts the
+        output — one key lost, or one key duplicated, per split, across thousands of
+        splits.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 250" role="img" aria-label="Three splittings of the same key sequence at boundary B: exclusive on both sides drops B, inclusive on both sides emits B twice, and swath's half-open convention emits B exactly once.">
+          <g class="f-dim">
+            <text class="sm" x="0" y="16">the same five keys, split at B</text>
+          </g>
+          <!-- key ticks reference -->
+          <g>
+            <g class="s-rule" stroke-width="1">
+              <line x1="120" y1="34" x2="700" y2="34"/>
+            </g>
+            <g class="f-dim">
+              <text class="sm" x="180" y="30" text-anchor="middle">k1</text>
+              <text class="sm" x="290" y="30" text-anchor="middle">k2</text>
+              <text class="sm" x="400" y="30" text-anchor="middle">B</text>
+              <text class="sm" x="510" y="30" text-anchor="middle">k4</text>
+              <text class="sm" x="620" y="30" text-anchor="middle">k5</text>
+            </g>
+          </g>
+
+          <!-- row builder: y positions -->
+          <!-- ROW 1 — wrong: exclusive both sides -->
+          <text class="hd f-alert" x="0" y="72">gap</text>
+          <text class="sm" x="0" y="88">both exclusive</text>
+          <g class="s-alert" fill="none" stroke-width="1.5">
+            <rect x="130" y="58" width="264" height="26" rx="1"/>
+            <rect x="406" y="58" width="288" height="26" rx="1"/>
+          </g>
+          <g class="f-alert">
+            <circle cx="180" cy="71" r="3"/><circle cx="290" cy="71" r="3"/>
+            <circle cx="510" cy="71" r="3"/><circle cx="620" cy="71" r="3"/>
+          </g>
+          <g class="s-alert" stroke-width="1.6">
+            <line x1="394" y1="64" x2="406" y2="78"/><line x1="406" y1="64" x2="394" y2="78"/>
+          </g>
+          <text class="sm f-alert" x="400" y="100" text-anchor="middle">B emitted by nobody</text>
+
+          <!-- ROW 2 — wrong: inclusive both sides -->
+          <text class="hd f-alert" x="0" y="146">overlap</text>
+          <text class="sm" x="0" y="162">both inclusive</text>
+          <g class="s-alert" fill="none" stroke-width="1.5">
+            <rect x="130" y="132" width="282" height="26" rx="1"/>
+            <rect x="388" y="132" width="306" height="26" rx="1"/>
+          </g>
+          <g class="f-alert">
+            <circle cx="180" cy="145" r="3"/><circle cx="290" cy="145" r="3"/>
+            <circle cx="396" cy="145" r="3"/><circle cx="404" cy="145" r="3"/>
+            <circle cx="510" cy="145" r="3"/><circle cx="620" cy="145" r="3"/>
+          </g>
+          <text class="sm f-alert" x="400" y="174" text-anchor="middle">B emitted twice</text>
+
+          <!-- ROW 3 — swath -->
+          <text class="hd f-acc" x="0" y="220">swath</text>
+          <text class="sm" x="0" y="236">(A, B] · left wins</text>
+          <g class="s-acc" fill="none" stroke-width="1.7">
+            <rect x="130" y="206" width="276" height="26" rx="1"/>
+            <rect x="406" y="206" width="288" height="26" rx="1"/>
+          </g>
+          <g class="f-acc">
+            <circle cx="180" cy="219" r="3"/><circle cx="290" cy="219" r="3"/>
+            <circle cx="396" cy="219" r="4"/>
+            <circle cx="510" cy="219" r="3"/><circle cx="620" cy="219" r="3"/>
+          </g>
+          <text class="sm f-acc" x="268" y="248" text-anchor="middle">emits k ≤ B</text>
+          <text class="sm f-acc" x="550" y="248" text-anchor="middle">start-after = B, so emits k &gt; B</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 4</b> Invariant I3. The left range emits the boundary key; the right range uses it as its exclusive <span class="mono">start-after</span>. Together with I2 — the live ranges always tile the whole keyspace — this is what makes concurrent workers safe to run without a dedup pass.</figcaption>
+    </figure>
+
+    <div class="note">
+      <span class="lbl">Order by the bytes, not by the string</span>
+      <p>
+        S3 keys are Unicode text, but S3 <em>orders</em> them by their unsigned UTF-8 byte
+        representation. Java's <code>String.compareTo</code> orders by UTF-16, and the two
+        disagree for supplementary code points (≥ U+10000), where surrogate pairs reorder.
+        So keys travel through the whole engine as <code>KeyBytes</code> — the UTF-8 bytes
+        plus an unsigned comparator — and are decoded to text only at the very edge, for
+        text output and filters. Comparing boundaries with
+        <span class="mono">String.compareTo</span> would be a silent correctness bug, not a
+        style issue: two ranges that look adjacent in UTF-16 can overlap or leave a gap in
+        the order S3 actually paginates.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="split">
+    <div class="sec-head">
+      <span class="eyebrow">§3</span>
+      <h2>Two ways to split, neither enough alone</h2>
+    </div>
+    <div class="col">
+      <p>
+        Given a range, where do you cut it? swath has two independent answers, and the
+        interesting part is that each one fails exactly where the other works.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 300" role="img" aria-label="Left: on a clustered bucket, the byte midpoint lands in empty keyspace above all the keys, producing slivers. Right: one delimiter probe returns real populated directory boundaries that split the work evenly.">
+          <!-- LEFT PANEL -->
+          <text class="hd" x="0" y="14">Byte midpoint — dynamic, but blind</text>
+          <text class="sm" x="0" y="30">split at the arithmetic middle of the byte range</text>
+
+          <!-- clustered mass -->
+          <line class="s-ink" x1="0" y1="96" x2="350" y2="96" stroke-width="1.2"/>
+          <g class="f-acc" opacity="0.75">
+            <rect x="6" y="70" width="4" height="26"/><rect x="13" y="62" width="4" height="34"/>
+            <rect x="20" y="55" width="4" height="41"/><rect x="27" y="66" width="4" height="30"/>
+            <rect x="34" y="58" width="4" height="38"/><rect x="41" y="72" width="4" height="24"/>
+            <rect x="48" y="64" width="4" height="32"/><rect x="55" y="78" width="4" height="18"/>
+          </g>
+          <text class="sm" x="32" y="112" text-anchor="middle">all keys</text>
+          <text class="sm" x="262" y="74" text-anchor="middle">empty byte-space</text>
+          <g class="s-alert" stroke-width="1.8">
+            <line x1="175" y1="84" x2="175" y2="108"/>
+          </g>
+          <text class="sm f-alert" x="175" y="124" text-anchor="middle">midpoint lands here</text>
+          <g class="s-alert" fill="none" stroke-width="1.3" marker-end="url(#ar-al)">
+            <path d="M170 132 q-60 22 -105 6"/>
+          </g>
+          <text class="sm f-alert" x="86" y="158" text-anchor="middle">retry toward the cursor →</text>
+          <text class="sm f-alert" x="86" y="172" text-anchor="middle">thin slivers, not halves</text>
+          <text class="sm" x="0" y="196">Works beautifully on hashes and uuids, where mass</text>
+          <text class="sm" x="0" y="210">is spread across the byte space. Collapses to near-</text>
+          <text class="sm" x="0" y="224">serial on a deep tree that shares one long prefix.</text>
+
+          <!-- divider -->
+          <line class="s-rule" x1="380" y1="0" x2="380" y2="290" stroke-width="1"/>
+
+          <!-- RIGHT PANEL -->
+          <text class="hd" x="410" y="14">delimiter=/ probe — structural, one call</text>
+          <text class="sm" x="410" y="30">ask S3 where the directories are</text>
+
+          <line class="s-ink" x1="410" y1="96" x2="760" y2="96" stroke-width="1.2"/>
+          <g class="f-acc" opacity="0.75">
+            <rect x="416" y="70" width="4" height="26"/><rect x="423" y="62" width="4" height="34"/>
+            <rect x="430" y="55" width="4" height="41"/><rect x="437" y="66" width="4" height="30"/>
+            <rect x="444" y="58" width="4" height="38"/><rect x="451" y="72" width="4" height="24"/>
+            <rect x="458" y="64" width="4" height="32"/><rect x="465" y="78" width="4" height="18"/>
+          </g>
+          <g class="s-acc" stroke-width="1.8">
+            <line x1="424" y1="86" x2="424" y2="108"/>
+            <line x1="440" y1="86" x2="440" y2="108"/>
+            <line x1="456" y1="86" x2="456" y2="108"/>
+          </g>
+          <text class="sm f-acc" x="440" y="124" text-anchor="middle">real, populated boundaries</text>
+          <g class="f-dim">
+            <text class="sm" x="410" y="150">CommonPrefixes:</text>
+            <text class="sm" x="410" y="166">  logs/2024/</text>
+            <text class="sm" x="410" y="180">  logs/2025/</text>
+            <text class="sm" x="410" y="194">  logs/2026/</text>
+          </g>
+          <text class="sm" x="410" y="220">One request returns the bucket's own layout, so the</text>
+          <text class="sm" x="410" y="234">cuts sit where the keys actually are — but it is a</text>
+          <text class="sm" x="410" y="248">one-shot probe, and cannot rebalance as the run goes.</text>
+
+          <!-- bottom bar -->
+          <line class="s-rule" x1="0" y1="268" x2="760" y2="268" stroke-width="1"/>
+          <text class="hd f-sig" x="0" y="288">swath does both: seed structurally up front, steal dynamically for the rest of the run.</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 5</b> Seeding alone cannot rebalance; stealing alone is blind to where the mass is. The hybrid is the engine: one bounded <span class="mono">delimiter=/</span> descent before any worker starts, then demand-driven stealing forever after.</figcaption>
+    </figure>
+
+    <div class="col">
+      <h3>The seed, in one paragraph</h3>
+      <p>
+        Before a single worker claims work, <code>SeedStep</code> issues a shallow
+        <code>delimiter=/</code> pass at the listing prefix. S3 returns the top-level
+        common prefixes <span class="mono">p1 &lt; p2 &lt; … &lt; pk</span>, which become
+        cut-points: <span class="mono">(⊥, p1], (p1, p2], …, (pk, null]</span>. The cut
+        count is capped at <span class="mono">min(1000, 4×workers)</span> and evenly
+        subsampled, so seeding is proportional to the parallelism you actually have.
+        The descent adaptively goes one level deeper only where a sub-level is narrow
+        and complete, and the whole thing is bounded by a probe wallet — a directory
+        explosion can spend the wallet, never blow it. All the seed nodes are inserted
+        in one atomic transaction, so the very first durable state is already a valid
+        tiling of the keyspace.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="steal">
+    <div class="sec-head">
+      <span class="eyebrow">§4</span>
+      <h2>The steal — and its ladder of evidence</h2>
+    </div>
+    <div class="col">
+      <p>
+        A worker with no pending range to claim, while others are still busy, becomes a
+        <em class="term">thief</em>. It picks the victim with the largest estimated remaining
+        work — an estimate anchored to what that victim has already listed and how fast it is
+        draining, with the open-frontier worker scoring infinite until it gets a finite bound —
+        and tries to cut it in half.
+      </p>
+      <p>
+        The pivot is never a bare midpoint. It is placed from what the run has already
+        observed: for a bounded range, an interpolation inside
+        <span class="mono">(cursor, hi]</span> using the alphabet actually seen in
+        returned keys; for the open frontier, a forward reflection of the density
+        already drained. Then exactly <em class="term">one probe</em> — a
+        <span class="mono">max_keys=1</span> request — tests whether the upper half has
+        any keys at all. Only when that probe comes back empty does the thief spend more.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 236" role="img" aria-label="The steal in five steps: estimate where half the remaining work is, ask S3 for one key past that boundary, split there if the key exists, otherwise climb to stronger evidence, and revalidate against the still-moving owner before committing.">
+          <g class="s-rule" stroke-width="1"><line x1="26" y1="24" x2="26" y2="176"/></g>
+
+          <g class="f-acc"><circle cx="26" cy="24" r="5"/><circle cx="26" cy="62" r="5"/><circle cx="26" cy="100" r="5"/></g>
+          <circle cx="26" cy="138" r="5" class="f-sig"/>
+          <circle cx="26" cy="176" r="5" class="f-ink"/>
+
+          <text class="hd" x="48" y="28">Estimate where half the remaining work is</text>
+          <text class="sm" x="560" y="28">from mass already seen · 0 requests</text>
+
+          <text class="hd" x="48" y="66">Ask S3 for one key past that boundary</text>
+          <text class="sm" x="560" y="66">max_keys=1 · 1 request</text>
+
+          <text class="hd" x="48" y="104">If a key comes back, split there</text>
+          <text class="sm" x="560" y="104">the common case · done</text>
+
+          <text class="hd f-sig" x="48" y="142">If nothing does, climb to harder evidence</text>
+          <text class="sm" x="560" y="142">directory structure, observed density</text>
+
+          <text class="hd" x="48" y="180">Re-validate against the moving owner, then commit</text>
+          <text class="sm" x="560" y="180">one guarded transaction</text>
+
+          <line x1="0" y1="204" x2="760" y2="204" class="s-rule"/>
+          <text class="sm" x="0" y="224">The cheapest question first, and every rung after it fires only on evidence that the last one failed.</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 6</b> A steal, at the level you need to follow the argument. The thief picks the victim with the largest estimated remaining work, places a pivot from observed mass, and spends exactly one request to find out whether it guessed somewhere real.</figcaption>
+      <p class="src">Source: <span class="mono">docs/internals/algorithms.md</span> · invariants I2–I4 in <span class="mono">contracts.md</span></p>
+    </figure>
+
+    <div class="col">
+      <p>
+        There is a fourth trigger worth knowing about, because it inverts the usual
+        direction: <em class="term">owner-side split</em>. On a dense, fast-draining
+        range, even a valid pivot can be overrun before the split commits — the drainer
+        advances a full page per round trip and passes the pivot. So the range's own
+        owner places a pivot far ahead of its cursor and commits the split at page-commit
+        time, gated to fire only while live work has fallen below the worker count. The
+        mechanism is global; the trigger is local and demand-driven. That distinction is
+        one of the project's two stated design laws.
+      </p>
+    </div>
+
+    <details class="dive">
+      <summary>Show the complete pivot decision ladder <span class="hint">— every rung, and why the split cannot race</span></summary>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 424" role="img" aria-label="The pivot cascade: place a density-conditioned pivot, probe once; on a hit, commit. On an empty upper half step back, then structure probe, then density reflection, then a budgeted bisection; on a cursor-adjacent sliver, back out through coarser directory levels then a flat-leaf density pivot. Every path ends at a CAS-guarded split transaction taken under the victim's lock.">
+          <!-- step 1 -->
+          <rect class="f-acc" x="0" y="16" width="300" height="38" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.5"><rect x="0" y="16" width="300" height="38" rx="2"/></g>
+          <text class="hd" x="150" y="40" text-anchor="middle">place pivot m from observed mass</text>
+          <text class="sm" x="320" y="31">interpolate(cursor, hi, f), synthesized</text>
+          <text class="sm" x="320" y="45">against the alphabet seen in real keys</text>
+          <text class="sm f-acc" x="700" y="38" text-anchor="end">0 requests</text>
+
+          <line class="s-ink" x1="150" y1="54" x2="150" y2="74" stroke-width="1.2" marker-end="url(#ar)"/>
+
+          <!-- step 2 -->
+          <rect class="f-acc" x="0" y="76" width="300" height="38" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.5"><rect x="0" y="76" width="300" height="38" rx="2"/></g>
+          <text class="hd" x="150" y="100" text-anchor="middle">probe (m, hi] — one key</text>
+          <text class="sm" x="320" y="91">does the upper half hold any key at all?</text>
+          <text class="sm" x="320" y="105">most steals end right here</text>
+          <text class="sm f-acc" x="700" y="79" text-anchor="end">1 request</text>
+
+          <!-- HIT rail: out the right, down the far side, into commit -->
+          <g class="s-acc" fill="none" stroke-width="1.5" marker-end="url(#ar-acc)">
+            <path d="M300 95 L730 95 L730 378 L648 378"/>
+          </g>
+          <text class="hd f-acc" x="724" y="120" text-anchor="end">hit</text>
+
+          <!-- MISS branch down to the ladders -->
+          <line class="s-sig" x1="150" y1="114" x2="150" y2="146" stroke-width="1.5" marker-end="url(#ar-sig)"/>
+          <text class="hd f-sig" x="162" y="136">empty</text>
+
+          <text class="sm" x="0" y="166">the two ways a pivot goes wrong — each spends its own ladder, one request per rung</text>
+
+          <!-- LEFT LADDER -->
+          <rect class="f-sig" x="0" y="176" width="330" height="136" rx="2" opacity="0.07"/>
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="0" y="176" width="330" height="136" rx="2"/></g>
+          <text class="hd f-sig" x="14" y="196">EMPTY UPPER</text>
+          <text class="sm" x="14" y="211">the pivot aimed above all the keys</text>
+          <g class="f-dim">
+            <text class="sm" x="14" y="235">1 · step back to the plain midpoint</text>
+            <text class="sm" x="14" y="253">2 · delimiter=/ structure probe, take the</text>
+            <text class="sm" x="26" y="267">median boundary, when the page came back complete</text>
+            <text class="sm" x="14" y="285">3 · reflect the drained density forward</text>
+            <text class="sm" x="14" y="303">4 · bisect back toward the cursor</text>
+          </g>
+
+          <!-- RIGHT LADDER -->
+          <rect class="f-sig" x="360" y="176" width="330" height="136" rx="2" opacity="0.07"/>
+          <g class="s-sig" fill="none" stroke-width="1.4"><rect x="360" y="176" width="330" height="136" rx="2"/></g>
+          <text class="hd f-sig" x="374" y="196">CURSOR-ADJACENT SLIVER</text>
+          <text class="sm" x="374" y="211">the child would inherit the whole tail</text>
+          <g class="f-dim">
+            <text class="sm" x="374" y="235">1 · back out coarse→fine through the</text>
+            <text class="sm" x="386" y="249">directory levels, at most 4 probes</text>
+            <text class="sm" x="374" y="267">2 · flat-leaf density pivot</text>
+            <text class="sm" x="374" y="285">3 · else commit the byte-exact sliver —</text>
+            <text class="sm" x="386" y="299">thin, but it still tiles</text>
+          </g>
+
+          <!-- ladders → commit -->
+          <g class="s-sig" fill="none" stroke-width="1.4" marker-end="url(#ar-sig)">
+            <path d="M165 312 L165 332 L300 332 L300 348"/>
+            <path d="M525 312 L525 332 L400 332 L400 348"/>
+          </g>
+
+          <!-- commit -->
+          <rect class="f-panel" x="60" y="348" width="588" height="60" rx="2"/>
+          <g class="s-ink" fill="none" stroke-width="1.8"><rect x="60" y="348" width="588" height="60" rx="2"/></g>
+          <text class="hd" x="354" y="367" text-anchor="middle">under victim.lock — re-validate, then the split transaction</text>
+          <text class="sm" x="354" y="383" text-anchor="middle">victim.hi := m · insert the child (m, oldHi]</text>
+          <text class="sm" x="354" y="399" text-anchor="middle">guarded on (cursor IS NULL OR cursor &lt; m) AND range_end IS oldHi AND status ≠ COMPLETED</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 6a</b> Every rung below the first probe fires only on real evidence, and each costs at most one more request. A pivot that is genuinely unsplittable — no safe key strictly between the bounds — is cached as such so later steals don't re-probe a dead range.</figcaption>
+    </figure>
+
+    <div class="col">
+      <h3>Why the split can't race</h3>
+      <p>
+        The victim is still listing while the thief is probing, so the thief's snapshot
+        of <span class="mono">(cursor, hi)</span> is speculative. Three mechanisms make
+        the hand-off safe. The victim re-reads its volatile <span class="mono">hi</span>
+        <em class="term">before every key</em>, so a page fetched under the old, wider
+        bound stops at the new one. At commit time, under the same per-worker lock a
+        thief must take to narrow, the batch is re-trimmed against the current bound —
+        catching the one key that could have slipped through already-batched. And the
+        split itself is a standalone SQL transaction guarded on
+        <span class="mono">(cursor IS NULL OR cursor &lt; pivot) AND range_end IS oldHi AND status ≠ COMPLETED</span>,
+        so a stale second thief simply loses.
+      </p>
+    </div>
+    </details>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="laws">
+    <div class="sec-head">
+      <span class="eyebrow">§5</span>
+      <h2>What the engine learned from real buckets</h2>
+    </div>
+    <div class="col">
+      <p>
+        Two rules govern every mechanism above, and both were arrived at by being wrong
+        first. They are not coding conventions or aesthetics — they are findings about
+        where estimation breaks on real data, and any new mechanism has to be argued
+        against them. Plate 1 is the evidence for the first one.
+      </p>
+    </div>
+    <div class="cards">
+      <div>
+        <dt>L1 · Placement</dt>
+        <dd>
+          Condition estimates on <b>observed mass</b>; a uniform prior is
+          bootstrap-only. Real buckets cluster in a thin sliver of the byte range, so
+          "assume keys are evenly spread, cut in the arithmetic middle" systematically
+          aims pivots into empty space. The evidence ladder, best first: real observed
+          keys → CommonPrefix boundaries → drain-density reflection → uniform
+          interpolation.
+        </dd>
+      </div>
+      <div>
+        <dt>L2 · Triggers</dt>
+        <dd>
+          Mechanisms may be global and shape-blind; their <b>triggers must be local and
+          demand-driven</b>. One shape-agnostic split primitive is fine. A trigger keyed
+          on a run-wide failure or pacing signal punishes the whole run for one bad
+          region and starves the parts that were doing fine — so gate on a per-victim
+          fact or on genuine unmet demand instead.
+        </dd>
+      </div>
+    </div>
+    <div class="note">
+      <span class="lbl">Every new algorithm path must be instrumented</span>
+      <p>
+        swath deliberately does not bake bucket-shape detection into the engine. It
+        emits rich per-path signals instead, so buckets get classified and tuned
+        after the fact. Any new pivot strategy, split trigger, seed mode, backoff, or
+        router branch must emit an engagement counter plus whatever cheap keyspace
+        signal it observed. The test: can post-hoc analysis tell from the metrics alone
+        whether this path fired, and whether it helped?
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="durability">
+    <div class="sec-head">
+      <span class="eyebrow">§6</span>
+      <h2>Commit before emit, and the two cursors</h2>
+    </div>
+    <div class="col">
+      <p>
+        The ordering above is not incidental. A page's checkpoint commits
+        <em class="term">before</em> its rows go downstream. That means the checkpoint
+        can never claim a page that wasn't durably recorded — and it means the reverse
+        window is real: stop the process between the commit and the emit, and you have a
+        page that was committed and never written out.
+      </p>
+      <p>
+        swath does not paper over that. It tracks two cursors per range.
+        <span class="mono">cursor</span> is the last committed key.
+        <span class="mono">durable_cursor</span> is the highest key whose pages all live
+        in <em class="term">finalized</em> Parquet parts — parts whose footer has been
+        fsynced. Resume rewinds to <span class="mono">durable_cursor</span>, discards the
+        unfinalized tail, and re-lists only that bounded stretch.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 220" role="img" aria-label="Timeline of one range: pages commit and advance the cursor continuously, but durable_cursor only jumps when a part file's footer is fsynced. A crash discards the unfinalized tail and resume re-lists from durable_cursor.">
+          <text class="hd" x="0" y="14">one range, over time →</text>
+
+          <!-- pages row -->
+          <text class="sm" x="0" y="46">pages</text>
+          <g class="s-acc" fill="none" stroke-width="1.3">
+            <rect x="70" y="32" width="46" height="20" rx="1"/><rect x="120" y="32" width="46" height="20" rx="1"/>
+            <rect x="170" y="32" width="46" height="20" rx="1"/><rect x="220" y="32" width="46" height="20" rx="1"/>
+            <rect x="270" y="32" width="46" height="20" rx="1"/><rect x="320" y="32" width="46" height="20" rx="1"/>
+            <rect x="370" y="32" width="46" height="20" rx="1"/><rect x="420" y="32" width="46" height="20" rx="1"/>
+            <rect x="470" y="32" width="46" height="20" rx="1"/><rect x="520" y="32" width="46" height="20" rx="1"/>
+          </g>
+          <rect class="f-acc" x="70" y="32" width="446" height="20" rx="1" opacity="0.1"/>
+
+          <!-- cursor line -->
+          <text class="sm" x="0" y="90">cursor</text>
+          <line class="s-acc" x1="70" y1="84" x2="566" y2="84" stroke-width="2"/>
+          <g class="f-acc">
+            <circle cx="116" cy="84" r="2.6"/><circle cx="166" cy="84" r="2.6"/><circle cx="216" cy="84" r="2.6"/>
+            <circle cx="266" cy="84" r="2.6"/><circle cx="316" cy="84" r="2.6"/><circle cx="366" cy="84" r="2.6"/>
+            <circle cx="416" cy="84" r="2.6"/><circle cx="466" cy="84" r="2.6"/><circle cx="516" cy="84" r="2.6"/>
+            <circle cx="566" cy="84" r="4"/>
+          </g>
+          <text class="sm f-acc" x="580" y="88">advances every page</text>
+
+          <!-- durable cursor -->
+          <text class="sm" x="0" y="118">durable_cursor</text>
+          <g class="s-sig" stroke-width="2" fill="none">
+            <path d="M70 128 L266 128 L266 128"/>
+            <path d="M266 128 L466 128"/>
+          </g>
+          <g class="f-sig">
+            <circle cx="266" cy="128" r="4"/><circle cx="466" cy="128" r="4"/>
+          </g>
+          <g class="s-sig" stroke-width="1.2" stroke-dasharray="3 3">
+            <line x1="266" y1="56" x2="266" y2="124"/>
+            <line x1="466" y1="56" x2="466" y2="124"/>
+          </g>
+          <text class="sm f-sig" x="266" y="150" text-anchor="middle">part-00 fsynced</text>
+          <text class="sm f-sig" x="466" y="150" text-anchor="middle">part-01 fsynced</text>
+          <text class="sm f-sig" x="580" y="132">jumps only on finalize</text>
+
+          <!-- crash -->
+          <g class="s-alert" stroke-width="2">
+            <line x1="566" y1="24" x2="566" y2="176"/>
+          </g>
+          <text class="hd f-alert" x="566" y="18" text-anchor="middle">crash / Ctrl+C</text>
+
+          <!-- re-list band -->
+          <rect class="f-alert" x="466" y="164" width="100" height="18" opacity="0.16"/>
+          <g class="s-alert" fill="none" stroke-width="1.3" marker-end="url(#ar-al)" marker-start="url(#ar-al)">
+            <line x1="472" y1="173" x2="560" y2="173"/>
+          </g>
+          <text class="sm f-alert" x="516" y="198" text-anchor="middle">re-listed on resume</text>
+          <text class="sm" x="70" y="198">finalized parts — retained, never re-listed, never duplicated</text>
+          <line class="s-rule" x1="70" y1="182" x2="466" y2="182" stroke-width="1"/>
+        </svg>
+      </div>
+      <figcaption><b>Plate 8</b> Invariants I1, I5 and I6. A part's rows are durable if and only if the part is finalized, so the recovery rule is mechanical: keep every finalized part, throw away the tail, re-list the gap.</figcaption>
+    </figure>
+
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr><th>Destination</th><th>What you actually get</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k"><b>managed Parquet directory</b></td>
+            <td>Exactly-once durable dataset. Resumable with <code>swath resume out/</code>. Only the bounded non-durable tail is re-listed.</td>
+          </tr>
+          <tr>
+            <td class="k">stdout / text file</td>
+            <td>One-shot, non-resumable. Commit-before-emit means an interrupted run can be missing an in-flight page — at-most-once, stated plainly rather than hidden.</td>
+          </tr>
+          <tr>
+            <td class="k">single-file Parquet</td>
+            <td>Non-resumable; requires <code>--checkpoint none</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <p>
+        Resuming is gated on <span class="mono">args_hash</span> — a hash of the run's
+        <em>scope</em> (scheme, endpoint, bucket, prefix, recursion, versioning). Output
+        format and filters are deliberately excluded, because they don't change
+        <em>what gets listed</em>. Resume against a mismatched scope is refused;
+        <code>--restart</code> discards the old run.
+      </p>
+    </div>
+
+    <div class="note stop">
+      <span class="lbl">What "exactly once" does and does not claim</span>
+      <p>
+        Exactly-once here is a statement about <strong>swath's own parallelization and
+        recovery</strong>, and nothing else. No row is lost or duplicated because of the
+        range protocol, a split, a crash, or a resume — that is what the invariants above
+        buy you.
+      </p>
+      <p style="margin-top:0.8em;">
+        It is <strong>not</strong> a point-in-time snapshot of the bucket. A listing takes
+        minutes, S3 offers no consistent snapshot across a paginated scan, and a bucket
+        being written during the run will produce a mixed-time view: an object created
+        after the sweep passed its key may be absent, and one deleted behind the sweep may
+        still appear. If you need a coherent instant, you need a source that provides one —
+        S3 Inventory, or a quiet bucket.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="limits">
+    <div class="sec-head">
+      <span class="eyebrow">§7</span>
+      <h2>Where it honestly cannot win</h2>
+    </div>
+    <div class="col">
+      <p>
+        Inside <em>one</em> flat directory — a single prefix with no sub-structure — the
+        only tool S3 offers is <span class="mono">start-after</span> pagination: one
+        round trip per 1000 keys, strictly sequential. A directory with 110,000 keys is
+        ~110 sequential round trips, and adding workers does not help, because handing a
+        worker a valid starting point deep inside that directory requires already
+        knowing a key that far in — which costs exactly the listing you were trying to
+        parallelize.
+      </p>
+      <p>
+        You can sometimes split such a directory by guessing name-prefix bands (hex
+        <span class="mono">0</span>–<span class="mono">f</span>, say) when the names are
+        uniform. When they aren't, the sequential floor is real. It bounds only that one
+        directory's tail — a bucket with many dense directories still parallelizes across
+        them; only the last, densest one serializes at the very end. That is the red band
+        you saw in Plate 2.
+      </p>
+    </div>
+
+    <div class="note stop">
+      <span class="lbl">And when not to use swath at all</span>
+      <p>
+        If you already have a fresh S3 Inventory report or an S3 Metadata table for the
+        bucket, query that. Reading a precomputed listing is strictly cheaper than any
+        live <code>ListObjectsV2</code> lister, swath included. swath exists for the
+        buckets where that isn't an option — not enabled, too stale, or not yours — and
+        it is LIST-only by design: it never reads object contents, and it never routes
+        to a precomputed listing to make its own numbers look better.
+      </p>
+      <p style="margin-top:0.8em;">
+        The cost is legible and worth knowing before you start: one LIST request per 1000
+        keys. A billion-key bucket is roughly a million requests — on the order of $5 at a
+        $0.005-per-1000 reference rate, before probe and retry overhead, and before egress
+        if you run it outside the bucket's region. Every run reports its actual
+        <span class="mono">cost.api_calls</span>.
+      </p>
+    </div>
+
+    <div class="note">
+      <span class="lbl">And it will not floor an endpoint to hit a number</span>
+      <p>
+        <code>--concurrency</code> is a <strong>ceiling, not a target</strong>. swath backs
+        off when an endpoint shows genuine stress and recovers gradually afterwards, so the
+        run can finish slower than you asked for and that is the intended behaviour. The
+        control loop, and the reason retries are counted separately from throttles, are in
+        <a href="#dive-aimd">the concurrency deep dive</a>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="run">
+    <div class="sec-head">
+      <span class="eyebrow">the run</span>
+      <h2>One bad guess became work for all 128 workers</h2>
+    </div>
+    <div class="col">
+      <p>
+        This is the run Plate 1 was drawn from: <span class="mono">s3://noaa-gestofs-pds</span>,
+        a public NOAA forecast archive, listed cold with no inventory and no prior knowledge of
+        its shape. The single heaviest seed was split 2,155 times over the course of the run —
+        mostly by its own worker shedding work ahead of its cursor, since only 195 of the run's
+        2,399 splits were taken by thieves. Owner-side splitting is what refilled the worklist;
+        idle workers claiming those shed ranges is what emptied it again.
+      </p>
+    </div>
+
+    <div class="result">
+      <dl>
+        <div><dt>Objects listed</dt><dd>39,651,850</dd></div>
+        <div><dt>Initial guesses</dt><dd>513</dd></div>
+        <div><dt>Behind one guess</dt><dd class="hot">26,946,179</dd></div>
+        <div><dt>Splits in that lineage</dt><dd>2,155</dd></div>
+        <div><dt>Ranges completed</dt><dd>2,912</dd></div>
+        <div><dt>Ranges failed</dt><dd>0</dd></div>
+        <div><dt>Wall clock</dt><dd>1m 09s<a class="prov" href="#timings" title="provisional">&#8224;</a></dd></div>
+        <div><dt>Of perfect speedup</dt><dd>57.3%<a class="prov" href="#timings" title="provisional">&#8224;</a></dd></div>
+      </dl>
+    </div>
+
+    <div class="note stop" id="timings">
+      <span class="lbl">&#8224; The timings still need re-measuring</span>
+      <p>
+        This run was executed from a dedicated US-East cloud host — a different provider than
+        the bucket's, so the path to S3 crossed networks — at
+        <span class="mono">--concurrency 128</span>.
+        <strong>1m 09s is still one recorded run, not a benchmark</strong> — no competing
+        listers were measured alongside it, and instance type, network and the day's S3
+        behaviour all move it. The speedup percentage is a ratio of busy to idle worker-time
+        <em>within</em> this run: useful for diagnosing the steal path, not comparable across
+        machines or concurrency settings.
+      </p>
+      <p style="margin-top:0.8em;">
+        What does <em>not</em> depend on the machine is the shape this page argues from:
+        39,651,850 objects across 513 seeds, with 68.0% of them behind one of them. That is a
+        property of the bucket, and any run over the same contents will find it. The split and
+        range counts are not in that category — 2,155 splits and 2,912 completed ranges are
+        facts about <em>this</em> trace. Scheduling, timing, endpoint behaviour and any writes
+        to the bucket will move them.
+      </p>
+    </div>
+
+    <div class="col">
+      <p>
+        The last number is the honest one, and it went the wrong way. Perfect speedup here
+        would have been 39 seconds — 5,030 busy worker-seconds spread evenly across 128
+        workers. It took 69.
+        The missing 30 seconds are 3,750 worker-seconds spent idle — worker time not spent
+        listing. Some of it is the partition still being corrected; startup, request latency,
+        more workers than there is splittable work, and the unsplittable tail all contribute
+        too, and this figure does not separate them. What it does say plainly is that at 128
+        workers a large share of the fleet was waiting rather than listing. That gap is a known
+        lead, not a mystery, and it is being tracked.
+      </p>
+    </div>
+
+    <div class="cta" style="margin-top:1.6rem;">
+      <a class="primary" href="https://swath.varve.io/runs/noaa-gestofs-pds/">Open the full trace report</a>
+      <a href="https://github.com/varveio/swath">View the source</a>
+      <a href="https://github.com/varveio/swath#install">Install swath</a>
+      <a href="#dives">Read the deep dives</a>
+    </div>
+
+    <div class="note" style="margin-top:2rem;">
+      <span class="lbl">Do you have a bucket that breaks this?</span>
+      <p>
+        The interesting failure mode is a key distribution the pivot cascade cannot cut —
+        deep uniform prefixes, one enormous flat directory, names that defeat interpolation.
+        If you have one, we would genuinely like to see it. Bucket names and object contents
+        are not needed; a redacted ordered key distribution, or just the shape of it, is
+        enough. Open an issue, or mail <span class="mono">oss@varve.io</span>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section id="dives">
+    <div class="sec-head">
+      <span class="eyebrow">part two</span>
+      <h2>Under the hood</h2>
+    </div>
+    <div class="col">
+      <p>
+        Everything above is the argument. Everything below is the implementation behind it —
+        collapsed, because you do not need any of it to understand what swath does or to
+        decide whether it is useful to you. Open what you want to audit.
+      </p>
+    </div>
+  </section>
+
+  <section id="dive-pipeline">
+    <details class="dive">
+      <summary>Implementation: the runtime pipeline <span class="hint">— channels, filters, sort, and how output is written</span></summary>
+
+    <div class="col">
+      <p>
+        The worklist <em class="term">is</em> the checkpoint table. Each row in SQLite's
+        <span class="mono">listing_node</span> is one unit of work moving
+        <span class="mono">PENDING → IN_PROGRESS → COMPLETED</span>, which is what makes
+        resume nearly free and eliminates a whole class of permit-across-join deadlock.
+        A fixed pool of virtual threads drains it; termination is by quiescence
+        (<span class="mono">outstanding == 0</span>), not by an empty queue — a worker
+        may be mid-page and about to spawn a child.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 430" role="img" aria-label="Run flow, top to bottom: S3 returns a page to the fetcher, the range scanner commits it to the SQLite checkpoint before pushing it to a bounded channel; the channel feeds the filter chain and then either the text sinks or the Parquet writer pool, with an optional sort lane branching off the channel.">
+          <!-- S3 -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="14" width="260" height="40" rx="2"/></g>
+          <text class="hd" x="380" y="32" text-anchor="middle">Amazon S3 · ListObjectsV2</text>
+          <text class="sm" x="380" y="46" text-anchor="middle">up to 1000 keys, in byte order</text>
+
+          <line class="s-ink" x1="380" y1="54" x2="380" y2="74" stroke-width="1.3" marker-end="url(#ar)"/>
+
+          <!-- fetcher -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="76" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="94" text-anchor="middle">S3PageFetcher</text>
+          <text class="sm" x="380" y="107" text-anchor="middle">the one shipped backend · swath-s3</text>
+
+          <line class="s-ink" x1="380" y1="114" x2="380" y2="134" stroke-width="1.3" marker-end="url(#ar)"/>
+
+          <!-- engine container -->
+          <g class="s-rule" fill="none" stroke-width="1" stroke-dasharray="3 3">
+            <rect x="236" y="128" width="524" height="82" rx="2"/>
+          </g>
+          <text class="sm" x="756" y="122" text-anchor="end">WorkStealingScan · N virtual threads</text>
+
+          <!-- range scanner -->
+          <rect class="f-acc" x="250" y="138" width="260" height="62" rx="2" opacity="0.1"/>
+          <g class="s-acc" fill="none" stroke-width="1.8"><rect x="250" y="138" width="260" height="62" rx="2"/></g>
+          <text class="hd" x="380" y="158" text-anchor="middle">RangeScanner.runRange</text>
+          <text class="sm" x="380" y="174" text-anchor="middle">one worker, one range</text>
+          <text class="sm" x="380" y="189" text-anchor="middle">re-reads hi before every key</text>
+
+          <!-- thief -->
+          <g class="s-sig" fill="none" stroke-width="1.5"><rect x="546" y="146" width="208" height="46" rx="2"/></g>
+          <text class="hd f-sig" x="650" y="164" text-anchor="middle">Thief / OwnerSelfSplit</text>
+          <text class="sm" x="650" y="179" text-anchor="middle">narrows hi, inserts a child</text>
+          <line class="s-sig" x1="546" y1="169" x2="516" y2="169" stroke-width="1.3" marker-end="url(#ar-sig)"/>
+
+          <!-- commit -->
+          <line class="s-ink" x1="380" y1="210" x2="380" y2="234" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="226">① commit</text>
+
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="236" width="260" height="40" rx="2"/></g>
+          <text class="hd" x="380" y="254" text-anchor="middle">SQLite checkpoint</text>
+          <text class="sm" x="380" y="268" text-anchor="middle">one writer thread · WAL · the worklist</text>
+
+          <line class="s-ink" x1="380" y1="276" x2="380" y2="300" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text class="hd f-acc" x="392" y="292">② then emit</text>
+
+          <!-- channel -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="302" width="260" height="30" rx="2"/></g>
+          <text class="hd" x="380" y="322" text-anchor="middle">bounded Channel of PageBatch</text>
+
+          <!-- sort lane -->
+          <g class="s-rule" fill="none" stroke-width="1.2" stroke-dasharray="4 3">
+            <rect x="546" y="288" width="214" height="58" rx="2"/>
+            <path d="M510 317 L546 317"/>
+          </g>
+          <text class="sm" x="653" y="306" text-anchor="middle">optional --sort lane</text>
+          <text class="sm" x="653" y="321" text-anchor="middle">segments staged on disk,</text>
+          <text class="sm" x="653" y="336" text-anchor="middle">k-way merged at the end</text>
+
+          <line class="s-ink" x1="380" y1="332" x2="380" y2="348" stroke-width="1.2" marker-end="url(#ar)"/>
+
+          <!-- filters -->
+          <g class="s-ink" fill="none" stroke-width="1.5"><rect x="250" y="350" width="260" height="38" rx="2"/></g>
+          <text class="hd" x="380" y="368" text-anchor="middle">FilterChain</text>
+          <text class="sm" x="380" y="381" text-anchor="middle">regex · size · mtime · storage class</text>
+
+          <!-- sinks -->
+          <g class="s-ink" fill="none" stroke-width="1.2" marker-end="url(#ar)">
+            <path d="M300 388 L300 396 L120 396 L120 402"/>
+            <path d="M460 388 L460 396 L620 396 L620 402"/>
+          </g>
+          <g class="s-ink" fill="none" stroke-width="1.5">
+            <rect x="0" y="404" width="240" height="24" rx="2"/>
+            <rect x="500" y="404" width="260" height="24" rx="2"/>
+          </g>
+          <text class="sm" x="120" y="420" text-anchor="middle">JSONL · TSV · table → stdout</text>
+          <text class="sm" x="630" y="420" text-anchor="middle">ParquetWriterPool → parts + manifest</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 7</b> The run has two deliberately different concurrency shapes: a small static pipeline of siblings under a structured-concurrency scope, and the listing engine, which is a worklist — that is what caps threads at N regardless of how wide the range tree grows.</figcaption>
+    </figure>
+  
+    </details>
+  </section>
+
+  <section id="dive-aimd">
+    <details class="dive">
+      <summary>Deep dive: concurrency control <span class="hint">— AIMD, retry interaction, and why --concurrency is a ceiling</span></summary>
+
+    <div class="col">
+      <p>
+        <code>--concurrency</code> (default 64) sets a <em>ceiling</em>. The live target
+        <span class="mono">T</span> starts at a slow-start floor and moves by AIMD:
+        multiply down by 0.7 on a real 503 or <span class="mono">Retry-After</span>, add
+        one after roughly ten clean seconds, never below one.
+      </p>
+      <p>
+        The subtlety is what feeds it. The AWS SDK's own retry is turned
+        <em class="term">off</em> (<span class="mono">maxAttempts = 1</span>) so the gauge
+        sees every genuine 503 immediately, rather than after the SDK quietly absorbed
+        three behind its own backoff. Two adaptive loops reacting to the same signal
+        over-correct; swath keeps exactly one.
+      </p>
+      <p>
+        On a healthy endpoint the decrease path never fires — <span class="mono">T</span>
+        ramps to the ceiling and stays. A clean run's speed comes from the engine, not
+        from adaptivity.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 170" role="img" aria-label="Sawtooth plot of the concurrency target over time: it ramps up by one per clean window, drops to seventy percent on each 503, and never falls below one.">
+          <g class="s-rule" stroke-width="1">
+            <line x1="46" y1="20" x2="46" y2="132"/>
+            <line x1="46" y1="132" x2="740" y2="132"/>
+          </g>
+          <text class="sm" x="40" y="26" text-anchor="end">Tmax</text>
+          <text class="sm" x="40" y="136" text-anchor="end">1</text>
+          <text class="sm" x="740" y="152" text-anchor="end">time →</text>
+          <line class="s-rule" x1="46" y1="22" x2="740" y2="22" stroke-width="1" stroke-dasharray="3 4"/>
+
+          <polyline class="s-acc" fill="none" stroke-width="2"
+            points="46,116 96,100 146,86 196,72 246,60 296,50 330,42 330,74 380,64 430,54 470,46 470,78 520,68 570,58 620,48 660,40 660,66 700,56 740,46"/>
+
+          <g class="s-alert" stroke-width="1.4">
+            <line x1="330" y1="34" x2="330" y2="82"/>
+            <line x1="470" y1="38" x2="470" y2="86"/>
+            <line x1="660" y1="32" x2="660" y2="74"/>
+          </g>
+          <g class="f-alert">
+            <circle cx="330" cy="30" r="3"/><circle cx="470" cy="34" r="3"/><circle cx="660" cy="28" r="3"/>
+          </g>
+          <text class="sm f-alert" x="330" y="22" text-anchor="middle">503</text>
+          <text class="sm f-alert" x="470" y="26" text-anchor="middle">503</text>
+          <text class="sm f-alert" x="660" y="20" text-anchor="middle">503</text>
+
+          <text class="sm f-acc" x="180" y="94">+1 per clean ~10s window</text>
+          <text class="sm f-alert" x="344" y="98">×0.7 on stress</text>
+          <text class="sm" x="46" y="164">Workers above the new T finish their current page, then park. The floor is 1 — the run always makes forward progress.</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 9</b> AIMD on the concurrency target. It exists to degrade gracefully against a hostile or throttling endpoint and recover afterwards — not as a tuning knob for throughput.</figcaption>
+    </figure>
+  
+    </details>
+  </section>
+
+  <section id="dive-modules">
+    <details class="dive">
+      <summary>Repository architecture: the modules <span class="hint">— dependency rules, and what reaches the uber-jar</span></summary>
+
+    <div class="col">
+      <p>
+        Six Gradle modules, all edges pointing one way. Only <span class="mono">swath-cli</span>
+        ships: the uber-jar is built over its runtime classpath, so a module reaches a
+        released artifact if and only if the CLI depends on it.
+      </p>
+    </div>
+
+    <figure>
+      <div class="plate-body">
+        <svg viewBox="0 0 760 336" role="img" aria-label="Module graph: swath-model is a leaf; swath-core depends on it; swath-s3 and swath-replay-server depend on core; swath-cli depends on core and s3 and is the only shipped module; swath-sim depends on replay-server and core and is a development tool.">
+          <!-- model -->
+          <g class="s-ink" fill="none" stroke-width="1.6"><rect x="250" y="10" width="260" height="44" rx="2"/></g>
+          <text class="hd" x="380" y="29" text-anchor="middle">swath-model</text>
+          <text class="sm" x="380" y="44" text-anchor="middle">KeyBytes · ListEntry · PageBatch</text>
+          <text class="sm f-dim" x="526" y="27">a true leaf — it imports</text>
+          <text class="sm f-dim" x="526" y="41">no other internal package</text>
+
+          <line class="s-ink" x1="380" y1="54" x2="380" y2="78" stroke-width="1.3" marker-end="url(#ar)"/>
+          <text class="sm" x="390" y="71">api</text>
+
+          <!-- core -->
+          <rect class="f-acc" x="130" y="80" width="500" height="62" rx="2" opacity="0.09"/>
+          <g class="s-acc" fill="none" stroke-width="2"><rect x="130" y="80" width="500" height="62" rx="2"/></g>
+          <text class="hd" x="380" y="100" text-anchor="middle">swath-core</text>
+          <text class="sm" x="380" y="117" text-anchor="middle">engine · engine.policy · checkpoint · sort · output</text>
+          <text class="sm" x="380" y="132" text-anchor="middle">filter · pipeline · runtime · observability</text>
+          <text class="sm f-dim" x="646" y="101">no AWS SDK,</text>
+          <text class="sm f-dim" x="646" y="115">no picocli,</text>
+          <text class="sm f-dim" x="646" y="129">no terminal.</text>
+
+          <g class="s-ink" fill="none" stroke-width="1.3" marker-end="url(#ar)">
+            <path d="M250 142 L250 172"/>
+            <path d="M510 142 L510 172"/>
+          </g>
+          <text class="sm" x="258" y="163">api</text>
+          <text class="sm" x="518" y="163">impl</text>
+
+          <!-- s3 -->
+          <g class="s-ink" fill="none" stroke-width="1.6"><rect x="110" y="174" width="280" height="42" rx="2"/></g>
+          <text class="hd" x="250" y="192" text-anchor="middle">swath-s3</text>
+          <text class="sm" x="250" y="207" text-anchor="middle">S3PageFetcher · the AWS SDK lives here</text>
+
+          <!-- replay server -->
+          <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="174" width="280" height="42" rx="2"/></g>
+          <text class="hd" x="550" y="192" text-anchor="middle">swath-replay-server</text>
+          <text class="sm" x="550" y="207" text-anchor="middle">the real engine vs a fake S3</text>
+
+          <g class="s-ink" fill="none" stroke-width="1.3" marker-end="url(#ar)">
+            <path d="M250 216 L250 244"/>
+            <path d="M550 216 L550 244"/>
+            <path d="M130 111 L70 111 L70 268 L106 268"/>
+          </g>
+          <text class="sm" x="258" y="236">impl</text>
+          <text class="sm" x="558" y="236">api</text>
+          <text class="sm" x="76" y="192">impl</text>
+
+          <!-- cli -->
+          <rect class="f-acc" x="110" y="246" width="280" height="50" rx="2" opacity="0.12"/>
+          <g class="s-acc" fill="none" stroke-width="2"><rect x="110" y="246" width="280" height="50" rx="2"/></g>
+          <text class="hd" x="250" y="268" text-anchor="middle">swath-cli</text>
+          <text class="sm" x="250" y="284" text-anchor="middle">the only shipped artifact</text>
+
+          <!-- sim -->
+          <g class="s-ink" fill="none" stroke-width="1.6" stroke-dasharray="4 3"><rect x="410" y="246" width="280" height="50" rx="2"/></g>
+          <text class="hd" x="550" y="266" text-anchor="middle">swath-sim</text>
+          <text class="sm" x="550" y="278" text-anchor="middle">real policies vs a modelled</text>
+          <text class="sm" x="550" y="290" text-anchor="middle">store, in virtual time</text>
+
+          <line class="s-rule" x1="0" y1="316" x2="760" y2="316" stroke-width="1"/>
+          <text class="sm" x="0" y="330">solid outline = on the shipped path   ·   dashed = development and analysis tools, never released</text>
+        </svg>
+      </div>
+      <figcaption><b>Plate 10</b> The dependency rules do real work: core stays AWS-free so a future GCS backend doesn't drag the S3 SDK, and terminal-free so an embedding application gets progress events without inheriting swath's opinions about stderr.</figcaption>
+    </figure>
+
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr><th>Module</th><th>Holds</th><th>Ships</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k"><b>swath-model</b></td>
+            <td><code>KeyBytes</code> and its unsigned comparator, the sealed <code>ListEntry</code> hierarchy, <code>PageBatch</code>, and <code>ByteMidpoint</code> — the UTF-8-safe pivot math.</td>
+            <td class="k">via CLI</td>
+          </tr>
+          <tr>
+            <td class="k"><b>swath-core</b></td>
+            <td>Everything that isn't a backend or a front end: the <code>WorkStealingScan</code> engine and its policy seam, the SQLite checkpoint, the Parquet writer pool and external merge sort, filters, the pipeline, metrics.</td>
+            <td class="k">via CLI</td>
+          </tr>
+          <tr>
+            <td class="k"><b>swath-s3</b></td>
+            <td>The one shipped backend. <code>S3PageFetcher</code>, client construction, fault classification, bearer-token auth. Siblings like <span class="mono">swath-gcs</span> would sit beside it.</td>
+            <td class="k">via CLI</td>
+          </tr>
+          <tr>
+            <td class="k"><b>swath-cli</b></td>
+            <td>The <span class="mono">swath</span> binary: Picocli commands, option groups, exit codes, the stderr progress display and terminal detection.</td>
+            <td class="k">yes</td>
+          </tr>
+          <tr>
+            <td class="k">swath-replay-server</td>
+            <td>Serves swath's own Parquet fixtures back as a fake S3 <code>ListObjectsV2</code> endpoint, so the real engine can be exercised end-to-end over HTTP with injected latency shapes.</td>
+            <td class="k">no</td>
+          </tr>
+          <tr>
+            <td class="k">swath-sim</td>
+            <td>A discrete-event simulator that runs the real split/steal policies against a ground-truth store in virtual time. Answers "what would a different policy have done here?" thousands of times without paying a socket.</td>
+            <td class="k">no</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span class="lbl">The policy seam — why the simulator is possible at all</span>
+      <p>
+        Decision logic is separated from execution. <code>ThiefPolicy</code>,
+        <code>OwnerSplitGovernor</code>, and <code>HybridSeedPlanner</code> are pure
+        functions of an immutable view: no lock, no clock, no randomness, no RPC of
+        their own. The executors — <code>Thief</code>, <code>OwnerSelfSplit</code>,
+        <code>SeedStep</code> — snapshot state, drive the policy through a
+        request/response loop issuing every probe it asks for, and apply the result.
+        A test walks the policy package's field-type closure and fails the build if any
+        policy reaches for ambient time, randomness, or metrics. That purity is what
+        lets the simulator replay a recorded <span class="mono">(view, decision)</span>
+        pair and get the same answer.
+      </p>
+    </div>
+  
+    </details>
+  </section>
+
+  <section id="dive-glossary">
+    <details class="dive">
+      <summary>Glossary <span class="hint">— the nine terms this page uses precisely</span></summary>
+
+    <div class="cards">
+      <div>
+        <dt>range / node</dt>
+        <dd>A half-open <span class="mono">(lo, hi]</span> slice of the keyspace, and simultaneously one row in the SQLite worklist. The unit of work, of checkpointing, and of resume.</dd>
+      </div>
+      <div>
+        <dt>cursor</dt>
+        <dd>The last key committed for a range. Doubles as the next request's <span class="mono">start-after</span> — there is no opaque continuation token in the model, which is why resume survives token expiry and re-splitting.</dd>
+      </div>
+      <div>
+        <dt>hi</dt>
+        <dd>A range's current upper bound. Volatile, because a thief lowers it while the owner is mid-page; the owner re-reads it before every single key.</dd>
+      </div>
+      <div>
+        <dt>pivot</dt>
+        <dd>A synthesized boundary key at which a range splits. Need not exist in the bucket, but must be valid UTF-8 and avoid code points that would make S3 reject the request.</dd>
+      </div>
+      <div>
+        <dt>probe</dt>
+        <dd>A <span class="mono">max_keys=1</span> request that answers one question: does the upper half of a proposed split contain any key at all? The cheapest evidence in the system.</dd>
+      </div>
+      <div>
+        <dt>mass</dt>
+        <dd>Where a bucket's keys actually sit in the keyspace. Always non-uniform, never visible in advance, and the thing every estimator is trying to approximate.</dd>
+      </div>
+      <div>
+        <dt>the open frontier</dt>
+        <dd>The single rightmost range with <span class="mono">hi = null</span>. It gets special treatment everywhere: density extrapolation instead of interpolation, and no owner self-split.</dd>
+      </div>
+      <div>
+        <dt>durable_cursor</dt>
+        <dd>The second cursor: the highest key whose pages all sit in finalized Parquet parts. It lags <span class="mono">cursor</span>, and the distance between them is exactly what a resume has to re-list.</dd>
+      </div>
+      <div>
+        <dt>quiescence</dt>
+        <dd>How the run ends. Not "the queue is empty" — a worker may be mid-page and about to spawn a child — but an outstanding count reaching zero after every completion and child is durably committed.</dd>
+      </div>
+    </div>
+  
+    </details>
+  </section>
+
+  <footer>
+    Built from the swath internals pack — <span class="mono">docs/internals/overview.md</span>,
+    <span class="mono">architecture.md</span>, <span class="mono">algorithms.md</span>,
+    <span class="mono">contracts.md</span>, and <span class="mono">build-and-modules.md</span> —
+    which are re-derived from the shipped code. Where this page and the source disagree, the
+    source wins.<br>
+    swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
+    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
+    stores beyond S3 are roadmap. Flags and output schemas may still change.
+    <div class="colophon">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
+          <path d="M8 15 L32 28 L56 15"/>
+          <path d="M13 24 L32 35 L51 24"/>
+          <path d="M18 33 L32 42 L46 33"/>
+          <path d="M23 42 L32 49 L41 42"/>
+        </g>
+      </svg>
+      <span>swath is built at <a href="https://varve.io">Varve</a> — a system of record for object storage.</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ── the keyspace, as mass ──────────────────────────────────
+     A cumulative distribution over [0,1]. Clusters are the
+     bucket's "directories"; the gaps between them are the empty
+     byte-space a naive midpoint aims into. One cluster is marked
+     flat: no internal structure, so no split can divide it.
+     ───────────────────────────────────────────────────────── */
+  var TOTAL = 39600000;
+  var N = 3072;
+
+  var CLUSTERS = [
+    { c: 0.050, w: 0.016, m: 0.055 },
+    { c: 0.140, w: 0.024, m: 0.105 },
+    { c: 0.245, w: 0.010, m: 0.060 },
+    { c: 0.360, w: 0.032, m: 0.150 },
+    { c: 0.505, w: 0.008, m: 0.110 },
+    { c: 0.605, w: 0.026, m: 0.130 },
+    { c: 0.720, w: 0.014, m: 0.090 },
+    { c: 0.895, w: 0.021, m: 0.300 }   /* the dense flat leaf */
+  ];
+  var FLAT_LO = 0.845, FLAT_HI = 0.950;   /* unsplittable region */
+
+  var dens = new Float64Array(N);
+  var cum  = new Float64Array(N + 1);
+  var peak = 0;
+
+  (function build() {
+    var i, j, x, v, cl, d, total = 0;
+    for (i = 0; i < N; i++) {
+      x = (i + 0.5) / N;
+      v = 0;
+      for (j = 0; j < CLUSTERS.length; j++) {
+        cl = CLUSTERS[j];
+        d = (x - cl.c) / cl.w;
+        v += cl.m * Math.exp(-0.5 * d * d) / cl.w;
+      }
+      dens[i] = v;
+      total += v;
+      if (v > peak) peak = v;
+    }
+    for (i = 0; i < N; i++) dens[i] /= total;
+    peak /= total;
+    cum[0] = 0;
+    for (i = 0; i < N; i++) cum[i + 1] = cum[i] + dens[i];
+    for (i = 0; i <= N; i++) cum[i] /= cum[N];
+  })();
+
+  function keysAt(x) {                      /* fraction of all keys below x */
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    var f = x * N, i = Math.floor(f), t = f - i;
+    if (i >= N) return 1;
+    return cum[i] + (cum[i + 1] - cum[i]) * t;
+  }
+  function posAt(k) {                        /* inverse of keysAt */
+    if (k <= 0) return 0;
+    if (k >= 1) return 1;
+    var lo = 0, hi = N, mid;
+    while (lo < hi) { mid = (lo + hi) >> 1; if (cum[mid] < k) lo = mid + 1; else hi = mid; }
+    var i = Math.max(0, lo - 1), span = cum[i + 1] - cum[i];
+    var t = span > 0 ? (k - cum[i]) / span : 0;
+    return (i + t) / N;
+  }
+  function massIn(a, b) { return Math.max(0, keysAt(b) - keysAt(a)); }
+
+  /* seed cut-points: the gaps between clusters, i.e. what a
+     delimiter=/ probe would hand back as directory boundaries */
+  function seedCuts() {
+    var cuts = [], i;
+    for (i = 0; i < CLUSTERS.length - 1; i++) {
+      cuts.push((CLUSTERS[i].c + CLUSTERS[i].w * 2.4 + CLUSTERS[i + 1].c - CLUSTERS[i + 1].w * 2.4) / 2);
+    }
+    return cuts;
+  }
+
+  /* ── run state ─────────────────────────────────────────────── */
+  /* more workers than seed ranges, so some are thieves from the first tick —
+     which is what a real run looks like at any sensible --concurrency */
+  var WORKERS = 12;
+  var TICKS_TO_DRAIN = 560;                 /* pacing target */
+  var KEYS_PER_TICK = TOTAL / (WORKERS * TICKS_TO_DRAIN);
+
+  var nodes, workers, keysDone, reqs, splits, phase, seedTimer, flashes, tick, done, floorSeen;
+
+  function reset() {
+    nodes = [];
+    workers = [];
+    keysDone = 0; reqs = 0; splits = 0; tick = 0;
+    phase = "seed"; seedTimer = 0; flashes = []; done = false; floorSeen = false;
+    for (var i = 0; i < WORKERS; i++) workers.push({ id: i, node: null, idle: true, backoff: 0 });
+  }
+
+  function startScan() {
+    var cuts = seedCuts(), prev = 0, i;
+    for (i = 0; i < cuts.length; i++) { nodes.push(mkNode(prev, cuts[i])); prev = cuts[i]; }
+    nodes.push(mkNode(prev, 1));            /* the closing range */
+    reqs += 1;                              /* the seed probe itself */
+    phase = "scan";
+  }
+
+  var nid = 0;
+  function mkNode(lo, hi) {
+    return { id: nid++, lo: lo, hi: hi, cursor: lo, drained: 0, owner: null, done: false, stuck: false };
+  }
+
+  function claim(w) {
+    for (var i = 0; i < nodes.length; i++) {
+      if (!nodes[i].done && nodes[i].owner === null) {
+        nodes[i].owner = w.id; w.node = nodes[i]; w.idle = false; return true;
+      }
+    }
+    return false;
+  }
+
+  /* estimated remaining work, from what the run has actually
+     observed — never from the true (invisible) mass */
+  function estRemaining(n) {
+    var span = n.hi - n.cursor;
+    if (span <= 0) return 0;
+    var drainedSpan = n.cursor - n.lo;
+    var density = drainedSpan > 1e-9 ? n.drained / drainedSpan : 1;
+    return span * density;
+  }
+
+  function trySteal(w) {
+    var best = null, bestScore = 0, i, n;
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      if (n.done || n.owner === null || n.stuck) continue;
+      if (n.hi - n.cursor < 0.0015) continue;
+      var s = estRemaining(n);
+      if (s > bestScore) { bestScore = s; best = n; }
+    }
+    if (!best) return false;
+
+    /* place the pivot from observed density, then probe once */
+    var f = 0.58, m = best.cursor + (best.hi - best.cursor) * f, rung = 0;
+    reqs += 1;
+    while (massIn(m, best.hi) <= 0 && rung < 4) {
+      rung++; reqs += 1;
+      m = rung === 1 ? best.cursor + (best.hi - best.cursor) * 0.5
+                     : best.cursor + (m - best.cursor) * 0.5;
+    }
+    flashes.push({ x: m, t: 0, ok: massIn(m, best.hi) > 0, rung: rung });
+
+    if (massIn(m, best.hi) <= 0 || m <= best.cursor) { w.backoff = 14; return false; }
+
+    /* a flat leaf has no structure to divide: the split is refused */
+    if (best.cursor > FLAT_LO && best.hi < FLAT_HI) { best.stuck = true; w.backoff = 30; floorSeen = true; return false; }
+
+    var child = mkNode(m, best.hi);
+    best.hi = m;
+    nodes.push(child);
+    child.owner = w.id; w.node = child; w.idle = false;
+    splits++;
+    return true;
+  }
+
+  function step() {
+    if (done) return;
+    tick++;
+
+    if (phase === "seed") {
+      seedTimer++;
+      if (seedTimer > 42) startScan();
+      return;
+    }
+
+    var i, w, n, busy = 0;
+    for (i = 0; i < workers.length; i++) {
+      w = workers[i];
+      if (w.backoff > 0) { w.backoff--; continue; }
+
+      if (w.idle) { if (!claim(w)) trySteal(w); }
+
+      if (!w.idle && w.node) {
+        n = w.node;
+        var here = keysAt(n.cursor);
+        var limit = keysAt(n.hi);
+        var next = Math.min(limit, here + KEYS_PER_TICK / TOTAL);
+        var moved = next - here;
+        n.drained += moved;
+        keysDone += moved * TOTAL;
+        reqs += Math.max(1, Math.round(moved * TOTAL / 1000));
+        n.cursor = posAt(next);
+        if (next >= limit - 1e-9) { n.done = true; n.owner = null; w.node = null; w.idle = true; }
+        else busy++;
+      }
+    }
+
+    var live = 0;
+    for (i = 0; i < nodes.length; i++) if (!nodes[i].done) live++;
+    if (live === 0) { phase = "done"; done = true; keysDone = TOTAL; }
+    /* only call it a serial floor once the stuck directory IS the run —
+       while other ranges are still draining, this is just ordinary scanning */
+    else if (floorSeen && live <= 2) phase = "floor";
+    else if (phase === "floor") phase = "scan";
+  }
+
+  /* ── rendering ─────────────────────────────────────────────── */
+  var cv = document.getElementById("strip");
+  var ctx = cv.getContext("2d");
+  var pal = {};
+
+  function readPalette() {
+    var cs = getComputedStyle(document.documentElement);
+    function v(k) { return cs.getPropertyValue(k).trim(); }
+    pal = {
+      ink: v("--ink"), ink2: v("--ink-2"), ink3: v("--ink-3"),
+      rule: v("--rule"), paper: v("--paper-2"), paper3: v("--paper-3"),
+      accent: v("--accent"), signal: v("--signal"), alert: v("--alert"),
+      w: [v("--w1"), v("--w2"), v("--w3"), v("--w4"), v("--w5"), v("--w6")]
+    };
+  }
+
+  var W = 0, H = 0;
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+    var r = cv.getBoundingClientRect();
+    W = Math.max(300, r.width);
+    H = W < 640 ? 274 : 232;                 /* room for the legend to wrap */
+    cv.style.height = H + "px";
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  var PAD = 22;
+  function px(x) { return PAD + x * (W - PAD * 2); }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    var i, n, x;
+
+    var profTop = 18, profH = 66, profBase = profTop + profH;
+
+    /* mass profile */
+    ctx.beginPath();
+    ctx.moveTo(px(0), profBase);
+    for (i = 0; i < N; i += 2) {
+      /* compressive scale: the tallest spike is orders of magnitude above the
+         rest, and a linear plot would flatten every other cluster to nothing */
+      ctx.lineTo(px((i + 0.5) / N), profBase - Math.pow(dens[i] / peak, 0.42) * profH * 0.94);
+    }
+    ctx.lineTo(px(1), profBase);
+    ctx.closePath();
+    ctx.fillStyle = pal.paper3; ctx.fill();
+    ctx.strokeStyle = pal.rule; ctx.lineWidth = 1; ctx.stroke();
+
+    ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+    ctx.fillStyle = pal.ink3;
+    ctx.textAlign = "left";
+    ctx.fillText(W < 560 ? "key density" : "key density — invisible to the engine", px(0), 12);
+    ctx.textAlign = "right";
+    ctx.fillText("keyspace →", px(1), 12);
+
+    /* flat-leaf marker */
+    if (floorSeen) {
+      ctx.fillStyle = pal.alert; ctx.globalAlpha = 0.09;
+      ctx.fillRect(px(FLAT_LO), profTop, px(FLAT_HI) - px(FLAT_LO), profH);
+      ctx.globalAlpha = 1;
+    }
+
+    var bandTop = 108, bandH = 26, gap = 6;
+
+    /* baseline */
+    ctx.strokeStyle = pal.rule; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px(0), bandTop - 12); ctx.lineTo(px(1), bandTop - 12); ctx.stroke();
+
+    if (phase === "seed") {
+      ctx.textAlign = "center";
+      ctx.fillStyle = pal.ink2;
+      ctx.font = '11.5px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+      ctx.fillText("waiting on one delimiter=/ probe …", px(0.5), bandTop + 24);
+      var cuts = seedCuts();
+      ctx.strokeStyle = pal.accent; ctx.lineWidth = 1.6;
+      for (i = 0; i < cuts.length; i++) {
+        if (seedTimer > 8 + i * 4) {
+          ctx.globalAlpha = Math.min(1, (seedTimer - 8 - i * 4) / 8);
+          ctx.beginPath(); ctx.moveTo(px(cuts[i]), bandTop - 20); ctx.lineTo(px(cuts[i]), bandTop + 6); ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      }
+      drawFooter();
+      return;
+    }
+
+    /* ranges, laid out in rows so overlapping generations stay legible */
+    var rows = [[], [], []];
+    for (i = 0; i < nodes.length; i++) {
+      n = nodes[i];
+      var r = n.done ? 0 : (n.owner === null ? 1 : 2);
+      rows[r].push(n);
+    }
+
+    /* completed ranges: a thin settled band */
+    ctx.fillStyle = pal.ink3; ctx.globalAlpha = 0.5;
+    for (i = 0; i < rows[0].length; i++) {
+      n = rows[0][i];
+      ctx.fillRect(px(n.lo), bandTop, Math.max(1, px(n.hi) - px(n.lo)) - 1, 5);
+    }
+    ctx.globalAlpha = 1;
+
+    /* pending (unclaimed) ranges */
+    for (i = 0; i < rows[1].length; i++) {
+      n = rows[1][i];
+      ctx.strokeStyle = pal.ink3; ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.strokeRect(px(n.lo) + 0.5, bandTop + 12.5, Math.max(2, px(n.hi) - px(n.lo)) - 1, bandH - 2);
+      ctx.setLineDash([]);
+    }
+
+    /* active ranges */
+    var y = bandTop + 12;
+    for (i = 0; i < rows[2].length; i++) {
+      n = rows[2][i];
+      var col = n.stuck ? pal.alert : pal.w[n.owner % pal.w.length];
+      var x0 = px(n.lo), x1 = px(n.hi), xc = px(n.cursor);
+      ctx.strokeStyle = col; ctx.lineWidth = 1.2;
+      ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(2, x1 - x0) - 1, bandH - 1);
+      ctx.fillStyle = col; ctx.globalAlpha = 0.30;
+      ctx.fillRect(x0 + 1, y + 1, Math.max(0, xc - x0) - 1, bandH - 2);
+      ctx.globalAlpha = 1;
+      /* the cursor itself */
+      ctx.fillRect(Math.max(x0, xc - 1), y, 2, bandH);
+    }
+
+    /* split flashes */
+    for (i = flashes.length - 1; i >= 0; i--) {
+      var fl = flashes[i];
+      fl.t++;
+      if (fl.t > 26) { flashes.splice(i, 1); continue; }
+      var a = 1 - fl.t / 26;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = fl.ok ? pal.signal : pal.alert;
+      ctx.lineWidth = fl.ok ? 2 : 1.2;
+      ctx.beginPath();
+      ctx.moveTo(px(fl.x), bandTop + 4);
+      ctx.lineTo(px(fl.x), bandTop + 12 + bandH + 6);
+      ctx.stroke();
+      if (fl.ok) {
+        ctx.fillStyle = pal.signal;
+        ctx.beginPath();
+        ctx.moveTo(px(fl.x), bandTop + 2); ctx.lineTo(px(fl.x) - 4, bandTop - 5);
+        ctx.lineTo(px(fl.x) + 4, bandTop - 5); ctx.closePath(); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    drawFooter();
+
+    function drawFooter() {
+      var fy = 208;
+      ctx.font = '10px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+      ctx.textAlign = "left"; ctx.fillStyle = pal.ink3;
+
+      var items = [
+        ["fill", pal.accent, "listed"],
+        ["bar", pal.ink3, "range finished"],
+        ["rect", pal.ink3, "not yet claimed"],
+        ["tick", pal.signal, "split committed"],
+        ["tick", pal.alert, "probe found nothing"]
+      ];
+      var cx = px(0), right = px(1);
+      for (var k = 0; k < items.length; k++) {
+        var it = items[k];
+        var w = 22 + ctx.measureText(it[2]).width;
+        if (cx + w > right) { cx = px(0); fy += 15; }   /* wrap on a narrow canvas */
+        if (it[0] === "fill") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.45; ctx.fillRect(cx, fy - 7, 16, 8); ctx.globalAlpha = 1; }
+        else if (it[0] === "bar") { ctx.fillStyle = it[1]; ctx.globalAlpha = 0.5; ctx.fillRect(cx, fy - 5, 16, 4); ctx.globalAlpha = 1; }
+        else if (it[0] === "rect") { ctx.strokeStyle = it[1]; ctx.lineWidth = 1; ctx.setLineDash([3, 2]); ctx.strokeRect(cx + 0.5, fy - 7.5, 16, 9); ctx.setLineDash([]); }
+        else { ctx.strokeStyle = it[1]; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx + 7, fy - 9); ctx.lineTo(cx + 7, fy + 1); ctx.stroke(); }
+        ctx.fillStyle = pal.ink3;
+        ctx.fillText(it[2], cx + 22, fy);
+        cx += w + 22;
+      }
+    }
+  }
+
+  /* ── readouts ──────────────────────────────────────────────── */
+  var elPhase = document.getElementById("phase");
+  var elNote  = document.getElementById("note");
+  var elKeys  = document.getElementById("m-keys");
+  var elReqs  = document.getElementById("m-reqs");
+  var elRan   = document.getElementById("m-ranges");
+  var elBusy  = document.getElementById("m-busy");
+  var elSpl   = document.getElementById("m-splits");
+
+  var NOTES = {
+    seed:  "One delimiter=/ probe asks S3 where the directories are.",
+    scan:  "Workers drain their ranges; idle ones steal from the busiest.",
+    floor: "One flat directory has no structure to split on — it drains alone.",
+    done:  "Complete. The range set tiled the keyspace with no gaps and no overlap."
+  };
+  var LABELS = { seed: "Seeding", scan: "Scanning", floor: "Serial floor", done: "Complete" };
+
+  function fmt(n) { return Math.round(n).toLocaleString("en-US"); }
+
+  function readout() {
+    elPhase.textContent = LABELS[phase];
+    elPhase.setAttribute("data-p", phase);
+    elNote.textContent = NOTES[phase];
+    elKeys.textContent = fmt(keysDone);
+    elReqs.textContent = fmt(reqs);
+    var live = 0, busy = 0, i;
+    for (i = 0; i < nodes.length; i++) if (!nodes[i].done) live++;
+    for (i = 0; i < workers.length; i++) if (!workers[i].idle) busy++;
+    elRan.textContent = fmt(live);
+    elBusy.textContent = busy + " / " + WORKERS;
+    elSpl.textContent = fmt(splits);
+  }
+
+  /* ── loop ──────────────────────────────────────────────────── */
+  var running = true, raf = null, last = 0;
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function frame(ts) {
+    raf = requestAnimationFrame(frame);
+    if (!running) return;
+    if (ts - last < 26) return;
+    last = ts;
+    step(); draw(); readout();
+    if (done) { running = false; setBtn(); }
+  }
+
+  var btn = document.getElementById("toggle");
+  function setBtn() { btn.textContent = done ? "Finished" : (running ? "Pause" : "Play"); btn.disabled = !!done; }
+
+  btn.addEventListener("click", function () {
+    if (done) return;
+    running = !running; last = 0; setBtn();
+  });
+  document.getElementById("replay").addEventListener("click", function () {
+    reset(); running = true; last = 0; setBtn(); draw(); readout();
+  });
+
+  function boot() {
+    readPalette(); resize(); reset();
+    if (reduce.matches) {
+      /* render a representative mid-run state rather than animating */
+      running = false;
+      startScan();
+      for (var i = 0; i < 240; i++) step();
+      setBtn();
+    }
+    draw(); readout();
+    raf = requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", function () { resize(); draw(); });
+  new MutationObserver(function () { readPalette(); draw(); })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", function () { readPalette(); draw(); });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
