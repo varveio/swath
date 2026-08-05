@@ -22,6 +22,13 @@ out denser or emptier than the guess assumed. No prefix hints, no pre-pass, no
 prior knowledge of how the keys are laid out. The name fits the method: the
 keyspace is tiled into adjacent ranges and swept in parallel, like mown swaths.
 
+To see the mechanism rather than read it, the
+[visual field guide](https://swath.varve.io/field-guide/) walks the range
+algebra, the split ladder, and a recorded 39.7-million-object listing where one
+guess secretly held 68% of the bucket — with the
+[generated trace report](https://swath.varve.io/runs/noaa-gestofs-pds/) of that
+run to interrogate. Both live at [swath.varve.io](https://swath.varve.io/).
+
 swath is built and maintained by [Varve](https://varve.io/) — we catalog the
 datasets inside object storage from listing structure alone, never object
 contents. swath is the listing layer underneath it, and we wanted it inspectable
