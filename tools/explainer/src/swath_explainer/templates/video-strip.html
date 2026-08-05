@@ -33,6 +33,8 @@
   .card ul { list-style:none; margin-top:38px; font-size:27px; line-height:1.8;
              color:var(--ink2); }
   .card ul b { color:var(--ink); }
+  .card .lede { font-size:29px; line-height:1.4; margin-top:26px;
+                color:var(--ink2); max-width:900px; }
   .card .prov { margin-top:44px; font-size:20px; color:var(--ink3); }
   .card .cta { margin-top:12px; font-size:24px; color:var(--teal); }
   .hide { visibility:hidden; }
@@ -108,7 +110,7 @@
 
   // ---- the strip: the live run, drawn at whichever geometry ---------------
   function state(t){
-    var nodes={}, busy={}, keys=0, splits=0, done=0, marks=[], i;
+    var nodes={}, busy={}, keys=0, splits=0, hsplits=0, done=0, marks=[], i;
     for(i=0;i<stream.length;i++){
       var e=stream[i]; if(e[0]>t) break; var k=e[1], n;
       if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={}); n.lo=e[4]; n.hi=e[6]; n.cur=e[5];
@@ -116,11 +118,13 @@
       else if(k===K_PAGE){ keys+=e[5]; n=nodes[e[2]]; if(n) n.cur=e[4]; }
       else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
         nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],st:0,w:-1}; splits++;
+        if(e[8]===HEAVY_ID) hsplits++;
         if(t-e[0]<2200) marks.push({x:e[5],a:1-(t-e[0])/2200}); }
       else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
         if(n){ n.st=2; if(n.w>=0) delete busy[n.w]; done++; } }
     }
-    return {nodes:nodes,busy:busy,keys:keys,splits:splits,marks:marks,done:done};
+    return {nodes:nodes,busy:busy,keys:keys,splits:splits,hsplits:hsplits,
+            marks:marks,done:done};
   }
 
   function drawRun(S, zoom, g){
@@ -239,11 +243,12 @@
       return;
     }
     var a=clamp(land);
-    if(bw<660) return;
+    var pw=Math.min(bw-30, 624);
+    if(pw<300) return;
     sc.textAlign="center";
     sc.globalAlpha=a;
     sc.fillStyle=css("--paper"); sc.globalAlpha=a*0.9;
-    sc.fillRect(bx+bw/2-312, BH/2-118, 624, 236);
+    sc.fillRect(bx+bw/2-pw/2, BH/2-118, pw, 236);
     sc.globalAlpha=a;
     sc.fillStyle=css("--rust"); sc.font="600 148px "+css("--mono");
     sc.fillText(F.topShare+"%", bx+bw/2, BH/2+22);
@@ -254,11 +259,34 @@
     sc.textAlign="start"; sc.globalAlpha=1;
   }
 
+  /* The one thing on screen that is not a rendering of trace state: what the OWNERSHIP RULE
+     alone implies for a range this size. It asserts no timing and no speedup — only that one
+     worker would hold it, which follows from the measured size plus "a range belongs to whoever
+     claimed it". Labelled as derived, and the card's provenance says so too. */
+  function counterfactual(a){
+    if(a<=0 || !SP.length) return;
+    var bx=pos(SP[HEAVY][0],1)*SW, bw=(pos(SP[HEAVY][1],1)-pos(SP[HEAVY][0],1))*SW;
+    sc.globalAlpha=a*0.90; sc.fillStyle=css("--paper");
+    sc.fillRect(bx+12, BH*0.20, bw-24, BH*0.56); sc.globalAlpha=a;
+    sc.strokeStyle=css("--rust"); sc.lineWidth=3; sc.setLineDash([12,8]);
+    sc.strokeRect(bx+12, BH*0.20, bw-24, BH*0.56); sc.setLineDash([]);
+    sc.textAlign="center";
+    var cx=bx+bw/2;
+    sc.font="20px "+css("--mono"); sc.fillStyle=css("--ink3");
+    sc.fillText("IF THE PLAN WERE FINAL — DERIVED, NOT RECORDED", cx, BH*0.20+38);
+    sc.font="600 92px "+css("--mono"); sc.fillStyle=css("--rust");
+    sc.fillText("1 worker", cx, BH*0.20+140);
+    sc.font="26px "+css("--mono"); sc.fillStyle=css("--ink2");
+    sc.fillText("owns "+mm(SP[HEAVY][2])+" files, start to finish", cx, BH*0.20+186);
+    sc.fillText((meta.workers-1)+" others finish and go idle", cx, BH*0.20+224);
+    sc.textAlign="start"; sc.globalAlpha=1;
+  }
+
   /* An anchored inset instead of a hard zoom. The full bucket stays on screen behind it
      and the inset grows out of the boundary it is magnifying, so the close-up never
      costs the viewer their place. */
-  function magnifier(a, lo, hi, S, drawExtra){
-    var px=pos(FIRST_SPLIT[5],1)*SW;
+  function magnifier(a, lo, hi, S, drawExtra, ev){
+    var px=pos(ev[5],1)*SW;
     var x0=px+(60-px)*a, x1=px+(SW-60-px)*a, y0=BH*0.42+(BH*0.30-BH*0.42)*a, y1=y0+(BH*0.52)*a;
     if(x1-x0<8) return;
     sc.strokeStyle=css("--ochre"); sc.lineWidth=2; sc.globalAlpha=.55;
@@ -290,28 +318,31 @@
   /* Every line the card states is gated on the trace. A run that lost ranges, or whose
      heavy lineage never pulled the whole fleet in, must not be handed this story. */
   var failLine = F.failed===0
-        ? '<li><b>0</b> failed ranges · no gaps, no overlaps</li>'
+        ? '<li><b>0</b> failed ranges'+(F.ledgerOk?' · no gaps, no overlaps':'')+'</li>'
         : '<li><b>'+fmt(F.failed)+'</b> failed ranges</li>';
   var helpLine = F.topWorkers>=meta.workers
         ? '<li>all <b>'+meta.workers+'</b> workers eventually helped</li>'
         : '<li><b>'+fmt(F.topWorkers)+'</b> of '+meta.workers+' workers entered that lineage</li>';
 
   var CARD='<div class="card"><div class="big">'+fmt(meta.totalKeys)+
-    '<br>files listed</div><ul>'+
+    '<br>files listed</div>'+
+    '<div class="lede">One guessed key range held '+F.topShare+'% of them. '+
+    'swath split it while listing, so every worker could help.</div><ul>'+
     '<li><b>'+fmt(F.seedCount)+'</b> guessed starting ranges</li>'+
-    '<li><b>'+fmt(F.topSplits)+'</b> live splits inside the overloaded one</li>'+
+    '<li><b>'+fmt(F.topSplits)+'</b> live splits inside the one it got wrong</li>'+
     helpLine + '<li><b>'+fmt(F.completed)+'</b> ranges completed</li>' + failLine +
     '</ul><div class="cta">github.com/varveio/swath</div>'+
     '<div class="prov">swath — parallel S3 listing that rebalances itself while it runs.<br>'+
-    'Rendered from the actual '+fmt(meta.events)+'-event trace; every split shown really '+
-    'happened. This run took '+dur(D)+' on one laptop — a recorded run, not a benchmark.'+
+    'Every run state shown is rendered from the actual '+fmt(meta.events)+'-event trace; '+
+    'the labelled no-split panel is a derived consequence of range ownership, not a '+
+    'recorded run. This run took '+dur(D)+' on one laptop — recorded, not a benchmark.'+
     '</div></div>';
   var HEAD='<div class="kicker" id="kicker"></div><div class="say" id="say"></div>'+
            '<div class="sub" id="sub"></div>';
 
   function runHead(){ if(!$("kicker")){ $("head").innerHTML=HEAD; }
     $("head").className=""; }
-  function stage(pool){ runHead(); show("axis",1); show("poolrow",pool);
+  function stage(pool){ runHead(); foot(FOOT_RUN); show("axis",1); show("poolrow",pool);
     $("strip").style.visibility="visible";
     $("axis").classList.remove("gone"); $("strip").classList.remove("gone");
     $("poolrow").classList.remove("gone"); $("foot").classList.remove("gone"); }
@@ -319,16 +350,28 @@
      most of why a fixed canvas still read as a slideshow. */
   function fade(u){ $("head").style.opacity = Math.min(clamp(u/0.10), clamp((1-u)/0.07)); }
   function meter(n,cap){ $("poolnum").textContent=n; $("poolcap").textContent=cap; }
+  function foot(t){ $("foot").textContent=t; }
+  var FOOT_RUN="Rendered from the actual run trace. Every split shown really happened.";
+  var FOOT_DERIVED="The dashed panel is derived from range ownership — not a recorded run.";
 
   var A1_END = firstSteal*0.88;
   var IDLE_END = Math.min(D, firstSteal+22000);   // far enough in that the fleet really has collapsed
+  /* The close-up must be a split that happens AFTER the starvation it answers. Showing the
+     first split against a later background rewound the worker grid by 22s, so the fleet
+     appeared to recover before the mechanism that recovers it. */
+  var SPLIT_EV=(function(){ for(var i=0;i<stream.length;i++){ var e=stream[i];
+    if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END) return e; }
+    return FIRST_SPLIT; })();
+  var SPLIT_TAKER=(function(){ if(!SPLIT_EV) return -1;
+    for(var i=0;i<stream.length;i++){ var e=stream[i];
+      if(e[1]===K_CLAIM && e[2]===SPLIT_EV[3]) return e[3]; } return -1; })();
 
   var SCENES=[
    // ---- orient: what this is, on the plan's own geometry -------------------
    {t:3200, f:function(u){ stage(1); fade(u);
      var S=state(A1_END*0.40*u), n=drawPool(S); drawRun(S,null,0); axisKeys(0);
      $("axis").textContent="one bucket · first key → last key";
-     meter(n+" / "+meta.workers, "workers listing");
+     meter(n+" / "+meta.workers, "each square = one worker");
      say("swath · one real S3 listing",
          mm(meta.totalKeys)+" files. "+meta.workers+" workers.",
          "S3 hands them back in order, 1000 at a time, and will not say how they are "+
@@ -337,87 +380,99 @@
    {t:6300, f:function(u){ stage(1); fade(u);
      var S=state(A1_END*(0.40+0.60*u)), n=drawPool(S);
      drawRun(S,null,0); heavyTag(0,0); axisKeys(0);
-     $("axis").textContent="the plan — "+fmt(F.seedCount)+" equal starting ranges";
-     meter(fmt(S.done), "ranges finished");
+     $("axis").textContent="plan view — "+fmt(F.seedCount)+" guesses shown equally";
+     meter(fmt(S.done), "guesses finished");
      say("swath · one real S3 listing",
-         fmt(F.seedCount)+" guessed starting ranges.",
-         "Each gives a worker somewhere to begin. Most finish quickly. "+
-         "The marked one keeps going."); }},
+         fmt(F.seedCount)+" guessed places to start.",
+         "Teal is being listed now. Most finish quickly. The marked one keeps going."); }},
 
    // ---- the reveal: hold, deform, land, hold ------------------------------
-   {t:11800, f:function(u){ stage(1); fade(u);
-     var g = ease(clamp((u-0.12)/0.52));
-     var land = clamp((u-0.72)/0.14);
+   {t:11500, f:function(u){ stage(1); fade(u);
+     var g = ease(clamp((u-0.12)/0.50));
+     var land = clamp((u-0.70)/0.13);
      var S=state(A1_END), n=drawPool(S);
      drawRun(S,null,g); heavyTag(g, land); axisKeys(g);
-     $("axis").textContent = g<0.5 ? "re-drawing to true size…"
-                                   : "measured — width = files, same "+fmt(F.seedCount)+" ranges";
-     meter(fmt(S.done), "ranges finished");
+     $("axis").textContent = (g<=0) ? "plan view — "+fmt(F.seedCount)+" guesses shown equally"
+       : (g<1 ? "same "+fmt(F.seedCount)+" boundaries · only the scale changes"
+              : "measured view — width = file count");
+     meter(fmt(S.done), "guesses finished");
      say("swath · one real S3 listing",
-         g<0.35 ? "It was never the same size as the others."
-                : "One starting range held most of the bucket.",
-         g<0.35 ? "Re-drawn so that width is files, not guesses." : ""); }},
+         g<0.30 ? "The guesses were drawn equally. The files were not."
+                : "One guess held most of the bucket.",
+         g<0.30 ? "Re-drawing so that width is file count." : ""); }},
 
-   // ---- the consequence, stated only once the trace shows it --------------
-   {t:15000, f:function(u){ stage(1); fade(u);
+   // ---- why that matters: what ownership alone would have meant ------------
+   {t:13600, f:function(u){ stage(1); fade(u);
+     var S=state(A1_END), n=drawPool(S);
+     drawRun(S,null,1); axisKeys(1); counterfactual(ease(clamp(u*2.2))); foot(FOOT_DERIVED);
+     $("axis").textContent="measured view — width = file count";
+     meter("1", "worker would own it");
+     say("if the plan were final",
+         "One worker would own all of it.",
+         "The other "+(meta.workers-1)+" finish their guesses and cannot help. "+
+         "A range belongs to whoever claimed it."); }},
+
+   // ---- and that is what the recorded run starts to do ---------------------
+   {t:17000, f:function(u){ stage(1); fade(u);
      var S=state(firstSteal+(IDLE_END-firstSteal)*u), n=drawPool(S);
      drawRun(S); axisKeys(1);
-     $("axis").textContent="measured — width = files";
-     meter(n+" / "+meta.workers, "workers listing");
+     $("axis").textContent="recorded run · measured view";
+     meter(n+" / "+meta.workers, "workers still listing");
      var starved = n < meta.workers*0.6;
      say("swath · one real S3 listing",
-         starved ? "Most of the fleet has run out of work."
-                 : "The small ranges finish first.",
-         starved ? "Everything left to do is inside one range." : ""); }},
+         starved ? "That is exactly what starts to happen."
+                 : "The small guesses finish first.",
+         starved ? "Nearly everything left is inside that one guess and its descendants." : ""); }},
 
-   // ---- the mechanism, without leaving the bucket -------------------------
-   {t:18700, f:function(u){
-     if(!FIRST_SPLIT){ return; }
+   // ---- the mechanism, at the moment it is needed --------------------------
+   {t:21500, f:function(u){
+     if(!SPLIT_EV){ return; }
      stage(1); fade(u);
-     var a=ease(clamp(u/0.30));
-     var half=Math.min(0.05, Math.max(0.012,(FIRST_SPLIT[6]-FIRST_SPLIT[5])*0.9));
-     var lo=Math.max(0,FIRST_SPLIT[5]-half), hi=Math.min(1,FIRST_SPLIT[5]+half);
-     var committed = u>0.52;
-     var S=state(FIRST_SPLIT[0]+(committed?900:-600));
-     drawRun(state(IDLE_END)); axisKeys(1);
+     var a=ease(clamp(u/0.26));
+     var committed = u>0.50;
+     var tNow = SPLIT_EV[0]+(committed?1200:-700);
+     var S=state(tNow), n=drawPool(S, committed?{w:SPLIT_TAKER,a:1}:null);
+     var half=Math.min(0.05, Math.max(0.012,(SPLIT_EV[6]-SPLIT_EV[5])*0.9));
+     var lo=Math.max(0,SPLIT_EV[5]-half), hi=Math.min(1,SPLIT_EV[5]+half);
+     drawRun(S); axisKeys(1);
      sc.fillStyle=css("--paper"); sc.globalAlpha=.45; sc.fillRect(0,0,SW,BH); sc.globalAlpha=1;
      magnifier(a, lo, hi, S, function(lo,hi,S){
        drawRun(S,[lo,hi]);
-       var mx=((FIRST_SPLIT[5]-lo)/(hi-lo))*SW;
+       var mx=((SPLIT_EV[5]-lo)/(hi-lo))*SW;
        sc.strokeStyle=css("--ochre"); sc.lineWidth=10;
        if(!committed) sc.setLineDash([26,18]);
        sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.setLineDash([]);
        if(committed){
-         var cx1=Math.min(SW,((FIRST_SPLIT[6]-lo)/(hi-lo))*SW);
+         var cx1=Math.min(SW,((SPLIT_EV[6]-lo)/(hi-lo))*SW);
          sc.globalAlpha=.18; sc.fillStyle=css("--ochre");
          sc.fillRect(mx,0,Math.max(0,cx1-mx),BH); sc.globalAlpha=1;
        }
-     });
-     drawPool(S, committed?{w:TAKER,a:1}:null);
-     meter(committed?"+1":"1", committed?"worker takes the upper piece":"worker on this range");
+     }, SPLIT_EV);
+     $("axis").textContent="recorded run · one split, close up";
+     meter(n+" / "+meta.workers, committed ? "a waiting worker just joined" : "workers still listing");
      say("swath · one real S3 listing",
          committed ? "Two adjacent ranges. No gap, no overlap."
-                   : "It splits the range while it is still being listed.",
-         committed ? "The owner keeps the lower piece. Another worker takes the upper one."
-                   : "The boundary never has to be a key that exists."); }},
+                   : "So it cuts the range while it is still being listed.",
+         committed ? "The owner keeps the lower half. A waiting worker takes the upper half."
+                   : "Ochre marks the new boundary."); }},
 
    // ---- recovery: the payoff is the fleet, not the split count ------------
-   {t:26200, f:function(u){ stage(1); fade(u);
-     var S=state(IDLE_END+(D-IDLE_END)*ease(u)), n=drawPool(S);
+   {t:27500, f:function(u){ stage(1); fade(u);
+     var S=state(SPLIT_EV[0]+(D-SPLIT_EV[0])*ease(u)), n=drawPool(S);
      drawRun(S); axisKeys(1);
-     $("axis").textContent="measured — width = files";
+     $("axis").textContent="recorded run · measured view";
      meter(n+" / "+meta.workers, "workers helping");
      say("swath · one real S3 listing",
-         "It keeps splitting until everyone can help.",
-         fmt(S.splits)+" splits, all inside the range it got wrong."); }},
+         "It keeps cutting until everyone can help.",
+         fmt(S.hsplits)+" splits inside that one guess."); }},
 
-   {t:29000, f:function(u){ stage(1); fade(u);
+   {t:29800, f:function(u){ stage(1); fade(u);
      var S=state(D), n=drawPool(S); drawRun(S); axisKeys(1);
-     $("axis").textContent="every range completed";
+     $("axis").textContent="recorded run · every range completed";
      meter(fmt(S.done), "ranges completed");
      say("swath · one real S3 listing",
-         fmt(F.completed)+" ranges completed.",
-         F.failed===0 ? "None failed. No gaps, no overlaps." : fmt(F.failed)+" failed."); }},
+         "One bad guess no longer strands the fleet.",
+         F.ledgerOk ? "Every range accounted for. No gaps, no overlaps." : ""); }},
 
    {t:36000, f:function(u){
      $("axis").classList.add("gone"); $("strip").classList.add("gone");
@@ -431,13 +486,13 @@
   /* Only one hard break survives: the move out of the run and into the result.
      Everything earlier is carried by the geometry, so a whip there just erased
      the spatial memory the viewer was still assembling. */
-  var ACTS=[29000], WHIP=120;
+  var ACTS=[29800], WHIP=120;
   function veilAt(vt){ var a=0;
     for(var i=0;i<ACTS.length;i++){ var d=Math.abs(vt-ACTS[i]);
       if(d<WHIP) a=Math.max(a, 1-d/WHIP); }
     return a*0.94; }
 
-  $("foot").textContent="Rendered from the actual run trace. Nothing simulated.";
+
 
   function seek(vt){
     var prev=0;
