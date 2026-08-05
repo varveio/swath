@@ -89,12 +89,25 @@ def self_test():
 
     page = render(build_model(list(SELF_TEST_TRACE), 0, "self-test", True))
     check("model injected", "/*__MODEL__*/null" in page, False)
+
+    # A bucket is not a trusted input: a key may try to close the script block.
+    evil = "</script><script>x/"
+    hostile = [dict(e) for e in SELF_TEST_TRACE]
+    for e in hostile:
+        for field in ("lo", "hi", "pivot"):
+            if e.get(field) == "b/":
+                e[field] = evil
+    hostile_page = render(build_model(hostile, 0, "self-test", False))
+    check("hostile key reaches the payload",
+          evil.replace("<", "\\u003c").replace(">", "\\u003e") in hostile_page, True)
+    check("hostile key cannot close the script block",
+          "</script><script>" in hostile_page, False)
     check("anonymized page withholds keys", "a/q" in page, False)
     check("page is standalone", "http://" in page or "https://" in page, False)
 
     for line in failures:
         print("FAIL " + line, file=sys.stderr)
-    print("self-test: 27 checks, %d failures" % len(failures), file=sys.stderr)
+    print("self-test: 29 checks, %d failures" % len(failures), file=sys.stderr)
     return 1 if failures else 0
 
 

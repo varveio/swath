@@ -12,7 +12,20 @@ def _load(name):
 
 
 def _inject(template, model):
-    return template.replace(_PLACEHOLDER, json.dumps(model, separators=(",", ":")))
+    return template.replace(_PLACEHOLDER, _script_safe(json.dumps(model, separators=(",", ":"))))
+
+
+def _script_safe(payload):
+    """Make a JSON document safe to embed in an HTML <script> block.
+
+    Object keys come from the bucket, so a key containing ``</script>`` would otherwise
+    close the block and inject markup into the report. JSON has no bare ``<``, ``>`` or
+    ``&`` outside string literals, so escaping them unconditionally is safe and leaves the
+    parsed value identical. U+2028/9 are valid in JSON strings but not in JS source.
+    """
+    return (payload.replace("<", "\\u003c").replace(">", "\\u003e")
+                   .replace("&", "\\u0026")
+                   .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
 
 def render_report(model):

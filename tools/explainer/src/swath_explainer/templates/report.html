@@ -238,13 +238,13 @@
 
   document.getElementById("title").textContent = meta.title||"swath run trace";
   document.getElementById("subtitle").textContent =
-    [fmt(meta.totalKeys)+" objects", fmt(meta.pagesSeen)+" LIST requests",
+    [fmt(meta.totalKeys)+" objects", fmt(meta.pagesSeen)+" committed pages",
      meta.workers+" workers", secs(meta.durationMs)].join("  ·  ");
 
   var tw=document.getElementById("tiles");
   [["Objects",fmt(meta.totalKeys)],["Wall time",secs(meta.durationMs)],
-   ["LIST requests",fmt(meta.pagesSeen)],
-   ["Requests / 1k",F.reqPer1k===null?"—":F.reqPer1k.toFixed(2)],
+   ["Committed pages",fmt(meta.pagesSeen)],
+   ["Pages / 1k objects",F.reqPer1k===null?"—":F.reqPer1k.toFixed(2)],
    ["Workers",fmt(meta.workers)],["Splits",fmt(F.totalSplits)]].forEach(function(t){
     var d=el("div"); d.appendChild(el("dt",null,t[0])); d.appendChild(el("dd",null,t[1])); tw.appendChild(d); });
 
@@ -268,7 +268,7 @@
         : "No split ever divided it, so it drained on a single worker for as long as it took."
     ]);
   }
-  if (F.firstStealMs!==null && F.peakLive>0) {
+  if (F.firstStealMs!==null && F.peakLive>=meta.workers) {
     finding("calm","Seeding alone carried the start",[
       "Every worker was busy within "+secs(F.peakLiveMs)+" ("+fmt(F.peakLive)+
       " ranges live at once), and the first steal attempt did not happen until "+
@@ -283,7 +283,7 @@
         "%) placed their pivot from something the run had observed — drained density, a real "+
         "directory boundary, the alphabet seen in returned keys. Only "+fmt(F.uniformSplits)+
         " used the plain byte midpoint."]);
-    } else {
+    } else if (F.totalSplits >= 20 && F.uniformSplits > F.totalSplits/2) {
       finding("","Most pivots fell back to the uniform midpoint",[
         fmt(F.uniformSplits)+" of "+fmt(F.totalSplits)+" splits ("+
         pct(F.uniformSplits,F.totalSplits)+"%) used the plain byte midpoint rather than an "+
@@ -318,9 +318,10 @@
     "genealogy — so this is the work each original guess was really responsible for. "+
     fmt(F.emptySeeds)+" seed ranges held no objects at all.";
   document.getElementById("seed-lede").textContent =
-    "This run's seed produced "+fmt(F.seedCount)+" ranges. They were not equal: the heaviest held "+
+    "This run's seed produced "+fmt(F.seedCount)+" ranges. The heaviest held "+
     F.topShare+"% of the objects"+(F.medianKeys? ", against a median of "+fmt(F.medianKeys)+
-    " for the rest":"")+", and "+fmt(F.emptySeeds)+" were empty.";
+    " for the rest":"")+
+    (F.emptySeeds? ", and "+fmt(F.emptySeeds)+" held nothing at all":"")+".";
 
   if (M.families.length && !meta.anonymized) {
     var famTotal=M.families.reduce(function(a,f){return a+f.keys;},0)||1;
@@ -360,10 +361,11 @@
     "Binned into "+M.rate.length+" intervals across the run. Peak observed rate ~"+
     fmt(M.peakRate)+" objects/s.";
   document.getElementById("time-lede").textContent =
-    "Parallelism is not constant. Watch for a trough: it is what a run looks like when the easy, "+
-    "well-guessed ranges have all finished and one badly-guessed one is still going — the moment "+
-    "stealing has to earn its keep."+
-    (F.firstSplitMs!==null? " The first split of this run committed at "+secs(F.firstSplitMs)+".":"");
+    "Objects listed per second, against the number of ranges alive at the same moment. A trough "+
+    "in both at once is what it looks like when the well-guessed ranges have finished and a "+
+    "badly-guessed one is still going — the moment stealing has to earn its keep. Whether this "+
+    "run has one is visible above."+
+    (F.firstSplitMs!==null? " Its first split committed at "+secs(F.firstSplitMs)+".":"");
 
   var gt=document.getElementById("gate-table");
   M.gateRows.forEach(function(r){ var tr=el("tr");
@@ -415,13 +417,15 @@
     document.getElementById("steal-cap").textContent =
       fmt(attempts)+" thief attempts produced "+fmt(made)+" child ranges ("+
       (100*hit).toFixed(0)+"%). " + (
-        hit < 0.25
+        (attempts >= 20 && hit < 0.25)
           ? "Many attempts against few children: idle workers were probing without finding "+
             "anything splittable — the probe-storm signature."
           : attempts < (F.totalSplits||1)*0.2
             ? "Note how few attempts there were relative to "+fmt(F.totalSplits)+" total splits: "+
               "the worklist was refilled mostly by owner-side splitting, not by thieves."
-            : "A high hit rate: when a thief looked for work, it usually found something to take.");
+            : attempts >= 20
+              ? "A high hit rate: when a thief looked for work, it usually found something to take."
+              : "Too few steal attempts in this run to read a pattern from.");
   }
 
   // ---- static map ---------------------------------------------------------
@@ -564,22 +568,26 @@
       "The fleet was occupied for "+fmt(F.busySec)+" worker-seconds. Spread perfectly across "+
       meta.workers+" workers that is "+fmt(F.idealSec)+"s of wall clock; the run actually took "+
       Math.round(meta.durationMs/1000)+"s — <B>"+F.speedupPct+"% of perfect speedup</B>.",
-      "The gap is "+fmt(F.idleSec)+" idle worker-seconds. That is the honest cost of not knowing "+
-      "where the objects were: workers with nothing to do while the partition was still being "+
-      "corrected. Watch the live-range trace above to see when it was spent."
+      "The gap is "+fmt(F.idleSec)+" idle worker-seconds — worker time not spent listing. "+
+      "Partition correction is one cause; startup, throttling, request latency, more workers "+
+      "than splittable work, and an unsplittable tail are others, and this report does not "+
+      "separate them. The live-range trace in §2 below shows when it was spent."
     ].map(function(x){ return x.replace(/<B>|<\/B>/g,""); }));
   }
   document.getElementById("ledger-lede").textContent =
     fmt(F.seedCount)+" seed ranges plus "+fmt(F.totalSplits)+" splits is "+
     fmt(F.seedCount+F.totalSplits)+" ranges; the trace records "+fmt(F.claimed)+" claimed and "+
     fmt(F.completed)+" completed, with "+fmt(F.failed)+" failed."+
-    (F.ledgerOk ? " Those balance exactly — every range that was created was claimed, and every "+
-      "range that was claimed finished. No gap, no overlap, nothing lost."
+    (F.ledgerOk ? " Those balance exactly: every range created was claimed, and every range "+
+      "claimed finished. That is a lifecycle reconciliation — it does not by itself inspect "+
+      "boundaries, so it evidences no lost or abandoned range rather than proving coverage."
                 : " Those do not balance, which is expected if the run was interrupted or the "+
       "trace is a partial prefix.")+
-    (F.floorPages ? " The run spent "+fmt(meta.pagesSeen)+" LIST requests against a theoretical "+
+    (F.floorPages ? " The run committed "+fmt(meta.pagesSeen)+" data pages against a theoretical "+
       "floor of "+fmt(F.floorPages)+" for this many objects — "+
-      (100*meta.pagesSeen/F.floorPages-100).toFixed(1)+"% overhead for the parallelism." : "");
+      (100*meta.pagesSeen/F.floorPages-100).toFixed(1)+"% more pages than the minimum. "+
+      "Probe and retry requests are not in this figure; the run summary's api_calls is the "+
+      "count of actual HTTP requests." : "");
 
   var prov=["Rendered from a swath --trace JSONL file by tools/explainer/explainer.py",
             fmt(meta.events)+" events parsed"];
