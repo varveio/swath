@@ -139,16 +139,17 @@
       /* The whole plan, underneath. A range only becomes a node once a worker claims it, so
          without this the opening shows 64 bands while the caption says 257. */
       for(var q=0;q<SP.length;q++){
-        var qx=X(SP[q][0]), qw=Math.max(0.8,X(SP[q][1])-qx);
+        var qx=Math.round(X(SP[q][0])), qw=Math.max(1,Math.round(X(SP[q][1]))-qx);
         sc.globalAlpha=.07; sc.fillStyle=css("--pale");
         sc.fillRect(qx,0,qw,BH); sc.globalAlpha=1;
-        if(qw>2.2){ sc.strokeStyle=css("--rule"); sc.lineWidth=1;
-                    sc.strokeRect(qx+0.5,0.5,qw-1,BH-1); }
+        if(qw>4){ sc.strokeStyle=css("--rule"); sc.lineWidth=1;
+                  sc.strokeRect(qx+0.5,0.5,qw-1,BH-1); }
       }
     }
     for(var id in S.nodes){
       var d=S.nodes[id], x0=X(d.lo), x1=X(d.hi);
       if(x1<-20||x0>SW+20) continue;
+      x0=Math.round(x0); x1=Math.round(x1);
       var w=Math.max(1,x1-x0);
       /* One channel per question. FILL answers "is this being listed right now" — solid for
          active, pale for finished, nothing for unclaimed. Lineage is annotated separately by
@@ -163,17 +164,17 @@
       else { sc.globalAlpha=.55; sc.fillStyle=col; sc.fillRect(x0,0,w,BH);
              sc.globalAlpha=.98; sc.fillRect(x0,0,Math.max(0,X(d.cur)-x0),SH); }
       sc.globalAlpha=1;
-      if(w>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1; sc.strokeRect(x0+.5,.5,w-1,BH-1); }
+      if(w>4){ sc.strokeStyle=css("--paper"); sc.lineWidth=1; sc.strokeRect(x0+.5,.5,w-1,BH-1); }
     }
     if(!zoom && SP.length){
       /* The rail marks the one guess this story is about, and every range split out of it.
          It is an annotation over the geometry, never a fill inside it. */
-      var hx=X(SP[HEAVY][0]), hw=Math.max(3,X(SP[HEAVY][1])-hx);
+      var hx=Math.round(X(SP[HEAVY][0])), hw=Math.max(3,Math.round(X(SP[HEAVY][1]))-hx);
       sc.fillStyle=css("--rust"); sc.fillRect(hx,0,hw,7);
       sc.fillRect(hx,0,2.5,BH); sc.fillRect(hx+hw-2.5,0,2.5,BH);
     }
     for(var i=0;i<S.marks.length;i++){
-      var mk=S.marks[i], mx=X(mk.x); if(mx<-2||mx>SW+2) continue;
+      var mk=S.marks[i], mx=Math.round(X(mk.x)); if(mx<-2||mx>SW+2) continue;
       sc.globalAlpha=mk.a; sc.strokeStyle=css("--ochre"); sc.lineWidth=3;
       sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.globalAlpha=1;
     }
@@ -214,26 +215,34 @@
     }
     return out;
   })();
+  var AXIS_PICK=(function(){
+    /* Fixed once, from the measured geometry: the heavy guess plus the two that sit nearest
+       the thirds of the axis. Re-deciding per frame made labels blink during the morph. */
+    if(!NAMED.length) return [];
+    var want=[0.02,0.42,0.80], out=[];
+    for(var w=0;w<want.length;w++){
+      var best=-1, bd=1e9;
+      for(var i=0;i<NAMED.length;i++){
+        var d=Math.abs(NAMED[i].x-want[w]);
+        if(d<bd && out.indexOf(i)<0){ bd=d; best=i; }
+      }
+      if(best>=0) out.push(best);
+    }
+    return out.map(function(i){ return NAMED[i]; });
+  })();
   function axisKeys(g){
     if(!NAMED.length) return;
     sc.fillStyle=css("--paper"); sc.fillRect(0,BH,SW,AXIS_H);
     sc.strokeStyle=css("--rule"); sc.lineWidth=1;
     sc.beginPath(); sc.moveTo(0,BH+0.5); sc.lineTo(SW,BH+0.5); sc.stroke();
     sc.font="19px "+css("--mono"); sc.fillStyle=css("--ink3");
-    var placed=[], i;
-    for(i=0;i<NAMED.length;i++){
-      var x=pos(NAMED[i].x,g)*SW, nm=NAMED[i].name;
+    for(var i=0;i<AXIS_PICK.length;i++){
+      var x=Math.round(pos(AXIS_PICK[i].x,g)*SW), nm=AXIS_PICK[i].name;
       if(nm.length>22) nm=nm.slice(0,21)+"…";
-      var w=nm.length*11.4;
-      if(x<4 || x+w>SW-4) continue;
-      var clash=false;
-      for(var j=0;j<placed.length;j++) if(Math.abs(placed[j]-x)<w+40) clash=true;
-      if(clash) continue;
-      placed.push(x);
+      if(x<4 || x+nm.length*11.4>SW-4) continue;
       sc.strokeStyle=css("--rule");
       sc.beginPath(); sc.moveTo(x+0.5,BH); sc.lineTo(x+0.5,BH+7); sc.stroke();
       sc.fillText(nm, x+7, BH+25);
-      if(placed.length>=3) break;
     }
   }
 
@@ -374,7 +383,7 @@
     $("poolrow").classList.remove("gone"); $("foot").classList.remove("gone"); }
   /* Copy dissolves rather than pops. A hard textContent swap is itself a cut, which is
      most of why a fixed canvas still read as a slideshow. */
-  var CUTS=[3200,6300,11500,14600,18000,22500,28500,31000];   // every scene boundary
+  var CUTS=[3200,6300,11500,14600,18000,20295,22500,28500,31000];  // boundaries + the commit
   var DIPS=[11500,14600,22500];        // the three where the picture actually discontinues
   function nearest(vt, list){
     var d=1e9; for(var i=0;i<list.length;i++) d=Math.min(d, Math.abs(vt-list[i])); return d;
@@ -485,22 +494,22 @@
      if(!SPLIT_EV){ return; }
      stage(1);
      var a=ease(clamp(u/0.26));
-     var commit = clamp((u-0.50)/0.055), committed = u>0.50;
-     var tNow = SPLIT_EV[0]+(committed?1200:-700);
+     var commit = ease(clamp((u-0.46)/0.10)), committed = commit>0.5;
+     var tNow = SPLIT_EV[0] - 700 + 1900*commit;
      var S=state(tNow), n=drawPool(S, committed?{w:SPLIT_TAKER,a:1}:null);
      var half=Math.min(0.05, Math.max(0.012,(SPLIT_EV[6]-SPLIT_EV[5])*0.9));
      var lo=Math.max(0,SPLIT_EV[5]-half), hi=Math.min(1,SPLIT_EV[5]+half);
      drawRun(S); axisKeys(1);
-     sc.fillStyle=css("--paper"); sc.globalAlpha=.45; sc.fillRect(0,0,SW,BH); sc.globalAlpha=1;
+     sc.fillStyle=css("--paper"); sc.globalAlpha=.45*a; sc.fillRect(0,0,SW,BH); sc.globalAlpha=1;
      magnifier(a, lo, hi, S, function(lo,hi,S){
        drawRun(S,[lo,hi]);
        var mx=((SPLIT_EV[5]-lo)/(hi-lo))*SW;
        sc.strokeStyle=css("--ochre"); sc.lineWidth=committed?(6+8*commit):10;
        if(!committed) sc.setLineDash([26,18]);
        sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.setLineDash([]);
-       if(committed){
+       if(commit>0){
          var cx1=Math.min(SW,((SPLIT_EV[6]-lo)/(hi-lo))*SW);
-         sc.globalAlpha=.18; sc.fillStyle=css("--ochre");
+         sc.globalAlpha=.18*commit; sc.fillStyle=css("--ochre");
          sc.fillRect(mx,0,Math.max(0,cx1-mx),BH); sc.globalAlpha=1;
        }
      }, SPLIT_EV);
