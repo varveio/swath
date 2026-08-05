@@ -375,13 +375,14 @@
     '<div class="lede">One guessed key range held '+F.topShare+'% of them. '+
     'swath split it while listing, so every worker could help.</div><ul>'+
     '<li><b>'+fmt(F.seedCount)+'</b> guessed starting ranges</li>'+
-    '<li>split <b>'+fmt(F.topSplits)+'</b> times while running, inside the one it got wrong</li>'+
+    '<li>split <b>'+fmt(F.topSplits)+'</b> times while running, all inside that one guess</li>'+
     helpLine + '<li><b>'+fmt(F.completed)+'</b> ranges completed</li>' + failLine +
-    '</ul><div class="cta">github.com/varveio/swath</div>'+
+    '</ul><div class="cta">swath.varve.io</div>'+
     '<div class="prov">swath — parallel S3 listing that rebalances itself while it runs.<br>'+
     'Every run state shown is rendered from the actual '+fmt(meta.events)+'-event trace; '+
     'the labelled no-split panel is a derived consequence of range ownership, not a '+
-    'recorded run. One recorded run of '+dur(D)+' — not a benchmark.'+
+    'recorded run. One recorded run of '+dur(D)+' — not a benchmark.<br>'+
+    'github.com/varveio/swath'+
     '</div></div>';
   var HEAD='<div class="kicker" id="kicker"></div><div class="say" id="say"></div>'+
            '<div class="sub" id="sub"></div>';
@@ -471,7 +472,7 @@
      var S=state(A1_END); drawPool(S);
      drawRun(S,null,1); axisKeys(1);
      counterfactual(Math.min(ease(clamp(u/0.22)), ease(clamp((1-u)/0.12)))); foot(FOOT_DERIVED);
-     $("axis").textContent="without splitting · what would happen";
+     $("axis").textContent="measured view — width = file count";
      say("without splitting · what would happen",
          "Without splitting, "+mm(SP[HEAVY][2])+" files would stay serial.",
          "One worker would own this range start to finish. The other "+(meta.workers-1)+
