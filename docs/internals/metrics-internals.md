@@ -933,14 +933,53 @@ per-event fields). This table is versioned by hand.
 
 ### Reading a trace, visually
 
-Two committed renderers turn a `--trace` file into pictures:
-`trace-to-perfetto.py` emits Chrome Trace Event Format for https://ui.perfetto.dev (zoomable
-worker timeline: range drains as slices, steals/splits as instant events); `trace-viz.py` emits
-a self-contained HTML page adding the keyspace×time carving map. Reading signatures: a healthy
-run is confetti (many short drains, everyone busy) and a map of wide/short rectangles; a dense
-serial tail is a single tall thin column outliving the run; a thief probe storm is a blizzard of
-steal-attempt markers; owner-split confetti is a stack of hairline rectangles in one keyspace
-region. The HTML page embeds this guide so every generated trace self-explains.
+`tools/explainer/explainer.py` (stdlib-only, like the CI drift guard) turns a `--trace` file into a
+self-contained HTML page:
+
+```text
+tools/explainer/explainer.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
+tools/explainer/explainer.py run.trace.jsonl -o video.html --video [--video-style strip|map]
+tools/explainer/explainer.py --self-test
+```
+
+The page is an **explainer, not a dashboard**: it computes the run's findings and states them in
+prose — which seed guess turned out to be wrong and by how much, when the engine noticed, what it
+did — then backs each one with a figure. The narrative is generated from the events, so it
+describes whichever run the tool is pointed at. Sections: the seed guesses ranked by the objects
+actually found behind them (weight rolled up through the split genealogy, so each bar is the work
+that guess was really responsible for); throughput and live-range count over time; the owner-split
+gate ledger; the pivot cascade with sample pivots verbatim; a static keyspace×time map; a
+replayable version of the same; and a lifecycle reconciliation
+(`seeds + splits == claimed == completed`), which evidences no lost or abandoned range but
+inspects no boundary and so is not by itself a coverage proof.
+
+The keyspace axis is the **measured key-mass CDF**, built from `page_committed`'s `(cursor, keys)`
+pairs: **equal width means an equal number of objects**, so a region holding two thirds of a bucket
+gets two thirds of the picture. On the space-time map a rectangle's area is the object mass a
+range owned multiplied by how long it owned it — related to the work it did, but not the same
+thing: a range that owns a large span briefly and lists little of it still draws wide. Neither
+obvious alternative survives real data — a raw byte-value axis collapses a deep-prefix bucket onto
+a hairline, and an axis anchored on range boundaries gives every boundary equal width, so a run
+seeded into hundreds of ranges renders as hundreds of identical slivers and width encodes nothing.
+The cost, stated on the page too: screen distance is not byte distance, and empty keyspace takes no
+width. Colour is **seed lineage**, not worker id — a reader cares which original guess the work
+descends from, not which of N threads ran it.
+
+Reading signatures: a healthy run is confetti (many short drains, everyone busy) and a map of
+wide/short rectangles; a dense serial tail is a single column outliving the run — narrow when the
+tail is a small share of the bucket, but wide when it is a large one, because this axis gives it
+width in proportion to its objects; a
+thief probe storm is a blizzard of steal-attempt markers with few splits behind them;
+owner-split confetti is a stack of hairline rectangles in one keyspace region. The page embeds
+this guide, plus per-mechanism split counts and per-reason steal outcomes, so every generated
+trace self-explains.
+
+Traces carry real key names (the sensitivity note above), and so does the rendered page —
+`--anonymize` emits positions and counts only, for a picture that needs to travel further than
+the trace does.
+
+A Perfetto exporter (Chrome Trace Event Format, for a zoomable worker timeline at
+https://ui.perfetto.dev) is the still-planned V2; no such script ships today.
 
 ---
 

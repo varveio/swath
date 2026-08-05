@@ -1,0 +1,24 @@
+[project]
+name = "swath-explainer"
+version = "0.1.0"
+description = "Turn a swath run's --trace event log into a readable HTML explainer and a share-ready video."
+readme = "README.md"
+requires-python = ">=3.11"
+# No runtime dependencies, deliberately: the generator is stdlib-only so the public repo keeps
+# its zero-dependency property and CI needs nothing installed. The optional video capture step
+# shells out to Node/playwright and ffmpeg, which are dev tools, not dependencies of this package.
+dependencies = []
+
+[project.scripts]
+swath-explainer = "swath_explainer.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swath_explainer"]
+
+[tool.hatch.build]
+# The templates ARE the pages; they must ship inside the wheel.
+artifacts = ["src/swath_explainer/templates/*.html"]

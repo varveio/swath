@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>swath</title>
+<style>
+  /* Light "plotting paper" language, carried over from the field guide — deliberately not a
+     dark observability dashboard, which is what the previous cut read as. */
+  :root {
+    --paper:#F1F2EB; --ink:#131A18; --ink2:#4E5A55; --ink3:#7C8781;
+    --rule:#CBD0C2; --pale:#C5CCC0;
+    --rust:#A33F28; --ochre:#9A6710; --teal:#0D6E60;
+    --mono:ui-monospace,"SFMono-Regular","Cascadia Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; margin:0; }
+  html,body { width:1080px; height:1350px; overflow:hidden; background:var(--paper);
+              color:var(--ink); font-family:var(--mono); }
+  .stage { width:1080px; height:1350px; padding:66px 64px 56px; display:flex;
+           flex-direction:column; position:relative; }
+  #head { height:300px; overflow:hidden; }
+  .kicker { font-size:17px; letter-spacing:.24em; text-transform:uppercase;
+            color:var(--ink3); margin-bottom:20px; min-height:22px; }
+  .say { font-size:56px; line-height:1.12; letter-spacing:-.035em; font-weight:500; }
+  .say .r { color:var(--rust); }
+  .say.q { font-size:48px; line-height:1.16; }
+  .sub { font-size:25px; color:var(--ink2); margin-top:22px; line-height:1.35; }
+  .axis { font-size:18px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink3);
+          margin:6px 0 14px; }
+  canvas { display:block; }
+  .poolrow { display:flex; align-items:center; gap:28px; margin-top:40px; }
+  .poolnum { font-size:60px; letter-spacing:-.03em; font-variant-numeric:tabular-nums;
+             line-height:1; }
+  .poolcap { font-size:20px; color:var(--ink2); margin-top:8px; }
+  #foot { margin-top:auto; font-size:19px; color:var(--ink3); }
+  .card .big { font-size:74px; letter-spacing:-.04em; line-height:1.06; }
+  .card ul { list-style:none; margin-top:38px; font-size:27px; line-height:1.8;
+             color:var(--ink2); }
+  .card ul b { color:var(--ink); }
+  .card .lede { font-size:29px; line-height:1.4; margin-top:26px;
+                color:var(--ink2); max-width:900px; }
+  .card .prov { margin-top:44px; font-size:20px; color:var(--ink3); }
+  .card .cta { margin-top:12px; font-size:24px; color:var(--teal); }
+  .hide { visibility:hidden; }
+  .gone { display:none; }
+  /* The closing card is the whole frame — without this it stacks at the top and leaves
+     the same dead lower third the opening used to have. */
+  #head.cardmode { flex:1; display:flex; flex-direction:column; justify-content:center; }
+  /* Act punctuation. A hard whip to paper at each act boundary — the alternative is
+     continuous drift, which is the tell that nobody directed the thing. */
+  #veil { position:absolute; inset:0; background:var(--paper); opacity:0; pointer-events:none; }
+</style></head>
+<body><div class="stage">
+  <div id="head">
+    <div class="kicker" id="kicker"></div>
+    <div class="say" id="say"></div>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="axis hide" id="axis"></div>
+  <canvas id="strip" width="952" height="600"></canvas>
+  <div class="poolrow hide" id="poolrow">
+    <canvas id="pool" width="560" height="112"></canvas>
+    <div><div class="poolnum" id="poolnum"></div><div class="poolcap" id="poolcap"></div></div>
+  </div>
+  <div id="foot"></div>
+  <div id="veil"></div>
+</div>
+<script>
+(function(){
+  "use strict";
+  var M = /*__MODEL__*/null; if(!M) return;
+  var meta=M.meta, F=M.findings, stream=M.stream, SP=M.seedSpans||[];
+  var K_CLAIM=1,K_PAGE=2,K_SPLIT=3,K_OWNER=4,K_DONE=5,K_FAIL=6;
+  var D=meta.durationMs, firstSteal=F.firstStealMs===null?D*0.3:F.firstStealMs;
+  function fmt(n){ return Math.round(n).toLocaleString("en-US"); }
+  function mm(n){ return (n/1e6).toFixed(1)+"M"; }
+  function $(id){ return document.getElementById(id); }
+  function css(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+  function clamp(v){ return Math.max(0,Math.min(1,v)); }
+  function ease(u){ return u*u*(3-2*u); }
+  /* Wall clock is a property of the machine the run happened on, so it is derived from the
+     trace and never asserted as a benchmark. See the card's provenance line. */
+  function dur(ms){ var s=Math.round(ms/1000);
+    return s<60 ? s+"s" : Math.floor(s/60)+"m "+(s%60)+"s"; }
+  var sc=$("strip").getContext("2d"), pc=$("pool").getContext("2d");
+  var SW=952, SH=600, PW=560, PH=112;
+  var AXIS_H=34, BH=SH-AXIS_H;          // the strip proper; AXIS_H holds real key names
+
+  var HEAVY=0; for(var z=0;z<SP.length;z++){ if(SP[z][2]>SP[HEAVY][2]) HEAVY=z; }
+  var HEAVY_ID = SP.length ? SP[HEAVY][3] : -1;
+  var NSEED = SP.length||1;
+
+  /* Two geometries over the same keyspace.
+       g=0  every seed the same width — the plan, and the only one on which the early run
+            is legible at all, since 256 of the 257 seeds share a third of the mass axis.
+       g=1  width = objects — the truth.
+     The seeds tile the keyspace, so mapping between them is a monotone piecewise-linear
+     remap through the shared breakpoints. Animating g IS the reveal: the run keeps playing
+     while the ground it is drawn on changes underneath it. */
+  var MP=[], UP=[];
+  (function(){ if(!SP.length) return;
+    MP.push(SP[0][0]); UP.push(0);
+    for(var i=0;i<SP.length;i++){ MP.push(SP[i][1]); UP.push((i+1)/NSEED); } })();
+  function uni(p){
+    if(!MP.length) return p;
+    if(p<=MP[0]) return UP[0];
+    if(p>=MP[MP.length-1]) return UP[UP.length-1];
+    var lo=0, hi=MP.length-1, mid;
+    while(hi-lo>1){ mid=(lo+hi)>>1; if(MP[mid]<=p) lo=mid; else hi=mid; }
+    var span=MP[hi]-MP[lo];
+    return span>0 ? UP[lo]+(UP[hi]-UP[lo])*((p-MP[lo])/span) : UP[lo];
+  }
+  function pos(p,g){ if(g>=1) return p; var u=uni(p); return g<=0 ? u : u+(p-u)*g; }
+
+  // ---- the strip: the live run, drawn at whichever geometry ---------------
+  function state(t){
+    var nodes={}, busy={}, keys=0, splits=0, hsplits=0, done=0, marks=[], i;
+    for(i=0;i<stream.length;i++){
+      var e=stream[i]; if(e[0]>t) break; var k=e[1], n;
+      if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={}); n.lo=e[4]; n.hi=e[6]; n.cur=e[5];
+        n.root=e[7]; n.st=1; n.w=e[3]; busy[e[3]]=e[7]; }
+      else if(k===K_PAGE){ keys+=e[5]; n=nodes[e[2]]; if(n) n.cur=e[4]; }
+      else if(k===K_SPLIT||k===K_OWNER){ n=nodes[e[2]]; if(n) n.hi=e[5];
+        var c=nodes[e[3]];
+        if(c){ c.root=e[8]; }                  // already claimed — keep its worker and state
+        else nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],st:0,w:-1};
+        splits++;
+        if(e[8]===HEAVY_ID) hsplits++;
+        if(t-e[0]<2200) marks.push({x:e[5],a:1-(t-e[0])/2200}); }
+      else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
+        if(n){ n.st=2; if(n.w>=0) delete busy[n.w]; done++; } }
+    }
+    return {nodes:nodes,busy:busy,keys:keys,splits:splits,hsplits:hsplits,
+            marks:marks,done:done};
+  }
+
+  function drawRun(S, zoom, g){
+    g=(g===undefined)?1:g;
+    sc.clearRect(0,0,SW,SH);
+    var z0=zoom?zoom[0]:0, z1=zoom?zoom[1]:1, zs=1/(z1-z0);
+    function X(p){ return (pos(p,g)-z0)*zs*SW; }
+    if(!zoom && SP.length){
+      /* The whole plan, underneath. A range only becomes a node once a worker claims it, so
+         without this the opening shows 64 bands while the caption says 257. */
+      for(var q=0;q<SP.length;q++){
+        var qx=Math.round(X(SP[q][0])), qw=Math.max(1,Math.round(X(SP[q][1]))-qx);
+        sc.globalAlpha=.07; sc.fillStyle=css("--pale");
+        sc.fillRect(qx,0,qw,BH); sc.globalAlpha=1;
+        if(qw>4){ sc.strokeStyle=css("--rule"); sc.lineWidth=1;
+                  sc.strokeRect(qx+0.5,0.5,qw-1,BH-1); }
+      }
+    }
+    for(var id in S.nodes){
+      var d=S.nodes[id], x0=X(d.lo), x1=X(d.hi);
+      if(x1<-20||x0>SW+20) continue;
+      x0=Math.round(x0); x1=Math.round(x1);
+      var w=Math.max(1,x1-x0);
+      /* One channel per question. FILL answers "is this being listed right now" — solid for
+         active, pale for finished, nothing for unclaimed. Lineage is annotated separately by
+         the rail below, so a screen full of the overloaded lineage reads as work in progress
+         rather than as a screen full of alarm colour. */
+      var col = (d.st===1) ? css("--teal") : css("--pale");
+      /* State has to out-read lineage here, or "145 finished, one has not" is invisible.
+         An active range is the brightest thing on the strip from the moment it is claimed —
+         the old base alpha meant a just-claimed range read fainter than a finished one. */
+      if(d.st===2){ sc.globalAlpha=.34; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
+      else if(d.st===0){ sc.globalAlpha=.10; sc.fillStyle=col; sc.fillRect(x0,0,w,BH); }
+      else { sc.globalAlpha=.55; sc.fillStyle=col; sc.fillRect(x0,0,w,BH);
+             sc.globalAlpha=.98; sc.fillRect(x0,0,Math.max(0,X(d.cur)-x0),SH); }
+      sc.globalAlpha=1;
+      if(w>4){ sc.strokeStyle=css("--paper"); sc.lineWidth=1; sc.strokeRect(x0+.5,.5,w-1,BH-1); }
+    }
+    if(!zoom && SP.length){
+      /* The rail marks the one guess this story is about, and every range split out of it.
+         It is an annotation over the geometry, never a fill inside it. */
+      var hx=Math.round(X(SP[HEAVY][0])), hw=Math.max(3,Math.round(X(SP[HEAVY][1]))-hx);
+      sc.fillStyle=css("--rust"); sc.fillRect(hx,0,hw,7);
+      sc.fillRect(hx,0,2.5,BH); sc.fillRect(hx+hw-2.5,0,2.5,BH);
+    }
+    for(var i=0;i<S.marks.length;i++){
+      var mk=S.marks[i], mx=Math.round(X(mk.x)); if(mx<-2||mx>SW+2) continue;
+      sc.globalAlpha=mk.a; sc.strokeStyle=css("--ochre"); sc.lineWidth=3;
+      sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.globalAlpha=1;
+    }
+  }
+
+  function drawPool(S, ring){
+    pc.clearRect(0,0,PW,PH);
+    var N=meta.workers||1, cols=16, rows=Math.ceil(N/cols), cw=PW/cols, ch=PH/rows, n=0;
+    for(var i=0;i<N;i++){
+      var cx=(i%cols)*cw, cy=Math.floor(i/cols)*ch, root=S.busy[i];
+      if(root===undefined){ pc.fillStyle=css("--rule"); pc.globalAlpha=.40; }
+      else { n++; pc.fillStyle=css("--teal"); pc.globalAlpha=.92; }
+      pc.fillRect(cx+2,cy+2,cw-4,ch-4); pc.globalAlpha=1;
+      if(root===HEAVY_ID){
+        pc.fillStyle=css("--rust");
+        pc.beginPath(); pc.moveTo(cx+cw-2,cy+2); pc.lineTo(cx+cw-2,cy+2+Math.min(9,ch*0.45));
+        pc.lineTo(cx+cw-2-Math.min(9,cw*0.45),cy+2); pc.closePath(); pc.fill();
+      }
+    }
+    if(ring && ring.w>=0 && ring.a>0){       // which cell just took the upper piece
+      var rx=(ring.w%cols)*cw, ry=Math.floor(ring.w/cols)*ch;
+      pc.globalAlpha=ring.a; pc.strokeStyle=css("--ochre"); pc.lineWidth=3;
+      pc.strokeRect(rx-1,ry-1,cw+2,ch+2); pc.globalAlpha=1;
+    }
+    return n;
+  }
+
+  /* Seed boundaries are real S3 key prefixes. Printing a few of them is the cheapest
+     way to tell a viewer that the bar is a bucket's key order and not an abstract meter —
+     it costs no caption and it is straight off the trace. Suppressed when anonymized. */
+  var NAMED=(function(){
+    if(meta.anonymized || !M.seeds) return [];
+    var byId={}, i; for(i=0;i<M.seeds.length;i++) byId[M.seeds[i].id]=M.seeds[i];
+    var out=[];
+    for(i=0;i<SP.length;i++){
+      var sd=byId[SP[i][3]];
+      if(sd && sd.lo && sd.lo!=="/") out.push({x:SP[i][0], name:sd.lo});
+    }
+    return out;
+  })();
+  var AXIS_PICK=(function(){
+    /* Fixed once, from the measured geometry: the heavy guess plus the two that sit nearest
+       the thirds of the axis. Re-deciding per frame made labels blink during the morph. */
+    if(!NAMED.length) return [];
+    var want=[0.02,0.42,0.80], out=[];
+    for(var w=0;w<want.length;w++){
+      var best=-1, bd=1e9;
+      for(var i=0;i<NAMED.length;i++){
+        var d=Math.abs(NAMED[i].x-want[w]);
+        if(d<bd && out.indexOf(i)<0){ bd=d; best=i; }
+      }
+      if(best>=0) out.push(best);
+    }
+    return out.map(function(i){ return NAMED[i]; });
+  })();
+  function axisKeys(g){
+    if(!NAMED.length) return;
+    sc.fillStyle=css("--paper"); sc.fillRect(0,BH,SW,AXIS_H);
+    sc.strokeStyle=css("--rule"); sc.lineWidth=1;
+    sc.beginPath(); sc.moveTo(0,BH+0.5); sc.lineTo(SW,BH+0.5); sc.stroke();
+    sc.font="19px "+css("--mono"); sc.fillStyle=css("--ink3");
+    var drawn=[];
+    for(var i=0;i<AXIS_PICK.length;i++){
+      var x=Math.round(pos(AXIS_PICK[i].x,g)*SW), nm=AXIS_PICK[i].name;
+      if(nm.length>22) nm=nm.slice(0,21)+"…";
+      var wid=nm.length*11.4;
+      if(x<4 || x+wid>SW-4) continue;
+      var clash=false;
+      for(var j=0;j<drawn.length;j++)
+        if(x < drawn[j][1]+22 && x+wid+22 > drawn[j][0]) clash=true;
+      if(clash) continue;
+      drawn.push([x, x+wid]);
+      sc.strokeStyle=css("--rule");
+      sc.beginPath(); sc.moveTo(x+0.5,BH); sc.lineTo(x+0.5,BH+7); sc.stroke();
+      sc.fillText(nm, x+7, BH+25);
+    }
+  }
+
+  /* The tag rides the heavy range through the whole deformation: it reads "1 of 257"
+     while the range is a sliver and becomes the share once the range is wide enough to
+     hold it. Naming the thing before it moves is what makes the movement mean something. */
+  function keyStrip(a){
+    if(a<=0) return;
+    var items=[[css("--teal"),.92,"listing now"],[css("--pale"),.34,"finished"],
+               [null,0,"not started"]], x=6, y=BH-30;
+    sc.globalAlpha=a*0.94; sc.fillStyle=css("--paper");
+    sc.fillRect(0, y-11, SW, 42);
+    sc.globalAlpha=a; sc.strokeStyle=css("--rule"); sc.lineWidth=1;
+    sc.beginPath(); sc.moveTo(0,y-10.5); sc.lineTo(SW,y-10.5); sc.stroke();
+    sc.font="19px "+css("--mono");
+    for(var i=0;i<items.length;i++){
+      if(items[i][0]){ sc.fillStyle=items[i][0]; sc.globalAlpha=a*items[i][1];
+                       sc.fillRect(x,y,20,20); sc.globalAlpha=a; }
+      else { sc.strokeStyle=css("--rule"); sc.lineWidth=1; sc.strokeRect(x+0.5,y+0.5,19,19); }
+      sc.fillStyle=css("--ink-2")||css("--ink2"); sc.fillStyle=css("--ink2");
+      sc.fillText(items[i][2], x+28, y+15);
+      x += 28 + items[i][2].length*11.4 + 26;
+    }
+    sc.fillStyle=css("--rust"); sc.fillRect(x,y+3,20,6);
+    sc.fillStyle=css("--ink2"); sc.fillText("the guess this is about", x+28, y+15);
+    sc.globalAlpha=1;
+  }
+
+  function heavyTag(g, land){
+    if(!SP.length) return;
+    var bx=pos(SP[HEAVY][0],g)*SW, bw=(pos(SP[HEAVY][1],g)-pos(SP[HEAVY][0],g))*SW;
+    if(land<=0){
+      var lx=bx+bw/2, ty=BH*0.30;
+      sc.strokeStyle=css("--rust"); sc.lineWidth=2;
+      sc.beginPath(); sc.moveTo(lx,ty); sc.lineTo(lx+92,ty-46); sc.lineTo(lx+250,ty-46);
+      sc.stroke();
+      sc.font="600 26px "+css("--mono"); sc.fillStyle=css("--rust"); sc.textAlign="left";
+      sc.fillText("1 of "+fmt(F.seedCount), lx+100, ty-56);
+      sc.textAlign="start";
+      return;
+    }
+    var a=clamp(land);
+    var pw=Math.min(bw-30, 624);
+    if(pw<300) return;
+    sc.textAlign="center";
+    sc.globalAlpha=a;
+    sc.fillStyle=css("--paper"); sc.globalAlpha=a*0.9;
+    sc.fillRect(bx+bw/2-pw/2, BH/2-118, pw, 236);
+    sc.globalAlpha=a;
+    sc.fillStyle=css("--rust"); sc.font="600 148px "+css("--mono");
+    sc.fillText(F.topShare+"%", bx+bw/2, BH/2+22);
+    sc.font="26px "+css("--mono"); sc.fillStyle=css("--ink2");
+    sc.fillText("of the whole bucket", bx+bw/2, BH/2+66);
+    sc.font="24px "+css("--mono");
+    sc.fillText(mm(SP[HEAVY][2])+" files · "+fmt(F.ratio)+"× the median guess", bx+bw/2, BH/2+104);
+    sc.textAlign="start"; sc.globalAlpha=1;
+  }
+
+  /* The one thing on screen that is not a rendering of trace state: what the OWNERSHIP RULE
+     alone implies for a range this size. It asserts no timing and no speedup — only that one
+     worker would hold it, which follows from the measured size plus "a range belongs to whoever
+     claimed it". Labelled as derived, and the card's provenance says so too. */
+  function counterfactual(a){
+    if(a<=0 || !SP.length) return;
+    var bx=pos(SP[HEAVY][0],1)*SW, bw=(pos(SP[HEAVY][1],1)-pos(SP[HEAVY][0],1))*SW;
+    sc.globalAlpha=a*0.90; sc.fillStyle=css("--paper");
+    sc.fillRect(bx+12, BH*0.20, bw-24, BH*0.56); sc.globalAlpha=a;
+    sc.strokeStyle=css("--ink"); sc.lineWidth=2.5; sc.setLineDash([11,9]);
+    sc.strokeRect(bx+12, BH*0.26, bw-24, BH*0.42); sc.setLineDash([]);
+    sc.textAlign="center";
+    var cx=bx+bw/2;
+    sc.font="20px "+css("--mono"); sc.fillStyle=css("--ink3");
+    sc.fillText("DERIVED FROM RANGE OWNERSHIP · NOT A RECORDED RUN", cx, BH*0.26+40);
+    sc.font="600 104px "+css("--mono"); sc.fillStyle=css("--ink");
+    sc.fillText("1 worker", cx, BH*0.26+150);
+    sc.textAlign="start"; sc.globalAlpha=1;
+  }
+
+  /* An anchored inset instead of a hard zoom. The full bucket stays on screen behind it
+     and the inset grows out of the boundary it is magnifying, so the close-up never
+     costs the viewer their place. */
+  function magnifier(a, lo, hi, S, drawExtra, ev){
+    var px=pos(ev[5],1)*SW;
+    var x0=px+(60-px)*a, x1=px+(SW-60-px)*a, y0=BH*0.42+(BH*0.30-BH*0.42)*a, y1=y0+(BH*0.52)*a;
+    if(x1-x0<8) return;
+    sc.strokeStyle=css("--ochre"); sc.lineWidth=2; sc.globalAlpha=.55;
+    sc.beginPath(); sc.moveTo(px,0); sc.lineTo(x0,y0); sc.moveTo(px,0); sc.lineTo(x1,y0);
+    sc.stroke(); sc.globalAlpha=1;
+    sc.fillStyle=css("--paper"); sc.fillRect(x0,y0,x1-x0,y1-y0);
+    sc.save();
+    sc.beginPath(); sc.rect(x0,y0,x1-x0,y1-y0); sc.clip();
+    sc.translate(x0,y0); sc.scale((x1-x0)/SW,(y1-y0)/BH);
+    drawExtra(lo,hi,S);
+    sc.restore();
+    sc.strokeStyle=css("--ink"); sc.lineWidth=3; sc.strokeRect(x0,y0,x1-x0,y1-y0);
+  }
+
+  // ---- the cut: scenes in VIDEO time, not run time ------------------------
+  function say(k,big,sub,cls){ $("kicker").textContent=k||"";
+    $("say").className="say"+(cls?" "+cls:""); $("say").innerHTML=big||"";
+    $("sub").innerHTML=sub||""; }
+  function show(id,on){ $(id).classList.toggle("hide", !on); }
+
+  var FIRST_SPLIT=(function(){ for(var i=0;i<stream.length;i++){ var e=stream[i];
+    if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID) return e; } return null; })();
+  /* The split event names the child range but not who takes it; the thief is whichever
+     worker claims that child next. Without this the close-up cannot show the hand-off. */
+  var TAKER=(function(){ if(!FIRST_SPLIT) return -1;
+    for(var i=0;i<stream.length;i++){ var e=stream[i];
+      if(e[1]===K_CLAIM && e[2]===FIRST_SPLIT[3]) return e[3]; } return -1; })();
+
+  /* Every line the card states is gated on the trace. A run that lost ranges, or whose
+     heavy lineage never pulled the whole fleet in, must not be handed this story. */
+  var failLine = F.failed===0
+        ? '<li><b>0</b> failed ranges'+(F.ledgerOk?' · no gaps, no overlaps':'')+'</li>'
+        : '<li><b>'+fmt(F.failed)+'</b> failed ranges</li>';
+  var helpLine = F.topWorkers>=meta.workers
+        ? '<li>all <b>'+meta.workers+'</b> workers eventually helped</li>'
+        : '<li><b>'+fmt(F.topWorkers)+'</b> of '+meta.workers+' workers entered that lineage</li>';
+
+  var CARD='<div class="card"><div class="big">'+fmt(meta.totalKeys)+
+    '<br>files listed</div>'+
+    '<div class="lede">One guessed key range held '+F.topShare+'% of them. '+
+    'swath split it while listing, so every worker could help.</div><ul>'+
+    '<li><b>'+fmt(F.seedCount)+'</b> guessed starting ranges</li>'+
+    '<li>split <b>'+fmt(F.topSplits)+'</b> times, all inside that one guess</li>'+
+    helpLine + '<li><b>'+fmt(F.completed)+'</b> ranges completed</li>' + failLine +
+    '</ul><div class="cta">swath.varve.io</div>'+
+    '<div class="prov">swath — parallel S3 listing that rebalances itself while it runs.<br>'+
+    'Every run state shown is rendered from the actual '+fmt(meta.events)+'-event trace; '+
+    'the labelled no-split panel is a derived consequence of range ownership, not a '+
+    'recorded run. One recorded run of '+dur(D)+' — not a benchmark.<br>'+
+    'github.com/varveio/swath'+
+    '</div></div>';
+  var HEAD='<div class="kicker" id="kicker"></div><div class="say" id="say"></div>'+
+           '<div class="sub" id="sub"></div>';
+
+  function runHead(){ if(!$("kicker")){ $("head").innerHTML=HEAD; }
+    $("head").className=""; }
+  function stage(pool){ runHead(); foot(FOOT_RUN); show("axis",1); show("poolrow",pool);
+    $("strip").style.visibility="visible";
+    $("axis").classList.remove("gone"); $("strip").classList.remove("gone");
+    $("poolrow").classList.remove("gone"); $("foot").classList.remove("gone"); }
+  /* Copy dissolves rather than pops. A hard textContent swap is itself a cut, which is
+     most of why a fixed canvas still read as a slideshow. */
+  /* Nothing dips. Transitions are animated in the thing that is changing. */
+  function fade(vt){}
+  function poolFade(a){ $("poolrow").style.opacity = a; }
+  function meter(n,cap){ $("poolnum").textContent=n; $("poolcap").textContent=cap; }
+  function foot(t){ $("foot").textContent=t; }
+  var FOOT_RUN="Rendered from the actual run trace. Every split shown really happened.";
+  var FOOT_DERIVED="The dashed panel is derived from range ownership — not a recorded run.";
+
+  var A1_END = firstSteal*0.88;
+  var IDLE_END = Math.min(D, firstSteal+22000);   // far enough in that the fleet really has collapsed
+  /* The close-up must be a split that happens AFTER the starvation it answers. Showing the
+     first split against a later background rewound the worker grid by 22s, so the fleet
+     appeared to recover before the mechanism that recovers it. */
+  var SPLIT_EV=(function(){
+    /* The close-up has to stand up to being paused on. Pick a split whose child a worker
+       actually held and listed from — the earliest ones are often claimed and completed
+       within a few hundred ms having committed nothing. */
+    function childWorked(id, from){
+      var pages=0, doneAt=null;
+      for(var j=0;j<stream.length;j++){ var x=stream[j];
+        if(x[0]<from) continue;
+        if(x[1]===K_PAGE && x[2]===id) pages++;
+        if((x[1]===K_DONE||x[1]===K_FAIL) && x[2]===id){ doneAt=x[0]; break; } }
+      return pages>0 && (doneAt===null || doneAt-from>2000);
+    }
+    for(var i=0;i<stream.length;i++){ var e=stream[i];
+      if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END
+         && childWorked(e[3], e[0])) return e; }
+    for(i=0;i<stream.length;i++){ e=stream[i];
+      if((e[1]===K_SPLIT||e[1]===K_OWNER) && e[8]===HEAVY_ID && e[0]>=IDLE_END) return e; }
+    return FIRST_SPLIT; })();
+  var SPLIT_TAKER=(function(){ if(!SPLIT_EV) return -1;
+    for(var i=0;i<stream.length;i++){ var e=stream[i];
+      if(e[1]===K_CLAIM && e[2]===SPLIT_EV[3]) return e[3]; } return -1; })();
+
+  var SCENES=[
+   // ---- orient: what this is, on the plan's own geometry -------------------
+   {t:3200, f:function(u){ stage(1); poolFade(1);
+     var S=state(A1_END*0.55*ease(u)), n=drawPool(S); drawRun(S,null,0); axisKeys(0);
+     $("axis").textContent="one bucket · first key → last key";
+     meter(n+" / "+meta.workers, "each square = one worker");
+     say("swath · one real S3 listing",
+         mm(meta.totalKeys)+" files. "+meta.workers+" workers.",
+         "S3 hands them back in order, 1000 at a time, and will not say how they are "+
+         "spread across the bucket."); }},
+
+   {t:6300, f:function(u){ stage(1); poolFade(1);
+     var S=state(A1_END*(0.55+0.45*u)), n=drawPool(S);
+     drawRun(S,null,0); heavyTag(0,0); axisKeys(0);
+     $("axis").textContent="plan view — "+fmt(F.seedCount)+" guesses shown equally";
+     keyStrip(Math.min(clamp((u-0.15)/0.2), clamp((1-u)/0.09)));
+     meter(n+" / "+meta.workers, "workers listing");
+     say("swath · one real S3 listing",
+         fmt(F.seedCount)+" guessed places to start.",
+         "Each gives one worker somewhere to begin. Most finish quickly. "+
+         "One marked guess keeps going."); }},
+
+   // ---- the reveal: hold, deform, land, hold ------------------------------
+   {t:11500, f:function(u){ stage(1); poolFade(1);
+     var g = ease(clamp((u-0.12)/0.50));
+     var land = Math.min(clamp((u-0.70)/0.13), clamp((1-u)/0.07));
+     var S=state(A1_END), n=drawPool(S);
+     drawRun(S,null,g); heavyTag(g, land); axisKeys(g);
+     $("axis").textContent = (g<=0) ? "plan view — "+fmt(F.seedCount)+" guesses shown equally"
+       : (g<1 ? "same "+fmt(F.seedCount)+" boundaries · only the scale changes"
+              : "measured view — width = file count");
+     meter(n+" / "+meta.workers, "workers listing");
+     say("swath · one real S3 listing",
+         g<0.30 ? "The guesses were drawn equally. The files were not."
+                : "One guess held most of the bucket.",
+         g<0.30 ? "Re-drawing so that width is file count." : ""); }},
+
+   // ---- why that matters: what ownership alone would have meant ------------
+   {t:14600, f:function(u){ stage(1); poolFade(1-ease(clamp(u/0.16)));
+     var S=state(A1_END); drawPool(S);
+     drawRun(S,null,1); axisKeys(1);
+     counterfactual(Math.min(ease(clamp(u/0.22)), ease(clamp((1-u)/0.12)))); foot(FOOT_DERIVED);
+     $("axis").textContent="measured view — width = file count";
+     say("without splitting · what would happen",
+         "Without splitting, "+(SP.length?mm(SP[HEAVY][2]):"the heaviest range's files")+" would stay serial.",
+         "One worker would own this range start to finish. The other "+(meta.workers-1)+
+         " could not share it, because a range belongs to whoever claimed it."); }},
+
+   // ---- and that is what the recorded run starts to do ---------------------
+   {t:18000, f:function(u){ stage(1); poolFade(ease(clamp(u/0.14)));
+     var S=state(A1_END+(IDLE_END-A1_END)*u), n=drawPool(S);
+     drawRun(S); axisKeys(1);
+     $("axis").textContent="recorded run · measured view";
+     meter(n+" / "+meta.workers, "workers still listing");
+     var starved = n < meta.workers*0.6;
+     say("swath · one real S3 listing",
+         starved ? "Back in the real run, the fleet runs out of work."
+                 : "The small guesses finish first.",
+         starved ? n+" of "+meta.workers+" still listing. Nearly everything left sits "+
+                   "inside that one guess." : ""); }},
+
+   // ---- the mechanism, at the moment it is needed --------------------------
+   {t:22500, f:function(u){
+     if(!SPLIT_EV){ return; }
+     stage(1); poolFade(1);
+     var a=Math.min(ease(clamp(u/0.26)), ease(clamp((1-u)/0.10)));
+     var commit = ease(clamp((u-0.46)/0.10)), committed = commit>0.5;
+     var tNow = Math.max(IDLE_END, SPLIT_EV[0]-700) + 1900*commit;
+     var S=state(tNow), n=drawPool(S, committed?{w:SPLIT_TAKER,a:1}:null);
+     var half=Math.min(0.05, Math.max(0.012,(SPLIT_EV[6]-SPLIT_EV[5])*0.9));
+     var lo=Math.max(0,SPLIT_EV[5]-half), hi=Math.min(1,SPLIT_EV[5]+half);
+     drawRun(S); axisKeys(1);
+     sc.fillStyle=css("--paper"); sc.globalAlpha=.45*a; sc.fillRect(0,0,SW,BH); sc.globalAlpha=1;
+     magnifier(a, lo, hi, S, function(lo,hi,S){
+       drawRun(S,[lo,hi]);
+       var mx=((SPLIT_EV[5]-lo)/(hi-lo))*SW;
+       sc.strokeStyle=css("--ochre"); sc.lineWidth=committed?(6+8*commit):10;
+       if(!committed) sc.setLineDash([26,18]);
+       sc.beginPath(); sc.moveTo(mx,0); sc.lineTo(mx,BH); sc.stroke(); sc.setLineDash([]);
+       if(commit>0){
+         var cx1=Math.min(SW,((SPLIT_EV[6]-lo)/(hi-lo))*SW);
+         sc.globalAlpha=.18*commit; sc.fillStyle=css("--ochre");
+         sc.fillRect(mx,0,Math.max(0,cx1-mx),BH); sc.globalAlpha=1;
+       }
+     }, SPLIT_EV);
+     $("axis").textContent="recorded run · one split, close up";
+     meter(n+" / "+meta.workers, committed ? "a waiting worker just joined" : "workers still listing");
+     say("swath · one real S3 listing",
+         committed ? "Two adjacent ranges. No gap, no overlap."
+                   : "So it cuts the range while it is still being listed.",
+         committed ? "The owner keeps the first half. A waiting worker takes the second."
+                   : "The marked line is the new boundary."); }},
+
+   // ---- recovery: the payoff is the fleet, not the split count ------------
+   {t:28500, f:function(u){ stage(1); poolFade(1);
+     var RECOV=Math.max(IDLE_END, SPLIT_EV?SPLIT_EV[0]-700:IDLE_END)+1900;
+     var S=state(RECOV+(D-RECOV)*ease(u)), n=drawPool(S);
+     drawRun(S); axisKeys(1);
+     $("axis").textContent="recorded run · measured view";
+     meter(n+" / "+meta.workers, "workers helping");
+     say("swath · one real S3 listing",
+         "It keeps cutting until everyone can help.",
+         fmt(S.hsplits)+" splits inside that one guess."); }},
+
+   {t:31000, f:function(u){ stage(1); poolFade(1);
+     var S=state(D), n=drawPool(S); drawRun(S); axisKeys(1);
+     $("axis").textContent="recorded run · every range completed";
+     meter(fmt(S.done), "ranges completed");
+     say("swath · one real S3 listing",
+         "One bad guess no longer strands the fleet.",
+         F.ledgerOk ? "Every range accounted for. No gaps, no overlaps." : ""); }},
+
+   {t:33500, f:function(u){
+     $("head").style.opacity=1; $("head").style.removeProperty("opacity");
+     $("axis").classList.add("gone"); $("strip").classList.add("gone");
+     $("poolrow").classList.add("gone"); $("foot").classList.add("gone");
+     $("head").style.opacity=1;
+     $("head").innerHTML=CARD; $("head").className="cardmode"; }}
+  ];
+
+  /* Act boundaries. A caption swap alone does not read as a cut, so each of these gets a
+     ~260ms whip to paper — short enough to feel like an edit, long enough to register. */
+  /* Only one hard break survives: the move out of the run and into the result.
+     Everything earlier is carried by the geometry, so a whip there just erased
+     the spatial memory the viewer was still assembling. */
+  var ACTS=[31000], WHIP=120;
+  function veilAt(vt){ var a=0;
+    for(var i=0;i<ACTS.length;i++){ var d=Math.abs(vt-ACTS[i]);
+      if(d<WHIP) a=Math.max(a, 1-d/WHIP); }
+    return a*0.94; }
+
+
+
+  function seek(vt){
+    var prev=0;
+    for(var i=0;i<SCENES.length;i++){
+      if(vt < SCENES[i].t || i===SCENES.length-1){
+        SCENES[i].f(clamp((vt-prev)/Math.max(1,SCENES[i].t-prev)));
+        break;
+      }
+      prev=SCENES[i].t;
+    }
+    fade(vt);
+    $("veil").style.opacity=veilAt(vt);
+  }
+  window.__seek=seek; window.__duration=33500; window.__videoTime=true; seek(0);
+})();
+</script></body></html>
