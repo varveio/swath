@@ -24,7 +24,7 @@ tools/explainer/
     ├── model.py                  # the reduction: figures, lineage, findings
     ├── render.py                 # model + template -> page
     ├── cli.py                    # argument handling
-    ├── selftest.py               # 27 checks, no inputs needed
+    ├── selftest.py               # 29 checks, no inputs needed
     └── templates/
         ├── report.html           # the explainer report
         ├── video-strip.html      # video: the algorithm as it happens
@@ -53,7 +53,7 @@ Open `run.html`. One file, no CDN, no external images, safe from `file://`, ligh
 ```
 explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize]
                              [--video [--video-style strip|map]]
-explainer.py --self-test              # 27 checks, no inputs needed
+explainer.py --self-test              # 29 checks, no inputs needed
 ```
 
 | Flag | What it does |

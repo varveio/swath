@@ -938,6 +938,7 @@ self-contained HTML page:
 
 ```
 tools/explainer/explainer.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
+tools/explainer/explainer.py run.trace.jsonl -o video.html --video [--video-style strip|map]
 tools/explainer/explainer.py --self-test
 ```
 
@@ -948,11 +949,15 @@ describes whichever run the tool is pointed at. Sections: the seed guesses ranke
 actually found behind them (weight rolled up through the split genealogy, so each bar is the work
 that guess was really responsible for); throughput and live-range count over time; the owner-split
 gate ledger; the pivot cascade with sample pivots verbatim; a static keyspace×time map; a
-replayable version of the same; and a conservation check (`seeds + splits == claimed == completed`).
+replayable version of the same; and a lifecycle reconciliation
+(`seeds + splits == claimed == completed`), which evidences no lost or abandoned range but
+inspects no boundary and so is not by itself a coverage proof.
 
 The keyspace axis is the **measured key-mass CDF**, built from `page_committed`'s `(cursor, keys)`
-pairs: **equal width means an equal number of objects**, so a range's area is proportional to the
-work it did and a region holding two thirds of a bucket gets two thirds of the picture. Neither
+pairs: **equal width means an equal number of objects**, so a region holding two thirds of a bucket
+gets two thirds of the picture. On the space-time map a rectangle's area is the object mass a
+range owned multiplied by how long it owned it — related to the work it did, but not the same
+thing: a range that owns a large span briefly and lists little of it still draws wide. Neither
 obvious alternative survives real data — a raw byte-value axis collapses a deep-prefix bucket onto
 a hairline, and an axis anchored on range boundaries gives every boundary equal width, so a run
 seeded into hundreds of ranges renders as hundreds of identical slivers and width encodes nothing.
@@ -961,7 +966,9 @@ width. Colour is **seed lineage**, not worker id — a reader cares which origin
 descends from, not which of N threads ran it.
 
 Reading signatures: a healthy run is confetti (many short drains, everyone busy) and a map of
-wide/short rectangles; a dense serial tail is a single tall thin column outliving the run; a
+wide/short rectangles; a dense serial tail is a single column outliving the run — narrow when the
+tail is a small share of the bucket, but wide when it is a large one, because this axis gives it
+width in proportion to its objects; a
 thief probe storm is a blizzard of steal-attempt markers with few splits behind them;
 owner-split confetti is a stack of hairline rectangles in one keyspace region. The page embeds
 this guide, plus per-mechanism split counts and per-reason steal outcomes, so every generated
