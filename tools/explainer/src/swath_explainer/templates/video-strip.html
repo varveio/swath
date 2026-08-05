@@ -474,7 +474,7 @@
      counterfactual(Math.min(ease(clamp(u/0.22)), ease(clamp((1-u)/0.12)))); foot(FOOT_DERIVED);
      $("axis").textContent="measured view — width = file count";
      say("without splitting · what would happen",
-         "Without splitting, "+mm(SP[HEAVY][2])+" files would stay serial.",
+         "Without splitting, "+(SP.length?mm(SP[HEAVY][2]):"the heaviest range's files")+" would stay serial.",
          "One worker would own this range start to finish. The other "+(meta.workers-1)+
          " could not share it, because a range belongs to whoever claimed it."); }},
 
@@ -525,7 +525,7 @@
 
    // ---- recovery: the payoff is the fleet, not the split count ------------
    {t:28500, f:function(u){ stage(1); poolFade(1);
-     var RECOV=Math.max(IDLE_END, SPLIT_EV[0]-700)+1900;
+     var RECOV=Math.max(IDLE_END, SPLIT_EV?SPLIT_EV[0]-700:IDLE_END)+1900;
      var S=state(RECOV+(D-RECOV)*ease(u)), n=drawPool(S);
      drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · measured view";

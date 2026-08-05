@@ -223,8 +223,13 @@ def build_model(events, skipped, title, anonymize):
     owner_splits = sum(n for (k, m), n in mech_count.items() if k == "owner_split")
     uniform = sum(n for (k, m), n in mech_count.items()
                   if m in ("midpoint", "byte_midpoint"))
+    # Everything the gate let through counts as admitted: a published carve, a carve whose
+    # pivot was reflected (lifted or clamped — the split still happened), and the periodic
+    # confetti probe. Counting those as "blocked" overstated the gate's refusals.
     blocked = sum(gate_count.values()) - sum(
-        n for r, n in gate_count.items() if r in ("self_published",))
+        n for r, n in gate_count.items()
+        if r in ("self_published", "pivot_reflect_lifted",
+                 "pivot_reflect_clamped", "confetti_probe"))
 
     findings = {
         "seedCount": len(seeds),

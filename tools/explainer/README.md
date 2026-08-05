@@ -13,7 +13,7 @@ installed. Only the optional video capture step needs anything extra.
 
 ## Layout
 
-```
+```text
 tools/explainer/
 ├── explainer.py                  # run from a clone with nothing set up
 ├── pyproject.toml                # or install it: provides `swath-explainer`
@@ -50,7 +50,7 @@ uv run tools/explainer/explainer.py run.trace.jsonl -o run.html
 
 Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark.
 
-```
+```text
 explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize]
                              [--video [--video-style strip|map]]
 explainer.py --self-test              # 29 checks, no inputs needed
@@ -91,6 +91,9 @@ node tools/explainer/capture-video.js http://localhost:PORT/video.html
 ffmpeg -framerate 30 -i /tmp/frames/f%05d.png -c:v libx264 -preset slow -crf 20 \
        -pix_fmt yuv420p -movflags +faststart run.mp4
 ```
+
+`capture-video.js` needs the `playwright` npm package resolvable from where you run it
+(`npm install playwright`, or point `NODE_PATH` at an existing install).
 
 1080×1350 (4:5) — the tallest ratio the common social feeds accept, so it claims the most
 vertical space. Silent by design, because those feeds autoplay muted: the frame narrates itself

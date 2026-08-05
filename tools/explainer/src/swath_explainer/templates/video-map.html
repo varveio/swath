@@ -85,7 +85,8 @@
     {at:firstSteal+(D-firstSteal)*0.62, n:"converging", t:"<b>"+fmt(F.topSplits)+" splits</b> into "+
       "that one range. All <b>"+fmt(F.topWorkers)+"</b> workers end up inside it."},
     {at:D*0.985, n:"done", t:"<b>"+fmt(meta.totalKeys)+" objects</b> in "+secs(D)+
-      ", at <b>"+F.reqPer1k.toFixed(2)+"</b> requests per thousand. No gaps. No overlaps."}
+      (F.reqPer1k===null ? "" : ", at <b>"+F.reqPer1k.toFixed(2)+"</b> requests per thousand")+
+      ". No gaps. No overlaps."}
   ];
 
   // ---- accumulating keyspace x time map ---------------------------------

@@ -1,4 +1,4 @@
-const { chromium } = require('/usr/local/share/npm-global/lib/node_modules/@playwright/cli/node_modules/playwright');
+const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
 (async () => {
   const url = process.argv[2], OUT = '/tmp/frames';
@@ -20,7 +20,7 @@ const fs = require('fs'), path = require('path');
     await pg.screenshot({path: path.join(OUT, `f${String(i).padStart(5,'0')}.png`)});
   }
   for (let i=0;i<total;i++){
-    const u = i/(total-1), e = videoTime ? u : (3*u*u - 2*u*u*u);
+    const u = i/Math.max(1, total-1), e = videoTime ? u : (3*u*u - 2*u*u*u);
     await pg.evaluate(`window.__seek(${e*dur})`);
     await pg.screenshot({path: path.join(OUT, `f${String(i+PRE).padStart(5,'0')}.png`)});
     if (i%90===0) console.log(`  ${i}/${total}`);

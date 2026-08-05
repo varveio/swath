@@ -936,7 +936,7 @@ per-event fields). This table is versioned by hand.
 `tools/explainer/explainer.py` (stdlib-only, like the CI drift guard) turns a `--trace` file into a
 self-contained HTML page:
 
-```
+```text
 tools/explainer/explainer.py run.trace.jsonl -o run.html [--title s3://bucket] [--anonymize]
 tools/explainer/explainer.py run.trace.jsonl -o video.html --video [--video-style strip|map]
 tools/explainer/explainer.py --self-test
