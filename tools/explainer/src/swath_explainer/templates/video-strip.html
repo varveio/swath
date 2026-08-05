@@ -50,7 +50,7 @@
     <div class="sub" id="sub"></div>
   </div>
   <div class="axis hide" id="axis"></div>
-  <canvas id="strip" width="952" height="760"></canvas>
+  <canvas id="strip" width="952" height="600"></canvas>
   <div class="poolrow hide" id="poolrow">
     <canvas id="pool" width="560" height="112"></canvas>
     <div><div class="poolnum" id="poolnum"></div><div class="poolcap" id="poolcap"></div></div>
@@ -76,49 +76,37 @@
   function dur(ms){ var s=Math.round(ms/1000);
     return s<60 ? s+"s" : Math.floor(s/60)+"m "+(s%60)+"s"; }
   var sc=$("strip").getContext("2d"), pc=$("pool").getContext("2d");
-  var SW=952, SH=760, PW=560, PH=112, SH_TALL=760, SH_RUN=500;
-  /* The strip owns the whole frame until the worker grid needs the room. Reserving that
-     space before the grid exists left the bottom of the frame dead for the opening seconds. */
-  function setSH(h){ h=Math.round(h); if(SH!==h){ SH=h; $("strip").height=h; } }
+  var SW=952, SH=600, PW=560, PH=112;
 
   var HEAVY=0; for(var z=0;z<SP.length;z++){ if(SP[z][2]>SP[HEAVY][2]) HEAVY=z; }
   var HEAVY_ID = SP.length ? SP[HEAVY][3] : -1;
+  var NSEED = SP.length||1;
 
-  // ---- the strip: guesses, the morph, and the real run --------------------
-  function drawGuess(e, wipe, hi){
-    wipe = (wipe===undefined)?1:wipe; hi=(hi===undefined)?1:hi;
-    sc.clearRect(0,0,SW,SH);
-    var N=SP.length||1, i;
-    for(i=0;i<N;i++){
-      var g0=(i/N)*SW, g1=((i+1)/N)*SW, a0=SP[i][0]*SW, a1=SP[i][1]*SW;
-      var x0=g0+(a0-g0)*e, x1=g1+(a1-g1)*e, w=Math.max(0.8,x1-x0);
-      if(x0 > wipe*SW) continue;
-      sc.fillStyle = (i===HEAVY) ? css("--rust") : css("--pale");
-      sc.fillRect(x0,0,Math.min(w, wipe*SW-x0),SH);
-      if(w>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1;
-                 sc.strokeRect(x0+0.5,0.5,w-1,SH-1); }
-    }
-    if(e<0.03){                     // the one that matters must be findable while narrow
-      var hx=(HEAVY/N)*SW, hw=SW/N;
-      sc.strokeStyle=css("--rust"); sc.lineWidth=4;
-      sc.strokeRect(hx-4,-2,hw+8,SH+4);
-    }
-    if(e>0.92 && hi>0.35){                     // name the block from inside it
-      var bx=SP[HEAVY][0]*SW, bw=(SP[HEAVY][1]-SP[HEAVY][0])*SW;
-      var pw=Math.min(bw-56, 500), a=clamp((hi-0.35)/0.3);
-      if(pw>240){
-        sc.fillStyle="#FFFFFF"; sc.globalAlpha=.88*a;
-        sc.fillRect(bx+28, SH/2-70, pw, 140); sc.globalAlpha=a;
-        sc.fillStyle=css("--rust"); sc.font="600 50px "+css("--mono");
-        sc.fillText(mm(SP[HEAVY][2]*clamp((hi-0.35)/0.65))+" objects", bx+52, SH/2-10);
-        sc.font="25px "+css("--mono"); sc.fillStyle=css("--ink2");
-        sc.fillText(fmt(F.ratio)+"× the median guess", bx+52, SH/2+32); sc.globalAlpha=1;
-      }
-    }
+  /* Two geometries over the same keyspace.
+       g=0  every seed the same width — the plan, and the only one on which the early run
+            is legible at all, since 256 of the 257 seeds share a third of the mass axis.
+       g=1  width = objects — the truth.
+     The seeds tile the keyspace, so mapping between them is a monotone piecewise-linear
+     remap through the shared breakpoints. Animating g IS the reveal: the run keeps playing
+     while the ground it is drawn on changes underneath it. */
+  var MP=[], UP=[];
+  (function(){ if(!SP.length) return;
+    MP.push(SP[0][0]); UP.push(0);
+    for(var i=0;i<SP.length;i++){ MP.push(SP[i][1]); UP.push((i+1)/NSEED); } })();
+  function uni(p){
+    if(!MP.length) return p;
+    if(p<=MP[0]) return UP[0];
+    if(p>=MP[MP.length-1]) return UP[UP.length-1];
+    var lo=0, hi=MP.length-1, mid;
+    while(hi-lo>1){ mid=(lo+hi)>>1; if(MP[mid]<=p) lo=mid; else hi=mid; }
+    var span=MP[hi]-MP[lo];
+    return span>0 ? UP[lo]+(UP[hi]-UP[lo])*((p-MP[lo])/span) : UP[lo];
   }
+  function pos(p,g){ if(g>=1) return p; var u=uni(p); return g<=0 ? u : u+(p-u)*g; }
 
+  // ---- the strip: the live run, drawn at whichever geometry ---------------
   function state(t){
-    var nodes={}, busy={}, keys=0, splits=0, marks=[], i;
+    var nodes={}, busy={}, keys=0, splits=0, done=0, marks=[], i;
     for(i=0;i<stream.length;i++){
       var e=stream[i]; if(e[0]>t) break; var k=e[1], n;
       if(k===K_CLAIM){ n=nodes[e[2]]||(nodes[e[2]]={}); n.lo=e[4]; n.hi=e[6]; n.cur=e[5];
@@ -128,26 +116,49 @@
         nodes[e[3]]={lo:e[5],hi:e[6],cur:e[5],root:e[8],st:0,w:-1}; splits++;
         if(t-e[0]<2200) marks.push({x:e[5],a:1-(t-e[0])/2200}); }
       else if(k===K_DONE||k===K_FAIL){ n=nodes[e[2]];
-        if(n){ n.st=2; if(n.w>=0) delete busy[n.w]; } }
+        if(n){ n.st=2; if(n.w>=0) delete busy[n.w]; done++; } }
     }
-    return {nodes:nodes,busy:busy,keys:keys,splits:splits,marks:marks};
+    return {nodes:nodes,busy:busy,keys:keys,splits:splits,marks:marks,done:done};
   }
 
-  function drawRun(S, zoom, only){
+  function drawRun(S, zoom, g){
+    g=(g===undefined)?1:g;
     sc.clearRect(0,0,SW,SH);
     var z0=zoom?zoom[0]:0, z1=zoom?zoom[1]:1, zs=1/(z1-z0);
-    function X(p){ return (p-z0)*zs*SW; }
+    function X(p){ return (pos(p,g)-z0)*zs*SW; }
+    if(!zoom && SP.length){
+      /* The whole plan, underneath. A range only becomes a node once a worker claims it, so
+         without this the opening shows 64 bands while the caption says 257. */
+      for(var q=0;q<SP.length;q++){
+        var qx=X(SP[q][0]), qw=Math.max(0.8,X(SP[q][1])-qx);
+        sc.globalAlpha=.13; sc.fillStyle=(q===HEAVY)?css("--rust"):css("--pale");
+        sc.fillRect(qx,0,qw,SH); sc.globalAlpha=1;
+        if(qw>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1;
+                    sc.strokeRect(qx+0.5,0.5,qw-1,SH-1); }
+      }
+    }
     for(var id in S.nodes){
-      if(only && !only[id]) continue;
       var d=S.nodes[id], x0=X(d.lo), x1=X(d.hi);
       if(x1<-20||x0>SW+20) continue;
-      var w=Math.max(1,x1-x0), col=(d.root===HEAVY_ID)?css("--rust"):css("--pale");
-      if(d.st===2){ sc.globalAlpha=.34; sc.fillStyle=col; sc.fillRect(x0,0,w,SH); }
-      else if(d.st===0){ sc.globalAlpha=.15; sc.fillStyle=col; sc.fillRect(x0,0,w,SH); }
-      else { sc.globalAlpha=.20; sc.fillStyle=col; sc.fillRect(x0,0,w,SH);
-             sc.globalAlpha=.95; sc.fillRect(x0,0,Math.max(0,X(d.cur)-x0),SH); }
+      var heavy=(d.root===HEAVY_ID), w=Math.max(1,x1-x0);
+      /* Teal means working — the same thing it means in the worker grid below, so state
+         reads across both canvases. Lineage still owns the heavy range's colour. Pale on
+         paper cannot carry a 4px band, which is what made the sweep look like nothing. */
+      var col = heavy ? css("--rust") : (d.st===1 ? css("--teal") : css("--pale"));
+      /* State has to out-read lineage here, or "145 finished, one has not" is invisible.
+         An active range is the brightest thing on the strip from the moment it is claimed —
+         the old base alpha meant a just-claimed range read fainter than a finished one. */
+      if(d.st===2){ sc.globalAlpha=.26; sc.fillStyle=col; sc.fillRect(x0,0,w,SH); }
+      else if(d.st===0){ sc.globalAlpha=.16; sc.fillStyle=col; sc.fillRect(x0,0,w,SH); }
+      else { sc.globalAlpha=.55; sc.fillStyle=col; sc.fillRect(x0,0,w,SH);
+             sc.globalAlpha=.98; sc.fillRect(x0,0,Math.max(0,X(d.cur)-x0),SH); }
       sc.globalAlpha=1;
       if(w>2.2){ sc.strokeStyle=css("--paper"); sc.lineWidth=1; sc.strokeRect(x0+.5,.5,w-1,SH-1); }
+    }
+    if(!zoom && g<0.55 && SP.length){        // one seed in 257 is a hairline; ring it
+      var hx=X(SP[HEAVY][0]), hw=Math.max(3,X(SP[HEAVY][1])-hx);
+      sc.strokeStyle=css("--rust"); sc.lineWidth=4; sc.globalAlpha=1-g/0.55;
+      sc.strokeRect(hx-4,-2,hw+8,SH+4); sc.globalAlpha=1;
     }
     for(var i=0;i<S.marks.length;i++){
       var mk=S.marks[i], mx=X(mk.x); if(mx<-2||mx>SW+2) continue;
@@ -171,6 +182,20 @@
       pc.strokeRect(rx-1,ry-1,cw+2,ch+2); pc.globalAlpha=1;
     }
     return n;
+  }
+
+  function heavyLabel(g, hi){
+    if(!SP.length || g<0.92 || hi<=0) return;
+    var bx=pos(SP[HEAVY][0],g)*SW, bw=(pos(SP[HEAVY][1],g)-pos(SP[HEAVY][0],g))*SW;
+    var pw=Math.min(bw-56, 500), a=clamp(hi);
+    if(pw<240) return;
+    sc.fillStyle="#FFFFFF"; sc.globalAlpha=.88*a;
+    sc.fillRect(bx+28, SH/2-70, pw, 140); sc.globalAlpha=a;
+    sc.fillStyle=css("--rust"); sc.font="600 50px "+css("--mono");
+    sc.fillText(mm(SP[HEAVY][2]*a)+" objects", bx+52, SH/2-10);
+    sc.font="25px "+css("--mono"); sc.fillStyle=css("--ink2");
+    sc.fillText(fmt(F.ratio)+"× the median guess", bx+52, SH/2+32);
+    sc.globalAlpha=1;
   }
 
   // ---- the cut: scenes in VIDEO time, not run time ------------------------
@@ -207,50 +232,50 @@
   function stage(pool){ runHead(); show("axis",1); show("poolrow",pool);
     $("strip").style.visibility="visible"; }
 
+  /* The run is playing from the first frame. Video time drives run time directly; the only
+     thing that changes across act one is the geometry underneath it. */
+  var A1_END = firstSteal*0.88;          // just short of the first steal
+
   var SCENES=[
-   // ---- act one: the question, and the answer the run measured -------------
-   {t:2600, f:function(u){ stage(0); setSH(SH_TALL);
+   // ---- act one: watch it happen, on the plan's own geometry ---------------
+   {t:4200, f:function(u){ stage(1);
+     var S=state(A1_END*0.55*u), n=drawPool(S); drawRun(S,null,0);
      $("axis").textContent="the plan — "+fmt(F.seedCount)+" guesses, all the same size";
-     say("", "How do you divide "+mm(meta.totalKeys)+" objects among "+meta.workers+
-         " workers<br>when S3 will not tell you where they are?", "", "q");
-     drawGuess(0, clamp(u*1.5)); }},
-   {t:4000, f:function(u){ stage(0); setSH(SH_TALL);
+     $("poolnum").textContent=n+" / "+meta.workers;
+     $("poolcap").textContent="workers busy";
+     say("1 · seeding", "How do you divide "+mm(meta.totalKeys)+" objects among "+
+         meta.workers+" workers<br>when S3 will not tell you where they are?",
+         "You cut it blind, hand every worker a piece, and start listing.", "q"); }},
+
+   {t:7000, f:function(u){ stage(1);
+     var S=state(A1_END*(0.55+0.45*u)), n=drawPool(S); drawRun(S,null,0);
      $("axis").textContent="the plan — "+fmt(F.seedCount)+" guesses, all the same size";
-     say("1 · guess", "You cut it blind, and assume each piece<br>holds about the same.",
-         "That assumption is the only thing available. It is also wrong.");
-     drawGuess(0,1); }},
-   {t:5600, f:function(u){ stage(0); setSH(SH_TALL);
-     $("axis").textContent="measuring what was really there…";
-     say("2 · discover", "This is what each guess actually held.", "");
-     drawGuess(ease(u),1); }},
-   {t:8000, f:function(u){ stage(0); setSH(SH_TALL);
-     $("axis").textContent="measured — width = objects";
-     say("2 · discover", "One guess held <span class='r'>"+
-         (F.topShare*clamp(u*2.2)).toFixed(0)+"%</span> of the bucket.",
-         "Nothing could have revealed that before listing it.");
-     drawGuess(1,1,clamp(u*2.2)); }},
+     $("poolnum").textContent=fmt(S.done); $("poolcap").textContent="guesses finished";
+     say("2 · parallel sweep", fmt(S.done)+" guesses have already finished.",
+         "One of them is not finishing. Watch the marked one."); }},
+
+   // ---- the reveal: the ground moves, and answers the question -------------
+   {t:9800, f:function(u){ stage(1);
+     var g=ease(u), S=state(A1_END), n=drawPool(S);
+     drawRun(S,null,g); heavyLabel(g, clamp((u-0.55)/0.3));
+     $("axis").textContent = g<0.5 ? "re-drawing to true size…" : "measured — width = objects";
+     $("poolnum").textContent=fmt(S.done); $("poolcap").textContent="guesses finished";
+     say("2 · parallel sweep", "It was never the same size as the others.",
+         "It held <span class='r'>"+F.topShare+"%</span> of the bucket. "+
+         "Nothing could have revealed that before listing it."); }},
 
    // ---- act two: the run corrects it --------------------------------------
-   {t:11200, f:function(u){
-     /* Free the room before the grid claims it — showing both at full height overruns
-        the frame and drops the worker grid on top of the footer. */
-     var shrink=ease(clamp(u/0.25));
-     stage(shrink>0.88 ? 1 : 0);
-     setSH(SH_TALL+(SH_RUN-SH_TALL)*shrink);
+   {t:13000, f:function(u){ stage(1);
+     var S=state(A1_END+(firstSteal-A1_END)*u), n=drawPool(S); drawRun(S);
      $("axis").textContent="the real run — width = objects";
-     var S=state(u*firstSteal*0.62), n=drawPool(S); drawRun(S);
      $("poolnum").textContent=n+" / "+meta.workers; $("poolcap").textContent="workers busy";
-     say("3 · rebalance", meta.workers+" workers start in parallel.", ""); }},
-   {t:14400, f:function(u){ stage(1); setSH(SH_RUN);
-     var S=state(firstSteal*(0.62+0.38*u)), n=drawPool(S); drawRun(S);
-     $("poolnum").textContent=n+" / "+meta.workers; $("poolcap").textContent="workers busy";
-     say("3 · rebalance", "The easy guesses finish first.",
-         "Most of the fleet has nothing left to do."); }},
+     say("3 · rebalance", "The easy guesses are gone.",
+         "Most of the fleet now has nothing left to do."); }},
 
    // ---- the beat the whole algorithm turns on -----------------------------
-   {t:19400, f:function(u){
+   {t:18000, f:function(u){
      if(!FIRST_SPLIT){ return; }
-     stage(1); setSH(SH_RUN);
+     stage(1);
      /* Centre the window on the pivot with equal room either side. Framing it on the child's
         full extent lets the child swamp the shot, and "two adjacent ranges" stops reading. */
      var half=Math.min(0.05, Math.max(0.012, (FIRST_SPLIT[6]-FIRST_SPLIT[5])*0.9));
@@ -261,7 +286,7 @@
      if(u<0.30){                                   // one range, one worker, still draining
        drawRun(pre,[lo,hi]); drawPool(pre);
        $("poolnum").textContent="1"; $("poolcap").textContent="worker on this range";
-       say("3 · rebalance", "One range. One worker. Far too much of it.", "");
+       say("4 · stealing", "One range. One worker. Far too much of it.", "");
      } else if(u<0.55){                            // the pivot is placed, not yet committed
        drawRun(pre,[lo,hi]);
        var a=clamp((u-0.30)/0.25);
@@ -271,7 +296,7 @@
        sc.setLineDash([]); sc.globalAlpha=1;
        drawPool(pre);
        $("poolnum").textContent=""; $("poolcap").textContent="";
-       say("3 · rebalance", "An idle worker proposes a boundary.",
+       say("4 · stealing", "An idle worker proposes a boundary.",
            "One max_keys=1 request asks whether anything lives above it.");
      } else {                                      // committed: two adjacent ranges, new owner
        drawRun(post,[lo,hi]);
@@ -297,26 +322,26 @@
        drawPool(post,{w:TAKER,a:a2});
        $("poolnum").textContent = TAKER>=0 ? "+1" : "";
        $("poolcap").textContent = TAKER>=0 ? "worker takes the upper piece" : "";
-       say("3 · rebalance", "Two adjacent ranges. No gap, no overlap.",
+       say("4 · stealing", "Two adjacent ranges. No gap, no overlap.",
            "The boundary never had to be a key that exists.");
      } }},
 
-   {t:32000, f:function(u){ stage(1); setSH(SH_RUN);
+   {t:30500, f:function(u){ stage(1);
      var S=state(firstSteal+(D-firstSteal)*u), n=drawPool(S);
      drawRun(S); $("axis").textContent="the real run — width = objects";
      $("poolnum").textContent=fmt(S.splits); $("poolcap").textContent="splits committed";
-     say("3 · rebalance", fmt(S.splits)+" splits later…",
+     say("4 · stealing", fmt(S.splits)+" splits later…",
          (S.splits > F.topSplits*0.6 && n>=meta.workers-4) ? "…all "+meta.workers+
            " workers are inside one original guess." : ""); }},
 
-   {t:37500, f:function(){ show("axis",0); show("poolrow",0);
+   {t:36000, f:function(){ show("axis",0); show("poolrow",0);
      $("strip").style.visibility="hidden";
      $("head").innerHTML=CARD; $("head").className="cardmode"; }}
   ];
 
   /* Act boundaries. A caption swap alone does not read as a cut, so each of these gets a
      ~260ms whip to paper — short enough to feel like an edit, long enough to register. */
-  var ACTS=[8000,14400,19400,32000], WHIP=130;
+  var ACTS=[9800,13000,18000,30500], WHIP=130;
   function veilAt(vt){ var a=0;
     for(var i=0;i<ACTS.length;i++){ var d=Math.abs(vt-ACTS[i]);
       if(d<WHIP) a=Math.max(a, 1-d/WHIP); }
@@ -335,6 +360,6 @@
     }
     $("veil").style.opacity=veilAt(vt);
   }
-  window.__seek=seek; window.__duration=37500; window.__videoTime=true; seek(0);
+  window.__seek=seek; window.__duration=36000; window.__videoTime=true; seek(0);
 })();
 </script></body></html>
