@@ -361,7 +361,7 @@
     '<div class="prov">swath — parallel S3 listing that rebalances itself while it runs.<br>'+
     'Every run state shown is rendered from the actual '+fmt(meta.events)+'-event trace; '+
     'the labelled no-split panel is a derived consequence of range ownership, not a '+
-    'recorded run. This run took '+dur(D)+' on one laptop — recorded, not a benchmark.'+
+    'recorded run. One recorded run of '+dur(D)+' — not a benchmark.'+
     '</div></div>';
   var HEAD='<div class="kicker" id="kicker"></div><div class="say" id="say"></div>'+
            '<div class="sub" id="sub"></div>';
@@ -374,11 +374,20 @@
     $("poolrow").classList.remove("gone"); $("foot").classList.remove("gone"); }
   /* Copy dissolves rather than pops. A hard textContent swap is itself a cut, which is
      most of why a fixed canvas still read as a slideshow. */
-  function fade(u){
-    var a = Math.min(clamp(u/0.09), clamp((1-u)/0.07));
-    $("head").style.opacity = a;
-    $("axis").style.opacity = a; $("strip").style.opacity = a;
-    $("poolrow").style.opacity = a;
+  var CUTS=[3200,6300,11500,14600,18000,22500,28500,31000];   // every scene boundary
+  var DIPS=[11500,14600,22500];        // the three where the picture actually discontinues
+  function nearest(vt, list){
+    var d=1e9; for(var i=0;i<list.length;i++) d=Math.min(d, Math.abs(vt-list[i])); return d;
+  }
+  /* Copy changes at every boundary, so it gets a short dip of its own; the canvas only dips
+     where it would otherwise jump. Called once per frame from seek(), not per scene. */
+  function fade(vt){
+    var canvas = Math.min(1, nearest(vt, DIPS)/165);
+    var copy   = Math.min(1, nearest(vt, CUTS)/110);
+    $("head").style.opacity = Math.min(canvas, copy);
+    $("axis").style.opacity = canvas;
+    $("strip").style.opacity = canvas;
+    $("poolrow").style.opacity = canvas;
   }
   function meter(n,cap){ $("poolnum").textContent=n; $("poolcap").textContent=cap; }
   function foot(t){ $("foot").textContent=t; }
@@ -414,7 +423,7 @@
 
   var SCENES=[
    // ---- orient: what this is, on the plan's own geometry -------------------
-   {t:3200, f:function(u){ stage(1); fade(u);
+   {t:3200, f:function(u){ stage(1);
      var S=state(A1_END*0.55*ease(u)), n=drawPool(S); drawRun(S,null,0); axisKeys(0);
      $("axis").textContent="one bucket · first key → last key";
      meter(n+" / "+meta.workers, "each square = one worker");
@@ -423,7 +432,7 @@
          "S3 hands them back in order, 1000 at a time, and will not say how they are "+
          "spread across the bucket."); }},
 
-   {t:6300, f:function(u){ stage(1); fade(u);
+   {t:6300, f:function(u){ stage(1);
      var S=state(A1_END*(0.55+0.45*u)), n=drawPool(S);
      drawRun(S,null,0); heavyTag(0,0); axisKeys(0);
      $("axis").textContent="plan view — "+fmt(F.seedCount)+" guesses shown equally";
@@ -435,7 +444,7 @@
          "The railed one keeps going."); }},
 
    // ---- the reveal: hold, deform, land, hold ------------------------------
-   {t:11500, f:function(u){ stage(1); fade(u);
+   {t:11500, f:function(u){ stage(1);
      var g = ease(clamp((u-0.12)/0.50));
      var land = clamp((u-0.70)/0.13);
      var S=state(A1_END), n=drawPool(S);
@@ -450,7 +459,7 @@
          g<0.30 ? "Re-drawing so that width is file count." : ""); }},
 
    // ---- why that matters: what ownership alone would have meant ------------
-   {t:14600, f:function(u){ stage(0); fade(u);
+   {t:14600, f:function(u){ stage(0);
      var S=state(A1_END);
      drawRun(S,null,1); axisKeys(1); counterfactual(ease(clamp(u/0.28))); foot(FOOT_DERIVED);
      $("axis").textContent="counterfactual · not recorded";
@@ -460,7 +469,7 @@
          " cannot share it, because a range belongs to whoever claimed it."); }},
 
    // ---- and that is what the recorded run starts to do ---------------------
-   {t:18000, f:function(u){ stage(1); fade(u);
+   {t:18000, f:function(u){ stage(1);
      var S=state(firstSteal+(IDLE_END-firstSteal)*u), n=drawPool(S);
      drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · measured view";
@@ -474,7 +483,7 @@
    // ---- the mechanism, at the moment it is needed --------------------------
    {t:22500, f:function(u){
      if(!SPLIT_EV){ return; }
-     stage(1); fade(u);
+     stage(1);
      var a=ease(clamp(u/0.26));
      var commit = clamp((u-0.50)/0.055), committed = u>0.50;
      var tNow = SPLIT_EV[0]+(committed?1200:-700);
@@ -504,7 +513,7 @@
                    : "Ochre marks the new boundary."); }},
 
    // ---- recovery: the payoff is the fleet, not the split count ------------
-   {t:28500, f:function(u){ stage(1); fade(u);
+   {t:28500, f:function(u){ stage(1);
      var RECOV=SPLIT_EV[0]+1200;
      var S=state(RECOV+(D-RECOV)*ease(u)), n=drawPool(S);
      drawRun(S); axisKeys(1);
@@ -514,7 +523,7 @@
          "It keeps cutting until everyone can help.",
          fmt(S.hsplits)+" splits inside that one guess."); }},
 
-   {t:31000, f:function(u){ stage(1); fade(u);
+   {t:31000, f:function(u){ stage(1);
      var S=state(D), n=drawPool(S); drawRun(S); axisKeys(1);
      $("axis").textContent="recorded run · every range completed";
      meter(fmt(S.done), "ranges completed");
@@ -523,7 +532,7 @@
          F.ledgerOk ? "Every range accounted for. No gaps, no overlaps." : ""); }},
 
    {t:33500, f:function(u){
-     $("head").style.opacity=1;
+     $("head").style.opacity=1; $("head").style.removeProperty("opacity");
      $("axis").classList.add("gone"); $("strip").classList.add("gone");
      $("poolrow").classList.add("gone"); $("foot").classList.add("gone");
      $("head").style.opacity=1;
@@ -552,6 +561,7 @@
       }
       prev=SCENES[i].t;
     }
+    fade(vt);
     $("veil").style.opacity=veilAt(vt);
   }
   window.__seek=seek; window.__duration=33500; window.__videoTime=true; seek(0);
