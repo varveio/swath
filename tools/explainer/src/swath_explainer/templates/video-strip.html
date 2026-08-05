@@ -236,10 +236,17 @@
     sc.strokeStyle=css("--rule"); sc.lineWidth=1;
     sc.beginPath(); sc.moveTo(0,BH+0.5); sc.lineTo(SW,BH+0.5); sc.stroke();
     sc.font="19px "+css("--mono"); sc.fillStyle=css("--ink3");
+    var drawn=[];
     for(var i=0;i<AXIS_PICK.length;i++){
       var x=Math.round(pos(AXIS_PICK[i].x,g)*SW), nm=AXIS_PICK[i].name;
       if(nm.length>22) nm=nm.slice(0,21)+"…";
-      if(x<4 || x+nm.length*11.4>SW-4) continue;
+      var wid=nm.length*11.4;
+      if(x<4 || x+wid>SW-4) continue;
+      var clash=false;
+      for(var j=0;j<drawn.length;j++)
+        if(x < drawn[j][1]+22 && x+wid+22 > drawn[j][0]) clash=true;
+      if(clash) continue;
+      drawn.push([x, x+wid]);
       sc.strokeStyle=css("--rule");
       sc.beginPath(); sc.moveTo(x+0.5,BH); sc.lineTo(x+0.5,BH+7); sc.stroke();
       sc.fillText(nm, x+7, BH+25);
@@ -253,7 +260,11 @@
     if(a<=0) return;
     var items=[[css("--teal"),.92,"listing now"],[css("--pale"),.34,"finished"],
                [null,0,"not started"]], x=6, y=BH-30;
-    sc.globalAlpha=a; sc.font="19px "+css("--mono");
+    sc.globalAlpha=a*0.94; sc.fillStyle=css("--paper");
+    sc.fillRect(0, y-11, SW, 42);
+    sc.globalAlpha=a; sc.strokeStyle=css("--rule"); sc.lineWidth=1;
+    sc.beginPath(); sc.moveTo(0,y-10.5); sc.lineTo(SW,y-10.5); sc.stroke();
+    sc.font="19px "+css("--mono");
     for(var i=0;i<items.length;i++){
       if(items[i][0]){ sc.fillStyle=items[i][0]; sc.globalAlpha=a*items[i][1];
                        sc.fillRect(x,y,20,20); sc.globalAlpha=a; }
