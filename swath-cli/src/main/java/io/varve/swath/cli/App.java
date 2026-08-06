@@ -125,6 +125,9 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
      * URI at the top level (no verb) can be recognized without hard-coding the scheme list. */
     private static final Pattern URI_SHAPED = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*://[\\s\\S]*");
 
+    /** How deep {@link #messageChain} follows a chain — see {@code ExitCodes.MAX_CHAIN_DEPTH}. */
+    private static final int MAX_MESSAGE_CHAIN_DEPTH = 32;
+
     @Mixin
     final GlobalOptions global = new GlobalOptions();
 
@@ -203,7 +206,7 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
         int code = ExitCodes.forThrowable(ex);
         SwathException domain = domainException(ex);
         if (domain != null) {
-            recordError(coordinator, cmd, err -> err.println("swath: " + domain.getMessage()));
+            recordError(coordinator, cmd, err -> err.println("swath: " + messageChain(domain)));
         } else if (code == ExitCodes.UNEXPECTED) {
             recordError(coordinator, cmd, err -> {
                 err.println("swath: unexpected error: " + ex);
@@ -234,6 +237,47 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
             }
         }
         return null;
+    }
+
+    /**
+     * A domain error's own message followed by every distinct cause message beneath it, joined
+     * with {@code ": "} on ONE line.
+     *
+     * <p>Printing only {@code getMessage()} loses the fault. A domain exception names the
+     * <em>stage</em> that failed — {@code OutputException("parquet writer failed", cause)} — while
+     * the cause names <em>what went wrong</em>, and it is the cause that tells an operator (or an
+     * external runner classifying the run) whether the disk filled, a file was unwritable, or the
+     * encoder rejected a row. Measured on the 2026-08 Outcrop campaign: seven buckets failed
+     * identically with nothing on stderr but {@code swath: parquet writer failed}, and the
+     * {@code No space left on device} underneath was thrown away here.
+     *
+     * <p>One line, not a stack trace, for the reason the caller documents: the whole record is
+     * written under the coordinator's lock so nothing can splice into it, and a multi-line trace
+     * is what would make that splice-able. The trace stays behind {@code -v} on the unexpected
+     * path.
+     *
+     * <p>A link whose text the chain already ends with is skipped, because the JDK's own wrapping
+     * habit ({@code new IOException(cause)} takes {@code cause.toString()} as its message) would
+     * otherwise render as {@code x: x}.
+     */
+    static String messageChain(Throwable throwable) {
+        var text = new StringBuilder();
+        int depthLeft = MAX_MESSAGE_CHAIN_DEPTH;
+        for (Throwable current = throwable; current != null && depthLeft > 0; current = current.getCause()) {
+            depthLeft--;
+            String message = current.getMessage();
+            // An exception with no message still has to say something, or the chain silently
+            // shortens and the reader cannot tell a missing link from an absent one.
+            String part = message == null || message.isBlank()
+                ? current.getClass().getSimpleName()
+                : message.strip();
+            if (text.isEmpty()) {
+                text.append(part);
+            } else if (!text.toString().endsWith(part)) {
+                text.append(": ").append(part);
+            }
+        }
+        return text.toString();
     }
 
     public static void main(String[] args) {
