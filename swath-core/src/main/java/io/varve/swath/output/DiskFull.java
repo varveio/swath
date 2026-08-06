@@ -51,6 +51,10 @@ public final class DiskFull {
      * Heuristic out-of-space detection. {@code ENOSPC} is the case that matters; a quota that has
      * been hit ({@code EDQUOT}) is included because it is the same condition from the run's point
      * of view and has the same remedy, and the JDK reports both only as text.
+     *
+     * <p>Each condition is matched by BOTH its {@code strerror} wording and its symbolic name,
+     * because which one surfaces depends on the platform and on how far the exception travelled
+     * before something re-wrapped it.
      */
     public static boolean is(IOException e) {
         String msg = e.getMessage();
@@ -60,6 +64,7 @@ public final class DiskFull {
         String m = msg.toLowerCase();
         return m.contains("no space left on device")
             || m.contains("enospc")
-            || m.contains("disk quota exceeded");
+            || m.contains("disk quota exceeded")
+            || m.contains("edquot");
     }
 }

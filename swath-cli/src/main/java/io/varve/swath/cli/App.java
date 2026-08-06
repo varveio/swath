@@ -247,9 +247,9 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
      * <em>stage</em> that failed — {@code OutputException("parquet writer failed", cause)} — while
      * the cause names <em>what went wrong</em>, and it is the cause that tells an operator (or an
      * external runner classifying the run) whether the disk filled, a file was unwritable, or the
-     * encoder rejected a row. Measured on the 2026-08 Outcrop campaign: seven buckets failed
-     * identically with nothing on stderr but {@code swath: parquet writer failed}, and the
-     * {@code No space left on device} underneath was thrown away here.
+     * encoder rejected a row. Observed in the field: a fleet of large listings failed identically
+     * with nothing on stderr but {@code swath: parquet writer failed}, while the
+     * {@code No space left on device} underneath was discarded here.
      *
      * <p>One line, not a stack trace, for the reason the caller documents: the whole record is
      * written under the coordinator's lock so nothing can splice into it, and a multi-line trace
@@ -268,9 +268,12 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
             String message = current.getMessage();
             // An exception with no message still has to say something, or the chain silently
             // shortens and the reader cannot tell a missing link from an absent one.
+            // Flatten any line break INSIDE a message too. Stripping the ends is not enough: a
+            // wrapped IOException can carry an embedded newline, and one of those would split the
+            // record the coordinator's lock exists to keep whole.
             String part = message == null || message.isBlank()
                 ? current.getClass().getSimpleName()
-                : message.strip();
+                : message.strip().replaceAll("\\R+", " ");
             if (text.isEmpty()) {
                 text.append(part);
             } else if (!text.toString().endsWith(part)) {

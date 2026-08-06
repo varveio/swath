@@ -20,11 +20,11 @@ import picocli.CommandLine.Command;
 /**
  * Pins the two halves of "a full disk is legible from outside the process".
  *
- * <p>Both were missing together, and the combination is what made the 2026-08 Outcrop campaign
- * unable to see disk exhaustion at all: seven buckets filled a 30 GiB workspace, exited 1, and put
- * nothing on stderr but {@code swath: parquet writer failed}. An external runner classifying that
- * run had neither a code nor a message to go on, so it read the failure as memory pressure and
- * retried on ever-larger machines with the same disk.
+ * <p>Both were missing together, and the combination left a large listing fleet unable to see disk
+ * exhaustion at all: buckets filled a 30 GiB workspace, exited 1, and put nothing on stderr but
+ * {@code swath: parquet writer failed}. An external runner classifying that run had neither a code
+ * nor a message to go on, so it read the failure as memory pressure and retried on ever-larger
+ * machines with the same disk.
  *
  * <ul>
  *   <li><b>The code</b> — {@link OutputException} exits {@link ExitCodes#DISK_FULL} when the cause
@@ -44,6 +44,15 @@ class DiskFullClassificationTest {
         @Override
         public Integer call() throws OutputException {
             throw new OutputException("parquet writer failed", new IOException(ENOSPC));
+        }
+    }
+
+    @Command(name = "multiline")
+    static class MultiLineCauseCommand implements Callable<Integer> {
+        @Override
+        public Integer call() throws OutputException {
+            throw new OutputException("parquet writer failed",
+                    new IOException("write failed\n\tat part-00007.parquet\n" + ENOSPC));
         }
     }
 
@@ -75,6 +84,22 @@ class DiskFullClassificationTest {
                 new RuntimeException("write failed", new IOException(ENOSPC)));
 
         assertThat(failure.exitCode()).isEqualTo(ExitCodes.DISK_FULL);
+    }
+
+    /**
+     * Both conditions, in both spellings. Which of the two a platform produces — the
+     * {@code strerror} wording or the symbolic name — is not ours to predict.
+     */
+    @Test
+    void everySpellingOfOutOfSpaceIsRecognised() {
+        for (String message : new String[] {
+            ENOSPC, "ENOSPC", "Disk quota exceeded", "EDQUOT", "write failed: ENOSPC",
+        }) {
+            assertThat(new OutputException("parquet writer failed", new IOException(message))
+                    .exitCode())
+                .as("message %s", message)
+                .isEqualTo(ExitCodes.DISK_FULL);
+        }
     }
 
     /** Every other sink failure keeps the generic code: the disk code must stay actionable. */
@@ -126,7 +151,7 @@ class DiskFullClassificationTest {
         cmd.execute("disk-full");
 
         assertThat(err.toString())
-                .as("the stage alone is what the campaign saw, and it was not diagnosable")
+                .as("the stage alone is what the field reports saw, and it was not diagnosable")
                 .contains("swath: parquet writer failed: " + ENOSPC);
     }
 
@@ -139,6 +164,32 @@ class DiskFullClassificationTest {
         cmd.setErr(new PrintWriter(err));
 
         cmd.execute("disk-full");
+
+        assertThat(err.toString().strip().lines()).hasSize(1);
+    }
+
+    /**
+     * Stripping the ends is not enough — an embedded line break would split the record that the
+     * stderr coordinator's lock exists to keep whole, which is the guarantee above.
+     */
+    @Test
+    void anEmbeddedLineBreakIsFlattened() {
+        var failure = new OutputException("parquet writer failed",
+                new IOException("write failed\n\tat part-00007.parquet\r\n" + ENOSPC));
+
+        assertThat(App.messageChain(failure)).doesNotContain("\n").doesNotContain("\r");
+        assertThat(App.messageChain(failure))
+                .isEqualTo("parquet writer failed: write failed \tat part-00007.parquet " + ENOSPC);
+    }
+
+    @Test
+    void aMultiLineCauseStillPrintsAsOneTerminalLine() {
+        StringWriter err = new StringWriter();
+        CommandLine cmd = App.commandLine();
+        cmd.addSubcommand("multiline", new MultiLineCauseCommand());
+        cmd.setErr(new PrintWriter(err));
+
+        cmd.execute("multiline");
 
         assertThat(err.toString().strip().lines()).hasSize(1);
     }
