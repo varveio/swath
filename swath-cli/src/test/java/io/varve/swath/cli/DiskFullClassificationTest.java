@@ -87,17 +87,23 @@ class DiskFullClassificationTest {
     }
 
     /**
-     * Both conditions, in both spellings. Which of the two a platform produces — the
-     * {@code strerror} wording or the symbolic name — is not ours to predict.
+     * Both conditions, in both spellings, at both depths. Which of the two a platform produces —
+     * the {@code strerror} wording or the symbolic name — is not ours to predict, and neither is
+     * how many times something re-wraps it on the way up. Testing the cross product is what stops
+     * a regression that keeps the chain walk for one spelling and loses it for another.
      */
     @Test
-    void everySpellingOfOutOfSpaceIsRecognised() {
+    void everySpellingOfOutOfSpaceIsRecognisedAtAnyDepth() {
         for (String message : new String[] {
             ENOSPC, "ENOSPC", "Disk quota exceeded", "EDQUOT", "write failed: ENOSPC",
         }) {
             assertThat(new OutputException("parquet writer failed", new IOException(message))
                     .exitCode())
-                .as("message %s", message)
+                .as("immediate cause: %s", message)
+                .isEqualTo(ExitCodes.DISK_FULL);
+            assertThat(new OutputException("parquet writer failed",
+                    new RuntimeException("write failed", new IOException(message))).exitCode())
+                .as("wrapped cause: %s", message)
                 .isEqualTo(ExitCodes.DISK_FULL);
         }
     }
