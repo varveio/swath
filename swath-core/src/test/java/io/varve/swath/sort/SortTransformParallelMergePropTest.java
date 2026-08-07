@@ -148,6 +148,49 @@ class SortTransformParallelMergePropTest {
                 ranges, Long.MAX_VALUE, SortedFileWriterFactory.DEFAULT, false);
     }
 
+    /**
+     * The core property with each range forced to CASCADE. Every property above runs under
+     * {@link SortConfigs#base()}'s {@code merge-budget-bytes = Long.MAX_VALUE}, so no range ever
+     * needs more than one pass — which leaves the interaction of the two backstops untested, and it
+     * is reachable in production: {@link ParallelRangeMerge#perRangeFanIn} divides the budget by
+     * {@code R}, so a segment count that a serial merge spans in ONE pass can outrun the per-range
+     * fan-in as soon as {@code R} rises. A 1-byte budget pins each range at the {@code max(2, …)}
+     * floor, so any input with &gt;2 segments cascades within every range.
+     *
+     * <p>The baseline is a NON-cascading serial run (budget unbounded): under the strict generator
+     * equal-comparing rows are byte-identical, so the correct output is unique and the cascading
+     * parallel run must still reproduce it exactly — a range that dropped or duplicated a row while
+     * folding its intermediates, or that mis-ordered across a cascade pass, fails here and passes
+     * every existing property.
+     */
+    @Property(tries = 60)
+    void cascadingRangesAreStillByteExactToANonCascadingSerialRun(
+            @ForAll @IntRange(min = 3, max = 6) int segmentCount,
+            @ForAll @IntRange(min = 1, max = 320) int entryCount,
+            @ForAll KeyStyle style,
+            @ForAll @IntRange(min = 2, max = 6) int ranges,
+            @ForAll long seed) throws IOException {
+        Scenario s = buildScenario(segmentCount, entryCount, style, seed, false);
+        Path root = Files.createTempDirectory("prangeprop-cascade-");
+        try {
+            SortTransformResult serial =
+                    run(s, 1, Long.MAX_VALUE, root, "serial", SortedFileWriterFactory.DEFAULT);
+            SortTransformResult parallel = run(s, ranges, Long.MAX_VALUE, root, "parallel",
+                    SortedFileWriterFactory.DEFAULT, 1L);
+
+            List<ListEntry> input = s.allEntries();
+            List<ListEntry> parallelRows = readAll(parallel.finalFiles());
+            assertThat(parallel.totalRows()).as("cascading parallel rows out == rows in")
+                    .isEqualTo(input.size());
+            assertThat(parallelRows).as("cascading parallel is the exact input multiset")
+                    .containsExactlyInAnyOrderElementsOf(input);
+            assertByteExactToSerial(readAll(serial.finalFiles()), parallelRows);
+            assertSequentialPartNames(parallel.finalFiles());
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Adversarial boundary / degenerate examples.
     // ---------------------------------------------------------------------
@@ -461,13 +504,20 @@ class SortTransformParallelMergePropTest {
 
     private SortTransformResult run(Scenario s, int parallelism, long finalFileBytes, Path root,
                                     String name, SortedFileWriterFactory factory) throws IOException {
+        return run(s, parallelism, finalFileBytes, root, name, factory, Long.MAX_VALUE);
+    }
+
+    private SortTransformResult run(Scenario s, int parallelism, long finalFileBytes, Path root,
+                                    String name, SortedFileWriterFactory factory, long mergeBudgetBytes)
+            throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         List<Path> segs = new ArrayList<>();
         for (int i = 0; i < s.segments().size(); i++) {
             segs.add(writeSegment(staging, "seg-" + i + ".parquet", s.segments().get(i)));
         }
-        SortTransform transform = new SortTransform(new SortRun(config(parallelism, finalFileBytes), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, factory));
+        SortConfig config = config(parallelism, finalFileBytes).withMergeBudgetBytes(mergeBudgetBytes);
+        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, factory));
         return transform.transform(segs, output, staging, PublishListener.NO_OP);
     }
 

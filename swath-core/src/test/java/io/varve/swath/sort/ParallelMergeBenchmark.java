@@ -11,12 +11,15 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -62,6 +65,10 @@ class ParallelMergeBenchmark {
     private static final int NUM_SEGMENTS = Integer.getInteger("swath.bench.segments", 64);
     private static final long TOTAL_ROWS = Long.getLong("swath.bench.rows", 12_000_000L);
     private static final int BLOCK_ROWS = Integer.getInteger("swath.bench.blockRows", 4_000);
+    /** The {@code R} values to sweep, in order; {@code R=1} must be first (it is the identity baseline). */
+    private static final List<Integer> RANGES =
+            Arrays.stream(System.getProperty("swath.bench.ranges", "1,2,4,8").split(","))
+                    .map(String::trim).map(Integer::parseInt).toList();
     private static final int TOTAL_DAYS = 1_500;
     private static final String KEY_PREFIX = "corp-data-lake-logs";
     private static final String[] STORAGE_CLASSES =
@@ -70,8 +77,10 @@ class ParallelMergeBenchmark {
     // the row-group skip has real, narrow groups to prune.
     private static final long SEGMENT_ROW_GROUP_BYTES = 1L << 20;
 
+    // Generous: the corpus knobs above (and swath.bench.ranges) govern how long a sweep actually takes,
+    // and this class never runs under the default suite — the timeout is a runaway backstop, not a budget.
     @Test
-    @Timeout(value = 9, unit = TimeUnit.MINUTES)
+    @Timeout(value = 120, unit = TimeUnit.MINUTES)
     void parallelMergeScaling() throws IOException {
         Path root = Files.createTempDirectory("swath-parallel-merge-bench-");
         System.out.println("BENCH_ROOT " + root);
@@ -85,7 +94,7 @@ class ParallelMergeBenchmark {
             System.out.printf("BENCH_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
                     corpus.segments, corpus.rows, corpus.bytes, buildMs);
 
-            List<Integer> ranges = List.of(1, 2, 4, 8);
+            List<Integer> ranges = RANGES;
             Map<Integer, ArmResult> results = new LinkedHashMap<>();
             List<Path> baselineFinals = null;
 
@@ -156,6 +165,13 @@ class ParallelMergeBenchmark {
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + label);
         samplerThread.setDaemon(true);
 
+        // Peak HEAP is the gating metric for merge-parallelism (the R× writer/floor term the merge
+        // budget does not cover), and unlike RSS it can be attributed per arm: RSS is process-wide and
+        // monotone across arms in one JVM (a later R=1 arm inherits an earlier R=8 arm's peak), whereas
+        // the heap pools' peak is resettable. Same measurement as production's efficiency.peak_heap_bytes
+        // (ResourceMetrics#peakHeapBytes: used, summed across HEAP pools).
+        System.gc();   // settle the prior arm's garbage so this arm's peak is its own
+        resetHeapPeaks();
         long cpuStartNanos = processCpuTimeNanos();
         long wallStartNanos = System.nanoTime();
         samplerThread.start();
@@ -182,6 +198,7 @@ class ParallelMergeBenchmark {
                 ? -1
                 : (cpuEndNanos - cpuStartNanos) / 1e9 / ((wallEndNanos - wallStartNanos) / 1e9);
         ar.peakRssBytes = sampler.maxRssBytes;
+        ar.peakHeapBytes = peakHeapBytes();
         ar.mergePasses = result.mergePasses();
         ar.cascadedPasses = result.cascadedPasses();
         ar.fastPathEmissions = result.fastPathEmissions();
@@ -191,6 +208,26 @@ class ParallelMergeBenchmark {
         ar.rowgroupSkipEngagedCount = metrics.count("SORT.merge_range_rowgroup_skipped");
         ar.rangeLatenciesMs = rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).collect(Collectors.toList());
         return ar;
+    }
+
+    /** Clear every HEAP pool's recorded peak, so the next arm's peak is attributable to that arm alone. */
+    private static void resetHeapPeaks() {
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP) {
+                pool.resetPeakUsage();
+            }
+        }
+    }
+
+    /** Peak heap bytes since the last {@link #resetHeapPeaks()}, summed across HEAP pools. */
+    private static long peakHeapBytes() {
+        long total = 0;
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP && pool.getPeakUsage() != null) {
+                total += pool.getPeakUsage().getUsed();
+            }
+        }
+        return total;
     }
 
     private static long processCpuTimeNanos() {
@@ -491,6 +528,7 @@ class ParallelMergeBenchmark {
         long mergeMs;
         double avgCoresBusy;
         long peakRssBytes;
+        long peakHeapBytes;
         long mergePasses;
         long cascadedPasses;
         long fastPathEmissions;
@@ -503,11 +541,13 @@ class ParallelMergeBenchmark {
 
         String toLine() {
             return String.format(
-                    "BENCH_ROW label=%s r=%d merge_ms=%d avg_cores_busy=%.2f peak_rss_mb=%.1f "
+                    "BENCH_ROW label=%s r=%d merge_ms=%d avg_cores_busy=%.2f peak_heap_mb=%.1f "
+                            + "peak_rss_mb=%.1f "
                             + "merge_passes=%d cascaded_passes=%d fastpath=%d total_rows=%d files=%d "
                             + "range_parallel_count=%d rowgroup_skip_engaged=%d byte_exact=%s "
                             + "range_latencies_ms=%s",
-                    label, mergeParallelism, mergeMs, avgCoresBusy, peakRssBytes / (1024.0 * 1024.0),
+                    label, mergeParallelism, mergeMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
+                    peakRssBytes / (1024.0 * 1024.0),
                     mergePasses, cascadedPasses, fastPathEmissions, totalRows, finalFiles.size(),
                     rangeParallelCount, rowgroupSkipEngagedCount, byteExact, rangeLatenciesMs);
         }
