@@ -315,10 +315,14 @@ Semantics:
   avoids the row **decode**, not the read — the format has no per-page offset index, so each range
   still reads and CRC-verifies the framed pages it steps over.
 
-  *Cost.* More ranges means more concurrent merge streams, so peak heap and the descriptor budget
-  both divide across them; `R` is clamped so a range never opens more streams than its share of
-  `merge-budget-bytes` and the process fd limit allow. Setting `R` past that point makes every
-  range **cascade** (merge in multiple passes), which is slower than the serial merge, not faster.
+  *Cost.* More ranges means more concurrent merge streams, so both peak heap and the process
+  descriptor budget divide across them: each range's merge fan-in is clamped to its share of
+  `merge-budget-bytes` and of the fd limit. **`R` itself is not clamped** — when that per-range
+  fan-in falls below the staging-segment count, every range **cascades** (merges in several
+  passes, rewriting its rows each time), which is slower than the serial merge rather than faster.
+  So `R` is bounded in practice by roughly
+  `merge-budget-bytes / (segments × per-stream-bytes)`, and exceeding it is a silent
+  pessimisation: the range counters still report that the parallel path engaged.
 
   On page-run staging there is also **read amplification**: because the format carries no per-page
   offset index, a range reads a prefix of each segment ending at its own upper bound, so the ranges

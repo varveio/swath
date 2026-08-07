@@ -17,7 +17,7 @@ measurements: single-machine, single-vantage runs against public buckets,
 stamped with version/date/machine/bucket per the [Methodology](#methodology)
 bar. They are reported because they are more useful than an empty placeholder,
 and because the *method* for reproducing them on your own bucket is written
-alongside — see [Diagnosing a run](#diagnosing-a-run--and-why-these-numbers-do-not-transfer-between-buckets),
+alongside — see [Diagnosing a run](#diagnosing-a-run),
 which also explains why absolute numbers should not be ported between buckets.
 A release-candidate bundle (multiple machines, repeated runs, in-region
 vantage) is still outstanding, and where a section has no data at all it says
@@ -68,7 +68,7 @@ shapes (deep prefix trees, flat key spaces, skewed distributions).
 **LIST-call growth is essentially optimal and shape-insensitive.** Across every
 run below, `efficiency.api_calls_per_1k_objects` sat between **1.016 and 1.089**
 against a theoretical floor of 1.0 (1 000 keys per LIST response), with
-`page_fill_ratio` at 1.0000 and `overfetch_ratio` 1.008–1.045. Call count is
+`page_fill_ratio` at 1.0000 and `overfetch_ratio` 1.008–1.050. Call count is
 therefore ~linear in object count with a small constant, and the interesting
 variable is not calls but **wall clock**, which is governed by how many requests
 the engine can keep in flight — a keyspace-shape property, not a size property.
@@ -140,11 +140,16 @@ Sustained keys listed per second, and the LIST-request rate that throughput
 implies, under representative concurrency settings.
 
 Observed peak on the measured buckets: **~655 000 keys/s** (≈ 666 LIST/s) at
-`--concurrency 256`, on a keyspace that could not fill a higher ceiling. A
-smaller, easier-to-split bucket reached ~425 000 keys/s in its listing phase at
-`--concurrency 256` on the same machine. The full sweep, and why 512 is *slower*
-than 256 on that bucket, is in
+`--concurrency 256`, on a keyspace that could not fill a higher ceiling. The full
+sweep, and why 512 is *slower* than 256 on that bucket, is in
 [Diagnosing a run](#field-observations-stamped-and-shape-specific).
+
+The second, ten-times-smaller bucket reached ~426 000 keys/s in its listing phase
+at the same concurrency — **lower**, not higher, and not a like-for-like
+comparison: its whole listing lasted 23 s (so ramp-up is a large fraction of it)
+and it produced only 148 splits against the larger bucket's ~4 900, so there was
+far less parallel work to spread. It is reported here only to show that keys/s
+does not follow object count.
 
 Two caveats that matter more than the numbers:
 
@@ -251,6 +256,8 @@ _Measured 2026-07-29 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box, bundled rep
 server over captured public-bucket listings; wall change is relative within the
 bench's compressed latency profile, never an absolute claim. Public data only._
 
+<a id="diagnosing-a-run"></a>
+
 ## Diagnosing a run — and why these numbers do not transfer between buckets
 
 This section is **method, not a claim**. The figures in it are stamped field
@@ -347,17 +354,26 @@ overshot** — back the ceiling off until utilisation recovers.
 
 ### Predicting split supply from the summary's shape block
 
-`shape` describes the keyspace the run actually saw, and it is what explains why
-two buckets of identical size list at different rates:
+`shape` describes the keyspace the run actually saw:
 
-- `divergence_depth_histogram` — where split points become distinguishable. Mass
-  concentrated in the DEEP buckets means every new range costs a deep probe, so
-  split supply is expensive and in-flight is hard to fill.
+- `divergence_depth_histogram` — how deep into the key a split point becomes
+  distinguishable. Mass in the DEEP buckets means each new range costs a deeper
+  probe.
 - `mass_skew_gini` — how unevenly objects are distributed across ranges.
 - `delimiter_fanout` — how much branching a structure probe returns.
 
-A bucket with shallow divergence and wide fanout will fill a high ceiling; one
-with deep divergence will not, no matter what you set.
+**Treat these as hypothesis-generating, not diagnostic — that is what the
+evidence here supports.** Both buckets measured on this page put their entire
+divergence histogram in the deepest bucket, so that signal did not discriminate
+between them, and no shallow-divergence bucket was measured at all. The claim
+that shallow divergence fills a high ceiling is a *prediction* from how the
+split/steal engine works, not something these runs establish.
+
+What the runs DO establish is the direct evidence of split starvation, and it
+comes from the engine counters rather than the shape block: `engine.splits`
+plateauing and `engine.steals` staying flat as `--concurrency` rises, while
+per-request latency does not move. Read those first; use `shape` to form a guess
+about *why*.
 
 ### Field observations (stamped, and shape-specific)
 
@@ -379,8 +395,12 @@ Read it as the METHOD working, not as a recommended setting: throughput peaks at
 256 and regresses at 512, utilisation collapses from 93 % to 18 %, per-request
 latency stays flat at ~175 ms throughout (so the remote was never the wall), and
 CPU-per-key stays ~7.4 until the ceiling outruns the keyspace and then climbs.
-This bucket's `divergence_depth_histogram` puts every sampled range in its
-deepest bucket — an expensive keyspace to split — which is why it starves early.
+The direct evidence that it is split-starved rather than remote-limited is in
+the engine counters: `engine.splits` plateaued at ~4 900 and `engine.steals`
+stayed flat at ~300–400 across the whole sweep, while latency never moved. Its
+`shape.divergence_depth_histogram` sits entirely in the deepest bucket, which is
+consistent with expensive splitting — but so does the other bucket measured
+here, so that signal alone does not distinguish them.
 
 **Do not port the peak.** A differently shaped bucket of the same size will have
 a different one. Run the sweep on your own bucket, or read the shape block and
