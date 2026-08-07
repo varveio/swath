@@ -320,6 +320,14 @@ Semantics:
   `merge-budget-bytes` and the process fd limit allow. Setting `R` past that point makes every
   range **cascade** (merge in multiple passes), which is slower than the serial merge, not faster.
 
+  On page-run staging there is also **read amplification**: because the format carries no per-page
+  offset index, a range reads a prefix of each segment ending at its own upper bound, so the ranges
+  together read about `(R+1)/2` times the bytes a serial merge reads while each decodes only ~`1/R`
+  of the rows. Measured at `R=8` on a 9.9 M-key fixture: 4.50×. Decode dominates read at that
+  scale — the range reading 8× the bytes of another finished within ~2 % of it — but on staging
+  much larger than page cache the extra reads are real, so treat `R` as a throughput/IO trade
+  rather than a free win.
+
   *Known gap.* Parts produced by the parallel path carry a range-local `file_index` and none is
   marked `file_final`, so they do not carry the self-describing multi-file completeness proof a
   serial `--sort` output does. Consumers that verify that stamp (including swath's own replay
