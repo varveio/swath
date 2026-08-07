@@ -128,6 +128,7 @@ final class ParallelRangeMerge {
     /** How long the failure path waits for range threads to stop before it sweeps their files. */
     private static final long RANGE_QUIESCE_SECONDS = 30;
 
+
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
@@ -712,6 +713,19 @@ final class ParallelRangeMerge {
      * too few. An unreadable segment is treated the same way, as is a run with rolling disabled
      * ({@code final-file-bytes == MAX_VALUE}), which produces exactly one part per range.
      */
+    /** Total staged bytes, best-effort: an unreadable segment counts as zero and only shrinks R. */
+    private static long stagedBytes(List<Path> stagingSegments) {
+        long total = 0;
+        for (Path segment : stagingSegments) {
+            try {
+                total += Files.size(segment);
+            } catch (IOException e) {
+                log.debug("could not size a staging segment for the parallel-merge floor", e);
+            }
+        }
+        return total;
+    }
+
     private long estimatedOpenParts(List<Path> stagingSegments, int ranges) {
         if (config.finalFileBytes() == Long.MAX_VALUE) {
             return ranges;   // no rolling: one part per range
@@ -759,6 +773,12 @@ final class ParallelRangeMerge {
         int segments = stagingSegments.size();
         if (requested <= 1 || segments <= 0) {
             return Math.max(1, requested);
+        }
+        // Too small to be worth splitting: the speedup would be seconds and the cost is a permanent
+        // change to the published file count. Checked before anything else, because it is the cheapest
+        // test and the most common answer on ordinary runs.
+        if (stagedBytes(stagingSegments) < config.minParallelStagedBytes()) {
+            return 1;
         }
         long perStream = perStreamBytes(stagingSegments);
         // The open output parts are priced FIRST, because their count is driven by final-file-bytes

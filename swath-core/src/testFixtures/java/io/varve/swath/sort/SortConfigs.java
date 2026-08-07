@@ -22,14 +22,24 @@ public final class SortConfigs {
     /**
      * The canonical test config: a 64&nbsp;MB segment gate, unbounded segment-entries and
      * merge-budget (so the bytes gate and raw fan-in govern), fan-in 512, single-file output, and the
-     * shipped defaults for the remaining knobs (LZ4, serial merge, 64&nbsp;KiB per-stream estimate).
+     * shipped defaults for the remaining knobs (LZ4, 64&nbsp;KiB per-stream estimate).
+     *
+     * <p>Pins the merge SERIAL rather than inheriting {@link SortConfig#DEFAULT_MERGE_PARALLELISM},
+     * which is now core-derived and greater than one. Most tests here are about something other than
+     * parallelism and assert single-file output; inheriting the shipped default would silently turn
+     * each of them into a test of the parallel path instead of the thing it names. A case that wants
+     * the parallel merge asks for it — {@code base().withMergeParallelism(R)} — and gets it, because
+     * the staged-bytes floor is dropped to zero here (test fixtures are far below the production
+     * floor, which exists to stop a small run multiplying its file count for a few seconds' gain).
      */
     public static SortConfig base() {
         return SortConfig.DEFAULT
                 .withSegmentBytes(64L << 20)
                 .withFanIn(512)
                 .withFinalFileBytes(Long.MAX_VALUE)
-                .withMergeBudgetBytes(Long.MAX_VALUE);
+                .withMergeBudgetBytes(Long.MAX_VALUE)
+                .withMergeParallelism(1)
+                .withMinParallelStagedBytes(0L);
     }
 
     /**

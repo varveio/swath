@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 126;
+    static final int EXPECTED_OTLP_METER_COUNT = 127;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -216,6 +216,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.rate_limit.wait|{}",
             "TIMER|swath.run.duration|{}",
             "TIMER|swath.sort.backpressure.wait|{}",
+            "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
             "TIMER|swath.sort.merge.range.latency|{}");
 
