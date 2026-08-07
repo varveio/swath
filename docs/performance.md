@@ -12,17 +12,38 @@ measures it. Its comparative runs have not started yet, so it carries a
 [methodology](https://github.com/varveio/s3-listing-study/blob/main/docs/methodology.md)
 and a tool roster but no results so far.
 
-With one exception, every figure below is pending a release-candidate measurement
-pass and the numbers are not filled in yet. The exception is
-[The 0.2.0 scheduling defaults](#the-020-scheduling-defaults-rate_anchored_sensing--tail_floor),
-which reports completed measurements and states its own limits.
+Most sections now carry **field observations** rather than release-candidate
+measurements: single-machine, single-vantage runs against public buckets,
+stamped with version/date/machine/bucket per the [Methodology](#methodology)
+bar. They are reported because they are more useful than an empty placeholder,
+and because the *method* for reproducing them on your own bucket is written
+alongside — see [Diagnosing a run](#diagnosing-a-run--and-why-these-numbers-do-not-transfer-between-buckets),
+which also explains why absolute numbers should not be ported between buckets.
+A release-candidate bundle (multiple machines, repeated runs, in-region
+vantage) is still outstanding, and where a section has no data at all it says
+so plainly.
 
 ## Scaling behavior
 
 How listing time and LIST-call count grow as object count rises across bucket
 shapes (deep prefix trees, flat key spaces, skewed distributions).
 
-> _Numbers pending RC measurement._
+**LIST-call growth is essentially optimal and shape-insensitive.** Across every
+run below, `efficiency.api_calls_per_1k_objects` sat between **1.016 and 1.089**
+against a theoretical floor of 1.0 (1 000 keys per LIST response), with
+`page_fill_ratio` at 1.0000 and `overfetch_ratio` 1.008–1.045. Call count is
+therefore ~linear in object count with a small constant, and the interesting
+variable is not calls but **wall clock**, which is governed by how many requests
+the engine can keep in flight — a keyspace-shape property, not a size property.
+
+**What is NOT established here:** a like-for-like sweep of object count at fixed
+shape. The two buckets measured differ in shape as well as size, so no
+size-scaling exponent should be inferred from them. That remains an RC-bundle
+item.
+
+> _Stamp: swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, cross-cloud to
+> AWS S3; buckets `noaa-gefs-retrospective` (9.9 M, us-east-1) and
+> `pds-css-archive` (96.0 M, us-west-2)._
 
 ## Memory behavior and current evidence
 
@@ -39,21 +60,65 @@ million- or billion-object scale, and there is not yet a documented, enforced
 maximum part/segment-count envelope. Publish a stamped larger-scale measurement
 and an operating envelope before making a stronger bounded-memory claim.
 
-> _Numbers pending RC measurement._
+**Field observation: peak heap tracks `--concurrency`, not object count.**
+Unsorted Parquet output, default settings, one bucket of 96 022 559 objects
+(960× the PERF-2 gate's scale):
+
+| `--concurrency` | peak heap | peak RSS |
+|---:|---:|---:|
+| 32 | **0.92 GB** | 1.27 GB |
+| 64 | 2.24 GB | 2.51 GB |
+| 128 | 3.24 GB | 3.52 GB |
+| 256 | 4.80 GB | 4.92 GB |
+| 512 | 5.25 GB | 5.66 GB |
+
+At `--concurrency 32` a 96 M-object listing held peak heap **under the 1 GB
+PERF-2 figure at 960× the gate's object count**, and a 9.9 M-object listing at
+`--concurrency 256` peaked *higher* (2.70 GB) than the 96 M one at
+`--concurrency 32`. Both point the same way: the in-flight page buffers dominate,
+so the operating envelope is a function of the concurrency ceiling and not of how
+many objects the bucket holds.
+
+This supports the design intent but does **not** discharge the caveat above. It
+is one bucket, one machine, one run per point, unsorted only; `--sort` adds
+staging and merge buffers whose sizing is deliberately heap-adaptive (a function
+of `-Xmx`, see [`configuration.md`](configuration.md#jvm-system-properties)), and
+no maximum part/segment-count envelope is enforced yet.
+
+> _Stamp: swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, cross-cloud to
+> AWS S3; bucket `pds-css-archive` (96.0 M, us-west-2), unsorted Parquet._
 
 ## Resume cost
 
 The overhead of resuming an interrupted run: time to reopen the checkpoint and
 the LIST calls a resume spends versus a run that completes in one pass.
 
-> _Numbers pending RC measurement._
+> _No measurement. This one genuinely has no data behind it yet — it was not
+> exercised in any run on this page, and nothing here should be read as evidence
+> about resume cost._
 
 ## Throughput
 
 Sustained keys listed per second, and the LIST-request rate that throughput
 implies, under representative concurrency settings.
 
-> _Numbers pending RC measurement._
+Observed peak on the measured buckets: **~655 000 keys/s** (≈ 666 LIST/s) at
+`--concurrency 256`, on a keyspace that could not fill a higher ceiling. A
+smaller, easier-to-split bucket reached ~425 000 keys/s in its listing phase at
+`--concurrency 256` on the same machine. The full sweep, and why 512 is *slower*
+than 256 on that bucket, is in
+[Diagnosing a run](#field-observations-stamped-and-shape-specific).
+
+Two caveats that matter more than the numbers:
+
+- **These are cross-cloud** (GCP client → AWS S3). Round-trip latency was ~175 ms
+  and flat; an in-region client needs far less concurrency for the same
+  throughput, because throughput ≈ in-flight ÷ latency.
+- **Throughput is shape-bound, not size-bound.** The ceiling here was the
+  engine's ability to manufacture splittable ranges on a deep-divergence
+  keyspace, not the remote and not CPU.
+
+> _Stamp: as Scaling behavior above._
 
 ## The 0.2.0 scheduling defaults (`rate_anchored_sensing` + `tail_floor`)
 
@@ -149,12 +214,141 @@ _Measured 2026-07-29 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box, bundled rep
 server over captured public-bucket listings; wall change is relative within the
 bench's compressed latency profile, never an absolute claim. Public data only._
 
+## Diagnosing a run — and why these numbers do not transfer between buckets
+
+This section is **method, not a claim**. The figures in it are stamped field
+observations from a single dev machine (see the stamp), included because the
+*shape* of the reasoning transfers even where the numbers do not. Nothing here
+is a release-candidate measurement.
+
+### The one number to look at first: in-flight utilisation
+
+`--concurrency N` sets a **ceiling** (`Tmax`), not an achieved rate. What a run
+actually sustains is `engine.avg_in_flight`, and the ratio that matters is:
+
+```
+utilisation = engine.avg_in_flight / engine.peak_in_flight
+```
+
+By Little's law, `throughput ≈ in-flight ÷ per-request latency`. So if
+utilisation is high, the ceiling is binding and raising it may help. If it is
+low, the engine could not keep the ceiling full and **raising `--concurrency`
+makes things worse, not better** — you add scheduling overhead to fetch work
+that does not exist yet.
+
+One caveat when reading a `--sort` run: `avg_in_flight` is averaged over the
+WHOLE run, and in-flight is zero for the entire merge phase, so a sorted run's
+figure is diluted. Rescale it to the listing phase before judging:
+`avg_in_flight × duration_ms / (duration_ms − sort.merge_ms)`. An unsorted run
+needs no correction.
+
+### Is the wall the remote, or you?
+
+Derive per-request latency across a concurrency sweep:
+
+```
+latency ≈ engine.avg_in_flight ÷ (engine.pages ÷ wall_seconds)
+```
+
+- **Latency rises with concurrency** ⇒ the remote (or the AIMD controller
+  reacting to it) is the limit. Back off.
+- **Latency is flat while in-flight stops growing** ⇒ the limit is on your side:
+  the work-stealing engine is not producing splittable ranges fast enough. Look
+  at `engine.splits` and `engine.steals` — if `splits` plateaus and `steals`
+  stays flat as you raise concurrency, extra worker slots have nothing to take.
+
+Corroborating signals for a genuinely throttling remote:
+`recovered_errors.latency_freezes` climbing, `recovered_errors.min_effective_t`
+falling, non-zero `recovered_errors.connection_aborted`. If those are flat while
+throughput stalls, it is not the remote.
+
+### Sizing CPU
+
+`efficiency.cpu_seconds ÷ (objects ÷ 1e6)` gives **CPU-seconds per million
+keys**, which in field observation is roughly invariant to concurrency until the
+ceiling outruns what the keyspace can feed — at which point it climbs, and that
+climb is itself the signal that you have gone too far. It is the honest sizing
+input: `cores ≈ target keys/s × cpu_s_per_Mkey × 1e-6`, plus headroom.
+
+### Predicting split supply from the summary's shape block
+
+`shape` describes the keyspace the run actually saw, and it is what explains why
+two buckets of identical size list at different rates:
+
+- `divergence_depth_histogram` — where split points become distinguishable. Mass
+  concentrated in the DEEP buckets means every new range costs a deep probe, so
+  split supply is expensive and in-flight is hard to fill.
+- `mass_skew_gini` — how unevenly objects are distributed across ranges.
+- `delimiter_fanout` — how much branching a structure probe returns.
+
+A bucket with shallow divergence and wide fanout will fill a high ceiling; one
+with deep divergence will not, no matter what you set.
+
+### Field observations (stamped, and shape-specific)
+
+swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, listing **AWS** S3 —
+i.e. cross-cloud, which inflates the concurrency needed per unit of throughput
+relative to an in-region client. Bucket `pds-css-archive` (96 022 559 objects,
+us-west-2), `--no-sort`, one run per point:
+
+| `--concurrency` | keys/s | avg in-flight (utilisation) | CPU-s per Mkey |
+|---:|---:|---:|---:|
+| 32 | 165 831 | 29.9 (93 %) | 7.42 |
+| 64 | 327 275 | 56.9 (89 %) | 7.28 |
+| 128 | 511 429 | 89.0 (70 %) | 7.51 |
+| 256 | 655 346 | 118.4 (46 %) | 8.50 |
+| 512 | 519 286 | 93.2 (18 %) | 11.06 |
+
+Read it as the METHOD working, not as a recommended setting: throughput peaks at
+256 and regresses at 512, utilisation collapses from 93 % to 18 %, per-request
+latency stays flat at ~175 ms throughout (so the remote was never the wall), and
+CPU-per-key stays ~7.4 until the ceiling outruns the keyspace and then climbs.
+This bucket's `divergence_depth_histogram` puts every sampled range in its
+deepest bucket — an expensive keyspace to split — which is why it starves early.
+
+**Do not port the peak.** A differently shaped bucket of the same size will have
+a different one. Run the sweep on your own bucket, or read the shape block and
+in-flight utilisation from a single run and infer from those.
+
+### The merge phase grows with cores, not with object count
+
+On `--sort` runs, `sort.merge_ms ÷ duration_ms` is the merge's share of wall
+clock. The listing phase parallelises across cores and the serial merge does
+not, so **the same bucket shows a larger merge share on a bigger machine** —
+adding cores speeds the listing half and leaves the other half where it was.
+Judge the share against the machine, not against the object count, and remember
+Amdahl: a serial fraction `f` caps any core increase at `1/f`.
+
 ## Where swath is slow (honest limits)
 
 The bucket shapes and workloads where swath does not shine — where throttling,
 probe overhead, or an adversarial distribution costs more than the ideal.
 
-> _Numbers pending RC measurement._
+**Deep-divergence keyspaces starve the work-stealing engine.** When split points
+only become distinguishable far down the key (the run summary's
+`shape.divergence_depth_histogram` concentrated in its deepest buckets), every
+additional parallel range costs a deep probe. The engine then cannot keep its
+concurrency ceiling full, and throughput plateaus well below what the remote
+would serve. Measured on `pds-css-archive`: `engine.splits` plateaued at ~4 900
+and `engine.steals` stayed flat at ~300–400 no matter how high `--concurrency`
+went, in-flight utilisation fell from 93 % to 18 %, and throughput *regressed*
+21 % from c=256 to c=512 while per-request latency never moved. Setting a higher
+ceiling on such a bucket is actively counterproductive.
+
+**The sorted merge is serial, and its share grows with core count.** `--sort`
+adds a single-threaded merge after the listing. Because the listing half
+parallelises and the merge half does not, the merge's share of wall clock rises
+on bigger machines — the same bucket that spends a modest fraction of its wall
+in the merge on a small instance spends much more of it on a large one. A
+range-parallel merge exists behind
+`-Dswath.sort.merge-parallelism` but is **off by default and unreleased** (see
+[`usage.md`](usage.md#parallel-range-merge-off-by-default)).
+
+**Cross-cloud vantage.** All figures here were taken from a different cloud than
+the bucket. That inflates the concurrency required per unit of throughput and is
+not representative of an in-region client.
+
+> _Stamp: as Scaling behavior above._
 
 ## Methodology
 
@@ -164,4 +358,24 @@ listed. Measurements come from publicly available tooling only. We publish no
 leaderboard and make no self-favorable comparative framing — the numbers
 describe swath, not rivals.
 
-> _Numbers pending RC measurement._
+**What the current figures are, precisely.** Every number on this page outside
+the 0.2.0 scheduling sections is a *field observation*, not a release-candidate
+measurement. Specifically:
+
+- **n = 1 per point.** No repeats, so no variance is reported and small
+  differences between adjacent points are not significant.
+- **One machine, one vantage** — a 32 vCPU / 62 GiB GCP VM listing AWS S3, i.e.
+  cross-cloud. Round-trip latency was ~175 ms and flat; an in-region client will
+  need materially less concurrency for the same throughput.
+- **Two public buckets**, differing in shape as well as size, so no size-scaling
+  law is inferable from them.
+- **Serial arms.** Concurrency points were run one at a time, because concurrent
+  arms against the same bucket contend remotely and depress exactly the in-flight
+  and freeze counters under test.
+- Runs were driven by the shipped CLI and read from the run summary
+  (`--report`), so every figure is reproducible from a run's own artifacts.
+
+**What would raise these to RC grade:** repeats with reported variance, an
+in-region vantage, more than two keyspace shapes, and a like-for-like object-count
+sweep at fixed shape. Until then, treat the numbers as illustrations of the
+diagnostic method rather than as swath's performance envelope.
