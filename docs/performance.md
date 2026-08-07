@@ -302,15 +302,21 @@ throughput stalls, it is not the remote.
 ### Sizing CPU
 
 `efficiency.cpu_seconds ÷ (objects ÷ 1e6)` gives **CPU-seconds per million
-keys**. In field observation it is close to invariant — across a controlled
-sweep of 1, 2 and 4 client cores at concurrency 8–64, throughput per BUSY core
-(`keys_per_sec ÷ cpu_efficiency`) stayed in a 125 000–136 000 keys/s band,
-mean ~131 000, and the same CPU-per-key figure appeared on unrelated
+keys**. In field observation it is nearly invariant. Across a controlled 16-arm sweep of
+1, 2, 4 and 8 client cores at concurrency 8–64, throughput per BUSY core
+(`keys_per_sec ÷ cpu_efficiency`) stayed within **118 000–136 000 keys/s, mean
+~129 000 (±7 %)**, and the same CPU-per-key figure appeared on unrelated
 cross-cloud runs against real S3. So a workable model is:
 
 ```
-throughput ≈ min( cores × ~131 000 ,  concurrency × 1000 ÷ latency_seconds )
+throughput ≈ min( cores × ~129 000 ,  concurrency × 1000 ÷ latency_seconds )
 ```
+
+**It is not perfectly flat, and the drift has a direction.** CPU-per-key rises
+with core count — ~7.5 CPU-s/Mkey at 1–2 cores, ~7.7 at 4, ~8.2 at 8 — a
+coordination cost (more GC and JIT threads, more scheduling) of roughly 7–8 %
+from 1 core to 8. Sizing a large-core box from a small-core measurement will
+therefore under-estimate slightly; add headroom accordingly.
 
 Both terms come from a run's own summary, and **whichever is smaller tells you
 which knob to turn**: if the CPU term binds, add cores; if the latency term
