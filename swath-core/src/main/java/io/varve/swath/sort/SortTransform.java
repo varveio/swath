@@ -62,7 +62,7 @@ public final class SortTransform {
      * {@code .parquet} staging segment from {@link CaptureSorter}'s fixture path, or the off-by-default
      * parallel path's own {@code merge-r*.parquet} intermediates) by the columnar {@link SegmentReader}.
      */
-    private static final String SEGMENT_SUFFIX = ".pageseg";
+    static final String SEGMENT_SUFFIX = ".pageseg";
 
     // The sort-run inputs, held whole so the quintet threads straight through to ParallelRangeMerge
     // without re-listing loose positional params; the individual fields below are its hot-path aliases.
@@ -182,15 +182,15 @@ public final class SortTransform {
         // keyspace (fewer than two distinct sample keys) returns null and falls through to the serial
         // path below — so both merge-parallelism=1 (the default) and any unsplittable keyspace take the
         // EXACT untouched serial code, byte-for-byte identical.
-        // The off-by-default parallel range-merge path (ParallelRangeMerge / SortedFileIndex /
-        // row-group-scoped SegmentReader) reads COLUMNAR Parquet staging; it has no page-run reader,
-        // so it engages only when the staging segments are Parquet. Page-run staging (the live listing
-        // path's format) falls back to the serial merge, since parallelism is off by default; that
-        // serial merge is single-pass only when the runtime-clamped fan-in spans all segments,
-        // otherwise KWayMerge cascades over one or more passes. The parallel path continues to run on
-        // Parquet inputs (e.g. CaptureSorter fixtures and its own tests).
-        boolean pageRunStaging = !stagingSegments.isEmpty() && isPageRunSegment(stagingSegments.get(0));
-        if (config.mergeParallelism() > 1 && !pageRunStaging) {
+        // The parallel range-merge path now reads BOTH staging formats: columnar Parquet (via
+        // SortedFileIndex + a row-group-scoped SegmentReader) and page-run (via a page-scoped
+        // RangeScopedPageFrontier feeding the ordinary PageRunSegmentReader). Page-run is the live
+        // listing lane's format, so before this the knob could not engage on a real listing run at
+        // all -- it silently fell back to the serial merge, which made every A/B of the knob on a
+        // live bucket a no-op. Still off by default: mergeParallelism() > 1 is opt-in, and the
+        // decision to SHIP multi-file sorted output produced by a concurrent merge stays reserved
+        // (SortConfig#DEFAULT_MERGE_PARALLELISM), not least because of the completeness-stamp gap.
+        if (config.mergeParallelism() > 1) {
             SortTransformResult parallel = tryTransformParallel(stagingSegments, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting);
             if (parallel != null) {
@@ -273,7 +273,7 @@ public final class SortTransform {
         // cascade; otherwise the parallel merge reports work and no percentage, exactly as the serial
         // cascade does.
         onFinalPassStarting.onFinalPassStarting(
-                stagingSegments.size() <= rangeMerge.perRangeFanIn(boundaries.size() + 1));
+                stagingSegments.size() <= rangeMerge.perRangeFanIn(boundaries.size() + 1, stagingSegments));
         List<ParallelRangeMerge.RangeResult> results =
                 rangeMerge.run(stagingSegments, stagingDir, boundaries, progressCallback);
 
@@ -477,6 +477,8 @@ public final class SortTransform {
      * {@code merge-*.parquet} debris (older datasets and the SORT-RESUME tests plant the latter).
      */
     private static void cleanStaleMergeIntermediates(Path stagingDir) throws IOException {
+        // "merge-*" covers the serial path's own intermediates AND the parallel path's per-range
+        // "merge-r<range>-<n>" ones, in both staging formats.
         sweep(stagingDir, "merge-*" + SEGMENT_SUFFIX, "merge-*" + FINAL_SUFFIX);
     }
 

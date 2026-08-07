@@ -40,19 +40,27 @@ import org.slf4j.LoggerFactory;
  * range and no row is dropped or duplicated regardless of how the boundary keys are chosen. Boundary
  * choice therefore only affects <em>balance</em>, never correctness — a badly chosen boundary just
  * yields uneven (or empty) ranges, still a total, gap-free partition. Boundaries are sampled from the
- * observed key distribution ({@link SortedFileIndex#firstKeysPerRowGroup} first-keys across all
- * segments), evenly spaced through the sorted distinct sample.
+ * observed key distribution, evenly spaced through the sorted distinct sample (see {@link
+ * #sampleKeys}: page min-keys for page-run staging, row-group first-keys for columnar Parquet).
  *
- * <p><b>Peak heap (approximately bounded — see the caveats).</b> Each range's merge budget is
- * {@code mergeBudgetBytes / R}, so its {@link KWayMerge} pass width (read streams held open at once) is
- * {@code min(fanIn, max(2, (mergeBudgetBytes/R) / segmentRowGroupBytes))}. Summed over the {@code R}
- * concurrent ranges, the merge <i>read</i> streams stay near {@code mergeBudgetBytes} — <i>above</i> the
- * per-range floor. Two terms this budget does NOT cover, so realized peak can carry an {@code R}× term:
- * (1) the {@code max(2, …)} floor means at a tiny budget each range still opens 2 read streams
- * ({@code 2·R·segmentRowGroupBytes}); (2) the {@code R} concurrent {@code SortedFileWriter}s/cascade
- * {@code SegmentWriter}s each buffer up to {@code finalRowGroupBytes}/{@code segmentRowGroupBytes}, an
- * added {@code ~R·(finalRowGroupBytes + segmentRowGroupBytes)} the read budget ignores. Off-by-default;
- * this real profile must be measured before promoting the knob.
+ * <p><b>Both staging formats.</b> This path runs over the live listing lane's page-run
+ * ({@code .pageseg}) segments AND over columnar Parquet ({@link CaptureSorter}'s fixture path). Each
+ * format brings its own skip — a page skip ({@link RangeScopedPageFrontier}) or a row-group skip
+ * ({@link #selectRowGroups}) — and its own per-open-stream memory price, which is what the per-range
+ * fan-in divides the budget by ({@link #perRangeFanIn}). Page-run inputs keep {@link PageAwareMerger}'s
+ * decode-free page-whole fast path inside each range, so a range runs the same merge algorithm the
+ * serial path would; the {@code [lo, hi)} trim therefore sits ABOVE the merge
+ * ({@link RangeFilteredCursor}) rather than around each input.
+ *
+ * <p><b>Peak heap and descriptors, both divided across the ranges.</b> Each range's merge budget is
+ * {@code mergeBudgetBytes / R} and its {@link KWayMerge} pass width is that divided by the format's
+ * per-open-stream price ({@link #perStreamBytes}); the process fd budget is divided by {@code R} too,
+ * since the ranges hold their streams open at the same time. Terms the budget does NOT cover, so
+ * realized peak still carries an {@code R}× component: the {@code max(2, …)} floor (each range opens
+ * at least 2 streams), the {@code R} concurrent writers' buffers, and — the largest term measured in
+ * practice — the ALLOCATION FLOAT of decoding and of stepping over skipped pages, which scales with
+ * {@code R} and is reclaimable rather than live. Measured on the columnar path: ~1.6 MB live per open
+ * stream against ~480 MB/range of peak, i.e. most of the R-linear peak is float, not retained data.
  *
  * <p><b>Degenerate cases.</b> Fewer than two distinct sample keys ⇒ {@link #boundaries} returns
  * {@code null} and {@link SortTransform} falls back to the untouched serial path (so a keyspace that
@@ -112,9 +120,7 @@ final class ParallelRangeMerge {
     static List<byte[]> boundaries(List<Path> segments, int desiredRanges) throws IOException {
         TreeSet<byte[]> distinct = new TreeSet<>(KeyBytes::compareUnsigned);
         for (Path segment : segments) {
-            for (SortedFileIndex.RowGroupKey rg : SortedFileIndex.firstKeysPerRowGroup(segment)) {
-                distinct.add(rg.firstKey());
-            }
+            sampleKeys(segment, distinct);
         }
         if (distinct.size() < 2) {
             return null;   // cannot split — degenerate, fall back to serial
@@ -137,6 +143,43 @@ final class ParallelRangeMerge {
     }
 
     /**
+     * Add {@code segment}'s boundary-candidate keys to {@code distinct}, dispatching on the staging
+     * format the producer stamped. Both samples are the same shape — the first key of each physical
+     * unit of the segment — and both are read WITHOUT decoding any row:
+     *
+     * <ul>
+     *   <li><b>Page-run</b> ({@code .pageseg}, the live listing lane's format): each page's
+     *       {@code minKey}, walked with a {@link PageFrontierReader}. The frontier parses only the
+     *       record body's leading fields, so this costs a pass over the segment's framing, not a
+     *       decode. {@code minKey()} returns the reader's INTERNAL buffer (read-only, not
+     *       defensively copied — the hot merge path relies on that), so it is cloned before being
+     *       retained here.</li>
+     *   <li><b>Columnar Parquet</b> (the {@link CaptureSorter} fixture path, and this class's own
+     *       cascade intermediates): each row group's first key from
+     *       {@link SortedFileIndex#firstKeysPerRowGroup}.</li>
+     * </ul>
+     *
+     * <p>Sample granularity differs between the two — pages are typically finer than 1 MB row
+     * groups — which affects only how evenly the ranges balance, never correctness: every row is
+     * assigned to exactly one range by an exact per-row key compare in {@link RangeFilteredStream},
+     * whatever the boundaries are.
+     */
+    private static void sampleKeys(Path segment, TreeSet<byte[]> distinct) throws IOException {
+        if (SortTransform.isPageRunSegment(segment)) {
+            try (PageFrontierReader frontier = new PageFrontierReader(segment)) {
+                while (frontier.hasPage()) {
+                    distinct.add(frontier.minKey().clone());
+                    frontier.advance();
+                }
+            }
+            return;
+        }
+        for (SortedFileIndex.RowGroupKey rg : SortedFileIndex.firstKeysPerRowGroup(segment)) {
+            distinct.add(rg.firstKey());
+        }
+    }
+
+    /**
      * Merge each range concurrently, returning the ordered per-range results (range 0 first). Fails
      * the whole merge — after cancelling siblings and sweeping this run's own tmp/intermediate files —
      * if any range throws (never silently drops a range's rows). {@code progressCallback} and
@@ -155,15 +198,23 @@ final class ParallelRangeMerge {
     List<RangeResult> run(List<Path> stagingSegments, Path stagingDir, List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
         int ranges = boundaries.size() + 1;
-        int perRangeFanIn = perRangeFanIn(ranges);
+        int perRangeFanIn = perRangeFanIn(ranges, stagingSegments);
         // Row-group skip: derive each original segment's (firstKey, physicalBlockIndex, rowCount)
         // spans ONCE up front (a short key-column pass per segment) and share the read-only result
         // across every range thread — every range prunes against the same per-segment spans, so this
         // avoids re-deriving them R times. Cascade intermediates (created later, per range) are not
         // here and are span-derived on the fly in rangeSegmentIo#open.
+        // Which staging format this merge is over. Page-run is the live listing lane's format;
+        // columnar Parquet is CaptureSorter's fixture path. The row-group span pre-derivation below is
+        // Parquet-only -- page-run inputs carry their per-page frontier in the record framing itself,
+        // so there is nothing to pre-derive and each range walks it directly.
+        boolean pageRunFormat = !stagingSegments.isEmpty()
+                && SortTransform.isPageRunSegment(stagingSegments.get(0));
         Map<Path, List<SortedFileIndex.RowGroupSpan>> segmentSpans = new HashMap<>();
-        for (Path segment : stagingSegments) {
-            segmentSpans.put(segment, SortedFileIndex.rowGroupSpans(segment));
+        if (!pageRunFormat) {
+            for (Path segment : stagingSegments) {
+                segmentSpans.put(segment, SortedFileIndex.rowGroupSpans(segment));
+            }
         }
         Object progressLock = new Object();
         LongConsumer safeProgress = units -> {
@@ -186,7 +237,7 @@ final class ParallelRangeMerge {
                 byte[] lo = range == 0 ? null : boundaries.get(range - 1);
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
                 futures.add(pool.submit(mergeRange(range, lo, hi, stagingSegments, stagingDir,
-                        perRangeFanIn, safeProgress, safeHook, segmentSpans)));
+                        perRangeFanIn, safeProgress, safeHook, segmentSpans, pageRunFormat)));
             }
             List<RangeResult> results = new ArrayList<>(ranges);
             for (Future<RangeResult> f : futures) {
@@ -219,7 +270,8 @@ final class ParallelRangeMerge {
     private Callable<RangeResult> mergeRange(int range, byte[] lo, byte[] hi, List<Path> stagingSegments,
                                              Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
                                              DuplicateHook safeHook,
-                                             Map<Path, List<SortedFileIndex.RowGroupSpan>> segmentSpans) {
+                                             Map<Path, List<SortedFileIndex.RowGroupSpan>> segmentSpans,
+                                             boolean pageRunFormat) {
         return () -> {
             long startNanos = System.nanoTime();
             List<Path> intermediates = new ArrayList<>();
@@ -227,15 +279,34 @@ final class ParallelRangeMerge {
             // every segment this range opens, so the per-range log + skip signal reflect the whole range.
             long[] groupsRead = {0};
             long[] groupsSkipped = {0};
+            // Page-skip counters live on the frontier wrappers this range opened (one per page-run
+            // input); collected after the merge drains, for the same read-vs-skipped signal.
+            List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
+            // Page-run ranges see whole straddling boundary pages, so a duplicate pair lying OUTSIDE
+            // this range would be reported by both adjacent ranges. Scope the hook to [lo, hi) so the
+            // run's duplicate counts match the serial merge's exactly. (The Parquet path already trims
+            // per input stream, so its hook never sees an out-of-range row.)
+            DuplicateHook rangeHook = pageRunFormat ? (prev, dup) -> {
+                if (inRange(dup.key().rawUnsafe(), lo, hi)) {
+                    safeHook.onDuplicate(prev, dup);
+                }
+            } : safeHook;
             SegmentWriter segmentWriter =
-                    new SegmentWriter(comparator, safeHook, metrics, config.segmentRowGroupBytes());
-            KWayMerge.SegmentIo<Path> io = rangeSegmentIo(segmentWriter, stagingDir, range, lo, hi,
-                    intermediates, segmentSpans, groupsRead, groupsSkipped);
-            KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, safeHook, metrics);
+                    new SegmentWriter(comparator, rangeHook, metrics, config.segmentRowGroupBytes());
+            PageRunSegmentWriter pageRunWriter =
+                    new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
+            KWayMerge.SegmentIo<Path> io = rangeSegmentIo(segmentWriter, pageRunWriter, stagingDir, range,
+                    lo, hi, intermediates, segmentSpans, groupsRead, groupsSkipped, pageFrontiers,
+                    pageRunFormat);
+            KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
 
             List<Path> tmpParts = new ArrayList<>();
             long rows;
-            try (SortedCursor merged = merge.merge(stagingSegments, safeProgress)) {
+            // Page-run: the inputs are page frontiers, so the merged stream still carries the far side
+            // of any straddling boundary page — trim it here (RangeFilteredCursor). Parquet: each input
+            // was already entry-filtered on open, so the merged stream is in-range by construction.
+            try (SortedCursor merged = rangeScoped(merge.merge(stagingSegments, safeProgress),
+                    pageRunFormat, lo, hi)) {
                 // markFinalOnLast=false: range-local file_index, no file_final — the documented
                 // parallel-path stamp gap (see this class's javadoc).
                 rows = RolledPartWriter.drain(merged, config.finalFileBytes(),
@@ -256,11 +327,24 @@ final class ParallelRangeMerge {
             if (groupsSkipped[0] > 0) {
                 metrics.recordStealReason("SORT", "merge_range_rowgroup_skipped");
             }
+            long pagesKept = 0;
+            long pagesSkipped = 0;
+            for (RangeScopedPageFrontier f : pageFrontiers) {
+                pagesKept += f.pagesKept();
+                pagesSkipped += f.pagesSkipped();
+            }
+            // Page skip signal (§5a), the page-run twin of the row-group one above: fire once per
+            // range that stepped over >=1 page, so the run total is "how many ranges the page skip
+            // engaged on", and kept-vs-skipped in the log is the skip-fraction (did it help) signal.
+            if (pagesSkipped > 0) {
+                metrics.recordStealReason("SORT", "merge_range_page_skipped");
+            }
             long rangeNanos = System.nanoTime() - startNanos;
             rangeTimer.recordRangeMerge(rangeNanos);
             log.info("sort_merge_range range={} rows={} row_groups_read={} row_groups_skipped={} "
-                            + "duration_ms={}",
-                    range, rows, groupsRead[0], groupsSkipped[0], rangeNanos / 1_000_000L);
+                            + "pages_kept={} pages_skipped={} duration_ms={}",
+                    range, rows, groupsRead[0], groupsSkipped[0], pagesKept, pagesSkipped,
+                    rangeNanos / 1_000_000L);
             return new RangeResult(tmpParts, rows, merge.mergePasses(), merge.cascadedPasses(),
                     merge.fastPathEmissions());
         };
@@ -275,11 +359,14 @@ final class ParallelRangeMerge {
         return writer;
     }
 
-    private KWayMerge.SegmentIo<Path> rangeSegmentIo(SegmentWriter segmentWriter, Path stagingDir,
+    private KWayMerge.SegmentIo<Path> rangeSegmentIo(SegmentWriter segmentWriter,
+                                                     PageRunSegmentWriter pageRunWriter, Path stagingDir,
                                                      int range, byte[] lo, byte[] hi,
                                                      List<Path> intermediates,
                                                      Map<Path, List<SortedFileIndex.RowGroupSpan>> segmentSpans,
-                                                     long[] groupsRead, long[] groupsSkipped) {
+                                                     long[] groupsRead, long[] groupsSkipped,
+                                                     List<RangeScopedPageFrontier> pageFrontiers,
+                                                     boolean pageRunFormat) {
         int[] seq = {0};
         return new KWayMerge.SegmentIo<>() {
             @Override
@@ -287,11 +374,20 @@ final class ParallelRangeMerge {
                 // Restrict every input to this range. Originals span the whole keyspace; cascade
                 // intermediates are already in-range, so re-filtering them is a harmless idempotent pass.
                 //
+                // The RangeFilteredStream wrap is the same on both formats and is UNCHANGED — it
+                // trims straddling boundary units per-row, so the per-format skip below is a pure
+                // performance layer that never affects which rows this range emits.
+                if (SortTransform.isPageRunSegment(segment)) {
+                    // Entry-typed fallback for a page-run input (a merge group that MIXES formats, so
+                    // KWayMerge cannot take the frontier path). The frontier route below is the normal
+                    // one; both produce the same rows.
+                    return new RangeFilteredStream(
+                            new PageRunSegmentReader(openScopedFrontier(segment), comparator, metrics),
+                            lo, hi);
+                }
                 // Row-group skip: decode only the physical row groups whose key span overlaps
                 // [lo, hi). Originals were span-derived up front (segmentSpans); cascade intermediates
-                // are not in that map, so derive their spans on the fly. The RangeFilteredStream wrap
-                // is UNCHANGED — it still trims the straddling boundary groups per-row, so the skip is
-                // a pure performance layer and never affects which rows this range emits.
+                // are not in that map, so derive their spans on the fly.
                 List<SortedFileIndex.RowGroupSpan> spans = segmentSpans.get(segment);
                 if (spans == null) {
                     spans = SortedFileIndex.rowGroupSpans(segment);
@@ -303,7 +399,40 @@ final class ParallelRangeMerge {
             }
 
             @Override
+            public boolean supportsPageFrontier(Path segment) {
+                // Page-run inputs expose a decode-free frontier, so KWayMerge keeps PageAwareMerger's
+                // page-whole fast path INSIDE each range. Without this the parallel path would quietly
+                // fall back to the entry-typed StreamingMerger while the serial R=1 baseline kept the
+                // fast path — every range would pay a per-entry heap the control arm does not, and an
+                // A/B would be measuring a merger downgrade on top of the range parallelism.
+                return SortTransform.isPageRunSegment(segment);
+            }
+
+            @Override
+            public PageFrontierStream openFrontier(Path segment) throws IOException {
+                return openScopedFrontier(segment);
+            }
+
+            /** The range-scoped page frontier for {@code segment}, registered for its skip counters. */
+            private PageFrontierStream openScopedFrontier(Path segment) throws IOException {
+                RangeScopedPageFrontier scoped =
+                        new RangeScopedPageFrontier(new PageFrontierReader(segment, metrics), lo, hi);
+                pageFrontiers.add(scoped);
+                return scoped;
+            }
+
+            @Override
             public Path writeIntermediate(SortedCursor sorted) throws IOException {
+                // Cascade intermediates keep this range's INPUT format, so open() above dispatches
+                // them back to the same reader: a page-run merge stays page-run end to end instead of
+                // silently switching to columnar Parquet for its second pass.
+                if (pageRunFormat) {
+                    Path dest = stagingDir.resolve("merge-r" + range + "-" + (seq[0]++)
+                            + SortTransform.SEGMENT_SUFFIX);
+                    pageRunWriter.writeIntermediate(sorted, dest);
+                    intermediates.add(dest);
+                    return dest;
+                }
                 Path dest = stagingDir.resolve("merge-r" + range + "-" + (seq[0]++) + ".parquet");
                 segmentWriter.writeIntermediate(sorted, dest);
                 intermediates.add(dest);
@@ -402,16 +531,70 @@ final class ParallelRangeMerge {
      * because {@link SortTransform} asks the same question before the merge starts: staged segments
      * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
      */
-    int perRangeFanIn(int ranges) {
+    int perRangeFanIn(int ranges, List<Path> stagingSegments) {
         long perRangeBudget = config.mergeBudgetBytes() / ranges;
-        long budgetBound = perRangeBudget / config.segmentRowGroupBytes();
-        return (int) Math.min(config.fanIn(), Math.max(2L, budgetBound));
+        long budgetBound = perRangeBudget / perStreamBytes(stagingSegments);
+        // Descriptors are a WHOLE-PROCESS budget and the ranges hold their streams open at the same
+        // time, so the fd bound divides across them too. The serial path clamps once against the full
+        // budget (MergeFanInPlanner); a parallel merge that reused that bound unchanged would open R
+        // times as many descriptors as the process is allowed.
+        long fdBound = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
+                MergeFdBudget.FD_HEADROOM) / (long) ranges;
+        return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
+    }
+
+    /**
+     * Estimated heap held by ONE open merge stream, which is what the per-range budget is divided by.
+     * The two staging formats are not comparable here and using the wrong one is a real regression:
+     *
+     * <ul>
+     *   <li><b>Page-run:</b> the EXACT {@code maxRecordLen} from each segment's trailer (an O(1) read)
+     *       — the same quantity {@link MergeFanInPlanner#exactMemoryFanIn} clamps the serial merge
+     *       with. Typically tens of KiB.</li>
+     *   <li><b>Columnar Parquet:</b> {@code segmentRowGroupBytes}, since {@link SegmentReader} holds a
+     *       row group per open stream.</li>
+     * </ul>
+     *
+     * <p>Pricing a page-run stream at {@code segmentRowGroupBytes} (1 MB) instead of its real
+     * {@code maxRecordLen} overstates it by one to two orders of magnitude, which drives
+     * {@code budgetBound} far below the segment count and makes every range CASCADE — turning the
+     * parallel merge's win into a loss on exactly the workload this path exists to serve. Falls back
+     * to the Parquet estimate if a trailer cannot be read (correct, merely conservative).
+     */
+    private long perStreamBytes(List<Path> stagingSegments) {
+        long maxRecordLen = 0;
+        try {
+            for (Path seg : stagingSegments) {
+                if (!SortTransform.isPageRunSegment(seg)) {
+                    return config.segmentRowGroupBytes();
+                }
+                maxRecordLen = Math.max(maxRecordLen, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
+            }
+        } catch (IOException e) {
+            log.debug("could not read a page-run trailer for the per-range merge-memory bound; "
+                    + "falling back to the columnar estimate", e);
+            return config.segmentRowGroupBytes();
+        }
+        return maxRecordLen > 0 ? maxRecordLen : config.segmentRowGroupBytes();
+    }
+
+    /** {@code lo <= key < hi}, either bound {@code null} meaning unbounded — the range's ownership test. */
+    private static boolean inRange(byte[] key, byte[] lo, byte[] hi) {
+        return (lo == null || KeyBytes.compareUnsigned(key, lo) >= 0)
+                && (hi == null || KeyBytes.compareUnsigned(key, hi) < 0);
+    }
+
+    /** Trim a merged range stream to {@code [lo, hi)} on the page-run path; identity on the Parquet one. */
+    private static SortedCursor rangeScoped(SortedCursor merged, boolean pageRunFormat, byte[] lo,
+                                            byte[] hi) {
+        return pageRunFormat ? new RangeFilteredCursor(merged, lo, hi) : merged;
     }
 
     /** Best-effort sweep of THIS run's own tmp parts and cascade intermediates on the failure path. */
     private static void sweepOwnFiles(Path stagingDir) {
         sweep(stagingDir, "prange-*.parquet.tmp");
         sweep(stagingDir, "merge-r*-*.parquet");
+        sweep(stagingDir, "merge-r*-*" + SortTransform.SEGMENT_SUFFIX);   // page-run cascade intermediates
     }
 
     private static void sweep(Path stagingDir, String glob) {

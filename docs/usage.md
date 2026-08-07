@@ -292,6 +292,39 @@ Semantics:
   climb here is the prime leak suspect). The `swath.steal_reason{outcome=SORT,
   reason=backpressure_engaged}` engagement counter marks whenever admission actually hit the
   off-thread bound, for correlating against the timing of the retry storm.
+- **Parallel range merge (off by default).**
+  <a id="parallel-range-merge-off-by-default"></a>
+  `-Dswath.sort.merge-parallelism=R` (R > 1) splits the merge phase across R threads instead of
+  one. It is **off by default and not a released contract** — the decision to ship multi-file
+  sorted output produced by a concurrent merge is reserved, and one gap is still open (below).
+
+  *How it stays a global sort.* The keyspace is partitioned into R **contiguous, disjoint key
+  ranges**, sampled from the staging segments' own key distribution. Each range independently
+  k-way-merges every staging segment, emitting only the rows whose key falls in its `[lo, hi)`,
+  and writes its own part file(s). Because the ranges are contiguous, disjoint and in key order,
+  concatenating their outputs in range order **is** the global sort, so the parts are renamed into
+  one ascending `part-00001.parquet`... sequence. Row-to-range assignment is an exact per-row key
+  compare, so every row for a given key (its versions, and any cross-`row_type` rows) stays
+  together in exactly one range. Boundary choice therefore affects only how EVENLY the ranges are
+  balanced — never correctness. A keyspace with fewer than two distinct sample keys cannot be
+  split and silently uses the untouched serial path.
+
+  *What each range avoids reading.* A range only decodes the units of a segment that can hold one
+  of its keys: Parquet staging prunes by row group; page-run staging steps over pages whose
+  `[minKey, maxKey]` cannot reach the range, without decoding their rows. Note the page-run skip
+  avoids the row **decode**, not the read — the format has no per-page offset index, so each range
+  still reads and CRC-verifies the framed pages it steps over.
+
+  *Cost.* More ranges means more concurrent merge streams, so peak heap and the descriptor budget
+  both divide across them; `R` is clamped so a range never opens more streams than its share of
+  `merge-budget-bytes` and the process fd limit allow. Setting `R` past that point makes every
+  range **cascade** (merge in multiple passes), which is slower than the serial merge, not faster.
+
+  *Known gap.* Parts produced by the parallel path carry a range-local `file_index` and none is
+  marked `file_final`, so they do not carry the self-describing multi-file completeness proof a
+  serial `--sort` output does. Consumers that verify that stamp (including swath's own replay
+  server in `--serving-mode sorted`) will reject the output even though its content is a correct
+  global sort. This is why the path is off by default.
 - **Disk sizing.** The staging volume (wherever `-o`'s output directory lives) holds BOTH
   the staging segments AND, during the final merge, the merged output being written
   concurrently. Measure staging and final-output bytes on a representative sample,

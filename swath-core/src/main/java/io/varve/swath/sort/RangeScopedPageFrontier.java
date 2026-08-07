@@ -1,0 +1,161 @@
+/*
+ * Copyright 2026 Varve Systems Ltd
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package io.varve.swath.sort;
+
+import io.varve.swath.model.KeyBytes;
+import java.io.IOException;
+
+/**
+ * The page-run analogue of {@link ParallelRangeMerge}'s Parquet row-group skip: a
+ * {@link PageFrontierStream} view of one page-run segment restricted to the pages that can hold a
+ * key in {@code [lo, hi)}. Pages outside the range are stepped over <b>without decoding their
+ * rows</b> — {@link #decodeCurrentPage()} is never called on them — which is what makes a range cost
+ * a fraction of the segment instead of a full pass.
+ *
+ * <p><b>The overlap test is conservative, and correctness does not depend on it.</b> A page whose
+ * frontier is {@code [min, max]} is kept iff {@code max >= lo} and {@code min < hi} (either bound
+ * {@code null} = unbounded). Equality on {@code max == lo} keeps the page, because a key equal to
+ * {@code lo} belongs to THIS range (inclusive lo). Every kept page is still trimmed per-row by
+ * {@link RangeFilteredCursor} sitting above the whole range merge, so the skip is a pure performance
+ * layer: being too generous costs time, and the only thing that would cost correctness — skipping a
+ * page that could hold an in-range key — is exactly what the test above cannot do.
+ *
+ * <p><b>Why the tail can be abandoned but the head cannot.</b> Pages are stored in non-decreasing
+ * {@code minKey} order ({@link PageRunSegmentWriter}), so once {@code min >= hi} every later page
+ * also has {@code min >= hi}: the scan stops there and the rest of the segment is never read at all.
+ * {@code maxKey}, by contrast, is NOT monotone — a wide early page can overlap a late range — so the
+ * head cannot be skipped by seeking: each page's frontier must be read to learn its {@code max}.
+ * A range therefore reads a PREFIX of each segment ending at its own {@code hi}, and range {@code r}
+ * of {@code R} reads roughly {@code (r+1)/R} of it. Summed over the ranges that is ~{@code (R+1)/2}×
+ * the bytes a serial merge reads — real read amplification, traded for decoding ~{@code 1/R} of the
+ * rows. It is measured rather than assumed; see the campaign note.
+ *
+ * <p>The framed body is still read and CRC-verified for every page the scan steps over, because
+ * {@link PageRunSegmentIo#nextPage()} is the single page-advance primitive and it validates as it
+ * goes. Skipping the payload bytes outright would need either a per-page offset index in the trailer
+ * (a format change) or reading only each record's leading frontier fields and seeking past the rest
+ * (which forfeits per-RANGE CRC of skipped payloads, though not whole-merge coverage: the last range
+ * reads every page of every segment, which is exactly the serial path's once-per-merge coverage).
+ * Both are follow-ups, deliberately not taken here: this class keeps the shipped integrity
+ * guarantees exactly as they are, and the bytes-read measurement decides whether they are needed.
+ *
+ * <p><b>Completeness cross-check — a guarantee that DEMOTES here, deliberately.</b>
+ * {@link PageFrontierReader#advance()} runs {@code io.checkComplete} only when it walks off the end
+ * of a segment. A range that abandons its tail therefore never runs it. The guarantee is preserved
+ * but changes shape: it goes from "every reader that consumes a segment cross-checks it" to "exactly
+ * one range does, once per merge" — the LAST range ({@code hi == null}) can never set
+ * {@code pastRange} ({@link #beyondRange()} requires a non-null {@code hi}), so it walks every page
+ * of every segment, accumulating every declared count. That is adequate because nothing is published
+ * until every range succeeds ({@link ParallelRangeMerge#run}), so a segment that fails the check
+ * fails the whole merge before any output ships — but it is now a STRUCTURAL property of how ranges
+ * are built, so it is pinned by adversarial tests rather than left implicit.
+ */
+final class RangeScopedPageFrontier implements PageFrontierStream {
+
+    private final PageFrontierStream inner;
+    private final byte[] lo;   // inclusive, or null for -inf
+    private final byte[] hi;   // exclusive, or null for +inf
+
+    /** Pages whose rows this range may decode, and pages stepped over — the skip-fraction signal. */
+    private long pagesKept;
+    private long pagesSkipped;
+
+    /** True once the scan has passed {@code hi}; the underlying stream is left un-drained. */
+    private boolean pastRange;
+
+    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi) throws IOException {
+        this.inner = inner;
+        this.lo = lo;
+        this.hi = hi;
+        try {
+            skipToOverlapping();
+        } catch (IOException | RuntimeException e) {
+            // The constructor does IO (it walks the prefix), so a corrupt/truncated segment throws
+            // here — before the caller holds a reference it could close. Own the failure like every
+            // other reader in this package and release the stream we were handed.
+            try {
+                inner.close();
+            } catch (IOException | RuntimeException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
+    }
+
+    /** Step over non-overlapping pages until the frontier holds one this range can use, or it ends. */
+    private void skipToOverlapping() throws IOException {
+        while (inner.hasPage()) {
+            if (beyondRange()) {
+                // mins are non-decreasing: no later page can overlap either. Stop reading the segment.
+                pastRange = true;
+                return;
+            }
+            if (overlaps()) {
+                pagesKept++;
+                return;
+            }
+            pagesSkipped++;
+            inner.advance();
+        }
+    }
+
+    /** {@code min >= hi}: this page and every later one start at or above the range's end. */
+    private boolean beyondRange() {
+        return hi != null && KeyBytes.compareUnsigned(inner.minKey(), hi) >= 0;
+    }
+
+    /** {@code max >= lo}: the page can still reach into this range (its min is already {@code < hi}). */
+    private boolean overlaps() {
+        return lo == null || KeyBytes.compareUnsigned(inner.maxKey(), lo) >= 0;
+    }
+
+    @Override
+    public boolean hasPage() {
+        return !pastRange && inner.hasPage();
+    }
+
+    @Override
+    public byte[] minKey() {
+        return inner.minKey();
+    }
+
+    @Override
+    public byte[] maxKey() {
+        return inner.maxKey();
+    }
+
+    @Override
+    public int count() {
+        return inner.count();
+    }
+
+    @Override
+    public PageBlock decodeCurrentPage() throws IOException {
+        return inner.decodeCurrentPage();
+    }
+
+    @Override
+    public void advance() throws IOException {
+        if (pastRange) {
+            return;
+        }
+        inner.advance();
+        skipToOverlapping();
+    }
+
+    @Override
+    public void close() throws IOException {
+        inner.close();
+    }
+
+    long pagesKept() {
+        return pagesKept;
+    }
+
+    long pagesSkipped() {
+        return pagesSkipped;
+    }
+}

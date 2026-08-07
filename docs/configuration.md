@@ -191,7 +191,7 @@ threshold. All sizes are bytes.
 | `swath.sort.segment-row-group-bytes` | `1 MiB` (columnar-Parquet staging only) |
 | `swath.sort.merge-budget-bytes` | heap-adaptive, same shape as `segment-bytes` |
 | `swath.sort.merge-per-stream-bytes` | `64 KiB` (the divisor that bounds the effective fan-in) |
-| `swath.sort.merge-parallelism` | `1` (serial merge; `>1` is off-by-default and unreleased) |
+| `swath.sort.merge-parallelism` | `1` (serial merge; `>1` is off-by-default and unreleased -- see [`usage.md`](usage.md#parallel-range-merge-off-by-default)) |
 | `swath.git.sha` | unset (falls back to the jar's implementation version) — the commit stamped into the summary's `shape.fingerprint` |
 
 See [`usage.md`](usage.md#sorted-output---sort) for which knob actually binds and
