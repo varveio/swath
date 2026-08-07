@@ -259,7 +259,15 @@ public final class SortTransform {
     private SortTransformResult tryTransformParallel(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
+        // Boundary sampling is this path's new SERIAL fraction: on page-run staging it walks every
+        // page's frontier across every segment before any range starts. Timed on its own so an A/B can
+        // see it separately from the merge it precedes (it is the first thing to optimise -- by
+        // stride-sampling, or by reusing the listing phase's own keyspace partition -- if it is large).
+        long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(stagingSegments, config.mergeParallelism());
+        log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
+                stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
+                (System.nanoTime() - boundariesStartNanos) / 1_000_000L);
         if (boundaries == null) {
             return null;   // keyspace unsplittable — use the serial path
         }
