@@ -175,6 +175,88 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
+    /**
+     * The cascade clamp. An {@code R} the merge budget cannot carry over this many staged segments
+     * must be REDUCED, not honoured: {@code perRangeFanIn} divides the budget by the range count, so
+     * past the bound every range merges in several passes and the parallel merge is slower than the
+     * serial one it replaced. Before the clamp this was also silent — {@code merge_range_parallel}
+     * fired once per range either way, so a run pessimised by its own tuning looked like a success.
+     *
+     * <p>The budget here is sized to carry all the segments' streams for exactly {@code ALLOWED}
+     * ranges. Against the unclamped code this test fails on both counters: 8 ranges engage and every
+     * one of them cascades.
+     */
+    @Example
+    void anOverAmbitiousRangeCountIsClampedRatherThanCascadingEveryRange() throws IOException {
+        int segmentCount = 6;
+        int allowed = 3;
+        Scenario s = manyDistinctKeys(segmentCount, 8400);
+        Path root = Files.createTempDirectory("prange-pagerun-clamp-");
+        try {
+            // Price an open page-run stream exactly as the merge does — the trailer's maxRecordLen —
+            // so the budget below is the real bound rather than a guess that could drift with the
+            // page format.
+            Path probeDir = Files.createDirectories(root.resolve("probe"));
+            long perStream = 0;
+            for (Path seg : stage(probeDir, s.segments())) {
+                perStream = Math.max(perStream, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
+            }
+            long budget = perStream * segmentCount * allowed;
+
+            CountingMetrics metrics = new CountingMetrics();
+            SortTransformResult serial =
+                    run(s, 1, root, "serial", Long.MAX_VALUE, Long.MAX_VALUE, DuplicateHook.NO_OP,
+                            SortMetrics.NO_OP);
+            SortTransformResult clamped =
+                    run(s, 8, root, "clamped", Long.MAX_VALUE, budget, DuplicateHook.NO_OP, metrics);
+
+            assertThat(metrics.count("SORT.merge_range_clamped"))
+                    .as("the clamp bit, and the run said so").isEqualTo(1);
+            assertThat(metrics.count("SORT.merge_range_parallel"))
+                    .as("ran at the affordable range count, not the 8 requested")
+                    .isEqualTo(allowed);
+            assertThat(clamped.cascadedPasses())
+                    .as("no range cascades — which is the whole point of clamping")
+                    .isZero();
+            assertThat(clamped.finalFiles())
+                    .as("one part per range actually used").hasSize(allowed);
+            assertThat(readAll(clamped.finalFiles()))
+                    .as("clamping is a performance guard, so the rows are untouched")
+                    .containsExactlyElementsOf(readAll(serial.finalFiles()));
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
+    /**
+     * The floor of the same clamp: when not even ONE range fits the budget, the parallel path hands
+     * back to the serial merge instead of paying its boundary-sampling prologue to cascade anyway.
+     */
+    @Example
+    void aBudgetTooSmallForEvenOneRangeFallsBackToSerial() throws IOException {
+        Scenario s = manyDistinctKeys(6, 8400);
+        Path root = Files.createTempDirectory("prange-pagerun-clamp-floor-");
+        try {
+            CountingMetrics metrics = new CountingMetrics();
+            SortTransformResult serial =
+                    run(s, 1, root, "serial", Long.MAX_VALUE, Long.MAX_VALUE, DuplicateHook.NO_OP,
+                            SortMetrics.NO_OP);
+            SortTransformResult fellBack =
+                    run(s, 8, root, "fallback", Long.MAX_VALUE, 1L, DuplicateHook.NO_OP, metrics);
+
+            assertThat(metrics.count("SORT.merge_range_parallel"))
+                    .as("no range ran: the parallel path declined").isZero();
+            assertThat(metrics.count("SORT.merge_range_unsplittable"))
+                    .as("and the decline is visible in the metrics").isEqualTo(1);
+            assertThat(fellBack.finalFiles())
+                    .as("serial output shape").hasSize(serial.finalFiles().size());
+            assertThat(readAll(fellBack.finalFiles()))
+                    .containsExactlyElementsOf(readAll(serial.finalFiles()));
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
     /** Unique, densely-ordered keys — many pages per segment and always splittable. */
     private Scenario manyDistinctKeys(int segmentCount, int entryCount) {
         List<List<ListEntry>> segs = new ArrayList<>();

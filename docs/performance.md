@@ -52,11 +52,23 @@ because several of its properties materially shape the numbers:
   32-vCPU/16-core x86 instance.
 - **Cross-cloud, and partly cross-continent.** The client sat in GCP
   `us-east1`; `pds-css-archive` is in AWS `us-west-2` (cross-cloud *and*
-  coast-to-coast, ~175 ms round trip) and `noaa-gefs-retrospective` is in AWS
-  `us-east-1` (cross-cloud, same region). Latency is the denominator in
-  `throughput ≈ in-flight ÷ latency`, so an in-region client needs far less
-  concurrency for the same rate — this vantage inflates every concurrency figure
-  on the page.
+  coast-to-coast) and `noaa-gefs-retrospective` is in AWS `us-east-1`
+  (cross-cloud, same coast). Latency is the denominator in
+  `throughput ≈ in-flight ÷ latency`, so this vantage inflates every concurrency
+  figure on the page — but by less than the distance suggests, because most of a
+  LIST's latency is not travel time. Measured per request (`probe_latency`,
+  `worker_page`, p50) against the ICMP round trip to the same endpoint:
+
+  | client → bucket | network RTT | `ttfb` | `total` | ⇒ S3's own page work |
+  | --- | ---: | ---: | ---: | ---: |
+  | GCP `us-east1` → AWS `us-east-1` | 17.9 ms | 115.3 ms | 119.5 ms | ~97 ms |
+  | GCP `us-east1` → AWS `us-west-2` | 79.9 ms | 163.6 ms | 172.0 ms | ~84 ms |
+
+  The time S3 spends enumerating and serialising a 1000-key page — ~85–97 ms — is
+  the **majority of the latency, and it is the same in both regions**. Moving
+  in-region removes the ~62 ms RTT delta, which by
+  `throughput ≈ in-flight ÷ latency` cuts the in-flight needed for a given rate by
+  roughly a third. Worth having; not the step change "coast-to-coast" implies.
 - **Local disk for staging.** `--sort` staging and the final output shared one
   local SSD. A network-attached or slower volume changes the merge phase's
   profile.
@@ -159,9 +171,13 @@ does not follow object count.
 
 Two caveats that matter more than the numbers:
 
-- **These are cross-cloud** (GCP client → AWS S3). Round-trip latency was ~175 ms
-  and flat; an in-region client needs far less concurrency for the same
-  throughput, because throughput ≈ in-flight ÷ latency.
+- **These are cross-cloud** (GCP client → AWS S3). Per-request latency was ~172 ms
+  and flat, of which only ~80 ms is the network round trip — the rest is S3's own
+  page-production time, which an in-region client still pays. Moving in-region cuts
+  the in-flight needed for a given rate by roughly a third, not by the factor the
+  distance suggests, because throughput ≈ in-flight ÷ latency and latency does not
+  collapse. See [The machine these figures ran on](#the-machine-these-figures-ran-on)
+  for the measured breakdown.
 - **Throughput is shape-bound, not size-bound.** The ceiling here was the
   engine's ability to manufacture splittable ranges on a deep-divergence
   keyspace, not the remote and not CPU.
@@ -415,7 +431,8 @@ needed per unit of throughput relative to an in-region client:
 
 Read it as the METHOD working, not as a recommended setting: throughput peaks at
 256 and regresses at 512, utilisation collapses from 93 % to 18 %, per-request
-latency stays flat at ~175 ms throughout (so the remote was never the wall), and
+latency stays flat at ~175 ms throughout — that is total residence time, of which
+only ~80 ms is the network, so the remote was never the wall — and
 CPU-per-key stays ~7.4 until the ceiling outruns the keyspace and then climbs.
 The direct evidence that it is split-starved rather than remote-limited is in
 the engine counters: `engine.splits` plateaued at ~4 900 and `engine.steals`
@@ -484,9 +501,10 @@ measurement. Specifically:
   differences between adjacent points are not significant.
 - **One machine, one vantage** — the arm64 host in
   [The machine these figures ran on](#the-machine-these-figures-ran-on), listing
-  AWS S3 cross-cloud. Round-trip latency was ~175 ms and flat; an in-region
-  client will need materially less concurrency for the same throughput, and an
-  x86 host may differ on the CPU-bound phases.
+  AWS S3 cross-cloud. Per-request latency was ~172 ms and flat, only ~80 ms of it
+  network; an in-region client needs roughly a third less concurrency for the same
+  throughput (not less than that — S3's own page-production time dominates and does
+  not move), and an x86 host may differ on the CPU-bound phases.
 - **Two public buckets**, differing in shape as well as size, so no size-scaling
   law is inferable from them.
 - **Serial arms.** Concurrency points were run one at a time, because concurrent

@@ -573,8 +573,17 @@ final class ParallelRangeMerge {
      * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
      */
     int perRangeFanIn(int ranges, List<Path> stagingSegments) {
+        return perRangeFanIn(ranges, perStreamBytes(stagingSegments));
+    }
+
+    /**
+     * As {@link #perRangeFanIn(int, List)}, over a per-stream price the caller already computed. The
+     * seam exists for {@link #effectiveRanges}, which evaluates this at more than one candidate range
+     * count and must not re-read every segment's trailer once per candidate.
+     */
+    private int perRangeFanIn(int ranges, long perStreamBytes) {
         long perRangeBudget = config.mergeBudgetBytes() / ranges;
-        long budgetBound = perRangeBudget / perStreamBytes(stagingSegments);
+        long budgetBound = perRangeBudget / perStreamBytes;
         // Descriptors are a WHOLE-PROCESS budget and the ranges hold their streams open at the same
         // time, so the fd bound divides across them too. The serial path clamps once against the full
         // budget (MergeFanInPlanner); a parallel merge that reused that bound unchanged would open R
@@ -582,12 +591,56 @@ final class ParallelRangeMerge {
         //
         // The max(2, ...) floor below is a floor, not a guarantee: a merge needs 2 streams to merge
         // anything, so at an extreme R (where a range's share falls below 2) the ranges together can
-        // still exceed the process share -- 2 x R descriptors. R itself is not clamped, here or
-        // anywhere; it is an expert knob whose sane range is bounded by the budget arithmetic in this
-        // method's javadoc, and setting it far past that degrades long before it exhausts descriptors.
+        // still exceed the process share -- 2 x R descriptors. That regime is unreachable through the
+        // supported entry point, because effectiveRanges() clamps R long before a range's share falls
+        // that far; it stays possible only for a direct caller of this class.
         long fdBound = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
                 MergeFdBudget.FD_HEADROOM) / (long) ranges;
         return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
+    }
+
+    /**
+     * The requested range count, reduced until no range would cascade over {@code stagingSegments}.
+     * {@link SortTransform} applies this to {@code merge-parallelism} before it splits anything; the
+     * result is the {@code R} the run actually uses.
+     *
+     * <p><b>Why the clamp is not optional.</b> {@link #perRangeFanIn} divides BOTH the merge memory
+     * budget and the process descriptor budget by the range count. Once a range's share falls below
+     * the staged-segment count, every range cascades — it merges in several passes, rewriting all of
+     * its rows each time — and the knob goes backwards: measured 5.69× → 3.80× at {@code R=32} on a
+     * 16 GB heap, and 41 % slower than the single-pass arm at IDENTICAL heap when only the budget was
+     * pinned. Without this clamp the pessimisation is also SILENT: {@code merge_range_parallel} still
+     * fires once per range, so a run that was made slower by its own tuning is indistinguishable in
+     * the metrics from one that was made faster.
+     *
+     * <p>The bound tightens as a listing grows, which is exactly when an operator is least likely to
+     * re-derive it by hand: segment count rises with the object count, so an {@code R} that is
+     * single-pass on a 10 M-object bucket can cascade on a billion-object one at the same heap.
+     *
+     * <p>Returns at least 1. A 1 means even a single range would cascade — which is just what the
+     * serial merge does anyway — so the caller takes the untouched serial path instead of paying this
+     * path's boundary-sampling prologue for no parallelism. The search starts from a closed-form
+     * estimate and steps down only to absorb floor-division rounding, so it evaluates
+     * {@link #perRangeFanIn} a couple of times, not {@code R} times.
+     */
+    int effectiveRanges(int requested, List<Path> stagingSegments) {
+        int segments = stagingSegments.size();
+        if (requested <= 1 || segments <= 0) {
+            return Math.max(1, requested);
+        }
+        long perStream = perStreamBytes(stagingSegments);
+        // Closed form: the largest R with (budget/R)/perStream >= segments, and with the process fd
+        // share per range still spanning the segments. Both are the inequalities perRangeFanIn tests.
+        long byBudget = config.mergeBudgetBytes() / perStream / segments;
+        long byFd = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
+                MergeFdBudget.FD_HEADROOM) / segments;
+        int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
+        // Floor division in two places means the closed form can land one step high; step down until
+        // the predicate SortTransform reports on is actually true, so the clamp cannot be off by one.
+        while (candidate > 1 && perRangeFanIn(candidate, perStream) < segments) {
+            candidate--;
+        }
+        return candidate;
     }
 
     /**

@@ -259,13 +259,36 @@ public final class SortTransform {
     private SortTransformResult tryTransformParallel(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
+        ParallelRangeMerge rangeMerge =
+                new ParallelRangeMerge(run, rangeTimer);
+        // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
+        // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
+        // bound every range cascades and the parallel merge is slower than the serial one it replaced
+        // -- silently, since the engagement counter still fires once per range. See
+        // ParallelRangeMerge#effectiveRanges.
+        int requestedRanges = config.mergeParallelism();
+        int desiredRanges = rangeMerge.effectiveRanges(requestedRanges, stagingSegments);
+        if (desiredRanges < requestedRanges) {
+            // WARN, not debug: the operator asked for something the run could not give them, and the
+            // remedy (more heap, or a lower R) is theirs to apply.
+            log.warn("sort_merge_range_clamped requested={} effective={} segments={} "
+                            + "reason=would_cascade merge_budget_bytes={}",
+                    requestedRanges, desiredRanges, stagingSegments.size(), config.mergeBudgetBytes());
+            metrics.recordStealReason("SORT", "merge_range_clamped");
+        }
+        if (desiredRanges <= 1) {
+            // Even one range would cascade, so there is no parallelism left to buy -- take the
+            // untouched serial path rather than pay this path's boundary-sampling prologue for it.
+            metrics.recordStealReason("SORT", "merge_range_unsplittable");
+            return null;
+        }
         // Boundary sampling is this path's new SERIAL fraction: on page-run staging it walks every
         // page's frontier across every segment before any range starts. Timed on its own so an A/B can
         // see it separately from the merge it precedes (it is the first thing to optimise -- by
         // stride-sampling, or by reusing the listing phase's own keyspace partition -- if it is large).
         long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries =
-                ParallelRangeMerge.boundaries(stagingSegments, config.mergeParallelism(), metrics);
+                ParallelRangeMerge.boundaries(stagingSegments, desiredRanges, metrics);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
                 stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
                 (System.nanoTime() - boundariesStartNanos) / 1_000_000L);
@@ -278,8 +301,6 @@ public final class SortTransform {
             return null;   // keyspace unsplittable — use the serial path
         }
         fanInPlanner.warnIfCascadePredicted(stagingSegments.size(), config.effectiveFanIn());
-        ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, rangeTimer);
         // The whole parallel phase is merge-and-write; mark Phase.WRITING reachable once up front.
         // Unlike the serial path, the cascade passes are NOT behind us here: every range k-way-merges
         // all the staged segments and cascades whenever they outnumber its own fan-in, rewriting its
