@@ -302,10 +302,9 @@ final class EngineTogglesParseTest {
     }
 
     /**
-     * The 0.2.0 default flip promoted the sensing/tail-floor pair together. Pin both halves in one
-     * place, and pin the documented rollback — {@code docs/usage.md} and {@code
-     * docs/performance.md} both promise that this exact pair of toggles restores pre-0.2.0 engine
-     * behaviour, so a future default change cannot silently break that promise.
+     * The sensing/tail-floor pair are defaults together. Pin both halves in one place, and pin the
+     * documented rollback — {@code docs/usage.md} promises that this exact pair of toggles restores
+     * the pre-flip engine behaviour, so a future default change cannot silently break that promise.
      */
     @Test
     void theZeroTwoZeroDefaultIsTheCurePairAndTheDocumentedRollbackRestoresThePreFlipArms()

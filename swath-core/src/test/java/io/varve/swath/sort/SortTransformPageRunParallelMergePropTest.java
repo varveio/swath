@@ -28,6 +28,9 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.io.LocalInputFile;
+
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
@@ -254,6 +257,66 @@ class SortTransformPageRunParallelMergePropTest {
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
             deleteRecursively(root);
+        }
+    }
+
+    /**
+     * The completeness stamp, on the LIVE staging format and with ranges that ROLL. This is the case
+     * the stamp exists for and the one the columnar sibling test cannot reach: several ranges each
+     * emit several parts, so a range-local {@code file_index} would repeat (1,2,1,2,…) and no reader
+     * could tell a complete set from a truncated one. Asserts the published set carries a contiguous
+     * global {@code 1..N} in filename order with exactly one {@code file_final}, on {@code N}.
+     */
+    @Example
+    void pageRunParallelPartsCarryAGlobalStampAcrossRollingRanges() throws IOException {
+        int ranges = 3;
+        Scenario s = manyDistinctKeys(6, 8400);
+        Path root = Files.createTempDirectory("prange-pagerun-stamp-");
+        try {
+            SortConfig config = SortConfigs.base()
+                    .withFinalFileBytes(4096L)         // small enough that every range rolls
+                    .withMergeBudgetBytes(Long.MAX_VALUE)
+                    .withMergeParallelism(ranges);
+            Path output = Files.createDirectories(root.resolve("out"));
+            Path staging = Files.createDirectories(output.resolve("_staging"));
+            List<Path> segs = stage(staging, s.segments());
+            SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS)));
+            SortTransformResult result =
+                    transform.transform(segs, output, staging, PublishListener.NO_OP);
+
+            assertThat(result.finalFiles()).as("ranges rolled into more parts than ranges")
+                    .hasSizeGreaterThan(ranges);
+
+            List<Integer> indices = new ArrayList<>();
+            List<Integer> finalAt = new ArrayList<>();
+            for (int i = 0; i < result.finalFiles().size(); i++) {
+                Map<String, String> kv = footerKv(result.finalFiles().get(i));
+                indices.add(Integer.parseInt(kv.get(SortedParquetWriter.FILE_INDEX_KEY)));
+                if (kv.containsKey(SortedParquetWriter.FILE_FINAL_KEY)) {
+                    finalAt.add(i);
+                }
+            }
+            List<Integer> expected = new ArrayList<>();
+            for (int i = 1; i <= result.finalFiles().size(); i++) {
+                expected.add(i);
+            }
+            assertThat(indices).as("contiguous global file_index in filename order")
+                    .containsExactlyElementsOf(expected);
+            assertThat(finalAt).as("exactly one file_final, on the last part")
+                    .containsExactly(result.finalFiles().size() - 1);
+
+            // The stamp is a claim ABOUT the rows, so it is only worth anything if the rows are right.
+            assertThat(readAll(result.finalFiles())).as("still the exact input, in order")
+                    .containsExactlyElementsOf(s.allEntries().stream().sorted(cmp).toList());
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
+    private static Map<String, String> footerKv(Path file) throws IOException {
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+            return reader.getFooter().getFileMetaData().getKeyValueMetaData();
         }
     }
 

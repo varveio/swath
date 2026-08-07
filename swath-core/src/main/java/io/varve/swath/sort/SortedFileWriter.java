@@ -36,6 +36,18 @@ public interface SortedFileWriter extends AutoCloseable {
     default void markFinal() {
     }
 
+    /**
+     * Sets this file's 1-based position in the output's roll sequence, overriding whatever the
+     * factory was given. Honoured any time before {@link #close()}, exactly like {@link #markFinal()}.
+     *
+     * <p>The parallel range merge is the caller that needs it: a range writes its parts before it can
+     * know how many parts the ranges BELOW it produced, so global indices are assigned once every
+     * range has drained and the full ordered part list is known. Default no-op, for writers that do
+     * not stamp an index.
+     */
+    default void setFileIndex(int fileIndex) {
+    }
+
     /** Finalize (footer) and fsync. */
     @Override
     void close() throws IOException;

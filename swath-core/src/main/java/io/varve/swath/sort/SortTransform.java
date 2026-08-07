@@ -253,8 +253,9 @@ public final class SortTransform {
      * the untouched serial merge. Otherwise it merges the ranges concurrently
      * ({@link ParallelRangeMerge}), then does the SAME serial publish as the serial path — rename the
      * ordered range parts into one ascending {@code part-00001.parquet}… sequence (filename order ==
-     * key order == global sort), fire the publish listener, delete staging. The multi-file completeness
-     * stamp ({@code file_index}/{@code file_final}) is not implemented on this path.
+     * key order == global sort), fire the publish listener, delete staging. Immediately before that
+     * rename it writes the multi-file completeness stamp ({@code file_index} 1..N, one
+     * {@code file_final} on N), which is the point at which the global part order is first known.
      */
     private SortTransformResult tryTransformParallel(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
@@ -282,16 +283,19 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_unsplittable");
             return null;
         }
-        // Boundary sampling is this path's new SERIAL fraction: on page-run staging it walks every
-        // page's frontier across every segment before any range starts. Timed on its own so an A/B can
-        // see it separately from the merge it precedes (it is the first thing to optimise -- by
-        // stride-sampling, or by reusing the listing phase's own keyspace partition -- if it is large).
+        // Boundary sampling is this path's SERIAL fraction: on page-run staging it walks every page's
+        // frontier across every segment before any range starts. Recorded to its own timer as well as
+        // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
+        // term is invisible, and it is the one that does NOT shrink as R rises (it is the first thing
+        // to optimise, by reusing the listing phase's own keyspace partition, if it grows large).
         long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries =
                 ParallelRangeMerge.boundaries(stagingSegments, desiredRanges, metrics);
+        long boundariesNanos = System.nanoTime() - boundariesStartNanos;
+        rangeTimer.recordBoundarySampling(boundariesNanos);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
                 stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
-                (System.nanoTime() - boundariesStartNanos) / 1_000_000L);
+                boundariesNanos / 1_000_000L);
         if (boundaries == null) {
             // Instrumentation (AGENTS.md "instrument every new algo path"): without this, a run that
             // ASKED for a parallel merge and silently got the serial one is indistinguishable in the
@@ -313,16 +317,52 @@ public final class SortTransform {
                 rangeMerge.run(stagingSegments, stagingDir, boundaries, progressCallback);
 
         List<Path> tmpsInOrder = new ArrayList<>();
+        List<SortedFileWriter> partsInOrder = new ArrayList<>();
         long totalRows = 0;
         long mergePasses = 0;
         long cascadedPasses = 0;
         long fastPathEmissions = 0;
+        // results are in RANGE order, and ranges are contiguous and ascending, so concatenating each
+        // range's parts in its own write order gives the output's global key order — which is exactly
+        // the roll sequence the completeness stamp describes.
         for (ParallelRangeMerge.RangeResult rr : results) {
             tmpsInOrder.addAll(rr.tmpParts());
+            partsInOrder.addAll(rr.writers());
             totalRows += rr.rows();
             mergePasses += rr.mergePasses();
             cascadedPasses += rr.cascadedPasses();
             fastPathEmissions += rr.fastPathEmissions();
+        }
+
+        // THE COMPLETENESS STAMP. Every part is still open precisely so this can happen: only here is
+        // the full ordered part list known, so only here can a part be told its 1-based position in the
+        // global sequence and the last one be marked final. Closing is what writes the footer, so the
+        // assignment must precede it -- and it must precede the rename too, since a renamed file is
+        // published.
+        //
+        // What protects a FAILED publish is not the stamp but the rename: these are `.tmp` files in
+        // stagingDir, and nothing here is visible to a reader until the rename loop below moves it to
+        // outputDir. So a part abandoned mid-close may well carry a full stamp, including file_final --
+        // it is simply never published, and the next run's cleanStalePrangeTmp sweeps it. The
+        // guarantee is "never renamed => never seen", not "never stamped".
+        try {
+            for (int i = 0; i < partsInOrder.size(); i++) {
+                partsInOrder.get(i).setFileIndex(i + 1);
+            }
+            if (!partsInOrder.isEmpty()) {
+                partsInOrder.get(partsInOrder.size() - 1).markFinal();
+            }
+            RolledPartWriter.closeInOrder(partsInOrder);
+            partsInOrder.clear();
+        } catch (IOException | RuntimeException e) {
+            // Release the rest without letting a second failure replace the first: the original close
+            // error is what says why the publish failed.
+            try {
+                RolledPartWriter.closeQuietly(partsInOrder);
+            } catch (IOException | RuntimeException releaseFailure) {
+                e.addSuppressed(releaseFailure);
+            }
+            throw e;
         }
 
         List<Path> finalFiles = new ArrayList<>();

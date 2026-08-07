@@ -79,6 +79,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.sort.merge.passes` | counter | — | k-way merge passes executed (1 = single pass; >1 = cascade) |
 | `swath.sort.merge.latency` | timer | — | per-run merge wall time (staging segments → published sorted file) |
 | `swath.sort.merge.range.latency` | timer | — | per-RANGE merge wall time on the off-by-default parallel range-merge path (`swath.sort.merge-parallelism>1`) — recorded once per concurrent range, distinct from `swath.sort.merge.latency` (the whole-run wall), so an A/B can read per-range cost with vs. without row-group skip. Untouched (zero samples) on the default serial merge |
+| `swath.sort.merge.boundaries.latency` | timer | — | the parallel range merge's boundary-sampling prologue — recorded once per run, before any range starts. This is that path's SERIAL fraction: on page-run staging it walks every page's frontier across every segment, so it grows with staging size while the ranges beside it get faster as `R` rises. Included in `swath.sort.merge.latency`; subtract it to see the ranges' own scaling. Untouched (zero samples) on the default serial merge |
 | `swath.sort.backpressure.wait` | timer | — | time the listing waited to hand a sealed buffer to the (busy) encoder — the accepted cost of off-thread encoding |
 | `swath.sort.page_runs_per_buffer` | distribution summary | — | per-node page runs per sealed buffer (JSON `sort.page_runs_per_buffer` classification signal) |
 | `swath.sort.staging.bytes.peak` | gauge | — | high-water mark of total live (admitted-but-not-yet-durable) `--sort` staging bytes — the fill buffer's current byte estimate plus every sealed-but-unfinalized buffer's estimate (captured at seal time). **The number to read after a sort-staging OOM:** if it tracks roughly `T × segmentBytes` and stays bounded as `T` stabilizes, the OOM is linear-in-`T` tuning (give the run more heap); if it climbs unboundedly under a retry storm while `T` is stable, that is an unbounded-leak signature. Instrumentation only — it never gates admission itself |
@@ -391,8 +392,8 @@ downstream parser should key off, not "does `meters[]` exist".
 
 **`sort` block, `merge_progress_units`:** for a `--sort` run, the `sort` block
 (`{ "enabled": true, "segments": …, "passes": …, "segment_bytes": …, "merge_ms": …,
-"page_runs_per_buffer": …, "buffer_sort_fallbacks": …, "effective_fan_in": …,
-"merge_progress_units": … }`) additionally carries `merge_progress_units`, a live read of
+"merge_boundaries_ms": …, "page_runs_per_buffer": …, "buffer_sort_fallbacks": …,
+"effective_fan_in": …, "merge_progress_units": … }`) additionally carries `merge_progress_units`, a live read of
 `swath.progress.units`. That tally is **phase-agnostic, not merge-only**: the same counter advances
 during listing and writing, so on a `--sort` run `merge_progress_units`' value at merge start already
 includes every object emitted during listing. It is a monotone liveness signal, not a merge-only
@@ -401,6 +402,13 @@ its absolute magnitude. `segments` and `passes` are populated exactly ONCE, afte
 finishes, so both stay flat/zero for the entire merge; `merge_progress_units` is the field that
 genuinely advances across successive periodic flushes mid-merge, which is what lets an external
 `_swath_summary.json` poller distinguish alive-and-merging from wedged.
+
+**`sort` block, `merge_boundaries_ms`:** on the off-by-default parallel range merge
+(`swath.sort.merge-parallelism>1`), the boundary-sampling prologue that runs once before any range
+starts. It is **included in `merge_ms`**, and broken out because it is the one part of that phase
+that does not get faster as `R` rises — so `merge_ms − merge_boundaries_ms` is the term whose scaling
+an A/B is actually testing, and a rising ratio between them is the signal that `R` has stopped
+paying. Zero on the default serial merge, which never samples boundaries.
 
 **Merge-phase progress log line:** the merge/publish phase is covered by the run's single progress
 reporter, which spans seeding, listing, merging and writing alike — so it emits the SAME `progress`

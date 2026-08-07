@@ -1,29 +1,24 @@
 # swath performance
 
-This page defines the measurements required before swath makes quantitative
-performance or scale claims: scaling, memory, resume cost, throughput, and
-known slow paths. There is no published release-candidate measurement bundle
-yet. Where a section carries numbers they are **single-machine field
-observations**, labelled as such and stamped; where it carries none it says so.
-Neither is an RC measurement.
+This page covers scaling, memory, resume cost, throughput, the sorted merge, and
+known slow paths.
+
+Every number here is a **field observation**: a single-machine, single-vantage run
+against a public bucket, stamped with version, date, machine and bucket per the
+[Methodology](#methodology) bar. None is a release-candidate measurement — an RC
+bundle (multiple machines, repeated runs, in-region vantage) is still outstanding,
+and where a section has no data at all it says so.
+
+They are reported because they beat an empty placeholder, and because the *method*
+for reproducing them on your own bucket is written alongside — see
+[Diagnosing a run](#diagnosing-a-run), which also explains why absolute figures
+should not be ported between buckets.
 
 For a head-to-head against other S3 listing tools, see the
-[S3-listing comparison study](https://github.com/varveio/s3-listing-study),
-which is built for exactly that and commits to what it measures before it
-measures it. Its comparative runs have not started yet, so it carries a
+[S3-listing comparison study](https://github.com/varveio/s3-listing-study). Its
+comparative runs have not started, so it carries a
 [methodology](https://github.com/varveio/s3-listing-study/blob/main/docs/methodology.md)
-and a tool roster but no results so far.
-
-Most sections now carry **field observations** rather than release-candidate
-measurements: single-machine, single-vantage runs against public buckets,
-stamped with version/date/machine/bucket per the [Methodology](#methodology)
-bar. They are reported because they are more useful than an empty placeholder,
-and because the *method* for reproducing them on your own bucket is written
-alongside — see [Diagnosing a run](#diagnosing-a-run),
-which also explains why absolute numbers should not be ported between buckets.
-A release-candidate bundle (multiple machines, repeated runs, in-region
-vantage) is still outstanding, and where a section has no data at all it says
-so plainly.
+and a tool roster but no results yet.
 
 ## The machine these figures ran on
 
@@ -169,114 +164,13 @@ and it produced only 148 splits against the larger bucket's ~4 900, so there was
 far less parallel work to spread. It is reported here only to show that keys/s
 does not follow object count.
 
-Two caveats that matter more than the numbers:
+**Throughput is shape-bound, not size-bound.** The ceiling here was the engine's
+ability to manufacture splittable ranges on a deep-divergence keyspace, not the
+remote and not CPU — see
+[Where swath is slow](#where-swath-is-slow-honest-limits).
 
-- **These are cross-cloud** (GCP client → AWS S3). Per-request latency was ~172 ms
-  and flat, of which only ~80 ms is the network round trip — the rest is S3's own
-  page-production time, which an in-region client still pays. Moving in-region cuts
-  the in-flight needed for a given rate by roughly a third, not by the factor the
-  distance suggests, because throughput ≈ in-flight ÷ latency and latency does not
-  collapse. See [The machine these figures ran on](#the-machine-these-figures-ran-on)
-  for the measured breakdown.
-- **Throughput is shape-bound, not size-bound.** The ceiling here was the
-  engine's ability to manufacture splittable ranges on a deep-divergence
-  keyspace, not the remote and not CPU.
-
-> _Host and buckets: see [The machine these figures ran on](#the-machine-these-figures-ran-on)._
-
-## The 0.2.0 scheduling defaults (`rate_anchored_sensing` + `tail_floor`)
-
-0.2.0 turns on two engine mechanisms that previously shipped opt-in: the
-rate-anchored position sensor and the `reach_floored` owner-split child-tail
-floor. They are documented individually in
-[usage.md](usage.md#new-mechanism-performance-toggles--defaults-and-cost-profile);
-this section is the evidence for making them the default, and the reason a
-rollback path exists.
-
-**What they fix.** On a *wide-flat* tail — a range with a large number of keys
-left but a very thin trailing density — the pre-0.2.0 child-tail floor scores the
-child as `est × max(0, min(1, densityRatio) − f)`. With the trailing ratio at
-~3e-4 against `f`≈0.5 the product is exactly zero *regardless of the estimate*, so
-the owner is refused every time it tries to carve, and the range drains on one
-worker for the rest of the run. The pair makes that estimate honest and the floor
-reachable.
-
-**Measured, on a real store.** A 13.5M-key public dataset bucket in `us-east-2`,
-arms run serially and alternating, two repetitions each, all four runs completing
-the full key set:
-
-| arm | wall | keys/s | avg in-flight | API calls |
-| --- | --- | --- | --- | --- |
-| pre-0.2.0 default, rep 1 | 702.9s | 19,263 | 2.2 | 15,066 |
-| pre-0.2.0 default, rep 2 | 672.1s | 20,147 | 2.1 | 14,946 |
-| 0.2.0 default, rep 1 | **62.4s** | 216,985 | 24.1 | 15,009 |
-| 0.2.0 default, rep 2 | **57.7s** | 234,537 | 26.6 | 14,879 |
-
-≈11.3× and ≈11.6× end-to-end on the two repetitions, at slightly *fewer* API calls —
-the fleet stops idling, it does not start over-fetching. Comparing the worst new run
-against the best old one, the least favourable reading available, it is still 10.8×.
-
-**Breadth, and the correctness claim.** Both arms were then replayed over a
-123-fixture capture corpus (465M keys total, every fixture ≤20M keys) against the
-real engine. **114 of the 123 completed.** Across those 114, the emitted key set was
-byte-identical between arms on every one — the pair changes scheduling, never output —
-and total API calls moved −0.4%. Ten fixtures gained ≥1.5×. **Twelve fixtures
-regressed 5–23%** under the new defaults, verified serially on a quiet box: one shared
-mechanism (on those shapes the pair splits work more aggressively than the extra
-parallelism pays back). Output is byte-identical on every one; an opt-in recovery
-mechanism has been measured and is tracked separately.
-
-Nine further fixtures initially produced no result on either arm. The cause was a
-replay-*harness* defect, not the engine — the server answered a root delimiter rollup
-by walking ~1,000 per-prefix queries (~70s) against a ~3s client probe budget — and
-fixing it (the server's native skip-scan now serves open-upper-bound rollups; 70.34s →
-0.054s, responses byte-identical to the walk's) restored all nine: **18/18 runs
-complete, zero keyset differences**, so the byte-identical claim covers the full
-123-fixture corpus. Eight of the nine are roughly arm-neutral; one deep-nested
-forecast bucket is near-serial pre-flip and **2.0×** under the 0.2.0 defaults.
-
-**Honest limits.** The pair cures the wide-flat tail; it does not make every
-bucket parallel. Keyspaces that are deep and narrow enough that a pivot has almost
-no alphabet to cut against remain serial, identically so on both arms — the
-mechanism there is unsplittability, not the floor, and it is tracked separately.
-Buckets above 20M keys are not covered by the corpus panel; the largest live proof
-point is the 13.5M-key run above.
-
-**Rollback.** Pre-0.2.0 engine behaviour is exactly reachable with
-`--engine-toggle rate_anchored_sensing=off --engine-toggle tail_floor=current`.
-No output changes either way, so switching arms is safe mid-campaign.
-
-_Measured 2026-07-28 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box; live arm
-against S3 `us-east-2`, replay arm against the bundled replay server at a
-uniform latency profile. Public data only._
-
-## The 0.2.0 seed change: the scope-closing sentinel
-
-The seed pass tiles its cut-points as `(⊥,c1], …, (c_last, null]`, and the owner-split
-governor refuses to split any range whose upper bound is open — so whatever mass sorts
-past the last cut drains on **one worker, serially, however large it is**. On one real
-4.97M-key geoscience bucket, 95.2% of the keys sat under the *last* top-level prefix:
-the seed's own tiling made almost the whole bucket unsplittable.
-
-0.2.0 closes the scope when doing so is provable: if the top level was listed to
-completion and its greatest returned item is a common prefix `p/`, every key in scope
-is strictly below `prefixCeil(p/)`, and that bound is appended as one final cut — zero
-extra probes, one extra cut, the mass-bearing range gains a finite upper bound and the
-runtime splitter takes it from there. The bound is verified, never assumed (a direct
-object sorting past the last prefix declines it), and every decline reason is a named
-counter.
-
-On that bucket, replayed from a captured listing at a compressed latency profile
-(64 workers): open-frontier key share **0.952 → 0.000**, serial fraction 0.945 →
-0.001, runtime splits 15 → **482**, wall **−36%**, at *fewer* API calls (6,736 →
-5,797). Emitted key sets are byte-identical, there and across a 9-fixture control
-smoke whose walls all sit within measurement noise. The one disclosed cost: the final
-tile is empty by construction but still exists — one LIST spent, and a known small
-distortion of victim scoring, tracked separately.
-
-_Measured 2026-07-29 on swath 0.2.0-SNAPSHOT, 8-core/26GB Linux box, bundled replay
-server over captured public-bucket listings; wall change is relative within the
-bench's compressed latency profile, never an absolute claim. Public data only._
+> _Host, buckets, and the cross-cloud latency breakdown: see
+> [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 <a id="diagnosing-a-run"></a>
 
@@ -445,14 +339,15 @@ here, so that signal alone does not distinguish them.
 a different one. Run the sweep on your own bucket, or read the shape block and
 in-flight utilisation from a single run and infer from those.
 
-### The merge phase grows with cores, not with object count
+### Reading the merge's share of the wall
 
 On `--sort` runs, `sort.merge_ms ÷ duration_ms` is the merge's share of wall
-clock. The listing phase parallelises across cores and the serial merge does
+clock. The listing phase parallelises across cores; by default the merge does
 not, so **the same bucket shows a larger merge share on a bigger machine** —
 adding cores speeds the listing half and leaves the other half where it was.
 Judge the share against the machine, not against the object count, and remember
-Amdahl: a serial fraction `f` caps any core increase at `1/f`.
+Amdahl: a serial fraction `f` caps any core increase at `1/f`. That ceiling is
+what [The sorted merge](#the-sorted-merge) is about.
 
 ## Where swath is slow (honest limits)
 
@@ -463,27 +358,17 @@ probe overhead, or an adversarial distribution costs more than the ideal.
 only become distinguishable far down the key (the run summary's
 `shape.divergence_depth_histogram` concentrated in its deepest buckets), every
 additional parallel range costs a deep probe. The engine then cannot keep its
-concurrency ceiling full, and throughput plateaus well below what the remote
-would serve. Measured on `pds-css-archive`: `engine.splits` plateaued at ~4 900
-and `engine.steals` stayed flat at ~300–400 no matter how high `--concurrency`
-went, in-flight utilisation fell from 93 % to 18 %, and throughput *regressed*
-21 % from c=256 to c=512 while per-request latency never moved. Setting a higher
-ceiling on such a bucket is actively counterproductive.
+concurrency ceiling full, throughput plateaus well below what the remote would
+serve, and **raising `--concurrency` makes it worse** — the measured sweep is in
+[Field observations](#field-observations-stamped-and-shape-specific).
 
-**The sorted merge is serial, and its share grows with core count.** `--sort`
-adds a single-threaded merge after the listing. Because the listing half
-parallelises and the merge half does not, the merge's share of wall clock rises
-on bigger machines — the same bucket that spends a modest fraction of its wall
-in the merge on a small instance spends much more of it on a large one. A
-range-parallel merge exists behind
-`-Dswath.sort.merge-parallelism` but is **off by default and unreleased** (see
-[`usage.md`](usage.md#parallel-range-merge-off-by-default)).
+**The sorted merge is single-threaded by default**, so on a big machine it can
+be most of a sorted run's wall clock. The range-parallel merge behind
+`-Dswath.sort.merge-parallelism` removes that ceiling but is off by default —
+see [The sorted merge](#the-sorted-merge).
 
-**Cross-cloud vantage.** All figures here were taken from a different cloud than
-the bucket. That inflates the concurrency required per unit of throughput and is
-not representative of an in-region client.
-
-> _Host and buckets: see [The machine these figures ran on](#the-machine-these-figures-ran-on)._
+> _Host, buckets, and the cross-cloud caveat: see
+> [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 ## Methodology
 
@@ -493,27 +378,27 @@ listed. Measurements come from publicly available tooling only. We publish no
 leaderboard and make no self-favorable comparative framing — the numbers
 describe swath, not rivals.
 
-**What the current figures are, precisely.** Every number on this page outside
-the 0.2.0 scheduling sections is a *field observation*, not a release-candidate
-measurement. Specifically:
+**What the current figures are, precisely** — field observations, not
+release-candidate measurements:
 
 - **n = 1 per point.** No repeats, so no variance is reported and small
   differences between adjacent points are not significant.
 - **One machine, one vantage** — the arm64 host in
   [The machine these figures ran on](#the-machine-these-figures-ran-on), listing
-  AWS S3 cross-cloud. Per-request latency was ~172 ms and flat, only ~80 ms of it
-  network; an in-region client needs roughly a third less concurrency for the same
-  throughput (not less than that — S3's own page-production time dominates and does
-  not move), and an x86 host may differ on the CPU-bound phases.
-- **Two public buckets**, differing in shape as well as size, so no size-scaling
-  law is inferable from them.
-- **Serial arms.** Concurrency points were run one at a time, because concurrent
-  arms against the same bucket contend remotely and depress exactly the in-flight
-  and freeze counters under test.
+  AWS S3 cross-cloud. An x86 host may differ on the CPU-bound phases.
+- **Serial arms.** Points were run one at a time. Concurrent arms against the
+  same bucket contend remotely and depress exactly the in-flight and freeze
+  counters under test — and a benchmark process left running from an earlier
+  sweep does the same thing to CPU, so check the box is quiet before trusting a
+  number.
+- **Live buckets mutate.** Two arms of the same A/B can legitimately return
+  different object counts on an actively-written bucket, which makes a
+  cross-arm key-set digest meaningless there. Verify identity only on buckets
+  whose counts match exactly.
 - Runs were driven by the shipped CLI and read from the run summary
   (`--report`), so every figure is reproducible from a run's own artifacts.
 
 **What would raise these to RC grade:** repeats with reported variance, an
-in-region vantage, more than two keyspace shapes, and a like-for-like object-count
-sweep at fixed shape. Until then, treat the numbers as illustrations of the
-diagnostic method rather than as swath's performance envelope.
+in-region vantage, and a like-for-like object-count sweep at fixed shape. Until
+then, treat the numbers as illustrations of the diagnostic method rather than as
+swath's performance envelope.

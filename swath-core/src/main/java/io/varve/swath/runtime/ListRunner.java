@@ -51,6 +51,7 @@ import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
@@ -839,9 +840,22 @@ public final class ListRunner {
         // identityVerifiedWideSweep javadoc above for which caller passes which value. Every OTHER
         // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
+        // Not a method reference any more: the parallel path reports TWO wall times -- each range's own
+        // merge, and the serial boundary-sampling prologue that runs once before all of them.
+        RangeMergeTimer rangeTimer = new RangeMergeTimer() {
+            @Override
+            public void recordRangeMerge(long nanos) {
+                ctx.metrics().recordSortMergeRange(nanos);
+            }
+
+            @Override
+            public void recordBoundarySampling(long nanos) {
+                ctx.metrics().recordSortMergeBoundaries(nanos);
+            }
+        };
         SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, sortMetrics, writerFactory),
-                identityVerifiedWideSweep, ctx.metrics()::recordSortMergeRange);
+                identityVerifiedWideSweep, rangeTimer);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).

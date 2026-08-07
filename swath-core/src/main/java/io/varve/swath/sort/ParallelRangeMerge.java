@@ -13,6 +13,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -81,11 +82,15 @@ import org.slf4j.LoggerFactory;
  * skip is this path's decode-parallelism win over reading every segment whole; it is byte-identical
  * to reading every group (RangeFilteredStream produces the same rows either way).
  *
- * <p><b>Still not implemented:</b> correct global multi-file
- * completeness stamps ({@code file_index} = 1..N, single {@code file_final}) — each range writes with
- * a range-local {@code file_index} and no file is marked final, so the produced files are a correct
- * global sort by <em>filename</em> order but do NOT carry the self-describing completeness proof
- * {@link SortedParquetWriter} documents. The path remains off by default while that proof is absent.
+ * <p><b>Completeness stamp.</b> The output carries the same self-describing proof the serial path
+ * writes — {@code file_index} 1..N over the whole output with a single {@code file_final} on N — so a
+ * reader can tell a complete file set from a truncated one without trusting a sidecar. It is assigned
+ * late by necessity: a part's index is its position in the GLOBAL roll sequence, which depends on how
+ * many parts every lower range produced, and no range knows that while it is writing. Each range
+ * therefore hands its parts back OPEN ({@link RangeResult#writers}), and {@link SortTransform} — which
+ * collects the results in range order — assigns the indices, marks the last part final, and closes.
+ * Deferring the footer rather than the data keeps the cost small: a drained-but-unclosed writer has
+ * already flushed its row groups and retains only their metadata plus at most one buffered row group.
  */
 final class ParallelRangeMerge {
 
@@ -109,6 +114,13 @@ final class ParallelRangeMerge {
     private final SortedFileWriterFactory finalWriterFactory;
     private final RangeMergeTimer rangeTimer;
 
+    /**
+     * Every final-output part this merge has opened, across all ranges — the failure path's handle on
+     * them. Synchronized because range threads register concurrently. One instance per merge, so it
+     * does not accumulate across runs.
+     */
+    private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
+
     ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer) {
         this.config = run.config();
         this.comparator = run.comparator();
@@ -118,9 +130,18 @@ final class ParallelRangeMerge {
         this.rangeTimer = rangeTimer;
     }
 
-    /** One range's ordered output: the rolled tmp part files (in key order) plus aggregate counts. */
-    record RangeResult(List<Path> tmpParts, long rows, long mergePasses, long cascadedPasses,
-                       long fastPathEmissions) {
+    /**
+     * One range's ordered output: the rolled tmp part files (in key order), the writers that produced
+     * them — returned still OPEN — plus aggregate counts.
+     *
+     * <p>The writers are open because the completeness stamp cannot be written yet. A part's
+     * {@code file_index} is its position in the output's GLOBAL roll sequence, which depends on how
+     * many parts every lower range produced, and that is unknown until they all finish.
+     * {@link SortTransform} collects these results in range order, assigns the indices, marks the very
+     * last part final, and closes. {@code writers} is index-aligned with {@code tmpParts}.
+     */
+    record RangeResult(List<Path> tmpParts, List<SortedFileWriter> writers, long rows, long mergePasses,
+                       long cascadedPasses, long fastPathEmissions) {
     }
 
     /**
@@ -191,6 +212,13 @@ final class ParallelRangeMerge {
             long stride = totalPages <= MAX_SAMPLES_PER_SEGMENT
                     ? 1
                     : (totalPages + MAX_SAMPLES_PER_SEGMENT - 1) / MAX_SAMPLES_PER_SEGMENT;
+            if (stride > 1) {
+                // Instrumentation (AGENTS.md "instrument every new algo path"): the cap changes which
+                // boundaries get chosen, so a run whose ranges balanced badly needs to be able to tell
+                // a thinned sample from a full one. Fires once per capped SEGMENT, so the run total is
+                // how many segments were large enough to thin.
+                metrics.recordStealReason("SORT", "merge_range_sample_capped");
+            }
             try (PageFrontierReader frontier = new PageFrontierReader(segment, metrics)) {
                 for (long page = 0; frontier.hasPage(); page++) {
                     if (page % stride == 0) {
@@ -280,14 +308,21 @@ final class ParallelRangeMerge {
                     ranges, threads, perRangeFanIn);
             return results;
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
             futures.forEach(f -> f.cancel(true));
             quiesce(pool);
+            releaseOpenParts();
             sweepOwnFiles(stagingDir);
+            // Restore the flag AFTER the wait, not before it: awaitTermination throws immediately when
+            // the calling thread is already interrupted, so setting it first made quiesce() return
+            // without waiting at all -- and the sweep then ran while sibling ranges were still writing,
+            // which is the exact debris case quiesce exists to prevent. (quiesce re-interrupts itself
+            // if the wait is interrupted again, so the flag is never lost.)
+            Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
             futures.forEach(f -> f.cancel(true));
             quiesce(pool);
+            releaseOpenParts();
             sweepOwnFiles(stagingDir);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
@@ -297,6 +332,15 @@ final class ParallelRangeMerge {
                 throw uio.getCause() == null ? new IOException(uio.getMessage(), uio) : uio.getCause();
             }
             throw new IOException("parallel range merge failed", cause);
+        } catch (RuntimeException e) {
+            // Anything the two checked paths above do not name -- a RejectedExecutionException from
+            // submit() being the realistic one, since it fires mid-loop with some ranges already
+            // running. Without this the open parts and their files would survive the failure.
+            futures.forEach(f -> f.cancel(true));
+            quiesce(pool);
+            releaseOpenParts();
+            sweepOwnFiles(stagingDir);
+            throw e;
         } finally {
             pool.shutdownNow();
         }
@@ -336,16 +380,29 @@ final class ParallelRangeMerge {
             KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
 
             List<Path> tmpParts = new ArrayList<>();
+            List<SortedFileWriter> parts = new ArrayList<>();
             long rows;
             // Page-run: the inputs are page frontiers, so the merged stream still carries the far side
             // of any straddling boundary page — trim it here (RangeFilteredCursor). Parquet: each input
             // was already entry-filtered on open, so the merged stream is in-range by construction.
             try (SortedCursor merged = rangeScoped(merge.merge(stagingSegments, safeProgress),
                     pageRunFormat, lo, hi)) {
-                // markFinalOnLast=false: range-local file_index, no file_final — the documented
-                // parallel-path stamp gap (see this class's javadoc).
-                rows = RolledPartWriter.drain(merged, config.finalFileBytes(),
-                        () -> openRangePart(stagingDir, range, tmpParts), false, safeProgress);
+                // drainOpen, not drain: the parts are left OPEN and unstamped. Their file_index is a
+                // position in the GLOBAL roll sequence, which this range cannot know -- it depends on
+                // how many parts the ranges below it produce. SortTransform assigns the indices and
+                // closes, once every range has drained.
+                rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
+                        () -> openRangePart(stagingDir, range, tmpParts), safeProgress, parts, false);
+            } catch (IOException | RuntimeException e) {
+                // This range failed, so nothing it wrote will be published: release the open parts
+                // rather than strand their descriptors until the sweep. Never stamped -- an aborted
+                // range's files must not claim a position in a sequence that will not exist.
+                try {
+                    RolledPartWriter.closeQuietly(parts);
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+                throw e;
             }
             // Reclaim this range's cascade intermediates (KWayMerge already deleted the ones it folded;
             // deleteIfExists is a no-op on those). Originals are shared across ranges and are NEVER
@@ -382,16 +439,26 @@ final class ParallelRangeMerge {
                             + "pages_kept={} pages_skipped={} pages_unread={} duration_ms={}",
                     range, rows, groupsRead[0], groupsSkipped[0], pagesKept, pagesSkipped, pagesUnread,
                     rangeNanos / 1_000_000L);
-            return new RangeResult(tmpParts, rows, merge.mergePasses(), merge.cascadedPasses(),
+            return new RangeResult(tmpParts, parts, rows, merge.mergePasses(), merge.cascadedPasses(),
                     merge.fastPathEmissions());
         };
     }
 
     private SortedFileWriter openRangePart(Path stagingDir, int range, List<Path> tmpParts)
             throws IOException {
-        int localIndex = tmpParts.size() + 1;   // range-LOCAL file index (documented stamp gap)
+        // Range-local ordinal: it names the tmp file, and is only a PLACEHOLDER index. The real
+        // file_index is assigned by SortTransform once every range has drained and the global roll
+        // sequence is known; the footer is not written until then (see setFileIndex).
+        int localIndex = tmpParts.size() + 1;
         Path tmp = stagingDir.resolve("prange-" + range + "-" + localIndex + ".parquet.tmp");
         SortedFileWriter writer = finalWriterFactory.create(tmp, localIndex);
+        // Register on creation, not on return, so the failure path can release a part whatever
+        // happens to the range that owns it. A CANCELLED range is the case that needs this: its
+        // callable does not poll for interruption, so it runs to completion and its RangeResult --
+        // and with it the only other handle on these writers -- is discarded by the cancelled
+        // FutureTask. Without the registry those parts stay open until GC while the sweep unlinks
+        // the files underneath them. Closes are idempotent, so double-releasing is harmless.
+        openParts.add(writer);
         tmpParts.add(tmp);
         return writer;
     }
@@ -707,6 +774,26 @@ final class ParallelRangeMerge {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Release the open, unstamped parts of ranges that SUCCEEDED before a sibling failed. Their
+     * writers are handed back open by design (the global index is assigned later), so a failure that
+     * skips {@link SortTransform}'s publish would otherwise strand descriptors until GC — and the
+     * sweep below would unlink files still held open. Never stamps: an aborted merge's parts must not
+     * claim a position in a sequence that will never be published.
+     */
+    private void releaseOpenParts() {
+        List<SortedFileWriter> snapshot;
+        synchronized (openParts) {
+            snapshot = new ArrayList<>(openParts);
+        }
+        try {
+            RolledPartWriter.closeQuietly(snapshot);
+        } catch (IOException | RuntimeException ignored) {
+            // Already failing, and the sweep unlinks these tmp files next; a close error here would
+            // only mask the merge failure the caller is about to throw.
         }
     }
 

@@ -65,10 +65,24 @@ class ParallelMergeBenchmark {
     private static final int NUM_SEGMENTS = Integer.getInteger("swath.bench.segments", 64);
     private static final long TOTAL_ROWS = Long.getLong("swath.bench.rows", 12_000_000L);
     private static final int BLOCK_ROWS = Integer.getInteger("swath.bench.blockRows", 4_000);
-    /** The {@code R} values to sweep, in order; {@code R=1} must be first (it is the identity baseline). */
-    private static final List<Integer> RANGES =
-            Arrays.stream(System.getProperty("swath.bench.ranges", "1,2,4,8").split(","))
-                    .map(String::trim).map(Integer::parseInt).toList();
+    /**
+     * The {@code R} values to sweep, in order. {@code R=1} must be FIRST — it is the identity baseline
+     * every later arm is byte-compared against. The sweep is user-settable through
+     * {@code swath.bench.ranges}, so this is enforced rather than assumed: a sweep starting anywhere
+     * else would otherwise dereference a null baseline and surface as an NPE partway through a
+     * half-hour run, instead of saying up front what the operator got wrong.
+     */
+    private static final List<Integer> RANGES = parseRanges();
+
+    private static List<Integer> parseRanges() {
+        List<Integer> ranges = Arrays.stream(System.getProperty("swath.bench.ranges", "1,2,4,8").split(","))
+                .map(String::trim).map(Integer::parseInt).toList();
+        if (ranges.isEmpty() || ranges.get(0) != 1) {
+            throw new IllegalArgumentException("swath.bench.ranges must start with 1 — it is the identity "
+                    + "baseline every other arm is compared against; got " + ranges);
+        }
+        return ranges;
+    }
     private static final int TOTAL_DAYS = 1_500;
     private static final String KEY_PREFIX = "corp-data-lake-logs";
     private static final String[] STORAGE_CLASSES =

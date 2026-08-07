@@ -293,40 +293,42 @@ class SortTransformParallelMergePropTest {
     }
 
     // ---------------------------------------------------------------------
-    // Pins the CURRENT completeness-stamp behavior on the parallel path (range-local file_index, no
-    // file marked final) so a regression is caught. This test documents the current limitation; it
-    // does not establish the missing global completeness proof.
+    // The completeness stamp is IDENTICAL on both merge paths: a global file_index 1..N with exactly
+    // one file_final, on N. That symmetry is what makes merge-parallelism a performance knob rather
+    // than a change to what published output MEANS, and so what lets it be on by default.
     // ---------------------------------------------------------------------
 
     @Example
-    void parallelPartsCarryRangeLocalFileIndexAndNoFinalStamp_serialStampsProperly() throws IOException {
+    void parallelPartsCarryTheSameGlobalStampAsSerial() throws IOException {
         List<List<ListEntry>> segs = List.of(objs("a", "d", "g"), objs("b", "e", "h"), objs("c", "f", "i"));
         SortedFileWriterFactory stamped =
                 new SortedParquetWriterFactory(config(1, Long.MAX_VALUE), SortMode.OBJECTS);
         Path root = Files.createTempDirectory("prangeprop-stamp-");
         try {
             Scenario s = scenario(segs);
-            // Serial baseline: the single file carries a PROPER stamp — file_index 1, file_final true.
+            // Serial baseline: the single file carries file_index 1 and is marked final.
             SortTransformResult serial = run(s, 1, Long.MAX_VALUE, root, "serial", stamped);
             assertThat(serial.finalFiles()).hasSize(1);
             SortStamp serialStamp = readStamp(serial.finalFiles().get(0));
             assertThat(serialStamp.fileIndex()).isEqualTo(1);
             assertThat(serialStamp.fileFinal()).as("serial single file is stamped final").isTrue();
 
-            // Parallel path: 3 ranges ⇒ 3 parts. Current (documented-gap) behavior — each part is
-            // range-LOCAL file_index 1 (NOT the global 1..N), and NO part is stamped final.
+            // Parallel path: 3 ranges ⇒ 3 parts, stamped 1,2,3 in filename order with final on the
+            // last. A range-local stamp would read 1,1,1 with no final, and a reader could not tell a
+            // complete set from a truncated one.
             SortTransformResult parallel = run(s, 3, Long.MAX_VALUE, root, "parallel", stamped);
             assertThat(parallel.finalFiles()).hasSize(3);
+            List<Integer> indices = new ArrayList<>();
             for (Path part : parallel.finalFiles()) {
-                SortStamp stamp = readStamp(part);
-                assertThat(stamp.fileIndex())
-                        .as("range-local file_index, not global 1..N")
-                        .isEqualTo(1);
-                assertThat(stamp.fileFinal())
-                        .as("no parallel part is stamped final")
-                        .isFalse();
+                indices.add(readStamp(part).fileIndex());
             }
-            // Content is still a correct global sort despite the stamp gap.
+            assertThat(indices).as("global file_index 1..N in filename order").containsExactly(1, 2, 3);
+            for (int i = 0; i < parallel.finalFiles().size(); i++) {
+                boolean last = i == parallel.finalFiles().size() - 1;
+                assertThat(readStamp(parallel.finalFiles().get(i)).fileFinal())
+                        .as("file_final present iff last part (part %d)", i + 1)
+                        .isEqualTo(last);
+            }
             assertThat(readKeys(parallel.finalFiles())).containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i");
         } finally {
             deleteRecursively(root);
