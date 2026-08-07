@@ -94,6 +94,8 @@ class ParallelMergeBenchmark {
             System.out.printf("BENCH_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
                     corpus.segments, corpus.rows, corpus.bytes, buildMs);
 
+            measureOpenReaderHeap(master);
+
             List<Integer> ranges = RANGES;
             Map<Integer, ArmResult> results = new LinkedHashMap<>();
             List<Path> baselineFinals = null;
@@ -152,8 +154,13 @@ class ParallelMergeBenchmark {
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
         List<Path> stagingSegments = copyCorpus(master, staging);
 
+        // merge-parallelism is the swept knob; every OTHER swath.sort.* property falls through to the
+        // real system properties, so an arm can hold one knob fixed while another varies (e.g. pinning
+        // merge-budget-bytes while -Xmx changes, to separate cascade removal from GC relief).
         SortConfig config = SortConfig.fromProperties(
-                key -> "swath.sort.merge-parallelism".equals(key) ? String.valueOf(mergeParallelism) : null);
+                key -> "swath.sort.merge-parallelism".equals(key)
+                        ? String.valueOf(mergeParallelism)
+                        : System.getProperty(key));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         ConcurrentLinkedQueue<Long> rangeLatenciesNanos = new ConcurrentLinkedQueue<>();
         RangeMergeTimer timer = rangeLatenciesNanos::add;
@@ -208,6 +215,59 @@ class ParallelMergeBenchmark {
         ar.rowgroupSkipEngagedCount = metrics.count("SORT.merge_range_rowgroup_skipped");
         ar.rangeLatenciesMs = rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).collect(Collectors.toList());
         return ar;
+    }
+
+    /**
+     * DIRECT measurement of the per-open-stream retained heap — the term the merge budget prices at
+     * the on-disk {@code segmentRowGroupBytes} (1 MB) while {@link SegmentReader} actually retains a
+     * materialized row group ({@code ParquetFileReader.readRowGroup}). Opens every corpus segment,
+     * reads one entry from each (forcing the first row group to materialize), settles the heap, and
+     * reports the retained delta per open reader.
+     *
+     * <p>Without this the {@code R×} heap term can only be inferred by fitting the observed
+     * peak-heap slope and dividing by the segment count — which then "explains" the same slope it
+     * was derived from. This makes it a measurement instead.
+     */
+    private static void measureOpenReaderHeap(Path master) throws IOException {
+        List<Path> segments = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.parquet")) {
+            ds.forEach(segments::add);
+        }
+        long before = settledHeapBytes();
+        List<SegmentReader> open = new ArrayList<>(segments.size());
+        try {
+            for (Path segment : segments) {
+                SegmentReader reader = new SegmentReader(segment);
+                open.add(reader);
+                if (reader.hasNext()) {
+                    reader.next();   // force the first row group to materialize
+                }
+            }
+            long after = settledHeapBytes();
+            long delta = after - before;
+            System.out.printf("BENCH_STREAM_HEAP open_readers=%d retained_bytes=%d per_reader_bytes=%d "
+                            + "per_reader_mb=%.2f%n",
+                    open.size(), delta, delta / Math.max(1, open.size()),
+                    delta / (1024.0 * 1024.0) / Math.max(1, open.size()));
+        } finally {
+            for (SegmentReader reader : open) {
+                reader.close();
+            }
+        }
+    }
+
+    /** Used heap after giving the collector a chance to settle — the live-set estimate, not float. */
+    private static long settledHeapBytes() {
+        for (int i = 0; i < 3; i++) {
+            System.gc();
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
     }
 
     /** Clear every HEAP pool's recorded peak, so the next arm's peak is attributable to that arm alone. */
