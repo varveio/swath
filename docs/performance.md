@@ -23,6 +23,43 @@ A release-candidate bundle (multiple machines, repeated runs, in-region
 vantage) is still outstanding, and where a section has no data at all it says
 so plainly.
 
+## The machine these figures ran on
+
+Every field observation on this page comes from one host. Stated in full,
+because several of its properties materially shape the numbers:
+
+| | |
+|---|---|
+| Instance | GCP `c4a-highcpu-32`, zone `us-east1-b` |
+| CPU | **arm64** — Google Axion, ARM Neoverse-V2, 32 vCPU |
+| SMT | none (1 thread per core, 32 physical cores) |
+| Memory | 62 GiB |
+| Disk | 193 GB SSD-backed root volume (non-rotational); staging and output both landed here |
+| Kernel | Linux 6.17 (`aarch64`) |
+| JDK | Temurin 25.0.3+9 LTS |
+| swath | 0.2.2-dev |
+| Date | 2026-08-07 |
+
+**Why each of these can move a number:**
+
+- **arm64, not x86.** The merge phase leans on CRC32C, LZ4, and Parquet
+  encode/decode, all of which have architecture-specific paths. Merge-phase
+  timings in particular should not be assumed to carry to x86 unchanged.
+- **No SMT.** 32 vCPU here means 32 *physical* cores, so CPU-efficiency figures
+  are not diluted by sibling contention the way they would be on a
+  32-vCPU/16-core x86 instance.
+- **Cross-cloud, and partly cross-continent.** The client sat in GCP
+  `us-east1`; `pds-css-archive` is in AWS `us-west-2` (cross-cloud *and*
+  coast-to-coast, ~175 ms round trip) and `noaa-gefs-retrospective` is in AWS
+  `us-east-1` (cross-cloud, same region). Latency is the denominator in
+  `throughput ≈ in-flight ÷ latency`, so an in-region client needs far less
+  concurrency for the same rate — this vantage inflates every concurrency figure
+  on the page.
+- **Local disk for staging.** `--sort` staging and the final output shared one
+  local SSD. A network-attached or slower volume changes the merge phase's
+  profile.
+- **Single host, n = 1 per point.** See [Methodology](#methodology).
+
 ## Scaling behavior
 
 How listing time and LIST-call count grow as object count rises across bucket
@@ -41,9 +78,9 @@ shape. The two buckets measured differ in shape as well as size, so no
 size-scaling exponent should be inferred from them. That remains an RC-bundle
 item.
 
-> _Stamp: swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, cross-cloud to
-> AWS S3; buckets `noaa-gefs-retrospective` (9.9 M, us-east-1) and
-> `pds-css-archive` (96.0 M, us-west-2)._
+> _Buckets: `noaa-gefs-retrospective` (9.9 M objects, AWS us-east-1) and
+> `pds-css-archive` (96.0 M, AWS us-west-2). Host: see
+> [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 ## Memory behavior and current evidence
 
@@ -85,8 +122,8 @@ staging and merge buffers whose sizing is deliberately heap-adaptive (a function
 of `-Xmx`, see [`configuration.md`](configuration.md#jvm-system-properties)), and
 no maximum part/segment-count envelope is enforced yet.
 
-> _Stamp: swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, cross-cloud to
-> AWS S3; bucket `pds-css-archive` (96.0 M, us-west-2), unsorted Parquet._
+> _Bucket: `pds-css-archive` (96.0 M, AWS us-west-2), unsorted Parquet. Host:
+> see [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 ## Resume cost
 
@@ -118,7 +155,7 @@ Two caveats that matter more than the numbers:
   engine's ability to manufacture splittable ranges on a deep-divergence
   keyspace, not the remote and not CPU.
 
-> _Stamp: as Scaling behavior above._
+> _Host and buckets: see [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 ## The 0.2.0 scheduling defaults (`rate_anchored_sensing` + `tail_floor`)
 
@@ -286,10 +323,11 @@ with deep divergence will not, no matter what you set.
 
 ### Field observations (stamped, and shape-specific)
 
-swath 0.2.2-dev, 2026-08-07, 32 vCPU / 62 GiB GCP VM, listing **AWS** S3 —
-i.e. cross-cloud, which inflates the concurrency needed per unit of throughput
-relative to an in-region client. Bucket `pds-css-archive` (96 022 559 objects,
-us-west-2), `--no-sort`, one run per point:
+Bucket `pds-css-archive` (96 022 559 objects, AWS us-west-2), `--no-sort`, one
+run per point, from the arm64 host described in
+[The machine these figures ran on](#the-machine-these-figures-ran-on) — GCP
+us-east1, so cross-cloud and coast-to-coast, which inflates the concurrency
+needed per unit of throughput relative to an in-region client:
 
 | `--concurrency` | keys/s | avg in-flight (utilisation) | CPU-s per Mkey |
 |---:|---:|---:|---:|
@@ -348,7 +386,7 @@ range-parallel merge exists behind
 the bucket. That inflates the concurrency required per unit of throughput and is
 not representative of an in-region client.
 
-> _Stamp: as Scaling behavior above._
+> _Host and buckets: see [The machine these figures ran on](#the-machine-these-figures-ran-on)._
 
 ## Methodology
 
@@ -364,9 +402,11 @@ measurement. Specifically:
 
 - **n = 1 per point.** No repeats, so no variance is reported and small
   differences between adjacent points are not significant.
-- **One machine, one vantage** — a 32 vCPU / 62 GiB GCP VM listing AWS S3, i.e.
-  cross-cloud. Round-trip latency was ~175 ms and flat; an in-region client will
-  need materially less concurrency for the same throughput.
+- **One machine, one vantage** — the arm64 host in
+  [The machine these figures ran on](#the-machine-these-figures-ran-on), listing
+  AWS S3 cross-cloud. Round-trip latency was ~175 ms and flat; an in-region
+  client will need materially less concurrency for the same throughput, and an
+  x86 host may differ on the CPU-bound phases.
 - **Two public buckets**, differing in shape as well as size, so no size-scaling
   law is inferable from them.
 - **Serial arms.** Concurrency points were run one at a time, because concurrent
