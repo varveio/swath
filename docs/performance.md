@@ -302,10 +302,42 @@ throughput stalls, it is not the remote.
 ### Sizing CPU
 
 `efficiency.cpu_seconds ÷ (objects ÷ 1e6)` gives **CPU-seconds per million
-keys**, which in field observation is roughly invariant to concurrency until the
-ceiling outruns what the keyspace can feed — at which point it climbs, and that
-climb is itself the signal that you have gone too far. It is the honest sizing
-input: `cores ≈ target keys/s × cpu_s_per_Mkey × 1e-6`, plus headroom.
+keys**. In field observation it is close to invariant — across a controlled
+sweep of 1, 2 and 4 client cores at concurrency 8–64, throughput per BUSY core
+(`keys_per_sec ÷ cpu_efficiency`) stayed in a 125 000–136 000 keys/s band,
+mean ~131 000, and the same CPU-per-key figure appeared on unrelated
+cross-cloud runs against real S3. So a workable model is:
+
+```
+throughput ≈ min( cores × ~131 000 ,  concurrency × 1000 ÷ latency_seconds )
+```
+
+Both terms come from a run's own summary, and **whichever is smaller tells you
+which knob to turn**: if the CPU term binds, add cores; if the latency term
+binds, raise `--concurrency` (or reduce latency by moving in-region).
+
+Two caveats. The constant is workload- and CPU-specific — it was measured on
+arm64 for `objects`-mode Parquet output, and key length, filters, and output
+format all move it, so derive your own from one run rather than adopting this
+number. And it degrades once concurrency overshoots: the one arm in that sweep
+that regressed also showed CPU-per-key rising, which is the signal below.
+
+### Recognising "concurrency is set too high"
+
+The signature is the same whatever resource actually ran out — remote capacity,
+client CPU, or the engine's supply of splittable ranges:
+
+1. **In-flight utilisation collapses** (`avg_in_flight` falls away from the ceiling),
+2. **measured latency inflates** (now including queueing, not just service time),
+3. **throughput falls**, and
+4. **CPU-per-key rises** — you are paying more to do less.
+
+Observed twice from unrelated causes: against real S3 at `--concurrency 512`,
+where the keyspace could not supply splits fast enough (throughput −21 %,
+utilisation 46 % → 18 %); and against a fixture at `--concurrency 64` pinned to a
+single core, where the core was the scarce resource (throughput −7 %, utilisation
+73 % → 58 %). **You do not need to know which resource bound to know you have
+overshot** — back the ceiling off until utilisation recovers.
 
 ### Predicting split supply from the summary's shape block
 
