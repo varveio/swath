@@ -103,8 +103,83 @@ class SortTransformPageRunParallelMergePropTest {
             @ForAll KeyStyle style,
             @ForAll @IntRange(min = 2, max = 6) int ranges,
             @ForAll long seed) throws IOException {
-        assertParallelMatchesSerial(build(segmentCount, entryCount, style, seed), ranges,
-                Long.MAX_VALUE, 1L);
+        Scenario s = build(segmentCount, entryCount, style, seed);
+        Path root = Files.createTempDirectory("prange-pagerun-cascade-");
+        try {
+            SortTransformResult serial = run(s, 1, root, "serial", Long.MAX_VALUE, Long.MAX_VALUE,
+                    DuplicateHook.NO_OP, SortMetrics.NO_OP);
+            // Direct, not through SortTransform: the clamp reduces R to 1 on this budget and hands
+            // back to serial, so going through it would compare serial against serial and say nothing
+            // about the page-run cascade branches -- which write .pageseg intermediates and are the
+            // format-specific half of this path.
+            CascadeRun parallel = runParallelUnclamped(s, ranges, root, "parallel", 1L);
+            if (parallel == null) {
+                return;   // unsplittable keyspace
+            }
+
+            assertThat(parallel.cascadedPasses())
+                    .as("the ranges actually cascaded — otherwise this test proves nothing")
+                    .isGreaterThan(0);
+
+            List<ListEntry> input = s.allEntries();
+            List<ListEntry> parallelRows = readAll(parallel.parts());
+            assertThat(parallel.rows()).isEqualTo(input.size());
+            assertThat(parallelRows).as("exact input multiset")
+                    .containsExactlyInAnyOrderElementsOf(input);
+            assertThat(parallelRows).as("globally ascending").isSortedAccordingTo(cmp);
+            assertThat(parallelRows).as("position-for-position equal to serial")
+                    .containsExactlyElementsOf(readAll(serial.finalFiles()));
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
+    /**
+     * Drive {@link ParallelRangeMerge} directly, past {@link SortTransform}'s clamp, so the cascade
+     * branches are genuinely reached — see the twin in {@code SortTransformParallelMergePropTest}.
+     * Cascade intermediates on this path keep the page-run format, which is what makes it worth
+     * exercising separately from the columnar one.
+     */
+    private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
+                                            long mergeBudgetBytes) throws IOException {
+        Path output = Files.createDirectories(root.resolve(name));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        List<Path> segs = stage(staging, s.segments());
+        SortConfig config = SortConfigs.base()
+                .withFinalFileBytes(Long.MAX_VALUE)
+                .withMergeBudgetBytes(mergeBudgetBytes)
+                .withMergeParallelism(ranges);
+        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT);
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
+        if (boundaries == null) {
+            return null;
+        }
+        List<ParallelRangeMerge.RangeResult> results =
+                merge.run(segs, staging, boundaries, units -> { });
+
+        List<Path> parts = new ArrayList<>();
+        List<SortedFileWriter> writers = new ArrayList<>();
+        long cascaded = 0;
+        long rows = 0;
+        for (ParallelRangeMerge.RangeResult rr : results) {
+            parts.addAll(rr.tmpParts());
+            writers.addAll(rr.writers());
+            cascaded += rr.cascadedPasses();
+            rows += rr.rows();
+        }
+        for (int i = 0; i < writers.size(); i++) {
+            writers.get(i).setFileIndex(i + 1);
+        }
+        if (!writers.isEmpty()) {
+            writers.get(writers.size() - 1).markFinal();
+        }
+        RolledPartWriter.closeInOrder(writers);
+        return new CascadeRun(parts, rows, cascaded);
+    }
+
+    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
     }
 
     /**

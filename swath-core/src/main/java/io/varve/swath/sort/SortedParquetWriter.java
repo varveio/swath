@@ -77,7 +77,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private long rows;
     private boolean finalFile;
     private int fileIndex;
-    private volatile boolean closed;
+    private boolean closed;   // guarded by this (see close())
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
         this.path = path;
@@ -144,12 +144,18 @@ public final class SortedParquetWriter implements SortedFileWriter {
      * no-op is what lets both be unconditional instead of coordinated.
      */
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
+        // synchronized, not a volatile check-then-act: two owners CAN race here (the publish path
+        // stamps and closes, the failure path releases whatever is still open), and a check-then-act
+        // would let both enter the underlying Parquet close, which is not thread-safe.
         if (closed) {
             return;
         }
-        closed = true;
+        // Set only AFTER the footer write and fsync succeed. Marking first would make a FAILED close
+        // look completed, so a retry would silently skip a file whose footer was never written --
+        // publishing a part with no stamp at all.
         ListEntryParquetWriters.closeWithDurability(path, writer);
+        closed = true;
     }
 
     /**

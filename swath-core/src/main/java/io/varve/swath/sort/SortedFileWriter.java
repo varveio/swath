@@ -42,11 +42,16 @@ public interface SortedFileWriter extends AutoCloseable {
      *
      * <p>The parallel range merge is the caller that needs it: a range writes its parts before it can
      * know how many parts the ranges BELOW it produced, so global indices are assigned once every
-     * range has drained and the full ordered part list is known. Default no-op, for writers that do
-     * not stamp an index.
+     * range has drained and the full ordered part list is known.
+     *
+     * <p><b>Deliberately abstract, unlike {@link #markFinal()}.</b> A {@code default} no-op here is a
+     * trap: every DECORATOR of this interface then silently swallows the call, and the completeness
+     * stamp degrades to the range-local one with no compile error and no test failure — which is
+     * exactly what happened, in two separate decorators at once, while every direct-construction test
+     * passed. Forcing each implementation to say what it does is the only guard that scales to the
+     * next decorator someone adds.
      */
-    default void setFileIndex(int fileIndex) {
-    }
+    void setFileIndex(int fileIndex);
 
     /** Finalize (footer) and fsync. */
     @Override

@@ -316,6 +316,14 @@ public final class CaptureSorter {
                 }
 
                 @Override
+                public void setFileIndex(int fileIndex) {
+                    // Pure forward: this decorator only adds the duplicate-key check, never stamp
+                    // semantics. Swallowing it would silently downgrade fixture output's
+                    // completeness proof to the range-local one.
+                    target.setFileIndex(fileIndex);
+                }
+
+                @Override
                 public void close() throws IOException {
                     target.close();
                 }

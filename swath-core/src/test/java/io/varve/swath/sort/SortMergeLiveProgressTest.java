@@ -86,23 +86,30 @@ class SortMergeLiveProgressTest {
      * measure those rewrites against the staged rows and run past 100% before any output exists.
      */
     @Test
-    void aCascadingParallelRangeMergeReportsWorkAndNoPercentage(@TempDir Path root) throws IOException {
+    void aParallelRequestThatWouldCascadeFallsBackToSerialAndStillReportsHonestly(@TempDir Path root)
+            throws IOException {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
-        // Per-range fan-in 2 against five staged segments: every range cascades.
+        // Fan-in 2 against five staged segments: NO range count can merge these in one pass, so the
+        // clamp (ParallelRangeMerge#effectiveRanges) declines the parallel path outright rather than
+        // let every range cascade — a cascading range merge is slower than the serial one it would
+        // replace. What runs is therefore the SERIAL cascade, and the guard is that it still reports
+        // work without claiming a percentage it cannot honestly compute.
         SortTransformResult result = mergeParquetWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(2));
 
         assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
                 .isGreaterThan(0);
+        assertThat(result.finalFiles())
+                .as("one part — the serial path published this, not R ranges")
+                .hasSize(1);
         assertThat(samples).isNotEmpty();
-        assertThat(samples).allSatisfy(event -> {
-            assertThat(event.phase()).isEqualTo(Phase.WRITING);
-            assertThat(event.completion())
-                    .as("a cascading range merge has no honest denominator either")
-                    .isNull();
-        });
+        assertThat(samples)
+                .filteredOn(event -> event.phase() == Phase.MERGING)
+                .as("a cascading merge has no honest denominator, so it reports no percentage")
+                .isNotEmpty()
+                .allSatisfy(event -> assertThat(event.completion()).isNull());
         // Not vacuous: the merge really did move more rows than it was handed, which is exactly what
         // a staged-rows percentage would have reported as a finished, then over-finished, merge.
         assertThat(samples.get(samples.size() - 1).merging().sessionRowsMerged())

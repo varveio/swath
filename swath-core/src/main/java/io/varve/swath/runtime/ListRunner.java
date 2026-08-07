@@ -1070,6 +1070,14 @@ public final class ListRunner {
         }
 
         @Override
+        public void setFileIndex(int fileIndex) {
+            // Pure forward: this decorator adds liveness ticks, never stamp semantics. Not ticking
+            // here is deliberate — assignment is an in-memory field write, not the blocking syscall
+            // markFinal/close are marking.
+            delegate.setFileIndex(fileIndex);
+        }
+
+        @Override
         public void close() throws IOException {
             // A completed file is unambiguous forward progress, but delegate.close()
             // is a single footer-flush + fsync of a possibly multi-GB part — one blocking syscall that

@@ -82,6 +82,27 @@ import org.slf4j.LoggerFactory;
  * skip is this path's decode-parallelism win over reading every segment whole; it is byte-identical
  * to reading every group (RangeFilteredStream produces the same rows either way).
  *
+ * <p><b>Cascading ranges are unreachable in normal operation, and probably unnecessary at all.</b>
+ * A cascade is a multi-pass merge: when a range's fan-in is narrower than the staged-segment count it
+ * merges in several passes, rewriting every one of its rows each time. {@link
+ * SortTransform} clamps {@code R} so that cannot happen ({@link #effectiveRanges}) and falls back to
+ * the serial merge when not even one range fits, so no production run reaches the cascade branches
+ * below.
+ *
+ * <p>We suspect they are not needed even as a fallback. Staged segments are produced by
+ * work-stealing workers that own DISJOINT key ranges, so a well-formed run's segments barely overlap
+ * in keyspace and the merge is closer to an ordered concatenation than to an interleave — which is
+ * exactly what {@link PageAwareMerger}'s decode-free page-whole fast path already exploits
+ * ({@code page_whole_emitted}). A merge that never has to interleave does not need many streams open
+ * at once, and it is simultaneous open streams, not sortedness, that forces a cascade. Note the
+ * weaker claim: segments still overlap at range boundaries, and after a resume or a backfill they can
+ * overlap arbitrarily, so "barely" is not "never".
+ *
+ * <p>The branches are therefore kept as a correctness net against the clamp arithmetic being wrong
+ * rather than deleted, and are exercised directly by the tests (which construct this class without
+ * going through the clamp). Removing them is a reasonable follow-up once the disjointness argument is
+ * measured rather than reasoned.
+ *
  * <p><b>Completeness stamp.</b> The output carries the same self-describing proof the serial path
  * writes — {@code file_index} 1..N over the whole output with a single {@code file_final} on N — so a
  * reader can tell a complete file set from a truncated one without trusting a sidecar. It is assigned
@@ -640,15 +661,16 @@ final class ParallelRangeMerge {
      * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
      */
     int perRangeFanIn(int ranges, List<Path> stagingSegments) {
-        return perRangeFanIn(ranges, perStreamBytes(stagingSegments));
+        return perRangeFanIn(ranges, perStreamBytes(stagingSegments),
+                estimatedOpenParts(stagingSegments, ranges));
     }
 
     /**
-     * As {@link #perRangeFanIn(int, List)}, over a per-stream price the caller already computed. The
-     * seam exists for {@link #effectiveRanges}, which evaluates this at more than one candidate range
-     * count and must not re-read every segment's trailer once per candidate.
+     * As {@link #perRangeFanIn(int, List)}, over prices the caller already computed. The seam exists
+     * for {@link #effectiveRanges}, which evaluates this at more than one candidate range count and
+     * must not re-read every segment's trailer (or re-stat every segment) once per candidate.
      */
-    private int perRangeFanIn(int ranges, long perStreamBytes) {
+    private int perRangeFanIn(int ranges, long perStreamBytes, long openPartBudget) {
         long perRangeBudget = config.mergeBudgetBytes() / ranges;
         long budgetBound = perRangeBudget / perStreamBytes;
         // Descriptors are a WHOLE-PROCESS budget and the ranges hold their streams open at the same
@@ -661,9 +683,52 @@ final class ParallelRangeMerge {
         // still exceed the process share -- 2 x R descriptors. That regime is unreachable through the
         // supported entry point, because effectiveRanges() clamps R long before a range's share falls
         // that far; it stays possible only for a direct caller of this class.
-        long fdBound = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
-                MergeFdBudget.FD_HEADROOM) / (long) ranges;
+        long fdBound = streamFdBudget(openPartBudget) / (long) ranges;
         return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
+    }
+
+    /**
+     * Descriptors left for merge INPUT streams once the output parts have taken theirs.
+     *
+     * <p>The parts are the term the budget used to ignore. Every range's parts stay open until the
+     * whole merge finishes — that is what makes the global completeness stamp possible — so the
+     * process holds one descriptor per OUTPUT part on top of {@code R × fanIn} input streams, and the
+     * part count is set by {@code final-file-bytes} rather than by {@code R}. On a large listing with
+     * a small roll threshold the parts alone can exhaust the budget, which would surface as an EMFILE
+     * partway through a merge the clamp had already declared safe.
+     */
+    private static long streamFdBudget(long openPartBudget) {
+        long total = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
+                MergeFdBudget.FD_HEADROOM);
+        return Math.max(0L, total - openPartBudget);
+    }
+
+    /**
+     * How many final-output parts this merge will hold open at once — the sum over ranges, since none
+     * of them close until the stamp is assigned.
+     *
+     * <p>Estimated from STAGED bytes, which overstates the published size (staging is page-run/LZ4,
+     * the output is columnar Parquet) and so errs toward reserving too many descriptors rather than
+     * too few. An unreadable segment is treated the same way, as is a run with rolling disabled
+     * ({@code final-file-bytes == MAX_VALUE}), which produces exactly one part per range.
+     */
+    private long estimatedOpenParts(List<Path> stagingSegments, int ranges) {
+        if (config.finalFileBytes() == Long.MAX_VALUE) {
+            return ranges;   // no rolling: one part per range
+        }
+        long staged = 0;
+        for (Path segment : stagingSegments) {
+            try {
+                staged += Files.size(segment);
+            } catch (IOException e) {
+                log.debug("could not size a staging segment for the open-part fd estimate; "
+                        + "assuming the roll threshold is reached once per segment", e);
+                staged += config.finalFileBytes();
+            }
+        }
+        // Ceiling division, and never fewer than one part per range: a range always opens at least one.
+        long byRoll = (staged + config.finalFileBytes() - 1) / config.finalFileBytes();
+        return Math.max(ranges, byRoll);
     }
 
     /**
@@ -696,15 +761,26 @@ final class ParallelRangeMerge {
             return Math.max(1, requested);
         }
         long perStream = perStreamBytes(stagingSegments);
-        // Closed form: the largest R with (budget/R)/perStream >= segments, and with the process fd
-        // share per range still spanning the segments. Both are the inequalities perRangeFanIn tests.
+        // The open output parts are priced FIRST, because their count is driven by final-file-bytes
+        // and the staged size, not by R -- so lowering R does not make them fit. If they alone leave
+        // too few descriptors for even a 2-way merge, no range count is viable and the whole path
+        // declines; the serial merge holds one part open at a time and is unaffected.
+        long openParts = estimatedOpenParts(stagingSegments, requested);
+        if (streamFdBudget(openParts) < 2) {
+            return 1;
+        }
+        // Closed form: the largest R with (budget/R)/perStream >= segments, and with the per-range
+        // share of what the parts left over still spanning the segments. Both are the inequalities
+        // perRangeFanIn tests.
         long byBudget = config.mergeBudgetBytes() / perStream / segments;
-        long byFd = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
-                MergeFdBudget.FD_HEADROOM) / segments;
+        long byFd = streamFdBudget(openParts) / segments;
         int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
-        // Floor division in two places means the closed form can land one step high; step down until
-        // the predicate SortTransform reports on is actually true, so the clamp cannot be off by one.
-        while (candidate > 1 && perRangeFanIn(candidate, perStream) < segments) {
+        // Floor division in several places means the closed form can land one step high; step down
+        // until the predicate SortTransform reports on is actually true, so the clamp cannot be off by
+        // one. estimatedOpenParts is re-evaluated per candidate because its floor is R itself.
+        while (candidate > 1
+                && perRangeFanIn(candidate, perStream, estimatedOpenParts(stagingSegments, candidate))
+                        < segments) {
             candidate--;
         }
         return candidate;

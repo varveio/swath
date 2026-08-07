@@ -372,6 +372,11 @@ final class SortMergeReentryContractTest {
         }
 
         @Override
+        public void setFileIndex(int fileIndex) {
+            delegate.setFileIndex(fileIndex);   // forward: this fake only injects a mid-merge crash
+        }
+
+        @Override
         public void write(ListEntry e) throws IOException {
             if (armed.get() && written >= crashAfterRows && armed.compareAndSet(true, false)) {
                 throw new IOException("injected SORT-RESUME-2 mid-merge crash after " + written + " rows");

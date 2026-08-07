@@ -175,17 +175,25 @@ class SortTransformParallelMergePropTest {
         try {
             SortTransformResult serial =
                     run(s, 1, Long.MAX_VALUE, root, "serial", SortedFileWriterFactory.DEFAULT);
-            SortTransformResult parallel = run(s, ranges, Long.MAX_VALUE, root, "parallel",
-                    SortedFileWriterFactory.DEFAULT, 1L);
+            // Direct, not through SortTransform: the clamp would reduce R to 1 on this budget and hand
+            // back to serial, so routing through it would compare serial against serial and prove
+            // nothing about the cascade branches this test is named for.
+            CascadeRun parallel = runParallelUnclamped(s, ranges, root, "parallel", 1L);
+            if (parallel == null) {
+                return;   // unsplittable keyspace; the degenerate case has its own example
+            }
+
+            assertThat(parallel.cascadedPasses())
+                    .as("the ranges actually cascaded — otherwise this test proves nothing")
+                    .isGreaterThan(0);
 
             List<ListEntry> input = s.allEntries();
-            List<ListEntry> parallelRows = readAll(parallel.finalFiles());
-            assertThat(parallel.totalRows()).as("cascading parallel rows out == rows in")
+            List<ListEntry> parallelRows = readAll(parallel.parts());
+            assertThat(parallel.rows()).as("cascading parallel rows out == rows in")
                     .isEqualTo(input.size());
             assertThat(parallelRows).as("cascading parallel is the exact input multiset")
                     .containsExactlyInAnyOrderElementsOf(input);
             assertByteExactToSerial(readAll(serial.finalFiles()), parallelRows);
-            assertSequentialPartNames(parallel.finalFiles());
         } finally {
             deleteRecursively(root);
         }
@@ -528,6 +536,61 @@ class SortTransformParallelMergePropTest {
         return SortConfigs.base().withFinalFileBytes(finalFileBytes).withMergeParallelism(mergeParallelism);
     }
 
+    /**
+     * Drive {@link ParallelRangeMerge} DIRECTLY, past {@link SortTransform}'s clamp, and return the
+     * range parts in key order.
+     *
+     * <p>Necessary because the clamp makes cascading ranges unreachable through the normal entry
+     * point: it reduces {@code R} until no range would cascade and falls back to serial when none
+     * fits. Routing a "cascading ranges" test through {@code SortTransform} therefore silently
+     * measures the SERIAL path against itself — which is what these tests were doing after the clamp
+     * landed, passing while exercising none of the code they name.
+     *
+     * <p>Mirrors the publish path's stamp-then-close so the parts are readable: the writers come back
+     * open by design (see {@link ParallelRangeMerge}'s javadoc).
+     */
+    private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
+                                            long mergeBudgetBytes) throws IOException {
+        Path output = Files.createDirectories(root.resolve(name));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        List<Path> segs = new ArrayList<>();
+        for (int i = 0; i < s.segments().size(); i++) {
+            segs.add(writeSegment(staging, "seg-" + i + ".parquet", s.segments().get(i)));
+        }
+        SortConfig config = config(ranges, Long.MAX_VALUE).withMergeBudgetBytes(mergeBudgetBytes);
+        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT);
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
+        if (boundaries == null) {
+            return null;   // unsplittable keyspace — nothing to say about cascading ranges
+        }
+        List<ParallelRangeMerge.RangeResult> results =
+                merge.run(segs, staging, boundaries, units -> { });
+
+        List<Path> parts = new ArrayList<>();
+        List<SortedFileWriter> writers = new ArrayList<>();
+        long cascaded = 0;
+        long rows = 0;
+        for (ParallelRangeMerge.RangeResult rr : results) {
+            parts.addAll(rr.tmpParts());
+            writers.addAll(rr.writers());
+            cascaded += rr.cascadedPasses();
+            rows += rr.rows();
+        }
+        for (int i = 0; i < writers.size(); i++) {
+            writers.get(i).setFileIndex(i + 1);
+        }
+        if (!writers.isEmpty()) {
+            writers.get(writers.size() - 1).markFinal();
+        }
+        RolledPartWriter.closeInOrder(writers);
+        return new CascadeRun(parts, rows, cascaded);
+    }
+
+    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
+    }
+
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
         Path path = dir.resolve(name);
         SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
@@ -621,6 +684,11 @@ class SortTransformParallelMergePropTest {
                 @Override
                 public long rows() {
                     return inner.rows();
+                }
+
+                @Override
+                public void setFileIndex(int fileIndex) {
+                    inner.setFileIndex(fileIndex);   // forward: this fake only changes roll timing
                 }
 
                 @Override
