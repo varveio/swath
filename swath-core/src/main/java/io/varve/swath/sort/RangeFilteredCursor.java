@@ -44,7 +44,20 @@ final class RangeFilteredCursor implements SortedCursor {
         this.inner = inner;
         this.lo = lo;
         this.hi = hi;
-        this.head = loadFirst();
+        try {
+            this.head = loadFirst();
+        } catch (RuntimeException e) {
+            // loadFirst() pulls rows, so a corrupt page surfaces here as an UncheckedIOException —
+            // before the caller can bind this cursor in its try-with-resources. Release the merge
+            // streams we were handed rather than stranding them until GC (this transform is
+            // library-only and must not leak descriptors into its embedder).
+            try {
+                inner.close();
+            } catch (RuntimeException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     private ListEntry loadFirst() {

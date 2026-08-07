@@ -59,17 +59,22 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
     private final byte[] lo;   // inclusive, or null for -inf
     private final byte[] hi;   // exclusive, or null for +inf
 
-    /** Pages whose rows this range may decode, and pages stepped over — the skip-fraction signal. */
+    /** Pages in the whole segment (trailer {@code totalRecords}) — the denominator for the signal. */
+    private final long totalPages;
+
+    /** Pages whose rows this range may decode, and pages read-then-stepped-over. */
     private long pagesKept;
     private long pagesSkipped;
 
     /** True once the scan has passed {@code hi}; the underlying stream is left un-drained. */
     private boolean pastRange;
 
-    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi) throws IOException {
+    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi, long totalPages)
+            throws IOException {
         this.inner = inner;
         this.lo = lo;
         this.hi = hi;
+        this.totalPages = totalPages;
         try {
             skipToOverlapping();
         } catch (IOException | RuntimeException e) {
@@ -155,7 +160,19 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
         return pagesKept;
     }
 
+    /** Pages this range READ and stepped over — the below-{@code lo} prefix. */
     long pagesSkipped() {
         return pagesSkipped;
+    }
+
+    /**
+     * Pages this range never read at all, because the scan stopped at {@code hi} (see
+     * {@link #beyondRange()}). This is the LARGER saving and, for range 0 ({@code lo == null}, which
+     * makes {@link #overlaps()} always true), the ONLY one — so a signal that counted just
+     * {@link #pagesSkipped()} would report range 0 as having skipped nothing while it in fact read
+     * roughly {@code 1/R} of each segment, and post-analysis could not tell whether the skip helped.
+     */
+    long pagesUnread() {
+        return Math.max(0, totalPages - pagesKept - pagesSkipped);
     }
 }

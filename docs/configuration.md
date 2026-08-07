@@ -178,21 +178,29 @@ while reading one: summary `sort.segment_bytes` is the total staging bytes
 *written* across all segments, not the `swath.sort.segment-bytes` roll
 threshold. All sizes are bytes.
 
-| Property | Default |
-| --- | --- |
-| `swath.sort.segment-bytes` | heap-adaptive: `max(64 MiB, heap-fraction × -Xmx)` |
-| `swath.sort.segment-entries` | unbounded (the bytes gate governs) |
-| `swath.sort.heap-fraction` | `0.08` |
-| `swath.sort.buffers` | `2` (must be `>= 2`) |
-| `swath.sort.fan-in` | `10000` (further clamped at runtime by the budget and `ulimit -n`) |
-| `swath.sort.segment-codec` | `LZ4` (`NONE`, `LZ4`, or `ZSTD1`) |
-| `swath.sort.final-file-bytes` | `1 GiB` (the roll threshold for multi-file sorted output) |
-| `swath.sort.final-row-group-bytes` | `8 MiB` (the published file's seek granularity) |
-| `swath.sort.segment-row-group-bytes` | `1 MiB` (columnar-Parquet staging only) |
-| `swath.sort.merge-budget-bytes` | heap-adaptive, same shape as `segment-bytes` |
-| `swath.sort.merge-per-stream-bytes` | `64 KiB` (the divisor that bounds the effective fan-in) |
-| `swath.sort.merge-parallelism` | `1` (serial merge; `>1` is off-by-default and unreleased -- see [`usage.md`](usage.md#parallel-range-merge-off-by-default)) |
-| `swath.git.sha` | unset (falls back to the jar's implementation version) — the commit stamped into the summary's `shape.fingerprint` |
+| Property | Default | When you'd touch it |
+| --- | --- | --- |
+| `swath.sort.heap-fraction` | `0.08` | **Sizing.** The single lever that moves both staging-segment size and the merge budget together; prefer it over setting either directly |
+| `swath.sort.final-file-bytes` | `1 GiB` (roll threshold for multi-file sorted output) | **Output shape.** Smaller ⇒ more, smaller parts; `Long.MAX_VALUE` ⇒ one file |
+| `swath.sort.merge-parallelism` | `1` (serial merge) | **Merge speed.** `>1` is off-by-default and unreleased — see [`usage.md`](usage.md#parallel-range-merge-off-by-default) |
+| `swath.sort.segment-codec` | `LZ4` (`NONE`, `LZ4`, `ZSTD1`) | Staging disk pressure vs CPU |
+| `swath.sort.segment-bytes` | heap-adaptive: `max(64 MiB, heap-fraction × -Xmx)` | Rarely — overrides the adaptive sizing above |
+| `swath.sort.merge-budget-bytes` | heap-adaptive, same shape as `segment-bytes` | Rarely — same |
+| `swath.sort.fan-in` | `10000` (runtime-clamped by the budget and `ulimit -n`) | Rarely — the runtime clamps usually bind first |
+| `swath.sort.final-row-group-bytes` | `8 MiB` | Rarely — the published file's seek granularity |
+| `swath.sort.segment-entries` | unbounded (the bytes gate governs) | Rarely — a backstop entry cap |
+| `swath.sort.buffers` | `2` (must be `>= 2`) | Internal — the in-flight sealed-buffer corridor |
+| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Internal — the divisor bounding the effective fan-in |
+| `swath.sort.segment-row-group-bytes` | `1 MiB` | Internal — columnar-Parquet staging only |
+| `swath.git.sha` | unset (falls back to the jar's implementation version) | The commit stamped into the summary's `shape.fingerprint` |
+
+**Ergonomics caveat, stated plainly:** everything above is reachable *only* as a JVM system
+property. There is no CLI flag and no `--tune` key for any of it, so tuning a containerized run
+means threading `JAVA_TOOL_OPTIONS` through your orchestration — and if you set that variable in a
+container, you must repeat the image's own baked JVM flags, because an environment variable
+*replaces* the Dockerfile `ENV` rather than appending to it. A knob reachable only this way tends
+not to get exercised; promoting the operator-facing ones (the first three rows) to typed `--tune`
+keys is a known follow-up, not a settled design.
 
 See [`usage.md`](usage.md#sorted-output---sort) for which knob actually binds and
 how to size the staging volume.

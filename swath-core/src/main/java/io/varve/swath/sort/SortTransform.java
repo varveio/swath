@@ -264,7 +264,8 @@ public final class SortTransform {
         // see it separately from the merge it precedes (it is the first thing to optimise -- by
         // stride-sampling, or by reusing the listing phase's own keyspace partition -- if it is large).
         long boundariesStartNanos = System.nanoTime();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(stagingSegments, config.mergeParallelism());
+        List<byte[]> boundaries =
+                ParallelRangeMerge.boundaries(stagingSegments, config.mergeParallelism(), metrics);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
                 stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
                 (System.nanoTime() - boundariesStartNanos) / 1_000_000L);

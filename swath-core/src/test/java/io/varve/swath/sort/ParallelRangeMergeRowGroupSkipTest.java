@@ -255,7 +255,7 @@ class ParallelRangeMergeRowGroupSkipTest {
         // Pin the scenario: the sampled boundary is exactly the overflowing key, and the written
         // segment really splits "d" across >= 2 physical row groups (else the test is vacuous).
         Path probe = writeSegment(cmp, Files.createDirectories(root.resolve("probe")), seg, 4096L);
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(List.of(probe), 2);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(List.of(probe), 2, SortMetrics.NO_OP);
         assertThat(boundaries).hasSize(1);
         assertThat(boundaries.get(0)).isEqualTo(dKey.getBytes(StandardCharsets.UTF_8));
         long dBlocks = SortedFileIndex.rowGroupSpans(probe).stream()
