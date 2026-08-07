@@ -43,9 +43,11 @@ final class MergeFanInPlanner {
     /**
      * The runtime-clamped merge fan-in for {@code segments} — {@link #clampedMergeFanIn} plus the
      * cascade-predicted warning ({@link #warnIfCascadePredicted}) that its result can trigger. The one
-     * entry point the serial merge path needs; the off-by-default parallel range-merge path calls
-     * {@link #warnIfCascadePredicted} directly instead (it merges against the STATIC {@code
-     * effectiveFanIn}, never this runtime clamp).
+     * entry point the serial merge path needs. The off-by-default parallel range-merge path does not
+     * call this: it computes its own PER-RANGE width ({@link ParallelRangeMerge#perRangeFanIn}), which
+     * divides both the memory budget and the process fd budget by the range count and prices a stream
+     * by staging format — reusing {@link #maxPageRunRecordLen} for the page-run case. It calls
+     * {@link #warnIfCascadePredicted} directly for the warning alone.
      */
     int plan(List<Path> segments) {
         int clamped = clampedMergeFanIn(segments);

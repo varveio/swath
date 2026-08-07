@@ -43,16 +43,16 @@ import java.io.IOException;
  * Both are follow-ups, deliberately not taken here: this class keeps the shipped integrity
  * guarantees exactly as they are, and the bytes-read measurement decides whether they are needed.
  *
- * <p><b>Completeness cross-check — a guarantee that DEMOTES here, deliberately.</b>
- * {@link PageFrontierReader#advance()} runs {@code io.checkComplete} only when it walks off the end
- * of a segment. A range that abandons its tail therefore never runs it. The guarantee is preserved
- * but changes shape: it goes from "every reader that consumes a segment cross-checks it" to "exactly
- * one range does, once per merge" — the LAST range ({@code hi == null}) can never set
- * {@code pastRange} ({@link #beyondRange()} requires a non-null {@code hi}), so it walks every page
- * of every segment, accumulating every declared count. That is adequate because nothing is published
- * until every range succeeds ({@link ParallelRangeMerge#run}), so a segment that fails the check
- * fails the whole merge before any output ships — but it is now a STRUCTURAL property of how ranges
- * are built, so it is pinned by adversarial tests rather than left implicit.
+ * <p><b>Completeness cross-check.</b> {@link PageFrontierReader#advance()} runs
+ * {@code io.checkComplete} only when it walks off the end of a segment, and a range that abandons
+ * its tail never does. The check is nevertheless still run once per segment per merge, by
+ * {@link ParallelRangeMerge#boundaries}: boundary sampling walks EVERY page of EVERY segment to EOF
+ * before any range starts (it advances through all pages, sampling a stride of their keys), so each
+ * segment is cross-checked there, and a corrupt trailer fails the merge before a range ever opens.
+ * Two further ranges' worth of redundancy exist on top of that — the LAST range ({@code hi == null})
+ * cannot set {@code pastRange} ({@link #beyondRange()} requires a non-null {@code hi}) and so also
+ * drains every segment — but the sampling pass is what makes the guarantee unconditional, and it is
+ * the reason no range-construction argument has to be load-bearing for it.
  */
 final class RangeScopedPageFrontier implements PageFrontierStream {
 
@@ -96,6 +96,10 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
         while (inner.hasPage()) {
             if (beyondRange()) {
                 // mins are non-decreasing: no later page can overlap either. Stop reading the segment.
+                // This page WAS read (the frontier loaded and CRC-verified it before we could compare
+                // its min), so it counts as skipped, not unread -- otherwise a segment lying wholly
+                // above hi would report a page as never-read despite having been read in full.
+                pagesSkipped++;
                 pastRange = true;
                 return;
             }

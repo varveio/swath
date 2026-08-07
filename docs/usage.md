@@ -294,8 +294,8 @@ Semantics:
   off-thread bound, for correlating against the timing of the retry storm.
 - **Parallel range merge (off by default).**
   <a id="parallel-range-merge-off-by-default"></a>
-  `-Dswath.sort.merge-parallelism=R` (R > 1) splits the merge phase across R threads instead of
-  one. It is **off by default and not a released contract** — the decision to ship multi-file
+  `-Dswath.sort.merge-parallelism=R` (R > 1) splits the merge phase into R independent key ranges
+  instead of one, merged concurrently on up to `min(R, availableProcessors)` threads. It is **off by default and not a released contract** — the decision to ship multi-file
   sorted output produced by a concurrent merge is reserved, and one gap is still open (below).
 
   *How it stays a global sort.* The keyspace is partitioned into R **contiguous, disjoint key

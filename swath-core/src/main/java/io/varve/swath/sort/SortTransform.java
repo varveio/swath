@@ -270,6 +270,11 @@ public final class SortTransform {
                 stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
                 (System.nanoTime() - boundariesStartNanos) / 1_000_000L);
         if (boundaries == null) {
+            // Instrumentation (AGENTS.md "instrument every new algo path"): without this, a run that
+            // ASKED for a parallel merge and silently got the serial one is indistinguishable in the
+            // metrics from a run that never asked. merge_range_parallel firing means engaged;
+            // this firing means requested-but-unsplittable; neither firing means never requested.
+            metrics.recordStealReason("SORT", "merge_range_unsplittable");
             return null;   // keyspace unsplittable — use the serial path
         }
         fanInPlanner.warnIfCascadePredicted(stagingSegments.size(), config.effectiveFanIn());

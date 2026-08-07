@@ -3,7 +3,9 @@
 This page defines the measurements required before swath makes quantitative
 performance or scale claims: scaling, memory, resume cost, throughput, and
 known slow paths. There is no published release-candidate measurement bundle
-yet, so the sections below are test plans and design targets, not results.
+yet. Where a section carries numbers they are **single-machine field
+observations**, labelled as such and stamped; where it carries none it says so.
+Neither is an RC measurement.
 
 For a head-to-head against other S3 listing tools, see the
 [S3-listing comparison study](https://github.com/varveio/s3-listing-study),
@@ -68,10 +70,11 @@ shapes (deep prefix trees, flat key spaces, skewed distributions).
 **LIST-call growth is essentially optimal and shape-insensitive.** Across every
 run below, `efficiency.api_calls_per_1k_objects` sat between **1.016 and 1.089**
 against a theoretical floor of 1.0 (1 000 keys per LIST response), with
-`page_fill_ratio` at 1.0000 and `overfetch_ratio` 1.008–1.050. Call count is
-therefore ~linear in object count with a small constant, and the interesting
-variable is not calls but **wall clock**, which is governed by how many requests
-the engine can keep in flight — a keyspace-shape property, not a size property.
+`page_fill_ratio` at 1.0000 and `overfetch_ratio` 1.008–1.050. Call count is therefore ~linear in object count with a small constant across the
+buckets measured, and the interesting variable is not calls but **wall clock**,
+which is governed by how many requests the engine can keep in flight. Two
+buckets is a thin basis for calling this shape-INSENSITIVE, so read it as "no
+shape effect was visible here", not as a general property.
 
 **What is NOT established here:** a like-for-like sweep of object count at fixed
 shape. The two buckets measured differ in shape as well as size, so no
@@ -97,7 +100,10 @@ million- or billion-object scale, and there is not yet a documented, enforced
 maximum part/segment-count envelope. Publish a stamped larger-scale measurement
 and an operating envelope before making a stronger bounded-memory claim.
 
-**Field observation: peak heap tracks `--concurrency`, not object count.**
+**Field observation: peak heap tracked `--concurrency` far more strongly than
+object count.** (Two buckets, no fixed-shape object-count sweep — the very
+measurement this page still lists as outstanding — so this is directional
+evidence for the design intent, not a demonstration of it.)
 Unsorted Parquet output, default settings, one bucket of 96 022 559 objects
 (960× the PERF-2 gate's scale):
 
@@ -271,8 +277,15 @@ is a release-candidate measurement.
 actually sustains is `engine.avg_in_flight`, and the ratio that matters is:
 
 ```
-utilisation = engine.avg_in_flight / engine.peak_in_flight
+utilisation = engine.avg_in_flight / <the --concurrency you set>
 ```
+
+Use the **configured** ceiling, not `engine.peak_in_flight`. A starved run whose
+in-flight briefly touched 10 under `--concurrency 512` would look 90 % utilised
+against its own peak while being 2 % utilised against what you asked for — and
+the second number is the one that tells you whether the setting is doing
+anything. (The tables below use configured concurrency: 29.9/32 = 93 %,
+93.2/512 = 18 %.)
 
 By Little's law, `throughput ≈ in-flight ÷ per-request latency`. So if
 utilisation is high, the ceiling is binding and raising it may help. If it is
@@ -294,12 +307,18 @@ Derive per-request latency across a concurrency sweep:
 latency ≈ engine.avg_in_flight ÷ (engine.pages ÷ wall_seconds)
 ```
 
-- **Latency rises with concurrency** ⇒ the remote (or the AIMD controller
-  reacting to it) is the limit. Back off.
+- **Latency rises with concurrency** ⇒ *something downstream of the client is
+  saturating*. Most often that is the remote or the AIMD controller reacting to
+  it — but this figure is derived from in-flight and request rate, so client CPU
+  exhaustion and queueing inflate it too. Check `cpu_efficiency` against your
+  core count before concluding it is the remote.
 - **Latency is flat while in-flight stops growing** ⇒ the limit is on your side:
   the work-stealing engine is not producing splittable ranges fast enough. Look
   at `engine.splits` and `engine.steals` — if `splits` plateaus and `steals`
   stays flat as you raise concurrency, extra worker slots have nothing to take.
+
+Flat throttle/recovery counters are consistent with an unstressed remote but do
+not prove one; they are evidence, not proof.
 
 Corroborating signals for a genuinely throttling remote:
 `recovered_errors.latency_freezes` climbing, `recovered_errors.min_effective_t`
@@ -310,7 +329,10 @@ throughput stalls, it is not the remote.
 
 `efficiency.cpu_seconds ÷ (objects ÷ 1e6)` gives **CPU-seconds per million
 keys**. In field observation it is nearly invariant. Across a controlled 16-arm sweep of
-1, 2, 4 and 8 client cores at concurrency 8–64, throughput per BUSY core
+1, 2, 4 and 8 client cores at concurrency 8–64 — run against a **local replay
+fixture** (a 9.9 M-key capture of `noaa-gefs-retrospective` served back over
+HTTP with 100 ms of injected per-request latency, client and server pinned to
+disjoint cores), not against S3 — throughput per BUSY core
 (`keys_per_sec ÷ cpu_efficiency`) stayed within **118 000–136 000 keys/s, mean
 ~129 000 (±7 %)**, and the same CPU-per-key figure appeared on unrelated
 cross-cloud runs against real S3. So a workable model is:

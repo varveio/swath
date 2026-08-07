@@ -196,9 +196,11 @@ threshold. All sizes are bytes.
 
 **Ergonomics caveat, stated plainly:** everything above is reachable *only* as a JVM system
 property. There is no CLI flag and no `--tune` key for any of it, so tuning a containerized run
-means threading `JAVA_TOOL_OPTIONS` through your orchestration — and if you set that variable in a
-container, you must repeat the image's own baked JVM flags, because an environment variable
-*replaces* the Dockerfile `ENV` rather than appending to it. A knob reachable only this way tends
+means threading `JAVA_TOOL_OPTIONS` through your orchestration. (The published image bakes no
+default JVM args, so there is nothing of its own to preserve when you set that variable — see the
+[`Dockerfile`](../Dockerfile). An image that DID bake flags would need them repeated, because an
+environment variable replaces the Dockerfile `ENV` rather than appending to it.) A knob reachable
+only this way tends
 not to get exercised; promoting the operator-facing ones (the first three rows) to typed `--tune`
 keys is a known follow-up, not a settled design.
 

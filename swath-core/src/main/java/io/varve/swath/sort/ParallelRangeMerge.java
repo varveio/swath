@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,6 +98,9 @@ final class ParallelRangeMerge {
      * with the listing's row count, which is exactly what {@code I11} forbids elsewhere.
      */
     private static final int MAX_SAMPLES_PER_SEGMENT = 4_096;
+
+    /** How long the failure path waits for range threads to stop before it sweeps their files. */
+    private static final long RANGE_QUIESCE_SECONDS = 30;
 
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
@@ -181,11 +185,12 @@ final class ParallelRangeMerge {
             // any range starts. Boundary choice affects BALANCE ONLY (see the class javadoc), so
             // thinning the sample cannot cost correctness; MAX_SAMPLES_PER_SEGMENT keeps far more
             // candidates than the R-1 splits ever consume.
-            long stride = 1;
             long totalPages = PageRunSegmentReader.readTrailer(segment).totalRecords();
-            if (totalPages > MAX_SAMPLES_PER_SEGMENT) {
-                stride = totalPages / MAX_SAMPLES_PER_SEGMENT;
-            }
+            // Ceiling division: floor would leave stride == 1 up to 2 x the cap (retaining ~8k keys
+            // for a 4097-page segment), so the "cap" would not be one.
+            long stride = totalPages <= MAX_SAMPLES_PER_SEGMENT
+                    ? 1
+                    : (totalPages + MAX_SAMPLES_PER_SEGMENT - 1) / MAX_SAMPLES_PER_SEGMENT;
             try (PageFrontierReader frontier = new PageFrontierReader(segment, metrics)) {
                 for (long page = 0; frontier.hasPage(); page++) {
                     if (page % stride == 0) {
@@ -277,10 +282,12 @@ final class ParallelRangeMerge {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             futures.forEach(f -> f.cancel(true));
+            quiesce(pool);
             sweepOwnFiles(stagingDir);
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
             futures.forEach(f -> f.cancel(true));
+            quiesce(pool);
             sweepOwnFiles(stagingDir);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
@@ -572,6 +579,12 @@ final class ParallelRangeMerge {
         // time, so the fd bound divides across them too. The serial path clamps once against the full
         // budget (MergeFanInPlanner); a parallel merge that reused that bound unchanged would open R
         // times as many descriptors as the process is allowed.
+        //
+        // The max(2, ...) floor below is a floor, not a guarantee: a merge needs 2 streams to merge
+        // anything, so at an extreme R (where a range's share falls below 2) the ranges together can
+        // still exceed the process share -- 2 x R descriptors. R itself is not clamped, here or
+        // anywhere; it is an expert knob whose sane range is bounded by the budget arithmetic in this
+        // method's javadoc, and setting it far past that degrades long before it exhausts descriptors.
         long fdBound = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
                 MergeFdBudget.FD_HEADROOM) / (long) ranges;
         return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
@@ -596,8 +609,19 @@ final class ParallelRangeMerge {
      * to the Parquet estimate if a trailer cannot be read (correct, merely conservative).
      */
     private long perStreamBytes(List<Path> stagingSegments) {
-        long maxRecordLen = MergeFanInPlanner.maxPageRunRecordLen(stagingSegments);
-        return maxRecordLen > 0 ? maxRecordLen : config.segmentRowGroupBytes();
+        long pageRun = MergeFanInPlanner.maxPageRunRecordLen(stagingSegments);
+        if (pageRun > 0) {
+            return pageRun;   // all page-run: the exact per-stream heap from the trailers
+        }
+        // Not all page-run. maxPageRunRecordLen reports -1 for a MIXED set as well as for an
+        // all-Parquet one, and falling straight back to segmentRowGroupBytes would then price a
+        // page-run stream at a Parquet row-group size -- an independently configurable knob that a
+        // page record can exceed, which would let a mixed merge open more streams than the budget
+        // allows. Take the larger of the two prices so the bound holds for whichever input is worse.
+        long columnar = config.segmentRowGroupBytes();
+        long pageRunSubset = MergeFanInPlanner.maxPageRunRecordLen(
+                stagingSegments.stream().filter(SortTransform::isPageRunSegment).toList());
+        return Math.max(columnar, Math.max(pageRunSubset, 0));
     }
 
     /** {@code lo <= key < hi}, either bound {@code null} meaning unbounded — the range's ownership test. */
@@ -610,6 +634,27 @@ final class ParallelRangeMerge {
     private static SortedCursor rangeScoped(SortedCursor merged, boolean pageRunFormat, byte[] lo,
                                             byte[] hi) {
         return pageRunFormat ? new RangeFilteredCursor(merged, lo, hi) : merged;
+    }
+
+    /**
+     * Stop the pool and wait, briefly, for the range threads to actually finish before anything
+     * sweeps their files. Cancelling a future only INTERRUPTS its thread; the merge and drain loops
+     * do not poll for interruption, so a sibling range can still be mid-write when the failure path
+     * runs. Sweeping underneath it would delete a file that is then re-created, leaving debris that
+     * an immediate retry -- which reuses the same {@code prange-}/{@code merge-r} names -- could
+     * collide with. Bounded because a hung range must not turn a failure into a hang: if the wait
+     * expires we sweep anyway, which is no worse than the previous unconditional behaviour.
+     */
+    private static void quiesce(ExecutorService pool) {
+        pool.shutdownNow();
+        try {
+            if (!pool.awaitTermination(RANGE_QUIESCE_SECONDS, TimeUnit.SECONDS)) {
+                log.debug("range threads did not stop within {}s of a failed parallel merge; "
+                        + "sweeping anyway", RANGE_QUIESCE_SECONDS);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** Best-effort sweep of THIS run's own tmp parts and cascade intermediates on the failure path. */
