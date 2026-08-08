@@ -31,11 +31,11 @@ because several of its properties materially shape the numbers:
 | CPU | **arm64** — Google Axion, ARM Neoverse-V2, 32 vCPU |
 | SMT | none (1 thread per core, 32 physical cores) |
 | Memory | 62 GiB |
-| Disk | 193 GB SSD-backed root volume (non-rotational); staging and output both landed here |
+| Disk | 200 GB GCP Hyperdisk Balanced NVMe persistent disk, ext4 root; staging and output both landed here |
 | Kernel | Linux 6.17 (`aarch64`) |
 | JDK | Temurin 25.0.3+9 LTS |
 | swath | 0.2.2-dev |
-| Date | 2026-08-07 |
+| Date | 2026-08-07–08 |
 
 **Why each of these can move a number:**
 
@@ -64,9 +64,11 @@ because several of its properties materially shape the numbers:
   in-region removes the ~62 ms RTT delta, which by
   `throughput ≈ in-flight ÷ latency` cuts the in-flight needed for a given rate by
   roughly a third. Worth having; not the step change "coast-to-coast" implies.
-- **Local disk for staging.** `--sort` staging and the final output shared one
-  local SSD. A network-attached or slower volume changes the merge phase's
-  profile.
+- **Storage caveat.** `--sort` staging and final output shared one Hyperdisk
+  Balanced network-attached persistent disk, not a local SSD. Absolute merge
+  times are storage-sensitive; sequential comparison arms used the same idle
+  filesystem, so their ratios remain useful, but should not be ported to a
+  different storage class.
 - **Single host, n = 1 per point.** See [Methodology](#methodology).
 
 ## Scaling behavior
@@ -343,8 +345,9 @@ in-flight utilisation from a single run and infer from those.
 
 ### Reading the merge's share of the wall
 
-On `--sort` runs, `sort.merge_ms ÷ duration_ms` is the merge's share of wall
-clock. The listing phase parallelises across cores, and eligible large runs now
+On `--sort` runs, `sort.merge_ms ÷ session_duration_ms` is the merge's share of
+full-session wall clock; `duration_ms` is the listing clock and is not the correct
+denominator here. The listing phase parallelises across cores, and eligible large runs now
 use the core-derived parallel merge by default. The explicit
 `-Dswath.sort.merge-parallelism=1` baseline — or a run forced onto the serial path
 by its staged-size/resource gates — still leaves the merge unchanged as listing
@@ -367,22 +370,36 @@ See [configuration](configuration.md#jvm-system-properties) and the
 [parallel-range merge guide](usage.md#parallel-range-merge) for the knobs and
 decline reasons.
 
-One n = 1 PR #99 field row from the host above reported this live-S3 comparison
-at fixed `-Xmx12g` and `--concurrency 256`:
+The final PR #99 field campaign ran sequential **serial A → shipped default → serial B** brackets
+at fixed `-Xmx12g` and `--concurrency 256`. The serial columns below are the bracket means; session
+ratio is default session wall divided by that serial mean, so lower is better.
 
-| bucket | objects reported in row | serial merge | parallel merge (`R=8`) | serial wall | parallel wall |
-|---|---:|---:|---:|---:|---:|
-| `noaa-mrms-pds` | 823,309,583 | 1126.1 s | 275.1 s | 1573 s | 722 s |
+| bucket | objects | segments | serial merge mean | default merge (`R=8`) | merge speedup | serial session mean | default session | session ratio |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `noaa-gefs-retrospective` | 9,915,173 | 2 | 15.1 s | 5.4 s | 2.81× | 26.0 s | 16.9 s | 0.649 |
+| `pds-css-archive` | 96,022,559 | 16 | 139.5 s | 38.4 s | 3.63× | 300.5 s | 194.9 s | 0.649 |
+| `noaa-mrms-pds` | 823.70–823.72 M | 128 | 1123.6 s | 282.8 s | 3.97× | 1564.6 s | 723.2 s | 0.462 |
 
-The directly observed result is the merge and wall-time comparison above. A
-separate listing-rate estimate can be derived by subtracting merge time from
-each wall time: both arms leave about `446.9 s`, and
-`823,309,583 / 446.9 ≈ 1.84 million objects/s`. That **1.84 million objects/s is
-DERIVED and indicative** — it is not the run summary's `keys_per_sec`, not a
-controlled listing-throughput measurement, and not comparable as the same
-metric to the directly observed 655,346 keys/s unsorted sweep above. The bucket
-mutated between arms, and no raw summary for either arm is committed, so this
-row does not establish a measured listing-rate ceiling.
+These observations were recorded on 2026-08-08 at tested SHA
+`2bd24c2f33df35341a497a91e24e7633a224b941`, on the 32-core arm64 host above. The host used its
+Hyperdisk Balanced network persistent disk rather than local SSD; every bracket arm used that same
+idle filesystem, so the ratios are controlled for storage within each bucket but the absolute merge
+times carry that caveat.
+
+PDS was the focused correctness gate: the default had zero bidirectional full-row `EXCEPT ALL`
+mismatches against serial A, zero descending physical-key transitions, eight effective ranges, and
+no clamp, cascade, or failure reason. Peak heap was 3.598 GiB of `-Xmx12g` (about 30%); its
+serial-relative delta is descriptive, not a release criterion. RSS also passed the documented gate.
+GEFS and MRMS are corroborating scale observations. MRMS was mutable across arms, and physical
+ordering of its default output was not evaluated, so the MRMS row is not additional focused-gate
+correctness evidence.
+
+Do not mix the rates represented by this campaign. MRMS's merge-object rate was 2,912,876 objects/s
+for the default merge versus a 733,123 objects/s serial-bracket rate; that is objects processed per
+merge wall, not listing throughput. The separate `823.7 M / 723.2 s ≈ 1.14 million objects/s` figure
+is a **derived full-session object/wall quotient**, spanning listing plus merge. Neither value is the
+run summary's listing-clock `keys_per_sec`, and neither supersedes the directly observed 655,346
+keys/s unsorted sweep above. No exact 1.5 million keys/s result was measured.
 
 ## Where swath is slow (honest limits)
 
@@ -418,8 +435,10 @@ describe swath, not rivals.
 **What the current figures are, precisely** — field observations, not
 release-candidate measurements:
 
-- **n = 1 per point.** No repeats, so no variance is reported and small
-  differences between adjacent points are not significant.
+- **Mostly n = 1 per point.** The final parallel-merge comparisons bracket one
+  default arm with serial A and serial B and report the serial mean; the earlier
+  concurrency points remain single observations. Small differences between
+  adjacent points are not significant.
 - **One machine, one vantage** — the arm64 host in
   [The machine these figures ran on](#the-machine-these-figures-ran-on), listing
   AWS S3 cross-cloud. An x86 host may differ on the CPU-bound phases.

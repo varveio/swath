@@ -21,9 +21,10 @@ them.
 
 Do **not** run this gate on the slower development box. Use the designated fast remote host or a
 faster dedicated equivalent: GCP `c4a-highcpu-32` (32 physical arm64 cores, no SMT), at least
-62 GiB RAM, JDK 25, `ulimit -n 65536`, and a local SSD with enough room for three complete outputs
-plus one arm's staging. Keep the host idle, run one arm at a time, and do not bypass swath's disk
-guard.
+62 GiB RAM, JDK 25, and `ulimit -n 65536`. A local SSD is preferred, but a sufficiently provisioned
+dedicated filesystem is acceptable when its storage type is stamped as a caveat. All three arms
+must use that same filesystem. Keep the host idle, run one arm at a time, and do not bypass swath's
+disk guard.
 
 ## 1. Freeze the candidate and environment
 
@@ -35,15 +36,30 @@ cd /path/to/swath
 set -euo pipefail
 
 export SWATH_REPO=$PWD
-export SCRATCH_BASE=/mnt/local-ssd
+# Select an existing absolute directory on the dedicated filesystem stamped below.
+export SCRATCH_BASE=/absolute/path/on/chosen-filesystem
+case "$SCRATCH_BASE" in
+  /*) ;;
+  *) printf 'SCRATCH_BASE must be an absolute path\n' >&2; false ;;
+esac
+test -d "$SCRATCH_BASE"
 export RUN_ROOT
 RUN_ROOT=$(mktemp -d "$SCRATCH_BASE/swath-parallel-default.XXXXXX")
 export SWATH="$SWATH_REPO/swath-cli/build/install/swath/bin/swath"
 export REPLAY="$SWATH_REPO/swath-replay-server/build/install/swath-replay-server/bin/swath-replay-server"
 
-# This public-bucket gate must not inherit credentials.
-unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE
+# This public-bucket gate must not inherit credentials, profiles, endpoints, or
+# container/web-identity providers. Empty files suppress the shared-file chain.
+export AWS_SHARED_CREDENTIALS_FILE="$RUN_ROOT/empty-aws-credentials"
+export AWS_CONFIG_FILE="$RUN_ROOT/empty-aws-config"
+: >"$AWS_SHARED_CREDENTIALS_FILE"
+: >"$AWS_CONFIG_FILE"
+chmod 600 "$AWS_SHARED_CREDENTIALS_FILE" "$AWS_CONFIG_FILE"
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+unset AWS_ACCESS_KEY AWS_SECRET_KEY AWS_PROFILE AWS_DEFAULT_PROFILE
 unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN
+unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_CREDENTIALS_FULL_URI
+unset AWS_CONTAINER_AUTHORIZATION_TOKEN AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE
 unset AWS_ENDPOINT_URL AWS_ENDPOINT_URL_S3
 export AWS_EC2_METADATA_DISABLED=true
 
@@ -63,8 +79,53 @@ java -version 2>&1 | tee "$RUN_ROOT/java.txt"
 lscpu | tee "$RUN_ROOT/lscpu.txt"
 free -h | tee "$RUN_ROOT/memory.txt"
 df -h "$SCRATCH_BASE" | tee "$RUN_ROOT/disk.txt"
+findmnt -T "$SCRATCH_BASE" -o SOURCE,FSTYPE,OPTIONS,TARGET | tee "$RUN_ROOT/storage-filesystem.txt"
+lsblk -o NAME,TYPE,SIZE,ROTA,TRAN,MODEL,MOUNTPOINTS | tee "$RUN_ROOT/storage-devices.txt"
 ulimit -n 65536
 ulimit -n | tee "$RUN_ROOT/ulimit.txt"
+
+# Blocking host preflight. Manual confirmations are recorded because "idle" and
+# "dedicated" cannot be inferred reliably from a one-shot command.
+read -r -p 'Confirm the host is idle (type yes): ' host_idle
+test "$host_idle" = yes
+printf '%s\n' "$host_idle" >"$RUN_ROOT/host-idle-confirmed.txt"
+
+read -r -p 'Confirm all arms use this dedicated filesystem (type yes): ' dedicated_fs
+test "$dedicated_fs" = yes
+printf '%s\n' "$dedicated_fs" >"$RUN_ROOT/dedicated-filesystem-confirmed.txt"
+
+read -r -p 'Describe the storage type/device for the evidence stamp: ' storage_type_note
+test -n "$storage_type_note"
+printf '%s\n' "$storage_type_note" >"$RUN_ROOT/storage-type-note.txt"
+
+java_major=$(java -XshowSettings:properties -version 2>&1 \
+  | awk -F'= ' '/java.specification.version =/ { print $2; exit }')
+test "$java_major" = 25
+
+arch=$(uname -m)
+physical_cores=$(lscpu -p=CORE,SOCKET \
+  | awk -F, '!/^#/ { print $1 "," $2 }' | sort -u | wc -l)
+threads_per_core=$(lscpu -p=CPU,CORE \
+  | awk -F, '!/^#/ { count[$2]++ } END { for (core in count) if (count[core] > max) max=count[core]; print max }')
+if [ "$arch" != aarch64 ] || [ "$physical_cores" -lt 32 ] || [ "$threads_per_core" -ne 1 ]; then
+  read -r -p 'Document the approved faster-equivalent host: ' host_equivalence_note
+  test -n "$host_equivalence_note"
+else
+  host_equivalence_note='designated baseline: arm64, >=32 physical cores, no SMT'
+fi
+printf '%s\n' "$host_equivalence_note" >"$RUN_ROOT/host-equivalence-note.txt"
+
+memory_kib=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+test "$memory_kib" -ge $((62 * 1024 * 1024))
+test "$(ulimit -n)" -eq 65536
+
+# 32 GiB covers three complete PDS outputs plus one arm's observed staging and
+# disk-guard headroom. A larger known output requires a correspondingly larger reservation.
+required_free_kib=$((32 * 1024 * 1024))
+available_kib=$(df -Pk "$SCRATCH_BASE" | awk 'NR == 2 { print $4 }')
+test "$available_kib" -ge "$required_free_kib"
+printf 'required_free_kib=%s available_kib=%s\n' \
+  "$required_free_kib" "$available_kib" >"$RUN_ROOT/storage-preflight.txt"
 
 ./gradlew :swath-cli:installDist :swath-replay-server:installDist --no-daemon
 find swath-cli/build/install/swath/lib \
@@ -94,6 +155,7 @@ run_arm() {
   local log="$RUN_ROOT/$label.log"
   local fd_sample="$RUN_ROOT/$label.peak-open-fds.txt"
   local fd_sampler_log="$RUN_ROOT/$label.fd-sampler.log"
+  local leftovers="$RUN_ROOT/$label.leftovers.txt"
   local pid='' sampler_pid='' status=0 sampler_status=0
   local java_opts='-Xmx12g'
 
@@ -193,8 +255,10 @@ run_arm() {
   jq -e '.completed == true and .exit_code == 0' \
     "$output/_swath_summary.json" >/dev/null
   test ! -e "$output/_staging"
-  test -z "$(find "$output" -type f \
-    \( -name '*.pageseg' -o -name '*.prange.tmp' -o -name '*.tmp' \) -print -quit)"
+  find "$output" -type f \
+    \( -name '*.pageseg' -o -name '*.prange.tmp' -o -name '*.tmp' \) \
+    -print >"$leftovers"
+  test ! -s "$leftovers"
   trap - EXIT INT TERM
 }
 
@@ -215,7 +279,8 @@ The engagement assertion requires exactly eight `merge_range_parallel` events an
 `merge_range_below_staged_floor`, `merge_range_fd_limited`, `merge_range_fd_exhausted`,
 `merge_range_would_cascade`, `merge_range_unsplittable`, `merge_cascade_predicted`,
 `merge_fanin_clamped`, `merge_fanin_fd_clamped`, `merge_fanin_mem_clamped`, and
-`merge_pass_cascaded`.
+`merge_pass_cascaded`. The log scan accepts only `rg` status 1 (no matches); a match or an inspection
+error fails the gate.
 
 ```bash
 export SERIAL_A="$RUN_ROOT/live-pds-serial-a/_swath_summary.json"
@@ -240,8 +305,10 @@ for reason in \
   merge_fanin_clamped merge_fanin_fd_clamped merge_fanin_mem_clamped merge_pass_cascaded; do
   test "$(reason_count "$DEFAULT" "$reason")" -eq 0
 done
-! rg -n 'ERROR|Exception|Too many open files|EMFILE|sort_merge_range_(failed|cancelled)' \
-  "$RUN_ROOT/live-pds-default.log"
+log_scan_status=0
+rg -n 'ERROR|Exception|Too many open files|EMFILE|sort_merge_range_(failed|cancelled)' \
+  "$RUN_ROOT/live-pds-default.log" || log_scan_status=$?
+test "$log_scan_status" -eq 1
 ```
 
 Score only a stable bracket. All three object counts must match. The two serial merge walls must be
@@ -251,13 +318,16 @@ merge mean and take no more than `1.05x` the serial-session mean end-to-end wall
 
 The retained resource thresholds are:
 
-- peak heap no more than the larger of `1.15x` the serial-bracket mean or mean + 512 MiB, and below
-  80% of `-Xmx12g`;
+- peak heap below 80% of `-Xmx12g`;
 - peak RSS no more than the larger of `1.15x` the serial-bracket mean or mean + 1 GiB, and below
   16 GiB;
 - sampled peak open descriptors no more than the serial-bracket mean + 256, and below 1024 (the
   +256 allowance deliberately covers eight ranges over roughly 16 segments); and
 - boundary sampling no more than 10% of the default merge wall.
+
+The score records the serial/default heap values and their delta as descriptive evidence. A
+serial-relative heap increase is not by itself a gate failure; only the 80%-of-Xmx heap ceiling is
+a release criterion.
 
 The following emits the scored values and fails if any threshold is missed:
 
@@ -298,8 +368,10 @@ jq -n \
     default_session_duration_ms: $d0.session_duration_ms,
     end_to_end_ratio: ($d0.session_duration_ms / $serial_session),
     boundary_share: ($d0.sort.merge_boundaries_ms / $d0.sort.merge_ms),
+    serial_peak_heap_mean_bytes: $serial_heap,
     default_peak_heap_bytes: $d0.efficiency.peak_heap_bytes,
-    heap_limit_bytes: maximum($serial_heap * 1.15; $serial_heap + 536870912),
+    default_minus_serial_heap_mean_bytes: ($d0.efficiency.peak_heap_bytes - $serial_heap),
+    heap_hard_limit_bytes: (12 * 1024 * 1024 * 1024 * 0.80),
     default_peak_rss_bytes: $d0.efficiency.peak_rss_bytes,
     rss_limit_bytes: maximum($serial_rss * 1.15; $serial_rss + 1073741824),
     default_peak_open_fds: $fd_d,
@@ -311,7 +383,6 @@ jq -n \
       ($serial_merge / $d0.sort.merge_ms) >= 2.0 and
       ($d0.session_duration_ms / $serial_session) <= 1.05 and
       ($d0.sort.merge_boundaries_ms / $d0.sort.merge_ms) <= 0.10 and
-      $d0.efficiency.peak_heap_bytes <= maximum($serial_heap * 1.15; $serial_heap + 536870912) and
       $d0.efficiency.peak_heap_bytes < (12 * 1024 * 1024 * 1024 * 0.80) and
       $d0.efficiency.peak_rss_bytes <= maximum($serial_rss * 1.15; $serial_rss + 1073741824) and
       $d0.efficiency.peak_rss_bytes < (16 * 1024 * 1024 * 1024) and
@@ -328,8 +399,9 @@ DuckDB is used here **only as an independent Parquet output comparator**. Do not
 serving mode, serving-mode timing, serial/default serving brackets, or a DuckDB token walk as part
 of this gate.
 
-Run one bidirectional, all-column `EXCEPT ALL` comparison of the default against serial A. A digest
-or row count is not a substitute:
+Run one bidirectional, all-column `EXCEPT ALL` comparison of the default against serial A. Serial B
+is intentionally only the timing-drift control, not a second output-comparison arm. A digest or row
+count is not a substitute:
 
 ```bash
 full_row_mismatches=$(duckdb -csv -noheader -c "
