@@ -34,6 +34,12 @@ public final class ExitCodes {
     public static final int USAGE = 2;
 
     /**
+     * The sink's filesystem ran out of space. {@code 74} is {@code EX_IOERR} (sysexits.h), letting
+     * an external runner retry with a larger workspace rather than classify output failures by text.
+     */
+    public static final int DISK_FULL = 74;
+
+    /**
      * A cooperative {@code stop_reason=stuck} cancel unwound to a resumable partial. Three sources
      * trip it — the liveness watchdog's escalation ladder, a transient-retry cap exhausting, and a
      * bare seed-time interrupt ({@code CancelSource}) — and the terminal {@code list_stuck_stop}

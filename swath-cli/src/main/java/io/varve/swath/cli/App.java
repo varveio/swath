@@ -7,8 +7,11 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.SwathException;
 import io.varve.swath.observability.SafeInput;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
@@ -125,6 +128,9 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
      * URI at the top level (no verb) can be recognized without hard-coding the scheme list. */
     private static final Pattern URI_SHAPED = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*://[\\s\\S]*");
 
+    /** How deep {@link #messageChain} follows a chain — see {@code ExitCodes.MAX_CHAIN_DEPTH}. */
+    private static final int MAX_MESSAGE_CHAIN_DEPTH = 32;
+
     @Mixin
     final GlobalOptions global = new GlobalOptions();
 
@@ -203,7 +209,7 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
         int code = ExitCodes.forThrowable(ex);
         SwathException domain = domainException(ex);
         if (domain != null) {
-            recordError(coordinator, cmd, err -> err.println("swath: " + domain.getMessage()));
+            recordError(coordinator, cmd, err -> err.println("swath: " + messageChain(domain)));
         } else if (code == ExitCodes.UNEXPECTED) {
             recordError(coordinator, cmd, err -> {
                 err.println("swath: unexpected error: " + ex);
@@ -234,6 +240,44 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
             }
         }
         return null;
+    }
+
+    /**
+     * A domain error's message followed by every distinct cause message, joined with {@code ": "}
+     * as one physical line so the error coordinator can serialize the record intact.
+     *
+     * <p>Adjacent duplicate messages and the repeated cause text from {@code new IOException(cause)}
+     * are emitted once.
+     */
+    static String messageChain(Throwable throwable) {
+        var text = new StringBuilder();
+        var visited = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        int depthLeft = MAX_MESSAGE_CHAIN_DEPTH;
+        Throwable previous = null;
+        String previousPart = null;
+        for (Throwable current = throwable;
+                current != null && depthLeft > 0 && visited.add(current);
+                current = current.getCause()) {
+            depthLeft--;
+            String message = current.getMessage();
+            String part = message == null || message.isBlank()
+                ? current.getClass().getSimpleName()
+                : SafeInput.logText(message);
+            if (text.isEmpty()) {
+                text.append(part);
+            } else if (!part.equals(previousPart) && !repeatsWrappedCause(previous, current)) {
+                text.append(": ").append(part);
+            }
+            previous = current;
+            previousPart = part;
+        }
+        return text.toString();
+    }
+
+    private static boolean repeatsWrappedCause(Throwable wrapper, Throwable cause) {
+        return wrapper instanceof IOException
+                && wrapper.getCause() == cause
+                && cause.toString().equals(wrapper.getMessage());
     }
 
     public static void main(String[] args) {
