@@ -292,11 +292,15 @@ Semantics:
   climb here is the prime leak suspect). The `swath.steal_reason{outcome=SORT,
   reason=backpressure_engaged}` engagement counter marks whenever admission actually hit the
   off-thread bound, for correlating against the timing of the retry storm.
-- **Parallel range merge (off by default).**
-  <a id="parallel-range-merge-off-by-default"></a>
-  `-Dswath.sort.merge-parallelism=R` (R > 1) splits the merge phase into R independent key ranges
-  instead of one, merged concurrently on up to `min(R, availableProcessors)` threads. It is **off by default and not a released contract** — the decision to ship multi-file
-  sorted output produced by a concurrent merge is reserved, and one gap is still open (below).
+- **Parallel range merge.**
+  <a id="parallel-range-merge"></a>
+  Large enough sorted runs split the merge phase into independent key ranges by default. The
+  configured ceiling is `max(1, min(8, availableProcessors / 2))`; set
+  `-Dswath.sort.merge-parallelism=R` to override it, or set `R=1` as the explicit serial opt-out.
+  The merge uses up to `min(R, availableProcessors)` threads. Runs with less than
+  `swath.sort.min-parallel-staged-bytes` of staged input (256 MiB by default) stay serial: below
+  that floor, the fixed boundary-sampling work and extra output parts are not worth the small
+  wall-time saving.
 
   *How it stays a global sort.* The keyspace is partitioned into R **contiguous, disjoint key
   ranges**, sampled from the staging segments' own key distribution. Each range independently
@@ -306,9 +310,10 @@ Semantics:
   one ascending `part-00001.parquet`... sequence. Row-to-range assignment is an exact per-row key
   compare, so every row for a given key (its versions, and any cross-`row_type` rows) stays
   together in exactly one range. Boundary choice therefore affects only how EVENLY the ranges are
-  balanced — never correctness. A keyspace with fewer than two distinct sample keys cannot be split
-  and falls back to the untouched serial path, recording `SORT.merge_range_unsplittable` so the
-  fallback shows up in the run's metrics instead of being indistinguishable from never asking.
+  balanced — never correctness. A keyspace with fewer than two distinct sample keys is genuinely
+  unsplittable and falls back to the untouched serial path, recording
+  `SORT.merge_range_unsplittable`. That counter is reserved for this post-sampling keyspace result;
+  the earlier staged-size and resource declines have the distinct reasons below.
 
   *What each range avoids reading.* A range only decodes the units of a segment that can hold one
   of its keys: Parquet staging prunes by row group; page-run staging steps over pages whose
@@ -320,16 +325,35 @@ Semantics:
   and the process descriptor budget divide across them: each range's merge fan-in is its share of
   `merge-budget-bytes` and of the fd limit. Once that per-range fan-in falls below the
   staging-segment count, every range would **cascade** (merge in several passes, rewriting its rows
-  each time) — slower than the serial merge rather than faster. So the usable ceiling is
+  each time) — slower than the serial merge rather than faster. After the staged-byte floor admits
+  the parallel path, its clamp is conceptually:
 
-  ```
-  R_max ≈ merge-budget-bytes / (segments × per-stream-bytes)
+  ```text
+  R_effective = min(
+    configured/core-derived R,
+    configured-fan-in bound (R if swath.sort.fan-in >= segments; otherwise 1),
+    floor(merge-budget-bytes / (segments × per-stream-bytes)),
+    floor(usable-fds / (segments + 1 initial output part))
+  )
   ```
 
-  **`R` is clamped to that bound rather than honoured past it.** A run that asks for more logs
-  `sort_merge_range_clamped` at WARN with the requested and effective values, and fires the
-  `merge_range_clamped` counter; if not even one range fits, the run takes the serial merge. Raise
-  `heap-fraction` (or the heap) to lift the bound — the remedy is more merge budget, not a bigger `R`.
+  The fd term reserves one initial output writer per candidate range alongside that range's input
+  streams; additional rolled parts are hard-bounded against the descriptors left after the input
+  reservation. Because `fan-in` is a per-range ceiling, no value of `R` can keep a range
+  single-pass when `swath.sort.fan-in < segments`; that case declines to serial. `R` is clamped to
+  the minimum of these bounds rather than honoured past it. When FD is lower, or on an exact
+  partial tie (`byFd == byBudget`) with final `R>1`, FD wins attribution (the test is
+  `byFd <= byBudget`) and records
+  `SORT.merge_range_fd_limited` / `reason=fd_limited`. Heap or configured `fan-in` records
+  `SORT.merge_range_would_cascade` / `reason=would_cascade` only when that constraint tightens the
+  result further than the partial FD bound, including when it forces the serial path. An FD final
+  bound of `R=1` records
+  `SORT.merge_range_fd_exhausted` / `reason=fd_exhausted`. If the staged input is below the
+  configured floor, it records
+  `SORT.merge_range_below_staged_floor` and logs `reason=below_staged_floor`. Any effective result
+  below 2 takes the serial merge. Raise `heap-fraction` (or the heap) when the heap term binds;
+  raise `ulimit -n` or reduce `R` when the initial descriptor share binds. A larger
+  `final-file-bytes` reduces later output-part demand.
 
   Note this ceiling **tightens as a listing grows**: segment count rises with object count, so an `R`
   that runs single-pass on a 10 M-object bucket can hit the clamp on a billion-object one at the same
@@ -343,11 +367,11 @@ Semantics:
   much larger than page cache the extra reads are real, so treat `R` as a throughput/IO trade
   rather than a free win.
 
-  *Known gap.* Parts produced by the parallel path carry a range-local `file_index` and none is
-  marked `file_final`, so they do not carry the self-describing multi-file completeness proof a
-  serial `--sort` output does. Consumers that verify that stamp (including swath's own replay
-  server in `--serving-mode sorted`) will reject the output even though its content is a correct
-  global sort. This is why the path is off by default.
+  *Completeness proof.* Parallel ranges return their drained writers in key order; the publisher
+  then assigns one global `file_index` sequence and marks only its final part `file_final` before
+  closing the footers. The resulting multi-file output carries the same self-describing
+  completeness proof as a serial `--sort` output, so consumers such as swath's sorted replay path
+  can verify it without a weaker parallel-only contract.
 - **Disk sizing.** The staging volume (wherever `-o`'s output directory lives) holds BOTH
   the staging segments AND, during the final merge, the merged output being written
   concurrently. Measure staging and final-output bytes on a representative sample,

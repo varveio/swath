@@ -182,7 +182,8 @@ threshold. All sizes are bytes.
 | --- | --- | --- |
 | `swath.sort.heap-fraction` | `0.08` | **Sizing.** The single lever that moves both staging-segment size and the merge budget together; prefer it over setting either directly |
 | `swath.sort.final-file-bytes` | `1 GiB` (roll threshold for multi-file sorted output) | **Output shape.** Smaller ⇒ more, smaller parts; `Long.MAX_VALUE` ⇒ one file |
-| `swath.sort.merge-parallelism` | `1` (serial merge) | **Merge speed.** `>1` is off-by-default and unreleased — see [`usage.md`](usage.md#parallel-range-merge-off-by-default) |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | **Merge speed.** Maximum concurrent key ranges for the final merge; `1` is the explicit serial opt-out. Runtime staged-size, configured-fan-in, heap, and descriptor gates can reduce it further — see [`usage.md`](usage.md#parallel-range-merge) |
+| `swath.sort.min-parallel-staged-bytes` | `256 MiB` | **Small-run floor.** Below this much staged input, keep the final merge serial so boundary sampling and extra output parts do not cost more than they save |
 | `swath.sort.segment-codec` | `LZ4` (`NONE`, `LZ4`, `ZSTD1`) | Staging disk pressure vs CPU |
 | `swath.sort.segment-bytes` | heap-adaptive: `max(64 MiB, heap-fraction × -Xmx)` | Rarely — overrides the adaptive sizing above |
 | `swath.sort.merge-budget-bytes` | heap-adaptive, same shape as `segment-bytes` | Rarely — same |
@@ -201,7 +202,7 @@ default JVM args, so there is nothing of its own to preserve when you set that v
 [`Dockerfile`](../Dockerfile). An image that DID bake flags would need them repeated, because an
 environment variable replaces the Dockerfile `ENV` rather than appending to it.) A knob reachable
 only this way tends
-not to get exercised; promoting the operator-facing ones (the first three rows) to typed `--tune`
+not to get exercised; promoting the operator-facing ones (the first four rows) to typed `--tune`
 keys is a known follow-up, not a settled design.
 
 See [`usage.md`](usage.md#sorted-output---sort) for which knob actually binds and

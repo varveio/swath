@@ -78,8 +78,8 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.sort.segment.bytes` | counter | — | compressed staging-segment bytes written |
 | `swath.sort.merge.passes` | counter | — | k-way merge passes executed (1 = single pass; >1 = cascade) |
 | `swath.sort.merge.latency` | timer | — | per-run merge wall time (staging segments → published sorted file) |
-| `swath.sort.merge.range.latency` | timer | — | per-RANGE merge wall time on the off-by-default parallel range-merge path (`swath.sort.merge-parallelism>1`) — recorded once per concurrent range, distinct from `swath.sort.merge.latency` (the whole-run wall), so an A/B can read per-range cost with vs. without row-group skip. Untouched (zero samples) on the default serial merge |
-| `swath.sort.merge.boundaries.latency` | timer | — | the parallel range merge's boundary-sampling prologue — recorded once per run, before any range starts. This is that path's SERIAL fraction: on page-run staging it walks every page's frontier across every segment, so it grows with staging size while the ranges beside it get faster as `R` rises. Included in `swath.sort.merge.latency`; subtract it to see the ranges' own scaling. Untouched (zero samples) on the default serial merge |
+| `swath.sort.merge.range.latency` | timer | — | per-RANGE merge wall time on the default parallel range-merge path — recorded once per concurrent range, distinct from `swath.sort.merge.latency` (the whole-run wall), so an A/B can read per-range cost with vs. without row-group skip. The configured default is `max(1, min(8, availableProcessors / 2))`; zero samples when an explicit `merge-parallelism=1` or a staged-size/resource/keyspace decline selects the serial merge |
+| `swath.sort.merge.boundaries.latency` | timer | — | the parallel range merge's boundary-sampling prologue — recorded once per run, before any range starts. This is that path's SERIAL fraction: on page-run staging it walks every page's frontier across every segment, so it grows with staging size while the ranges beside it get faster as `R` rises. Included in `swath.sort.merge.latency`; subtract it to see the ranges' own scaling. Zero samples only when parallelism was not requested or the staged-size/resource gates declined it before sampling; an unsplittable keyspace records one sample because that result is discovered by sampling (its JSON millisecond total may still truncate to `0`) |
 | `swath.sort.backpressure.wait` | timer | — | time the listing waited to hand a sealed buffer to the (busy) encoder — the accepted cost of off-thread encoding |
 | `swath.sort.page_runs_per_buffer` | distribution summary | — | per-node page runs per sealed buffer (JSON `sort.page_runs_per_buffer` classification signal) |
 | `swath.sort.staging.bytes.peak` | gauge | — | high-water mark of total live (admitted-but-not-yet-durable) `--sort` staging bytes — the fill buffer's current byte estimate plus every sealed-but-unfinalized buffer's estimate (captured at seal time). **The number to read after a sort-staging OOM:** if it tracks roughly `T × segmentBytes` and stays bounded as `T` stabilizes, the OOM is linear-in-`T` tuning (give the run more heap); if it climbs unboundedly under a retry storm while `T` is stable, that is an unbounded-leak signature. Instrumentation only — it never gates admission itself |
@@ -108,6 +108,17 @@ non-durable-`COMPLETED` back to `PENDING` — always zero on a fresh run, since 
 already `PENDING`), `durable_cursor_lag` (a **node-count** proxy for the checkpoint RPO bound — how
 many reopened nodes had a non-durable tail; NOT an exact key/page count), and `args_hash_refused`
 (a `swath resume` rejected because `args_hash` changed).
+
+Parallel-merge decisions use the same counter with `outcome=SORT`: `merge_range_below_staged_floor`
+means staged input was below `swath.sort.min-parallel-staged-bytes` (256 MiB by default),
+`merge_range_fd_limited` means the FD-derived bound determined final `R>1`; FD wins an exact partial
+heap/FD tie (`byFd <= byBudget`). `merge_range_would_cascade` means heap or configured `fan-in`
+cascade pressure alone tightened the result further, including both a partial clamp and a serial
+fallback. `merge_range_fd_exhausted` means the FD final bound forced `R=1` and selected the serial
+path, while
+`merge_range_unsplittable` is reserved for the genuinely unsplittable case discovered after boundary
+sampling found fewer than two distinct keys. The first four are resource/eligibility outcomes, not
+aliases for an unsplittable keyspace.
 
 The **distinct timers** (`api.latency`, `queue.wait`, `rate_limit.wait`, `rate_limit.api_wait`) keep a
 network slowdown, a downstream stall, a reactive AIMD pause, and a proactive client-side cap wait from
@@ -403,12 +414,17 @@ finishes, so both stay flat/zero for the entire merge; `merge_progress_units` is
 genuinely advances across successive periodic flushes mid-merge, which is what lets an external
 `_swath_summary.json` poller distinguish alive-and-merging from wedged.
 
-**`sort` block, `merge_boundaries_ms`:** on the off-by-default parallel range merge
-(`swath.sort.merge-parallelism>1`), the boundary-sampling prologue that runs once before any range
-starts. It is **included in `merge_ms`**, and broken out because it is the one part of that phase
-that does not get faster as `R` rises — so `merge_ms − merge_boundaries_ms` is the term whose scaling
-an A/B is actually testing, and a rising ratio between them is the signal that `R` has stopped
-paying. Zero on the default serial merge, which never samples boundaries.
+**`sort` block, `merge_boundaries_ms`:** on the default parallel range merge (configured maximum
+`max(1, min(8, availableProcessors / 2))`), the boundary-sampling prologue that runs once before any
+range starts. It is sourced from the total time recorded by
+`swath.sort.merge.boundaries.latency` and is **included in `merge_ms`**, which comes from the
+whole-run `swath.sort.merge.latency` timer. It is broken out because it is the one part of that
+phase that does not get faster as `R` rises — so `merge_ms − merge_boundaries_ms` is the term whose
+scaling an A/B is actually testing, and a rising ratio between them is the signal that `R` has
+stopped paying. Sampling a genuinely unsplittable keyspace still records the timer sample before the
+run falls back to serial; the JSON field can nevertheless be `0` when a sub-millisecond duration is
+truncated to whole milliseconds. No sample is recorded when parallelism was not requested or a
+staged-size/resource gate selected the serial merge before sampling began.
 
 **Merge-phase progress log line:** the merge/publish phase is covered by the run's single progress
 reporter, which spans seeding, listing, merging and writing alike — so it emits the SAME `progress`

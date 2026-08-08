@@ -152,9 +152,11 @@ the LIST calls a resume spends versus a run that completes in one pass.
 Sustained keys listed per second, and the LIST-request rate that throughput
 implies, under representative concurrency settings.
 
-Observed peak on the measured buckets: **~655 000 keys/s** (≈ 666 LIST/s) at
-`--concurrency 256`, on a keyspace that could not fill a higher ceiling. The full
-sweep, and why 512 is *slower* than 256 on that bucket, is in
+The highest directly observed `keys_per_sec` value in the five-arm, `--no-sort`
+`pds-css-archive` concurrency sweep was **655,346 keys/s** (≈ 666 LIST/s) at
+`--concurrency 256`. It is an n = 1 whole-session mean and only the peak **in that
+sweep** — not swath's global throughput ceiling. The full sweep, and why 512 is
+*slower* than 256 on that bucket, is in
 [Diagnosing a run](#field-observations-stamped-and-shape-specific).
 
 The second, ten-times-smaller bucket reached ~426 000 keys/s in its listing phase
@@ -164,9 +166,9 @@ and it produced only 148 splits against the larger bucket's ~4 900, so there was
 far less parallel work to spread. It is reported here only to show that keys/s
 does not follow object count.
 
-**Throughput is shape-bound, not size-bound.** The ceiling here was the engine's
-ability to manufacture splittable ranges on a deep-divergence keyspace, not the
-remote and not CPU — see
+**Throughput is shape-bound, not size-bound.** The limiting factor visible in the
+`pds-css-archive` sweep was the engine's ability to manufacture splittable ranges
+on that deep-divergence keyspace, not the remote and not CPU — see
 [Where swath is slow](#where-swath-is-slow-honest-limits).
 
 > _Host, buckets, and the cross-cloud latency breakdown: see
@@ -186,7 +188,7 @@ is a release-candidate measurement.
 `--concurrency N` sets a **ceiling** (`Tmax`), not an achieved rate. What a run
 actually sustains is `engine.avg_in_flight`, and the ratio that matters is:
 
-```
+```text
 utilisation = engine.avg_in_flight / <the --concurrency you set>
 ```
 
@@ -213,7 +215,7 @@ needs no correction.
 
 Derive per-request latency across a concurrency sweep:
 
-```
+```text
 latency ≈ engine.avg_in_flight ÷ (engine.pages ÷ wall_seconds)
 ```
 
@@ -247,7 +249,7 @@ disjoint cores), not against S3 — throughput per BUSY core
 ~129 000 (±7 %)**, and the same CPU-per-key figure appeared on unrelated
 cross-cloud runs against real S3. So a workable model is:
 
-```
+```text
 throughput ≈ min( cores × ~129 000 ,  concurrency × 1000 ÷ latency_seconds )
 ```
 
@@ -342,12 +344,45 @@ in-flight utilisation from a single run and infer from those.
 ### Reading the merge's share of the wall
 
 On `--sort` runs, `sort.merge_ms ÷ duration_ms` is the merge's share of wall
-clock. The listing phase parallelises across cores; by default the merge does
-not, so **the same bucket shows a larger merge share on a bigger machine** —
-adding cores speeds the listing half and leaves the other half where it was.
-Judge the share against the machine, not against the object count, and remember
-Amdahl: a serial fraction `f` caps any core increase at `1/f`. That ceiling is
-what [The sorted merge](#the-sorted-merge) is about.
+clock. The listing phase parallelises across cores, and eligible large runs now
+use the core-derived parallel merge by default. The explicit
+`-Dswath.sort.merge-parallelism=1` baseline — or a run forced onto the serial path
+by its staged-size/resource gates — still leaves the merge unchanged as listing
+gets faster, so **the same bucket shows a larger serial-merge share on a bigger
+machine**. Judge the share against the machine, not against the object count, and
+remember Amdahl: a serial fraction `f` caps any core increase at `1/f`. The
+default, its clamps, and the measured comparison are in
+[The sorted merge](#the-sorted-merge).
+
+## The sorted merge
+
+For staged input of at least 256 MiB, the final sorted merge defaults to
+`max(1, min(8, availableProcessors / 2))` contiguous ranges. Runtime clamps can
+reduce that ceiling against the configured `swath.sort.fan-in`, per-stream heap
+budget, staged-segment count, and descriptors needed by the input streams plus
+one initial output part per range; later rolled parts are hard-bounded against
+the remaining descriptor allowance. A result below 2 uses the serial path. Set
+`-Dswath.sort.merge-parallelism=1` for an explicit serial run.
+See [configuration](configuration.md#jvm-system-properties) and the
+[parallel-range merge guide](usage.md#parallel-range-merge) for the knobs and
+decline reasons.
+
+One n = 1 PR #99 field row from the host above reported this live-S3 comparison
+at fixed `-Xmx12g` and `--concurrency 256`:
+
+| bucket | objects reported in row | serial merge | parallel merge (`R=8`) | serial wall | parallel wall |
+|---|---:|---:|---:|---:|---:|
+| `noaa-mrms-pds` | 823,309,583 | 1126.1 s | 275.1 s | 1573 s | 722 s |
+
+The directly observed result is the merge and wall-time comparison above. A
+separate listing-rate estimate can be derived by subtracting merge time from
+each wall time: both arms leave about `446.9 s`, and
+`823,309,583 / 446.9 ≈ 1.84 million objects/s`. That **1.84 million objects/s is
+DERIVED and indicative** — it is not the run summary's `keys_per_sec`, not a
+controlled listing-throughput measurement, and not comparable as the same
+metric to the directly observed 655,346 keys/s unsorted sweep above. The bucket
+mutated between arms, and no raw summary for either arm is committed, so this
+row does not establish a measured listing-rate ceiling.
 
 ## Where swath is slow (honest limits)
 
@@ -362,10 +397,12 @@ concurrency ceiling full, throughput plateaus well below what the remote would
 serve, and **raising `--concurrency` makes it worse** — the measured sweep is in
 [Field observations](#field-observations-stamped-and-shape-specific).
 
-**The sorted merge is single-threaded by default**, so on a big machine it can
-be most of a sorted run's wall clock. The range-parallel merge behind
-`-Dswath.sort.merge-parallelism` removes that ceiling but is off by default —
-see [The sorted merge](#the-sorted-merge).
+**The sorted merge still has serial fractions and serial fallback paths.** Its
+boundary-sampling prologue is serial; runs below the 256 MiB staged floor, runs
+whose resource clamp lands below two ranges, genuinely unsplittable keyspaces,
+and explicit `-Dswath.sort.merge-parallelism=1` runs all use the serial merge.
+Eligible large runs use core-derived range parallelism by default — see
+[The sorted merge](#the-sorted-merge).
 
 > _Host, buckets, and the cross-cloud caveat: see
 > [The machine these figures ran on](#the-machine-these-figures-ran-on)._
