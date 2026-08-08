@@ -14,7 +14,7 @@ import java.util.function.LongConsumer;
  * The shared publish-roll loop behind both merge paths' final streaming pass: drain a merged sorted
  * cursor into a rolled sequence of files, starting a fresh file each time the current one reaches the
  * roll threshold, and feeding merge-progress in batches of {@link KWayMerge#PROGRESS_BATCH_ROWS}
- * (never per-row — §3.2). The serial publish ({@link SortTransform}) and the off-by-default parallel
+ * (never per-row — §3.2). The serial publish ({@link SortTransform}) and the parallel
  * range-merge ({@link ParallelRangeMerge}) share this identical control loop, roll math, and progress
  * cadence; they differ in exactly two ways, both parameters here:
  *
@@ -107,6 +107,7 @@ final class RolledPartWriter {
         try {
             SortedFileWriter writer = null;
             while (merged.hasNext()) {
+                MergeCancellation.check();
                 if (writer == null || shouldRoll(writer, finalFileBytes)) {
                     if (writer != null && closeRolledAway) {
                         // A rolled-away file is provably not the last one, so nothing about it is
@@ -119,6 +120,7 @@ final class RolledPartWriter {
                     writer = fileFactory.open();
                     out.add(writer);
                 }
+                MergeCancellation.check();
                 writer.write(merged.next());
                 totalRows++;
                 // §3.2: batched merge-progress feed (never per-row) — see KWayMerge.PROGRESS_BATCH_ROWS.

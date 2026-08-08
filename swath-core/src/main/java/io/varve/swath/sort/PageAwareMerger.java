@@ -150,6 +150,7 @@ final class PageAwareMerger implements SortedCursor {
     private ListEntry computeNext() {
         try {
             while (true) {
+                MergeCancellation.check();
                 // (1) Streaming a whole page (fast path)?
                 if (wholeCursor != null) {
                     if (wholeCursor.hasNext()) {

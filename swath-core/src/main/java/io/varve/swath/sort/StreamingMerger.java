@@ -110,7 +110,19 @@ final class StreamingMerger implements SortedCursor {
                 heap.add(s);
             }
         }
-        this.pending = computeNext();
+        // computeNext() can observe cooperative range cancellation before construction completes.
+        // In that case close() would otherwise be unreachable and every already-open input stream
+        // would leak until GC, defeating ParallelRangeMerge's quiescent cleanup guarantee.
+        try {
+            this.pending = computeNext();
+        } catch (RuntimeException e) {
+            try {
+                close();
+            } catch (RuntimeException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     @Override
@@ -129,6 +141,7 @@ final class StreamingMerger implements SortedCursor {
     }
 
     private ListEntry computeNext() {
+        MergeCancellation.check();
         try {
             EntryStream src;
             if (currentStream != null && currentStream.hasNext()

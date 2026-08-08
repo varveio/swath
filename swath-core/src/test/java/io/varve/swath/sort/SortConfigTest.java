@@ -36,12 +36,13 @@ class SortConfigTest {
         assertThat(config.segmentEntries()).isEqualTo(Long.MAX_VALUE);   // bytes gate governs by default
         assertThat(config.finalRowGroupBytes()).isEqualTo(8L * 1024 * 1024);
         // segmentRowGroupBytes now only sizes columnar-Parquet staging (fixtures and the
-        // off-by-default parallel-merge path); it no longer drives effectiveFanIn.
+        // parallel-merge path); it no longer drives effectiveFanIn.
         assertThat(config.segmentRowGroupBytes()).isEqualTo(1L * 1024 * 1024);
         // The page-run merge-memory denominator — ≈ one packed page (~64 KiB estimate).
         assertThat(config.mergePerStreamBytes()).isEqualTo(64L * 1024);
         // mergeBudgetBytes defaults to the SAME heap-adaptive shape as segmentBytes (floor 64 MB).
         assertThat(config.mergeBudgetBytes()).isEqualTo(config.segmentBytes());
+        assertThat(config.minParallelStagedBytes()).isEqualTo(256L * 1024 * 1024);
     }
 
     @Test
@@ -96,7 +97,8 @@ class SortConfigTest {
                 "final-row-group-bytes", "111",
                 "segment-row-group-bytes", "222",
                 "merge-budget-bytes", "333",
-                "merge-per-stream-bytes", "444"));
+                "merge-per-stream-bytes", "444",
+                "min-parallel-staged-bytes", "555"));
         assertThat(config.heapFraction()).isEqualTo(0.5);
         assertThat(config.segmentEntries()).isEqualTo(1000L);
         assertThat(config.buffers()).isEqualTo(4);
@@ -106,6 +108,7 @@ class SortConfigTest {
         assertThat(config.segmentRowGroupBytes()).isEqualTo(222L);
         assertThat(config.mergeBudgetBytes()).isEqualTo(333L);
         assertThat(config.mergePerStreamBytes()).isEqualTo(444L);
+        assertThat(config.minParallelStagedBytes()).isEqualTo(555L);
     }
 
     @Test
@@ -127,6 +130,13 @@ class SortConfigTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 0, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // merge-budget-bytes 0
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1,
+                DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, -1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("min-parallel-staged-bytes");
+        assertThatThrownBy(() -> fromProperties(Map.of("min-parallel-staged-bytes", "-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("min-parallel-staged-bytes");
     }
 
     // ------------------------------------------------------------------

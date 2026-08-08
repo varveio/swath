@@ -6,7 +6,7 @@
 package io.varve.swath.sort;
 
 /**
- * Per-range wall-time hook for the parallel range-merge path (off-by-default,
+ * Per-range wall-time hook for the parallel range-merge path,
  * {@code swath.sort.merge-parallelism > 1}). Mirrors {@code RunMetrics.recordSortMergeRange(nanos)}
  * so the pipeline wires the live {@code RunMetrics} in with a method reference and this package never
  * depends on Micrometer — the same seam idiom as {@link SortMetrics}, kept separate so the

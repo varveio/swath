@@ -85,14 +85,22 @@ public final class CaptureSorter {
 
     private final SortConfig config;
     private final SortMetrics metrics;
+    private final SortedFileWriterFactory finalWriterDelegate;
 
     public CaptureSorter(SortConfig config) {
         this(config, SortMetrics.NO_OP);
     }
 
     public CaptureSorter(SortConfig config, SortMetrics metrics) {
+        this(config, metrics, new SortedParquetWriterFactory(config, SortMode.OBJECTS));
+    }
+
+    /** Narrow test seam for forcing final-writer interleavings through the complete fixture pipeline. */
+    CaptureSorter(SortConfig config, SortMetrics metrics,
+                  SortedFileWriterFactory finalWriterDelegate) {
         this.config = config;
         this.metrics = metrics;
+        this.finalWriterDelegate = finalWriterDelegate;
     }
 
     /**
@@ -118,7 +126,7 @@ public final class CaptureSorter {
         List<Path> segments = stageSegments(inputParts, stagingDir, comparator, hook);
 
         SortedFileWriterFactory finalWriterFactory = new DuplicateKeyCheckingWriterFactory(
-                new SortedParquetWriterFactory(config, SortMode.OBJECTS), metrics);
+                finalWriterDelegate, metrics);
         SortTransform transform = new SortTransform(new SortRun(config, comparator, hook, metrics, finalWriterFactory));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP);
     }
@@ -261,15 +269,15 @@ public final class CaptureSorter {
      * SortTransform} writes the already-merged, totally-ordered stream, comparing each row's raw key
      * bytes against the immediately preceding row's (tracked in this factory instance, so the
      * comparison carries across a multi-file roll — the {@link RolledPartWriter#drain} loop opens a new
-     * delegate writer per file but this factory instance, and so {@link #previousKey}, is shared
-     * across all of them) is exactly equivalent to the old post-hoc read-back of the published
+     * delegate writer per file but one {@link SortedFileWriterFactory#forOutputSequence() output
+     * sequence} is shared across all rolls) is exactly equivalent to the old post-hoc read-back of the published
      * output, without a second full decode pass. The duplicate check fires BEFORE the row reaches the
      * delegate writer, so it throws while the offending file is still {@code part-NNNNN.parquet.tmp}
      * — before {@link SortTransform}'s rename loop runs — preserving the same tmp-then-rename publish
      * discipline the merge-phase {@link DuplicateHook} already relies on (a thrown exception here
      * never leaves a corrupt PUBLISHED file; only stale {@code .tmp}s, cleaned on the next run).
      */
-    private static final class DuplicateKeyCheckingWriterFactory implements SortedFileWriterFactory {
+    static final class DuplicateKeyCheckingWriterFactory implements SortedFileWriterFactory {
         private final SortedFileWriterFactory delegate;
         private final SortMetrics metrics;
         private byte[] previousKey;
@@ -277,6 +285,15 @@ public final class CaptureSorter {
         DuplicateKeyCheckingWriterFactory(SortedFileWriterFactory delegate, SortMetrics metrics) {
             this.delegate = delegate;
             this.metrics = metrics;
+        }
+
+        @Override
+        public SortedFileWriterFactory forOutputSequence() {
+            // ParallelRangeMerge shares the configured factory across range threads, but each range
+            // is its own ordered sequence. Give it independent previous-key state while retaining
+            // that state across every rolled file within the range. The serial path calls this once
+            // for the whole publish, so its cross-roll duplicate detection is unchanged.
+            return new DuplicateKeyCheckingWriterFactory(delegate.forOutputSequence(), metrics);
         }
 
         @Override

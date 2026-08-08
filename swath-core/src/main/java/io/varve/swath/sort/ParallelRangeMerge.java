@@ -20,17 +20,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Off-by-default (behind {@code swath.sort.merge-parallelism}): partition the keyspace into
+ * Heap-, staged-size-, and fd-gated (configured by {@code swath.sort.merge-parallelism}): partition the keyspace into
  * {@code R} contiguous ordered ranges and merge each range independently on its own thread, each
  * producing its own ordered part file(s). The concatenation of the ranges' outputs, in range order,
  * is the global sort with no duplicate and no gap — given the input segments already had none — so
@@ -125,9 +130,7 @@ final class ParallelRangeMerge {
      */
     private static final int MAX_SAMPLES_PER_SEGMENT = 4_096;
 
-    /** How long the failure path waits for range threads to stop before it sweeps their files. */
-    private static final long RANGE_QUIESCE_SECONDS = 30;
-
+    private static final AtomicLong MERGE_SEQUENCE = new AtomicLong();
 
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
@@ -135,6 +138,8 @@ final class ParallelRangeMerge {
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final RangeMergeTimer rangeTimer;
+    private final IntSupplier softFdLimitSupplier;
+    private final String workerThreadPrefix;
 
     /**
      * Every final-output part this merge has opened, across all ranges — the failure path's handle on
@@ -144,12 +149,22 @@ final class ParallelRangeMerge {
     private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
 
     ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer) {
+        this(run, rangeTimer, MergeFdBudget::softOpenFileLimit);
+    }
+
+    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer, IntSupplier softFdLimitSupplier) {
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.rangeTimer = rangeTimer;
+        this.softFdLimitSupplier = softFdLimitSupplier;
+        this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
+    }
+
+    String workerThreadPrefix() {
+        return workerThreadPrefix;
     }
 
     /**
@@ -164,6 +179,35 @@ final class ParallelRangeMerge {
      */
     record RangeResult(List<Path> tmpParts, List<SortedFileWriter> writers, long rows, long mergePasses,
                        long cascadedPasses, long fastPathEmissions) {
+    }
+
+    enum ClampReason {
+        NONE("none"),
+        BELOW_STAGED_FLOOR("below_staged_floor"),
+        FD_EXHAUSTED("fd_exhausted"),
+        FD_LIMITED("fd_limited"),
+        WOULD_CASCADE("would_cascade");
+
+        private final String logValue;
+
+        ClampReason(String logValue) {
+            this.logValue = logValue;
+        }
+
+        String logValue() {
+            return logValue;
+        }
+    }
+
+    record EffectiveRanges(int ranges, ClampReason reason) {
+        EffectiveRanges {
+            if (ranges < 1) {
+                throw new IllegalArgumentException("ranges must be >= 1");
+            }
+        }
+    }
+
+    private record IndexedRangeResult(int range, RangeResult result) {
     }
 
     /**
@@ -263,15 +307,9 @@ final class ParallelRangeMerge {
      * if any range throws (never silently drops a range's rows). {@code progressCallback} and
      * {@code hook} are invoked from multiple range threads, so they are serialized here.
      *
-     * <p><b>Failure is observed in submission (range) order, not first-completed order.</b>
-     * {@link Future#get()} is called on the futures in range order below, so a late range's
-     * failure is not noticed — and its siblings are not
-     * cancelled — until every earlier range's future has already completed (successfully or not).
-     * Correctness still holds either way: nothing is published until every range succeeds, so a whole
-     * merge that will fail never publishes a partial/gapped output regardless of which range's failure
-     * is observed first (see {@code aFailingRangeFailsTheWholeMerge}). First-completed failure
-     * detection (e.g. via {@code ExecutorCompletionService}, to cancel siblings sooner) is a
-     * productionization follow-up, not required for correctness.
+     * <p><b>Failure is observed in completion order.</b> A later-submitted range's failure is surfaced
+     * immediately even while an earlier range is still draining. Siblings are interrupted, joined to
+     * proven quiescence, and only afterwards are writers closed and owned files swept.
      */
     List<RangeResult> run(List<Path> stagingSegments, Path stagingDir, List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
@@ -312,40 +350,54 @@ final class ParallelRangeMerge {
         };
 
         int threads = Math.min(ranges, Math.max(1, Runtime.getRuntime().availableProcessors()));
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
-        List<Future<RangeResult>> futures = new ArrayList<>(ranges);
+        AtomicInteger threadSequence = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(threads, runnable -> {
+            Thread thread = new Thread(runnable,
+                    workerThreadPrefix + threadSequence.incrementAndGet());
+            thread.setDaemon(false);
+            return thread;
+        });
+        CompletionService<IndexedRangeResult> completions = new ExecutorCompletionService<>(pool);
+        List<Future<?>> futures = new ArrayList<>(ranges);
+        AtomicInteger openPartCount = new AtomicInteger();
+        int openPartLimit = openOutputPartLimit(ranges,
+                Math.min(perRangeFanIn, stagingSegments.size()));
         try {
             for (int r = 0; r < ranges; r++) {
                 int range = r;
                 byte[] lo = range == 0 ? null : boundaries.get(range - 1);
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
-                futures.add(pool.submit(mergeRange(range, lo, hi, stagingSegments, stagingDir,
-                        perRangeFanIn, safeProgress, safeHook, segmentSpans, pageRunFormat)));
+                Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
+                        perRangeFanIn, safeProgress, safeHook, segmentSpans, pageRunFormat,
+                        openPartCount, openPartLimit);
+                futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
-            List<RangeResult> results = new ArrayList<>(ranges);
-            for (Future<RangeResult> f : futures) {
-                results.add(f.get());
+            List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
+            for (int completed = 0; completed < ranges; completed++) {
+                IndexedRangeResult result = completions.take().get();
+                results.set(result.range(), result.result());
+            }
+            if (shutdownAndAwait(pool, false)) {
+                Thread.currentThread().interrupt();
             }
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={}",
                     ranges, threads, perRangeFanIn);
             return results;
         } catch (InterruptedException e) {
             futures.forEach(f -> f.cancel(true));
-            quiesce(pool);
+            shutdownAndAwait(pool, true);
             releaseOpenParts();
             sweepOwnFiles(stagingDir);
-            // Restore the flag AFTER the wait, not before it: awaitTermination throws immediately when
-            // the calling thread is already interrupted, so setting it first made quiesce() return
-            // without waiting at all -- and the sweep then ran while sibling ranges were still writing,
-            // which is the exact debris case quiesce exists to prevent. (quiesce re-interrupts itself
-            // if the wait is interrupted again, so the flag is never lost.)
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
             futures.forEach(f -> f.cancel(true));
-            quiesce(pool);
+            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
             releaseOpenParts();
             sweepOwnFiles(stagingDir);
+            if (interruptedWhileJoining) {
+                Thread.currentThread().interrupt();
+            }
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -353,15 +405,23 @@ final class ParallelRangeMerge {
             if (cause instanceof UncheckedIOException uio) {
                 throw uio.getCause() == null ? new IOException(uio.getMessage(), uio) : uio.getCause();
             }
+            if (cause instanceof RuntimeException runtime) {
+                // Preserve policy exceptions such as CaptureSorter's DuplicateKeyException. The
+                // parallel coordinator must not change the public failure type relative to serial.
+                throw runtime;
+            }
             throw new IOException("parallel range merge failed", cause);
         } catch (RuntimeException e) {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
             futures.forEach(f -> f.cancel(true));
-            quiesce(pool);
+            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
             releaseOpenParts();
             sweepOwnFiles(stagingDir);
+            if (interruptedWhileJoining) {
+                Thread.currentThread().interrupt();
+            }
             throw e;
         } finally {
             pool.shutdownNow();
@@ -372,8 +432,11 @@ final class ParallelRangeMerge {
                                              Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
                                              DuplicateHook safeHook,
                                              Map<Path, List<SortedFileIndex.RowGroupSpan>> segmentSpans,
-                                             boolean pageRunFormat) {
+                                             boolean pageRunFormat, AtomicInteger openPartCount,
+                                             int openPartLimit) {
         return () -> {
+            SortedFileWriterFactory rangeWriterFactory =
+                    finalWriterFactory.forOutputSequence();
             long startNanos = System.nanoTime();
             List<Path> intermediates = new ArrayList<>();
             // Row-group skip counters — accumulated (single-threaded within this one range) across
@@ -414,7 +477,8 @@ final class ParallelRangeMerge {
                 // how many parts the ranges below it produce. SortTransform assigns the indices and
                 // closes, once every range has drained.
                 rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
-                        () -> openRangePart(stagingDir, range, tmpParts), safeProgress, parts, false);
+                        () -> openRangePart(stagingDir, range, tmpParts, rangeWriterFactory,
+                                openPartCount, openPartLimit), safeProgress, parts, false);
             } catch (IOException | RuntimeException e) {
                 // This range failed, so nothing it wrote will be published: release the open parts
                 // rather than strand their descriptors until the sweep. Never stamped -- an aborted
@@ -466,20 +530,33 @@ final class ParallelRangeMerge {
         };
     }
 
-    private SortedFileWriter openRangePart(Path stagingDir, int range, List<Path> tmpParts)
-            throws IOException {
+    private SortedFileWriter openRangePart(Path stagingDir, int range, List<Path> tmpParts,
+            SortedFileWriterFactory rangeWriterFactory, AtomicInteger openPartCount,
+            int openPartLimit) throws IOException {
         // Range-local ordinal: it names the tmp file, and is only a PLACEHOLDER index. The real
         // file_index is assigned by SortTransform once every range has drained and the global roll
         // sequence is known; the footer is not written until then (see setFileIndex).
         int localIndex = tmpParts.size() + 1;
         Path tmp = stagingDir.resolve("prange-" + range + "-" + localIndex + ".parquet.tmp");
-        SortedFileWriter writer = finalWriterFactory.create(tmp, localIndex);
+        int open = openPartCount.incrementAndGet();
+        if (open > openPartLimit) {
+            openPartCount.decrementAndGet();
+            throw new IOException("parallel range merge output-part fd budget exhausted: limit="
+                    + openPartLimit + ", attempted=" + open
+                    + "; lower swath.sort.merge-parallelism or raise the soft open-file limit");
+        }
+        SortedFileWriter writer;
+        try {
+            writer = rangeWriterFactory.create(tmp, localIndex);
+        } catch (IOException | RuntimeException e) {
+            openPartCount.decrementAndGet();
+            throw e;
+        }
         // Register on creation, not on return, so the failure path can release a part whatever
-        // happens to the range that owns it. A CANCELLED range is the case that needs this: its
-        // callable does not poll for interruption, so it runs to completion and its RangeResult --
-        // and with it the only other handle on these writers -- is discarded by the cancelled
-        // FutureTask. Without the registry those parts stay open until GC while the sweep unlinks
-        // the files underneath them. Closes are idempotent, so double-releasing is harmless.
+        // happens to the range that owns it. A cancelled range exits cooperatively at the next safe
+        // point and closes its local list, while this registry lets the coordinator release every
+        // already-open part again after quiescence without depending on a cancelled Future's result.
+        // Closes are idempotent, so double-releasing is harmless.
         openParts.add(writer);
         tmpParts.add(tmp);
         return writer;
@@ -662,8 +739,7 @@ final class ParallelRangeMerge {
      * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
      */
     int perRangeFanIn(int ranges, List<Path> stagingSegments) {
-        return perRangeFanIn(ranges, perStreamBytes(stagingSegments),
-                estimatedOpenParts(stagingSegments, ranges));
+        return perRangeFanIn(ranges, perStreamBytes(stagingSegments), ranges);
     }
 
     /**
@@ -698,21 +774,38 @@ final class ParallelRangeMerge {
      * a small roll threshold the parts alone can exhaust the budget, which would surface as an EMFILE
      * partway through a merge the clamp had already declared safe.
      */
-    private static long streamFdBudget(long openPartBudget) {
-        long total = MergeFdBudget.fdBoundedFanIn(MergeFdBudget.softOpenFileLimit(),
-                MergeFdBudget.FD_HEADROOM);
-        return Math.max(0L, total - openPartBudget);
+    private long usableFdBudget() {
+        int softLimit = softFdLimitSupplier.getAsInt();
+        if (softLimit < 0) {
+            return Long.MAX_VALUE;
+        }
+        return Math.max(0L, (long) softLimit - MergeFdBudget.FD_HEADROOM);
     }
 
     /**
-     * How many final-output parts this merge will hold open at once — the sum over ranges, since none
-     * of them close until the stamp is assigned.
-     *
-     * <p>Estimated from STAGED bytes, which overstates the published size (staging is page-run/LZ4,
-     * the output is columnar Parquet) and so errs toward reserving too many descriptors rather than
-     * too few. An unreadable segment is treated the same way, as is a run with rolling disabled
-     * ({@code final-file-bytes == MAX_VALUE}), which produces exactly one part per range.
+     * Descriptors available to merge inputs after reserving {@code openPartBudget} output writers.
+     * No staged-byte estimate appears here: page-run compression and Parquet encoding are unrelated,
+     * so physical staging bytes cannot conservatively predict how many final files will roll.
      */
+    private long streamFdBudget(long openPartBudget) {
+        long usable = usableFdBudget();
+        return usable == Long.MAX_VALUE ? Long.MAX_VALUE : Math.max(0L, usable - openPartBudget);
+    }
+
+    /**
+     * Maximum final-output writers the range fleet may actually open while all final-pass input
+     * streams are live. The guard is enforced atomically in {@link #openRangePart}; exceeding it
+     * fails and cancels the merge before another descriptor is opened.
+     */
+    private int openOutputPartLimit(int ranges, int perRangeFanIn) {
+        long usable = usableFdBudget();
+        if (usable == Long.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        long inputReservation = (long) ranges * perRangeFanIn;
+        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, usable - inputReservation));
+    }
+
     /** Total staged bytes, best-effort: an unreadable segment counts as zero and only shrinks R. */
     private static long stagedBytes(List<Path> stagingSegments) {
         long total = 0;
@@ -724,25 +817,6 @@ final class ParallelRangeMerge {
             }
         }
         return total;
-    }
-
-    private long estimatedOpenParts(List<Path> stagingSegments, int ranges) {
-        if (config.finalFileBytes() == Long.MAX_VALUE) {
-            return ranges;   // no rolling: one part per range
-        }
-        long staged = 0;
-        for (Path segment : stagingSegments) {
-            try {
-                staged += Files.size(segment);
-            } catch (IOException e) {
-                log.debug("could not size a staging segment for the open-part fd estimate; "
-                        + "assuming the roll threshold is reached once per segment", e);
-                staged += config.finalFileBytes();
-            }
-        }
-        // Ceiling division, and never fewer than one part per range: a range always opens at least one.
-        long byRoll = (staged + config.finalFileBytes() - 1) / config.finalFileBytes();
-        return Math.max(ranges, byRoll);
     }
 
     /**
@@ -763,47 +837,65 @@ final class ParallelRangeMerge {
      * re-derive it by hand: segment count rises with the object count, so an {@code R} that is
      * single-pass on a 10 M-object bucket can cascade on a billion-object one at the same heap.
      *
-     * <p>Returns at least 1. A 1 means even a single range would cascade — which is just what the
-     * serial merge does anyway — so the caller takes the untouched serial path instead of paying this
-     * path's boundary-sampling prologue for no parallelism. The search starts from a closed-form
-     * estimate and steps down only to absorb floor-division rounding, so it evaluates
-     * {@link #perRangeFanIn} a couple of times, not {@code R} times.
+     * <p>Returns at least 1 plus a typed reason whenever the requested count was not honoured. A 1
+     * can mean the staged-size floor declined the work, descriptors were exhausted, or the memory
+     * budget/configured fan-in would force a cascade; none means the keyspace was unsplittable (that
+     * is known only after boundary sampling). With combined constraints, the reason names the one
+     * that determines the final range count: descriptor exhaustion applies only when descriptors
+     * alone force one range, while a binding descriptor reduction above one is descriptor-limited.
+     * The search starts from a closed-form estimate and steps down only to absorb constraints not
+     * represented in that estimate, so it evaluates {@link #perRangeFanIn} a couple of times, not
+     * {@code R} times.
      */
-    int effectiveRanges(int requested, List<Path> stagingSegments) {
+    EffectiveRanges effectiveRanges(int requested, List<Path> stagingSegments) {
         int segments = stagingSegments.size();
         if (requested <= 1 || segments <= 0) {
-            return Math.max(1, requested);
+            return new EffectiveRanges(Math.max(1, requested), ClampReason.NONE);
         }
         // Too small to be worth splitting: the speedup would be seconds and the cost is a permanent
         // change to the published file count. Checked before anything else, because it is the cheapest
         // test and the most common answer on ordinary runs.
         if (stagedBytes(stagingSegments) < config.minParallelStagedBytes()) {
-            return 1;
+            return new EffectiveRanges(1, ClampReason.BELOW_STAGED_FLOOR);
         }
         long perStream = perStreamBytes(stagingSegments);
-        // The open output parts are priced FIRST, because their count is driven by final-file-bytes
-        // and the staged size, not by R -- so lowering R does not make them fit. If they alone leave
-        // too few descriptors for even a 2-way merge, no range count is viable and the whole path
-        // declines; the serial merge holds one part open at a time and is unaffected.
-        long openParts = estimatedOpenParts(stagingSegments, requested);
-        if (streamFdBudget(openParts) < 2) {
-            return 1;
+        // Reserve one output writer per candidate range. Additional rolls are not estimated from
+        // staging bytes (that is not a valid upper bound); openRangePart enforces the remaining
+        // output-writer allowance dynamically. If even one output plus a two-way merge cannot fit,
+        // this is specifically fd exhaustion, not an unsplittable keyspace.
+        if (streamFdBudget(1) < 2) {
+            return new EffectiveRanges(1, ClampReason.FD_EXHAUSTED);
         }
         // Closed form: the largest R with (budget/R)/perStream >= segments, and with the per-range
         // share of what the parts left over still spanning the segments. Both are the inequalities
         // perRangeFanIn tests.
         long byBudget = config.mergeBudgetBytes() / perStream / segments;
-        long byFd = streamFdBudget(openParts) / segments;
+        long usableFds = usableFdBudget();
+        long byFd = usableFds == Long.MAX_VALUE
+                ? Long.MAX_VALUE
+                : usableFds / (segments + 1L);   // R*segments inputs + R initial output writers
         int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
         // Floor division in several places means the closed form can land one step high; step down
         // until the predicate SortTransform reports on is actually true, so the clamp cannot be off by
-        // one. estimatedOpenParts is re-evaluated per candidate because its floor is R itself.
+        // one. Re-evaluate the exact predicate per candidate because the integer divisions floor.
         while (candidate > 1
-                && perRangeFanIn(candidate, perStream, estimatedOpenParts(stagingSegments, candidate))
+                && perRangeFanIn(candidate, perStream, candidate)
                         < segments) {
             candidate--;
         }
-        return candidate;
+        ClampReason reason = ClampReason.NONE;
+        if (candidate < requested) {
+            // Name the constraint that determines the final range count. In particular, a partial
+            // descriptor reduction may expose an independent configured-fan-in or heap limit that
+            // then forces the search all the way to one range. That is a cascade decline, not fd
+            // exhaustion: descriptors alone would still have permitted parallel work.
+            boolean nonFdForcesSerial = config.fanIn() < segments || byBudget < 2;
+            boolean fdBinding = byFd < requested && byFd <= byBudget;
+            reason = candidate == 1
+                    ? (nonFdForcesSerial ? ClampReason.WOULD_CASCADE : ClampReason.FD_EXHAUSTED)
+                    : (fdBinding ? ClampReason.FD_LIMITED : ClampReason.WOULD_CASCADE);
+        }
+        return new EffectiveRanges(candidate, reason);
     }
 
     /**
@@ -853,24 +945,27 @@ final class ParallelRangeMerge {
     }
 
     /**
-     * Stop the pool and wait, briefly, for the range threads to actually finish before anything
-     * sweeps their files. Cancelling a future only INTERRUPTS its thread; the merge and drain loops
-     * do not poll for interruption, so a sibling range can still be mid-write when the failure path
-     * runs. Sweeping underneath it would delete a file that is then re-created, leaving debris that
-     * an immediate retry -- which reuses the same {@code prange-}/{@code merge-r} names -- could
-     * collide with. Bounded because a hung range must not turn a failure into a hang: if the wait
-     * expires we sweep anyway, which is no worse than the previous unconditional behaviour.
+     * Stop the pool and prove every range thread has exited before cleanup or return. Cancellation
+     * is cooperative: the shared merge and drain loops poll the interrupt flag at row/page/pass safe
+     * points, while try-with-resources closes readers and range writers on the way out. Interrupts of
+     * the coordinator during this join are remembered and restored only after quiescence is proven.
      */
-    private static void quiesce(ExecutorService pool) {
-        pool.shutdownNow();
-        try {
-            if (!pool.awaitTermination(RANGE_QUIESCE_SECONDS, TimeUnit.SECONDS)) {
-                log.debug("range threads did not stop within {}s of a failed parallel merge; "
-                        + "sweeping anyway", RANGE_QUIESCE_SECONDS);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+    private static boolean shutdownAndAwait(ExecutorService pool, boolean cancel) {
+        if (cancel) {
+            pool.shutdownNow();
+        } else {
+            pool.shutdown();
         }
+        boolean interrupted = false;
+        while (!pool.isTerminated()) {
+            try {
+                pool.awaitTermination(1, TimeUnit.DAYS);
+            } catch (InterruptedException e) {
+                interrupted = true;
+                pool.shutdownNow();
+            }
+        }
+        return interrupted;
     }
 
     /**

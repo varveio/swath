@@ -34,7 +34,7 @@ import java.util.function.UnaryOperator;
  *       final writer.</li>
  *   <li>{@code segmentRowGroupBytes} — the row-group size for INTERNAL <b>columnar Parquet</b> staging
  *       segments ({@link SegmentWriter}/{@link SegmentParquetSink}, still used by {@link CaptureSorter}'s
- *       sort-fixture path and the off-by-default {@link ParallelRangeMerge} path): small on purpose
+ *       sort-fixture path and the gated {@link ParallelRangeMerge} path): small on purpose
  *       (default 1&nbsp;MB, not {@code finalRowGroupBytes}'s 8&nbsp;MB) because {@link SegmentReader}
  *       preloads a whole row group per open Parquet stream. The live listing path stages
  *       <b>page-run</b> segments (not columnar Parquet), so this knob no longer governs the serial
@@ -204,6 +204,10 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         }
         if (segmentCodec == null) {
             throw new IllegalArgumentException("segment-codec must not be null");
+        }
+        if (minParallelStagedBytes < 0) {
+            throw new IllegalArgumentException(
+                    "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes);
         }
     }
 

@@ -20,6 +20,15 @@ public interface SortedFileWriterFactory {
     SortedFileWriterFactory DEFAULT = (path, fileIndex) -> new DefaultSortedFileWriter(path);
 
     /**
+     * Return a factory whose mutable decorator state is scoped to one ordered output sequence.
+     * A serial publish has one sequence across all of its rolled files; a parallel range merge has
+     * one sequence per range. Stateless factories may return {@code this}.
+     */
+    default SortedFileWriterFactory forOutputSequence() {
+        return this;
+    }
+
+    /**
      * @param fileIndex this file's 1-based position in the final output's roll sequence — known at
      *                   open time, unlike "is this the last file" which is only known when the merge
      *                   completes (see {@link SortedFileWriter#markFinal()}).
