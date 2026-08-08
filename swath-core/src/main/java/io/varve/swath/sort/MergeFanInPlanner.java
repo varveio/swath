@@ -43,9 +43,11 @@ final class MergeFanInPlanner {
     /**
      * The runtime-clamped merge fan-in for {@code segments} — {@link #clampedMergeFanIn} plus the
      * cascade-predicted warning ({@link #warnIfCascadePredicted}) that its result can trigger. The one
-     * entry point the serial merge path needs; the off-by-default parallel range-merge path calls
-     * {@link #warnIfCascadePredicted} directly instead (it merges against the STATIC {@code
-     * effectiveFanIn}, never this runtime clamp).
+     * entry point the serial merge path needs. The parallel range-merge path does not
+     * call this: it computes its own PER-RANGE width ({@link ParallelRangeMerge#perRangeFanIn}), which
+     * divides both the memory budget and the process fd budget by the range count and prices a stream
+     * by staging format — reusing {@link #maxPageRunRecordLen} for the page-run case. It calls
+     * {@link #warnIfCascadePredicted} directly for the warning alone.
      */
     int plan(List<Path> segments) {
         int clamped = clampedMergeFanIn(segments);
@@ -115,27 +117,42 @@ final class MergeFanInPlanner {
      * trailer read fails — the static bound is an acceptable, correct fallback.
      */
     private int exactMemoryFanIn(List<Path> segments) {
-        if (segments.isEmpty()) {
-            return Integer.MAX_VALUE;
-        }
-        long maxRecordLen = 0;
-        try {
-            for (Path seg : segments) {
-                if (!SortTransform.isPageRunSegment(seg)) {
-                    return Integer.MAX_VALUE;   // Parquet/mixed input: fall back to the static estimate
-                }
-                maxRecordLen = Math.max(maxRecordLen, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
-            }
-        } catch (IOException e) {
-            log.debug("could not read a page-run trailer for the exact merge-memory clamp; "
-                    + "falling back to the static effectiveFanIn estimate", e);
-            return Integer.MAX_VALUE;
-        }
+        long maxRecordLen = maxPageRunRecordLen(segments);
         if (maxRecordLen <= 0) {
             return Integer.MAX_VALUE;
         }
         long bound = config.mergeBudgetBytes() / maxRecordLen;
         return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
+    }
+
+    /**
+     * The largest framed record across {@code segments}, read O(1) per segment from the page-run
+     * trailer — the EXACT heap one open page-run merge stream holds, and so the right divisor for any
+     * merge-memory bound over page-run input. Returns {@code -1} when the input is empty, is not
+     * all page-run (columnar Parquet, or a mixed set), or a trailer cannot be read; every caller
+     * then falls back to its own static estimate, which is correct and merely conservative.
+     *
+     * <p>Package-private and shared: {@link ParallelRangeMerge} needs the same quantity to size its
+     * PER-RANGE fan-in, and computing it there independently would be the same scan written twice.
+     */
+    static long maxPageRunRecordLen(List<Path> segments) {
+        if (segments.isEmpty()) {
+            return -1;
+        }
+        long maxRecordLen = 0;
+        try {
+            for (Path seg : segments) {
+                if (!SortTransform.isPageRunSegment(seg)) {
+                    return -1;
+                }
+                maxRecordLen = Math.max(maxRecordLen, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
+            }
+        } catch (IOException e) {
+            log.debug("could not read a page-run trailer for the exact merge-memory bound; "
+                    + "falling back to the static estimate", e);
+            return -1;
+        }
+        return maxRecordLen > 0 ? maxRecordLen : -1;
     }
 
     /** Number of {@link KWayMerge#merge} passes (cascade passes + the final streaming pass). */

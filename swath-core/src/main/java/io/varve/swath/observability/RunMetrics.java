@@ -217,6 +217,8 @@ public final class RunMetrics {
     // swath.sort.merge-parallelism>1). Distinct from sortMergeLatency (the whole-run merge wall): this
     // records once per concurrent range so an A/B can see per-range cost with vs without row-group skip.
     private final Timer sortMergeRangeLatency;
+    // The parallel path's SERIAL prologue: boundary sampling, once per run, before any range starts.
+    private final Timer sortMergeBoundariesLatency;
     private final Timer sortBackpressureWait;
     private final DistributionSummary sortPageRunsPerBuffer;
 
@@ -535,6 +537,8 @@ public final class RunMetrics {
         sortMergePasses = Counter.builder("swath.sort.merge.passes").register(registry);
         sortMergeLatency = runScopedTimer("swath.sort.merge.latency").register(registry);
         sortMergeRangeLatency = runScopedTimer("swath.sort.merge.range.latency").register(registry);
+        sortMergeBoundariesLatency =
+                runScopedTimer("swath.sort.merge.boundaries.latency").register(registry);
         sortBackpressureWait = runScopedTimer("swath.sort.backpressure.wait").register(registry);
         sortPageRunsPerBuffer = runScopedSummary("swath.sort.page_runs_per_buffer").register(registry);
         // Peak in-flight staging bytes / handoff-queue depth / off-thread buffer count — see
@@ -1031,6 +1035,16 @@ public final class RunMetrics {
      */
     public void recordSortMergeRange(long nanos) {
         sortMergeRangeLatency.record(Duration.ofNanos(nanos));
+    }
+
+    /**
+     * Record the parallel merge's boundary-sampling prologue ({@code
+     * swath.sort.merge.boundaries.latency}) — the one phase of that path that does NOT parallelise,
+     * timed once per run before any range starts. Surfaced as {@code sort.merge_boundaries_ms} so an
+     * A/B can subtract it from {@code merge_ms} and see the ranges' own scaling.
+     */
+    public void recordSortMergeBoundaries(long nanos) {
+        sortMergeBoundariesLatency.record(Duration.ofNanos(nanos));
     }
 
     public void recordProbeFetch() {

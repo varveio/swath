@@ -148,6 +148,57 @@ class SortTransformParallelMergePropTest {
                 ranges, Long.MAX_VALUE, SortedFileWriterFactory.DEFAULT, false);
     }
 
+    /**
+     * The core property with each range forced to CASCADE. Every property above runs under
+     * {@link SortConfigs#base()}'s {@code merge-budget-bytes = Long.MAX_VALUE}, so no range ever
+     * needs more than one pass — which leaves the interaction of the two backstops untested, and it
+     * is reachable in production: {@link ParallelRangeMerge#perRangeFanIn} divides the budget by
+     * {@code R}, so a segment count that a serial merge spans in ONE pass can outrun the per-range
+     * fan-in as soon as {@code R} rises. A 1-byte budget pins each range at the {@code max(2, …)}
+     * floor, so any input with &gt;2 segments cascades within every range.
+     *
+     * <p>The baseline is a NON-cascading serial run (budget unbounded): under the strict generator
+     * equal-comparing rows are byte-identical, so the correct output is unique and the cascading
+     * parallel run must still reproduce it exactly — a range that dropped or duplicated a row while
+     * folding its intermediates, or that mis-ordered across a cascade pass, fails here and passes
+     * every existing property.
+     */
+    @Property(tries = 60)
+    void cascadingRangesAreStillByteExactToANonCascadingSerialRun(
+            @ForAll @IntRange(min = 3, max = 6) int segmentCount,
+            @ForAll @IntRange(min = 1, max = 320) int entryCount,
+            @ForAll KeyStyle style,
+            @ForAll @IntRange(min = 2, max = 6) int ranges,
+            @ForAll long seed) throws IOException {
+        Scenario s = buildScenario(segmentCount, entryCount, style, seed, false);
+        Path root = Files.createTempDirectory("prangeprop-cascade-");
+        try {
+            SortTransformResult serial =
+                    run(s, 1, Long.MAX_VALUE, root, "serial", SortedFileWriterFactory.DEFAULT);
+            // Direct, not through SortTransform: the clamp would reduce R to 1 on this budget and hand
+            // back to serial, so routing through it would compare serial against serial and prove
+            // nothing about the cascade branches this test is named for.
+            CascadeRun parallel = runParallelUnclamped(s, ranges, root, "parallel", 1L);
+            if (parallel == null) {
+                return;   // unsplittable keyspace; the degenerate case has its own example
+            }
+
+            assertThat(parallel.cascadedPasses())
+                    .as("the ranges actually cascaded — otherwise this test proves nothing")
+                    .isGreaterThan(0);
+
+            List<ListEntry> input = s.allEntries();
+            List<ListEntry> parallelRows = readAll(parallel.parts());
+            assertThat(parallel.rows()).as("cascading parallel rows out == rows in")
+                    .isEqualTo(input.size());
+            assertThat(parallelRows).as("cascading parallel is the exact input multiset")
+                    .containsExactlyInAnyOrderElementsOf(input);
+            assertByteExactToSerial(readAll(serial.finalFiles()), parallelRows);
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Adversarial boundary / degenerate examples.
     // ---------------------------------------------------------------------
@@ -250,40 +301,42 @@ class SortTransformParallelMergePropTest {
     }
 
     // ---------------------------------------------------------------------
-    // Pins the CURRENT completeness-stamp behavior on the parallel path (range-local file_index, no
-    // file marked final) so a regression is caught. This test documents the current limitation; it
-    // does not establish the missing global completeness proof.
+    // The completeness stamp is IDENTICAL on both merge paths: a global file_index 1..N with exactly
+    // one file_final, on N. That symmetry is what makes merge-parallelism a performance knob rather
+    // than a change to what published output MEANS, and so what lets it be on by default.
     // ---------------------------------------------------------------------
 
     @Example
-    void parallelPartsCarryRangeLocalFileIndexAndNoFinalStamp_serialStampsProperly() throws IOException {
+    void parallelPartsCarryTheSameGlobalStampAsSerial() throws IOException {
         List<List<ListEntry>> segs = List.of(objs("a", "d", "g"), objs("b", "e", "h"), objs("c", "f", "i"));
         SortedFileWriterFactory stamped =
                 new SortedParquetWriterFactory(config(1, Long.MAX_VALUE), SortMode.OBJECTS);
         Path root = Files.createTempDirectory("prangeprop-stamp-");
         try {
             Scenario s = scenario(segs);
-            // Serial baseline: the single file carries a PROPER stamp — file_index 1, file_final true.
+            // Serial baseline: the single file carries file_index 1 and is marked final.
             SortTransformResult serial = run(s, 1, Long.MAX_VALUE, root, "serial", stamped);
             assertThat(serial.finalFiles()).hasSize(1);
             SortStamp serialStamp = readStamp(serial.finalFiles().get(0));
             assertThat(serialStamp.fileIndex()).isEqualTo(1);
             assertThat(serialStamp.fileFinal()).as("serial single file is stamped final").isTrue();
 
-            // Parallel path: 3 ranges ⇒ 3 parts. Current (documented-gap) behavior — each part is
-            // range-LOCAL file_index 1 (NOT the global 1..N), and NO part is stamped final.
+            // Parallel path: 3 ranges ⇒ 3 parts, stamped 1,2,3 in filename order with final on the
+            // last. A range-local stamp would read 1,1,1 with no final, and a reader could not tell a
+            // complete set from a truncated one.
             SortTransformResult parallel = run(s, 3, Long.MAX_VALUE, root, "parallel", stamped);
             assertThat(parallel.finalFiles()).hasSize(3);
+            List<Integer> indices = new ArrayList<>();
             for (Path part : parallel.finalFiles()) {
-                SortStamp stamp = readStamp(part);
-                assertThat(stamp.fileIndex())
-                        .as("range-local file_index, not global 1..N")
-                        .isEqualTo(1);
-                assertThat(stamp.fileFinal())
-                        .as("no parallel part is stamped final")
-                        .isFalse();
+                indices.add(readStamp(part).fileIndex());
             }
-            // Content is still a correct global sort despite the stamp gap.
+            assertThat(indices).as("global file_index 1..N in filename order").containsExactly(1, 2, 3);
+            for (int i = 0; i < parallel.finalFiles().size(); i++) {
+                boolean last = i == parallel.finalFiles().size() - 1;
+                assertThat(readStamp(parallel.finalFiles().get(i)).fileFinal())
+                        .as("file_final present iff last part (part %d)", i + 1)
+                        .isEqualTo(last);
+            }
             assertThat(readKeys(parallel.finalFiles())).containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i");
         } finally {
             deleteRecursively(root);
@@ -461,19 +514,81 @@ class SortTransformParallelMergePropTest {
 
     private SortTransformResult run(Scenario s, int parallelism, long finalFileBytes, Path root,
                                     String name, SortedFileWriterFactory factory) throws IOException {
+        return run(s, parallelism, finalFileBytes, root, name, factory, Long.MAX_VALUE);
+    }
+
+    private SortTransformResult run(Scenario s, int parallelism, long finalFileBytes, Path root,
+                                    String name, SortedFileWriterFactory factory, long mergeBudgetBytes)
+            throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         List<Path> segs = new ArrayList<>();
         for (int i = 0; i < s.segments().size(); i++) {
             segs.add(writeSegment(staging, "seg-" + i + ".parquet", s.segments().get(i)));
         }
-        SortTransform transform = new SortTransform(new SortRun(config(parallelism, finalFileBytes), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, factory));
+        SortConfig config = config(parallelism, finalFileBytes).withMergeBudgetBytes(mergeBudgetBytes);
+        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, factory));
         return transform.transform(segs, output, staging, PublishListener.NO_OP);
     }
 
     /** Large budgets/fan-in so neither path cascades — a single pass makes tie ordering deterministic. */
     private SortConfig config(int mergeParallelism, long finalFileBytes) {
         return SortConfigs.base().withFinalFileBytes(finalFileBytes).withMergeParallelism(mergeParallelism);
+    }
+
+    /**
+     * Drive {@link ParallelRangeMerge} DIRECTLY, past {@link SortTransform}'s clamp, and return the
+     * range parts in key order.
+     *
+     * <p>Necessary because the clamp makes cascading ranges unreachable through the normal entry
+     * point: it reduces {@code R} until no range would cascade and falls back to serial when none
+     * fits. Routing a "cascading ranges" test through {@code SortTransform} therefore silently
+     * measures the SERIAL path against itself — which is what these tests were doing after the clamp
+     * landed, passing while exercising none of the code they name.
+     *
+     * <p>Mirrors the publish path's stamp-then-close so the parts are readable: the writers come back
+     * open by design (see {@link ParallelRangeMerge}'s javadoc).
+     */
+    private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
+                                            long mergeBudgetBytes) throws IOException {
+        Path output = Files.createDirectories(root.resolve(name));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        List<Path> segs = new ArrayList<>();
+        for (int i = 0; i < s.segments().size(); i++) {
+            segs.add(writeSegment(staging, "seg-" + i + ".parquet", s.segments().get(i)));
+        }
+        SortConfig config = config(ranges, Long.MAX_VALUE).withMergeBudgetBytes(mergeBudgetBytes);
+        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT);
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
+        if (boundaries == null) {
+            return null;   // unsplittable keyspace — nothing to say about cascading ranges
+        }
+        List<ParallelRangeMerge.RangeResult> results =
+                merge.run(segs, staging, boundaries, units -> { });
+
+        List<Path> parts = new ArrayList<>();
+        List<SortedFileWriter> writers = new ArrayList<>();
+        long cascaded = 0;
+        long rows = 0;
+        for (ParallelRangeMerge.RangeResult rr : results) {
+            parts.addAll(rr.tmpParts());
+            writers.addAll(rr.writers());
+            cascaded += rr.cascadedPasses();
+            rows += rr.rows();
+        }
+        for (int i = 0; i < writers.size(); i++) {
+            writers.get(i).setFileIndex(i + 1);
+        }
+        if (!writers.isEmpty()) {
+            writers.get(writers.size() - 1).markFinal();
+        }
+        RolledPartWriter.closeInOrder(writers);
+        return new CascadeRun(parts, rows, cascaded);
+    }
+
+    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
     }
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
@@ -569,6 +684,11 @@ class SortTransformParallelMergePropTest {
                 @Override
                 public long rows() {
                     return inner.rows();
+                }
+
+                @Override
+                public void setFileIndex(int fileIndex) {
+                    inner.setFileIndex(fileIndex);   // forward: this fake only changes roll timing
                 }
 
                 @Override

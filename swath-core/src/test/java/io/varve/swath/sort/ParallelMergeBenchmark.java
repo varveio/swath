@@ -11,6 +11,8 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,27 +20,28 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 /**
  * MEASUREMENT harness: proves whether the concurrent range-merge path
- * ({@code swath.sort.merge-parallelism > 1}, with the row-group skip) actually cuts
+ * ({@code swath.sort.merge-parallelism > 1}, with the live page-run skip) actually cuts
  * {@link SortTransform}'s merge-phase wall clock, and whether the effect is CPU-parallelizable or
  * disk-bandwidth-bound. Runs the ACTUAL production merge path — {@link SortTransform#transform}
- * with {@link SortedParquetWriterFactory} and production default segment/final row-group sizes —
- * over a large synthetic corpus of UNIQUE-keyed sorted staging segments, once per {@code R} in
- * {1, 2, 4, 8} (plus an R=1 repeat to bound run-to-run variance).
+ * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
+ * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing, once per
+ * requested {@code R} in {1, 2, 4, 8} (plus an R=1 repeat to bound run-to-run variance).
  *
  * <p>NOT part of the normal build or CI: this class only runs when {@code -Dswath.bench=on} is
  * passed (see {@link EnabledIfSystemProperty}), so {@code ./gradlew build} never executes it.
@@ -62,16 +65,67 @@ class ParallelMergeBenchmark {
     private static final int NUM_SEGMENTS = Integer.getInteger("swath.bench.segments", 64);
     private static final long TOTAL_ROWS = Long.getLong("swath.bench.rows", 12_000_000L);
     private static final int BLOCK_ROWS = Integer.getInteger("swath.bench.blockRows", 4_000);
+    private static final int PAGE_ROWS = Integer.getInteger("swath.bench.pageRows", 1_000);
+    /**
+     * The {@code R} values to sweep, in order. {@code R=1} must be FIRST — it is the identity baseline
+     * every later arm is full-row compared against. The sweep is user-settable through
+     * {@code swath.bench.ranges}, so this is enforced rather than assumed: a sweep starting anywhere
+     * else would otherwise dereference a null baseline and surface as an NPE partway through a
+     * half-hour run, instead of saying up front what the operator got wrong.
+     */
+    private static final List<Integer> RANGES = parseRanges();
+
+    private static List<Integer> parseRanges() {
+        String configured = System.getProperty("swath.bench.ranges", "1,2,4,8");
+        if (configured == null || configured.isBlank()) {
+            throw invalidRanges(configured, "must not be empty");
+        }
+        String[] tokens = configured.split(",", -1);
+        List<Integer> ranges = new ArrayList<>(tokens.length);
+        for (int i = 0; i < tokens.length; i++) {
+            String token = tokens[i].trim();
+            if (token.isEmpty()) {
+                throw invalidRanges(configured, "contains an empty value at position " + (i + 1));
+            }
+            try {
+                ranges.add(Integer.parseInt(token));
+            } catch (NumberFormatException e) {
+                throw invalidRanges(configured,
+                        "contains invalid integer '" + token + "' at position " + (i + 1));
+            }
+        }
+        if (ranges.get(0) != 1) {
+            throw invalidRanges(configured, "must start with R=1 for the identity baseline");
+        }
+        Set<Integer> seen = new HashSet<>();
+        for (int i = 0; i < ranges.size(); i++) {
+            int range = ranges.get(i);
+            if (range <= 0) {
+                throw invalidRanges(configured, "contains nonpositive R=" + range);
+            }
+            if (!seen.add(range)) {
+                throw invalidRanges(configured, "contains duplicate R=" + range);
+            }
+            if (i > 0 && range <= ranges.get(i - 1)) {
+                throw invalidRanges(configured, "must be strictly increasing; R=" + range
+                        + " follows R=" + ranges.get(i - 1));
+            }
+        }
+        return List.copyOf(ranges);
+    }
+
+    private static IllegalArgumentException invalidRanges(String configured, String reason) {
+        return new IllegalArgumentException(
+                "invalid swath.bench.ranges='" + configured + "': " + reason);
+    }
     private static final int TOTAL_DAYS = 1_500;
     private static final String KEY_PREFIX = "corp-data-lake-logs";
     private static final String[] STORAGE_CLASSES =
             {"STANDARD", "STANDARD_IA", "INTELLIGENT_TIERING", "GLACIER"};
-    // Production default segment-row-group-bytes (SortConfig#fromProperties) — small on purpose so
-    // the row-group skip has real, narrow groups to prune.
-    private static final long SEGMENT_ROW_GROUP_BYTES = 1L << 20;
-
+    // Generous: the corpus knobs above (and swath.bench.ranges) govern how long a sweep actually takes,
+    // and this class never runs under the default suite — the timeout is a runaway backstop, not a budget.
     @Test
-    @Timeout(value = 9, unit = TimeUnit.MINUTES)
+    @Timeout(value = 120, unit = TimeUnit.MINUTES)
     void parallelMergeScaling() throws IOException {
         Path root = Files.createTempDirectory("swath-parallel-merge-bench-");
         System.out.println("BENCH_ROOT " + root);
@@ -85,7 +139,9 @@ class ParallelMergeBenchmark {
             System.out.printf("BENCH_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
                     corpus.segments, corpus.rows, corpus.bytes, buildMs);
 
-            List<Integer> ranges = List.of(1, 2, 4, 8);
+            measureOpenReaderHeap(master);
+
+            List<Integer> ranges = RANGES;
             Map<Integer, ArmResult> results = new LinkedHashMap<>();
             List<Path> baselineFinals = null;
 
@@ -95,12 +151,14 @@ class ParallelMergeBenchmark {
                 if (r == 1) {
                     baselineFinals = ar.finalFiles;
                 } else {
-                    boolean exact = byteExact(baselineFinals, ar.finalFiles);
-                    ar.byteExact = exact;
+                    boolean exact = fullRowsEqual(baselineFinals, ar.finalFiles);
+                    ar.fullRowExact = exact;
                     if (!exact) {
-                        System.out.println("BENCH_BYTE_EXACT_FAIL r=" + r);
+                        System.out.println("BENCH_FULL_ROW_EXACT_FAIL requested_r=" + r
+                                + " actual_ranges=" + ar.actualRanges);
                         throw new AssertionError(
-                                "byte-exact mismatch at R=" + r + " vs the R=1 baseline — silent data loss");
+                                "full-row mismatch at requested R=" + r + " (actual ranges="
+                                        + ar.actualRanges + ") vs the R=1 baseline — silent data loss");
                     }
                     deleteRecursively(ar.armRoot);
                 }
@@ -109,7 +167,7 @@ class ParallelMergeBenchmark {
 
             // R=1 repeat, for run-to-run variance.
             ArmResult repeat = runArm(root, master, 1, "r1-repeat");
-            boolean repeatExact = byteExact(baselineFinals, repeat.finalFiles);
+            boolean repeatExact = fullRowsEqual(baselineFinals, repeat.finalFiles);
             if (!repeatExact) {
                 throw new AssertionError("R=1 repeat mismatched the R=1 baseline");
             }
@@ -117,14 +175,31 @@ class ParallelMergeBenchmark {
             deleteRecursively(repeat.armRoot);
 
             ArmResult baseline = results.get(1);
-            System.out.printf("BENCH_VARIANCE r1_first_ms=%d r1_repeat_ms=%d delta_pct=%.1f%n",
-                    baseline.mergeMs, repeat.mergeMs,
-                    100.0 * (repeat.mergeMs - baseline.mergeMs) / baseline.mergeMs);
+            System.out.printf("BENCH_VARIANCE requested_r=1 actual_ranges=1 first_elapsed_ms=%d "
+                            + "repeat_elapsed_ms=%d delta_pct=%.1f%n",
+                    baseline.elapsedNanos / 1_000_000, repeat.elapsedNanos / 1_000_000,
+                    100.0 * (repeat.elapsedNanos - baseline.elapsedNanos) / baseline.elapsedNanos);
 
             for (int r : ranges) {
                 ArmResult ar = results.get(r);
-                double speedup = (double) baseline.mergeMs / ar.mergeMs;
-                System.out.printf("BENCH_SPEEDUP r=%d speedup=%.3f%n", r, speedup);
+                if (r == 1) {
+                    System.out.println("BENCH_SPEEDUP requested_r=1 actual_ranges=1 status=baseline speedup=1.000");
+                } else if (ar.rangeBelowStagedFloorCount > 0
+                        || ar.rangeFdLimitedCount > 0
+                        || ar.rangeFdExhaustedCount > 0
+                        || ar.rangeWouldCascadeCount > 0
+                        || ar.rangeUnsplittableCount > 0
+                        || ar.actualRanges != ar.requestedRanges) {
+                    String status = ar.actualRanges <= 1 ? "not_engaged" : "clamped_or_reduced";
+                    System.out.printf("BENCH_SPEEDUP requested_r=%d actual_ranges=%d status=%s "
+                                    + "speedup=unavailable%n",
+                            r, ar.actualRanges, status);
+                } else {
+                    double speedup = (double) baseline.elapsedNanos / ar.elapsedNanos;
+                    System.out.printf("BENCH_SPEEDUP requested_r=%d actual_ranges=%d status=engaged "
+                                    + "speedup=%.3f%n",
+                            r, ar.actualRanges, speedup);
+                }
             }
 
             deleteRecursively(baseline.armRoot);
@@ -143,11 +218,15 @@ class ParallelMergeBenchmark {
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
         List<Path> stagingSegments = copyCorpus(master, staging);
 
+        // merge-parallelism is the swept knob; every OTHER swath.sort.* property falls through to the
+        // real system properties, so an arm can hold one knob fixed while another varies (e.g. pinning
+        // merge-budget-bytes while -Xmx changes, to separate cascade removal from GC relief).
         SortConfig config = SortConfig.fromProperties(
-                key -> "swath.sort.merge-parallelism".equals(key) ? String.valueOf(mergeParallelism) : null);
+                key -> "swath.sort.merge-parallelism".equals(key)
+                        ? String.valueOf(mergeParallelism)
+                        : System.getProperty(key));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
-        ConcurrentLinkedQueue<Long> rangeLatenciesNanos = new ConcurrentLinkedQueue<>();
-        RangeMergeTimer timer = rangeLatenciesNanos::add;
+        BenchRangeTimer timer = new BenchRangeTimer();
         SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortTransform transform =
                 new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP, metrics, writerFactory), false, timer);
@@ -156,6 +235,13 @@ class ParallelMergeBenchmark {
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + label);
         samplerThread.setDaemon(true);
 
+        // Peak HEAP is the gating metric for merge-parallelism (the R× writer/floor term the merge
+        // budget does not cover), and unlike RSS it can be attributed per arm: RSS is process-wide and
+        // monotone across arms in one JVM (a later R=1 arm inherits an earlier R=8 arm's peak), whereas
+        // the heap pools' peak is resettable. Same measurement as production's efficiency.peak_heap_bytes
+        // (ResourceMetrics#peakHeapBytes: used, summed across HEAP pools).
+        System.gc();   // settle the prior arm's garbage so this arm's peak is its own
+        resetHeapPeaks();
         long cpuStartNanos = processCpuTimeNanos();
         long wallStartNanos = System.nanoTime();
         samplerThread.start();
@@ -174,23 +260,104 @@ class ParallelMergeBenchmark {
         long cpuEndNanos = processCpuTimeNanos();
 
         ArmResult ar = new ArmResult();
-        ar.mergeParallelism = mergeParallelism;
+        ar.requestedRanges = mergeParallelism;
         ar.label = label;
         ar.armRoot = armRoot;
-        ar.mergeMs = (wallEndNanos - wallStartNanos) / 1_000_000;
+        ar.elapsedNanos = wallEndNanos - wallStartNanos;
         ar.avgCoresBusy = (cpuStartNanos < 0 || cpuEndNanos < 0)
                 ? -1
                 : (cpuEndNanos - cpuStartNanos) / 1e9 / ((wallEndNanos - wallStartNanos) / 1e9);
         ar.peakRssBytes = sampler.maxRssBytes;
+        ar.peakHeapBytes = peakHeapBytes();
         ar.mergePasses = result.mergePasses();
         ar.cascadedPasses = result.cascadedPasses();
         ar.fastPathEmissions = result.fastPathEmissions();
         ar.totalRows = result.totalRows();
         ar.finalFiles = result.finalFiles();
+        ar.inputSegments = stagingSegments.size();
         ar.rangeParallelCount = metrics.count("SORT.merge_range_parallel");
+        ar.actualRanges = ar.rangeParallelCount > 0 ? ar.rangeParallelCount : 1;
+        ar.rangeBelowStagedFloorCount = metrics.count("SORT.merge_range_below_staged_floor");
+        ar.rangeFdLimitedCount = metrics.count("SORT.merge_range_fd_limited");
+        ar.rangeFdExhaustedCount = metrics.count("SORT.merge_range_fd_exhausted");
+        ar.rangeWouldCascadeCount = metrics.count("SORT.merge_range_would_cascade");
+        ar.rangeUnsplittableCount = metrics.count("SORT.merge_range_unsplittable");
+        ar.pageSkipEngagedCount = metrics.count("SORT.merge_range_page_skipped");
         ar.rowgroupSkipEngagedCount = metrics.count("SORT.merge_range_rowgroup_skipped");
-        ar.rangeLatenciesMs = rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).collect(Collectors.toList());
+        ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
+        ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
+        ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
+        ar.boundaryNanos = timer.boundaryNanos;
+        ar.rangeLatenciesNanos = timer.rangeLatenciesNanos.stream().toList();
         return ar;
+    }
+
+    /**
+     * DIRECT measurement of the per-open-stream retained heap for the live page-run format. Opens a
+     * {@link PageFrontierReader} for every corpus segment (its constructor reads and CRC-verifies the
+     * first framed page body), settles the heap, and reports the retained delta per open frontier.
+     *
+     * <p>Without this the {@code R×} heap term can only be inferred by fitting the observed
+     * peak-heap slope and dividing by the segment count — which then "explains" the same slope it
+     * was derived from. This makes it a measurement instead.
+     */
+    private static void measureOpenReaderHeap(Path master) throws IOException {
+        List<Path> segments = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
+            ds.forEach(segments::add);
+        }
+        long before = settledHeapBytes();
+        List<PageFrontierReader> open = new ArrayList<>(segments.size());
+        try {
+            for (Path segment : segments) {
+                PageFrontierReader reader = new PageFrontierReader(segment);
+                open.add(reader);
+            }
+            long after = settledHeapBytes();
+            long delta = after - before;
+            System.out.printf("BENCH_STREAM_HEAP staging_format=page-run open_frontiers=%d "
+                            + "retained_bytes=%d per_frontier_bytes=%d per_frontier_mb=%.2f%n",
+                    open.size(), delta, delta / Math.max(1, open.size()),
+                    delta / (1024.0 * 1024.0) / Math.max(1, open.size()));
+        } finally {
+            for (PageFrontierReader reader : open) {
+                reader.close();
+            }
+        }
+    }
+
+    /** Used heap after giving the collector a chance to settle — the live-set estimate, not float. */
+    private static long settledHeapBytes() {
+        for (int i = 0; i < 3; i++) {
+            System.gc();
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+    }
+
+    /** Clear every HEAP pool's recorded peak, so the next arm's peak is attributable to that arm alone. */
+    private static void resetHeapPeaks() {
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP) {
+                pool.resetPeakUsage();
+            }
+        }
+    }
+
+    /** Peak heap bytes since the last {@link #resetHeapPeaks()}, summed across HEAP pools. */
+    private static long peakHeapBytes() {
+        long total = 0;
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP && pool.getPeakUsage() != null) {
+                total += pool.getPeakUsage().getUsed();
+            }
+        }
+        return total;
     }
 
     private static long processCpuTimeNanos() {
@@ -203,34 +370,55 @@ class ParallelMergeBenchmark {
     }
 
     // =====================================================================
-    // Corpus generation — streamed, unique, monotonically-keyed rows
+    // Corpus generation — deterministic, unique, monotonically-keyed rows
     // interleaved round-robin (at BLOCK_ROWS granularity) across NUM_SEGMENTS
     // sorted staging segments, so the merge does genuine cross-stream k-way
-    // work (not a trivial disjoint concatenation) while each segment's
-    // Parquet row groups stay NARROW (real row-group-skip opportunity).
+    // work (not a trivial disjoint concatenation) while each live-format page
+    // stays narrow (real page-skip opportunity).
     // =====================================================================
 
     private record CorpusStats(int segments, long rows, long bytes) {
     }
 
     private CorpusStats buildCorpus(Path master) throws IOException {
+        if (PAGE_ROWS <= 0) {
+            throw new IllegalArgumentException("swath.bench.pageRows must be > 0, got " + PAGE_ROWS);
+        }
+        SortConfig config = SortConfig.fromSystemProperties();
+        PageRunSegmentWriter writer =
+                new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, config.segmentCodec());
         long rowsPerDay = Math.max(1, TOTAL_ROWS / TOTAL_DAYS);
         LocalDate base = LocalDate.of(2019, 1, 1);
+        int totalSegments = 0;
         long totalRows = 0;
         long totalBytes = 0;
         for (int seg = 0; seg < NUM_SEGMENTS; seg++) {
-            Path path = master.resolve(String.format("seg-%05d.parquet", seg));
-            SegmentWriter writer =
-                    new SegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, SEGMENT_ROW_GROUP_BYTES);
-            long rows;
+            SortBuffer buffer = new SortBuffer(config, CMP);
             try (SortedCursor cursor =
                          new GeneratedCursor(seg, NUM_SEGMENTS, BLOCK_ROWS, TOTAL_ROWS, rowsPerDay, base)) {
-                rows = writer.writeIntermediate(cursor, path);
+                List<ListEntry> page = new ArrayList<>(PAGE_ROWS);
+                long nodeId = 0;
+                while (cursor.hasNext()) {
+                    page.add(cursor.next());
+                    if (page.size() == PAGE_ROWS) {
+                        buffer.admit(nodeId++, page);
+                        page = new ArrayList<>(PAGE_ROWS);
+                    }
+                }
+                if (!page.isEmpty()) {
+                    buffer.admit(nodeId, page);
+                }
             }
-            totalRows += rows;
-            totalBytes += Files.size(path);
+            if (buffer.isEmpty()) {
+                continue;
+            }
+            Path path = master.resolve(String.format("seg-%05d.pageseg", seg));
+            SegmentResult result = writer.flush(buffer.seal(SealTrigger.DRAIN), path);
+            totalSegments++;
+            totalRows += result.rows();
+            totalBytes += result.bytes();
         }
-        return new CorpusStats(NUM_SEGMENTS, totalRows, totalBytes);
+        return new CorpusStats(totalSegments, totalRows, totalBytes);
     }
 
     /**
@@ -241,8 +429,8 @@ class ParallelMergeBenchmark {
      * sequence is strictly increasing in the global row index, and (see {@link #key}) the derived
      * key is a monotonic function of that index, making the cursor already internally sorted with
      * NO in-memory sort. Segments therefore interleave across the WHOLE keyspace at block
-     * granularity (genuine k-way merge), while each segment's own row groups span only one
-     * contiguous block's worth of keys (narrow — real row-group-skip opportunity per range).
+     * granularity (genuine k-way merge), while each page spans at most {@link #PAGE_ROWS}
+     * contiguous keys (narrow — real page-skip opportunity per range).
      */
     private static final class GeneratedCursor implements SortedCursor {
         private final int segment;
@@ -343,12 +531,12 @@ class ParallelMergeBenchmark {
     }
 
     // =====================================================================
-    // Staging copy, byte-exact verification, RSS sampling, misc helpers
+    // Staging copy, full-row identity verification, RSS sampling, misc helpers
     // =====================================================================
 
     private static List<Path> copyCorpus(Path master, Path target) throws IOException {
         List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.parquet")) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
             ds.forEach(files::add);
         }
         files.sort(Comparator.comparing(p -> p.getFileName().toString()));
@@ -361,8 +549,8 @@ class ParallelMergeBenchmark {
         return out;
     }
 
-    /** Streams both file lists position-for-position; no full materialization (scales to any size). */
-    private static boolean byteExact(List<Path> expected, List<Path> actual) throws IOException {
+    /** Streams and compares decoded full rows position-for-position; this is not a file-byte check. */
+    private static boolean fullRowsEqual(List<Path> expected, List<Path> actual) throws IOException {
         try (MultiFileStream a = new MultiFileStream(expected); MultiFileStream b = new MultiFileStream(actual)) {
             long row = 0;
             while (a.hasNext() && b.hasNext()) {
@@ -485,31 +673,81 @@ class ParallelMergeBenchmark {
     }
 
     private static final class ArmResult {
-        int mergeParallelism;
+        int requestedRanges;
+        long actualRanges;
         String label;
         Path armRoot;
-        long mergeMs;
+        long elapsedNanos;
         double avgCoresBusy;
         long peakRssBytes;
+        long peakHeapBytes;
+        int inputSegments;
         long mergePasses;
         long cascadedPasses;
         long fastPathEmissions;
         long totalRows;
         List<Path> finalFiles;
         long rangeParallelCount;
+        long rangeBelowStagedFloorCount;
+        long rangeFdLimitedCount;
+        long rangeFdExhaustedCount;
+        long rangeWouldCascadeCount;
+        long rangeUnsplittableCount;
+        long pageSkipEngagedCount;
         long rowgroupSkipEngagedCount;
-        List<Long> rangeLatenciesMs;
-        boolean byteExact = true;   // R=1 baseline is trivially exact against itself
+        long sampleCappedSegments;
+        long pageWholeEmissions;
+        long pageOverlapKeyMerges;
+        long boundaryNanos;
+        List<Long> rangeLatenciesNanos;
+        boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
 
         String toLine() {
+            long rangeMergeSumNanos = rangeLatenciesNanos.stream().mapToLong(Long::longValue).sum();
+            String boundaryMs = boundaryNanos < 0 ? "unavailable" : String.valueOf(boundaryNanos / 1_000_000);
+            String rangeMergeSumMs = rangeLatenciesNanos.isEmpty()
+                    ? "unavailable"
+                    : String.valueOf(rangeMergeSumNanos / 1_000_000);
+            List<Long> rangeLatenciesMs =
+                    rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
             return String.format(
-                    "BENCH_ROW label=%s r=%d merge_ms=%d avg_cores_busy=%.2f peak_rss_mb=%.1f "
-                            + "merge_passes=%d cascaded_passes=%d fastpath=%d total_rows=%d files=%d "
-                            + "range_parallel_count=%d rowgroup_skip_engaged=%d byte_exact=%s "
-                            + "range_latencies_ms=%s",
-                    label, mergeParallelism, mergeMs, avgCoresBusy, peakRssBytes / (1024.0 * 1024.0),
-                    mergePasses, cascadedPasses, fastPathEmissions, totalRows, finalFiles.size(),
-                    rangeParallelCount, rowgroupSkipEngagedCount, byteExact, rangeLatenciesMs);
+                    "BENCH_ROW label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
+                            + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
+                            + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
+                            + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
+                            + "cascaded_passes=%d fastpath_emissions=%d range_parallel_count=%d "
+                            + "range_below_staged_floor_count=%d range_fd_limited_count=%d "
+                            + "range_fd_exhausted_count=%d "
+                            + "range_would_cascade_count=%d range_unsplittable_count=%d "
+                            + "page_skip_engaged_ranges=%d rowgroup_skip_engaged_ranges=%d "
+                            + "sample_capped_segments=%d page_whole_emissions=%d "
+                            + "page_overlap_keymerges=%d page_reads=unavailable "
+                            + "read_amplification=unavailable identity_check=full-row "
+                            + "full_row_exact=%s range_latencies_ms=%s",
+                    label, requestedRanges, actualRanges, elapsedNanos / 1_000_000, boundaryMs,
+                    rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
+                    peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
+                    mergePasses, cascadedPasses, fastPathEmissions, rangeParallelCount,
+                    rangeBelowStagedFloorCount, rangeFdLimitedCount, rangeFdExhaustedCount,
+                    rangeWouldCascadeCount, rangeUnsplittableCount, pageSkipEngagedCount,
+                    rowgroupSkipEngagedCount, sampleCappedSegments, pageWholeEmissions,
+                    pageOverlapKeyMerges, fullRowExact, rangeLatenciesMs);
+        }
+    }
+
+    /** Captures both timer methods without manufacturing timing unavailable on the serial path. */
+    private static final class BenchRangeTimer implements RangeMergeTimer {
+        private final ConcurrentLinkedQueue<Long> rangeLatenciesNanos = new ConcurrentLinkedQueue<>();
+        private volatile long boundaryNanos = -1;
+
+        @Override
+        public void recordRangeMerge(long nanos) {
+            rangeLatenciesNanos.add(nanos);
+        }
+
+        @Override
+        public void recordBoundarySampling(long nanos) {
+            boundaryNanos = nanos;
         }
     }
 

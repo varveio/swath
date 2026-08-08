@@ -158,6 +158,7 @@ final class KWayMerge<S> {
         List<S> current = new ArrayList<>(segments);
         boolean currentAreOriginals = true;
         while (current.size() > fanIn) {
+            MergeCancellation.check();
             current = onePass(current, currentAreOriginals, progressCallback);
             currentAreOriginals = false;   // every subsequent pass's input is our OWN intermediate
         }
@@ -253,6 +254,7 @@ final class KWayMerge<S> {
         long[] passCopyable = new long[1];       // this onePass call's totals, for the log line only —
         long[] passInterleaved = new long[1];     // the metrics themselves fire per-segment, below
         for (int i = 0; i < segments.size(); i += fanIn) {
+            MergeCancellation.check();
             List<S> group = segments.subList(i, Math.min(i + fanIn, segments.size()));
             S dest;
             // Select the group's merger through the SAME openMerger factory the final
@@ -362,11 +364,13 @@ final class KWayMerge<S> {
 
         @Override
         public boolean hasNext() {
+            MergeCancellation.check();
             return delegate.hasNext();
         }
 
         @Override
         public ListEntry next() {
+            MergeCancellation.check();
             ListEntry entry = delegate.next();
             if (++batchRows >= PROGRESS_BATCH_ROWS) {
                 progressCallback.accept(batchRows);

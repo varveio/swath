@@ -10,7 +10,7 @@ import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 
 /**
- * An off-by-default {@link EntryStream} view of an underlying sorted stream restricted
+ * An {@link EntryStream} view of an underlying sorted stream restricted
  * to one contiguous key range {@code [lo, hi)} — {@code lo} inclusive, {@code hi} exclusive, either
  * bound {@code null} meaning unbounded (the first/last range). Range membership is decided on the
  * <b>key bytes only</b> ({@link KeyBytes#compareUnsigned}, the primary component of
@@ -42,7 +42,20 @@ final class RangeFilteredStream implements EntryStream {
         this.inner = inner;
         this.lo = lo;
         this.hi = hi;
-        this.head = loadFirst();
+        try {
+            this.head = loadFirst();
+        } catch (IOException | RuntimeException e) {
+            // loadFirst() advances the wrapped reader to skip the < lo prefix, so a corrupt segment
+            // throws HERE — before this wrapper is returned to KWayMerge#open, which means the reader
+            // would never reach the list KWayMerge closes. Release it ourselves, as
+            // RangeFilteredCursor and every other IO-doing constructor in this package do.
+            try {
+                inner.close();
+            } catch (IOException | RuntimeException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     private ListEntry loadFirst() throws IOException {

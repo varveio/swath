@@ -108,7 +108,20 @@ final class PageRunSegmentReader implements EntryStream {
             throws IOException {
         // The frontier reader carries the RAW metrics (its page advances fire the guard counter
         // under its own name); only the merger's two page counters are re-labelled to this route's.
-        PageFrontierReader frontier = new PageFrontierReader(path, metrics);
+        this(new PageFrontierReader(path, metrics), comparator, metrics);
+    }
+
+    /**
+     * As {@link #PageRunSegmentReader(Path, Comparator, SortMetrics)}, but over a frontier the
+     * caller supplies and this reader then OWNS (closing this closes it). The seam exists for
+     * {@link ParallelRangeMerge}'s page skip: a {@link RangeScopedPageFrontier} steps over the pages
+     * that cannot reach the range without decoding them, and everything below this constructor —
+     * the {@link PageAwareMerger}, the disjoint-page fast path, the overlap key-merge, the
+     * min-monotonicity guard — is unchanged and cannot tell the difference, because a filtered
+     * frontier is still a frontier presenting pages in non-decreasing {@code minKey} order.
+     */
+    PageRunSegmentReader(PageFrontierStream frontier, Comparator<ListEntry> comparator,
+                         SortMetrics metrics) throws IOException {
         try {
             this.merger = new PageAwareMerger(List.of(frontier), comparator, DuplicateHook.NO_OP,
                     relabelled(metrics));

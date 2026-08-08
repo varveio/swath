@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.api.WriteSupport;
@@ -75,18 +76,25 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private final ParquetWriter<ListEntry> writer;
     private long rows;
     private boolean finalFile;
+    private int fileIndex;
+    private boolean closed;   // guarded by this (see close())
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
         this.path = path;
+        this.fileIndex = fileIndex;
         Map<String, String> stamp = Map.of(
                 ORDER_KEY, ORDER_VALUE,
                 MODE_KEY, mode.value(),
-                FORMAT_VERSION_KEY, FORMAT_VERSION_VALUE,
-                FILE_INDEX_KEY, Integer.toString(fileIndex));
-        // finalFile is read lazily (BooleanSupplier), not captured now: markFinal() may be called any
-        // time before close() — often well after this constructor returns.
-        WriteSupport<ListEntry> writeSupport =
-                new StampedWriteSupport(ParquetSchema.canonical(), stamp, () -> finalFile);
+                FORMAT_VERSION_KEY, FORMAT_VERSION_VALUE);
+        // finalFile AND fileIndex are both read lazily, not captured here: either may be set any time
+        // before close(), which is when the footer — and so the stamp — is actually written. The
+        // parallel range merge needs the index late: a range's parts only learn their position in the
+        // GLOBAL roll sequence once every earlier range has finished and its part count is known.
+        // this.fileIndex, NOT fileIndex: the constructor parameter shadows the field here, and capturing
+        // it would freeze the index at construction — silently defeating setFileIndex and reinstating
+        // the range-local stamp the parallel path exists to fix.
+        WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
+                ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
         this.writer = ListEntryParquetWriters.build(path, writeSupport, config.finalRowGroupBytes());
     }
 
@@ -115,10 +123,39 @@ public final class SortedParquetWriter implements SortedFileWriter {
         this.finalFile = true;
     }
 
-    /** Finalize (footer, incl. the stamp) and fsync the file and its parent directory (I6). */
+    /**
+     * Set this file's 1-based position in the output's roll sequence, overriding the constructor's
+     * value. Like {@link #markFinal()} this is honoured any time before {@link #close()}. The
+     * parallel range merge is the caller that needs it: each range writes its parts before it can
+     * know how many parts the ranges below it produced, so the global index is assigned afterwards,
+     * once every range has drained.
+     */
     @Override
-    public void close() throws IOException {
+    public void setFileIndex(int fileIndex) {
+        this.fileIndex = fileIndex;
+    }
+
+    /**
+     * Finalize (footer, incl. the stamp) and fsync the file and its parent directory (I6).
+     *
+     * <p>Idempotent. The parallel merge has two owners that may both try to release a part — the
+     * publish path that stamps and closes, and the failure path that releases whatever is still open
+     * — and which one runs is decided by a race between range threads. Making the second close a
+     * no-op is what lets both be unconditional instead of coordinated.
+     */
+    @Override
+    public synchronized void close() throws IOException {
+        // synchronized, not a volatile check-then-act: two owners CAN race here (the publish path
+        // stamps and closes, the failure path releases whatever is still open), and a check-then-act
+        // would let both enter the underlying Parquet close, which is not thread-safe.
+        if (closed) {
+            return;
+        }
+        // Set only AFTER the footer write and fsync succeed. Marking first would make a FAILED close
+        // look completed, so a retry would silently skip a file whose footer was never written --
+        // publishing a part with no stamp at all.
         ListEntryParquetWriters.closeWithDurability(path, writer);
+        closed = true;
     }
 
     /**
@@ -131,11 +168,14 @@ public final class SortedParquetWriter implements SortedFileWriter {
         private final ListEntryWriteSupport delegate;
         private final Map<String, String> stamp;
         private final BooleanSupplier finalFile;
+        private final IntSupplier fileIndex;
 
-        StampedWriteSupport(MessageType schema, Map<String, String> stamp, BooleanSupplier finalFile) {
+        StampedWriteSupport(MessageType schema, Map<String, String> stamp, BooleanSupplier finalFile,
+                            IntSupplier fileIndex) {
             this.delegate = new ListEntryWriteSupport(schema);
             this.stamp = stamp;
             this.finalFile = finalFile;
+            this.fileIndex = fileIndex;
         }
 
         @Override
@@ -162,6 +202,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
             // wins on key conflict (it's the seam this class owns).
             Map<String, String> merged = new LinkedHashMap<>(delegate.finalizeWrite().getExtraMetaData());
             merged.putAll(stamp);
+            merged.put(FILE_INDEX_KEY, Integer.toString(fileIndex.getAsInt()));
             if (finalFile.getAsBoolean()) {
                 merged.put(FILE_FINAL_KEY, FILE_FINAL_VALUE);
             }

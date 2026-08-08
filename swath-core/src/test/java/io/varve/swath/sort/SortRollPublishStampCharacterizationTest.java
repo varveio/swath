@@ -28,19 +28,16 @@ import org.junit.jupiter.api.io.TempDir;
  * {@link SortTransform} boundary so a change to the shared loop cannot silently alter either path's
  * observable output.
  *
- * <p><b>The pinned asymmetry.</b> The two loops are DELIBERATELY not symmetric, and that asymmetry is
- * the tripwire:
- * <ul>
- *   <li><b>Serial</b> stamps a GLOBAL {@code file_index} = {@code 1..N} in filename order and marks the
- *       LAST file {@code file_final} — the self-describing completeness proof (contracts.md §5,
- *       "served-file footer stamp").</li>
- *   <li><b>Parallel</b> stamps a RANGE-LOCAL {@code file_index} (restarting at 1 within each range, so
- *       NOT the global {@code 1..N}) and NEVER marks any file {@code file_final} — a documented owner
- *       gap on the off-by-default path (the output is still a correct global
- *       sort by filename order, only the completeness proof is absent).</li>
- * </ul>
- * Closing that gap is a separate, later change; here the current behavior is pinned exactly, absence of
- * {@code file_final} on the parallel path asserted explicitly (not merely read back as {@code false}).
+ * <p><b>The pinned invariant: both paths stamp identically.</b> Whichever merge produced the output,
+ * the published set carries a GLOBAL {@code file_index} = {@code 1..N} in filename order with exactly
+ * one {@code file_final}, on {@code N} — the self-describing completeness proof (contracts.md §5,
+ * "served-file footer stamp"). That symmetry is what lets {@code merge-parallelism} be a performance
+ * knob rather than a change to what the output means, and it is why the knob can be on by default.
+ *
+ * <p>The parallel case is the load-bearing one. Its ranges roll several parts EACH, so a per-range
+ * index would read {@code 1,2,3,1,2,3,…} and no reader could tell a complete set from a truncated
+ * one. The stamp is therefore assigned after every range has drained, when the global order is first
+ * known — see {@link ParallelRangeMerge}'s class javadoc.
  *
  * <p>Both loops also share one progress-feed cadence — batched at {@link KWayMerge#PROGRESS_BATCH_ROWS},
  * a full batch each time the counter reaches it and a remainder flush at the end — pinned here for the
@@ -101,7 +98,7 @@ class SortRollPublishStampCharacterizationTest {
      * carries the {@code file_final} key — asserted by its explicit absence, the tripwire.
      */
     @Test
-    void parallelRollStampsRangeLocalFileIndexAndNeverMarksFinal(@TempDir Path root) throws IOException {
+    void parallelRollStampsTheSameGlobalFileIndexAndFinalAsSerial(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         // Each segment holds a contiguous third of the keyspace, so its single sampled first-key (a, d, g)
         // makes boundaries() split into three balanced ranges (a,b,c | d,e,f | g,h,i). A 1-byte final-file
@@ -121,20 +118,23 @@ class SortRollPublishStampCharacterizationTest {
         assertThat(keys(result.finalFiles()))
                 .containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i");
 
-        // Range-local file_index: restarts at 1 per range, so filename order shows the reset pattern —
-        // NOT the global 1..9 the serial path would stamp.
+        // GLOBAL file_index 1..9 in filename order. This is the assertion that distinguishes a stamped
+        // parallel publish from the range-local one: each of the three ranges rolls three parts, so a
+        // per-range index would read 1,2,3,1,2,3,1,2,3 and a reader could not tell the set was whole.
         List<Integer> indices = new ArrayList<>();
         for (Path f : result.finalFiles()) {
             indices.add(fileIndex(f));
         }
-        assertThat(indices).containsExactly(1, 2, 3, 1, 2, 3, 1, 2, 3);
+        assertThat(indices).containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9);
 
-        // The tripwire: no parallel part is marked final — the key is ABSENT from every footer (never
-        // written "false"; absence is the negative case), so the completeness proof is genuinely gone.
+        // Exactly one file_final, on the highest index — the other half of the completeness proof. A
+        // reader accepts the set iff the indices are contiguous from 1 and exactly one file claims to
+        // be last, so a stamp on the wrong file is as broken as no stamp at all.
         for (Path f : result.finalFiles()) {
+            boolean last = f.equals(result.finalFiles().get(result.finalFiles().size() - 1));
             assertThat(hasFinalKey(f))
-                    .as("no parallel part carries file_final (%s)", names(List.of(f)).get(0))
-                    .isFalse();
+                    .as("file_final present iff last part (%s)", names(List.of(f)).get(0))
+                    .isEqualTo(last);
         }
 
         // Every merged row still reaches the progress sink across the range threads.

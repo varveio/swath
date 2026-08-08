@@ -205,6 +205,15 @@ tasks.withType<Test>().configureEach {
     // Same forwarding gap for the CLI help-golden regeneration switch (HelpUsageGoldenTest,
     // `./gradlew test -Dswath.goldens.update=true`) — otherwise it silently no-ops.
     System.getProperty("swath.goldens.update")?.let { systemProperty("swath.goldens.update", it) }
+    // The parallel-merge measurement harness is an explicitly selected JUnit test, but Gradle
+    // does not otherwise pass daemon -D properties into the forked test JVM. Forward only its
+    // opt-in/corpus controls and the sort knobs it deliberately sweeps; without this seam the
+    // documented -Dswath.bench=on invocation silently skips the harness.
+    if (System.getProperty("swath.bench") == "on") {
+        System.getProperties().stringPropertyNames()
+            .filter { it == "swath.bench" || it.startsWith("swath.bench.") || it.startsWith("swath.sort.") }
+            .forEach { systemProperty(it, System.getProperty(it)) }
+    }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     testLogging {
         events("passed", "skipped", "failed")

@@ -34,7 +34,7 @@ import java.util.function.UnaryOperator;
  *       final writer.</li>
  *   <li>{@code segmentRowGroupBytes} — the row-group size for INTERNAL <b>columnar Parquet</b> staging
  *       segments ({@link SegmentWriter}/{@link SegmentParquetSink}, still used by {@link CaptureSorter}'s
- *       sort-fixture path and the off-by-default {@link ParallelRangeMerge} path): small on purpose
+ *       sort-fixture path and the gated {@link ParallelRangeMerge} path): small on purpose
  *       (default 1&nbsp;MB, not {@code finalRowGroupBytes}'s 8&nbsp;MB) because {@link SegmentReader}
  *       preloads a whole row group per open Parquet stream. The live listing path stages
  *       <b>page-run</b> segments (not columnar Parquet), so this knob no longer governs the serial
@@ -73,7 +73,8 @@ import java.util.function.UnaryOperator;
 public record SortConfig(long segmentBytes, long segmentEntries, double heapFraction,
                          int buffers, int fanIn, long finalFileBytes, long finalRowGroupBytes,
                          long segmentRowGroupBytes, long mergeBudgetBytes, int mergeParallelism,
-                         long mergePerStreamBytes, PageCodec segmentCodec) {
+                         long mergePerStreamBytes, PageCodec segmentCodec,
+                         long minParallelStagedBytes) {
 
     /** Floor for the heap-adaptive segment gate (§7). */
     public static final long SEGMENT_BYTES_FLOOR = 64L * 1024 * 1024;
@@ -96,14 +97,43 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
     private static final String PREFIX = "swath.sort.";
 
     /**
-     * Off-by-default: the number of contiguous key ranges the final merge is split
-     * into, each merged on its own thread producing a separate ordered part file whose concatenation
-     * (in range order) is the global sort. Default {@code 1} == today's single-threaded merge,
-     * byte-for-byte identical output. {@code >1} opts into {@link ParallelRangeMerge}; the decision to
-     * ship multi-file sorted output produced by a concurrent merge is RESERVED FOR THE OWNER. Never
-     * flip this default without that acceptance.
+     * Default for {@code minParallelStagedBytes}: staged bytes below which the merge stays serial no
+     * matter what {@code merge-parallelism} says.
+     *
+     * <p>Splitting has a fixed price the speedup must earn back — the output gains at least one part
+     * per range, which is consumer-visible and permanent, and the path pays a boundary-sampling pass
+     * over every segment before any range starts. Measured serial merge throughput is ~20-25 MB of
+     * staging per second, so 256 MiB is roughly ten seconds of serial merge: below it a 3-4x speedup
+     * saves a few seconds and multiplies the file count, which is a bad trade for whoever reads the
+     * output. This is why an ordinary small sorted run still publishes the single file it always did.
      */
-    public static final int DEFAULT_MERGE_PARALLELISM = 1;
+    public static final long DEFAULT_MIN_PARALLEL_STAGED_BYTES = 256L * 1024 * 1024;
+
+    /**
+     * The number of contiguous key ranges the final merge is split into, each merged on its own
+     * thread producing a separate ordered part file whose concatenation (in range order) is the
+     * global sort ({@link ParallelRangeMerge}).
+     *
+     * <p><b>Why this is on by default.</b> The listing phase parallelises across cores and a serial
+     * merge does not, so the merge's share of a sorted run's wall clock RISES with core count —
+     * measured at 72 % of an 823 M-object run on 32 cores. Amdahl then caps any further core increase
+     * at ~1.4×, which makes the serial merge the binding constraint on every large sorted run.
+     * Measured end-to-end across five public buckets from 9.9 M to 823 M objects: 3.19×–4.09× on the
+     * merge phase, 2.18× on total wall clock at the top end, peak heap within +2.4 %, output
+     * byte-identical to the serial merge and carrying the identical completeness stamp.
+     *
+     * <p><b>Why {@code cores/2}, capped at 8.</b> Parallel efficiency falls off well before core
+     * count: measured 68 % at R=4, 51 % at R=8, 34 % at R=16, while peak heap and read amplification
+     * keep climbing past the throughput. R=8 buys 74 % of R=16's speedup for 63 % of its heap, so 8
+     * is the ceiling and half the cores is the ramp for smaller machines. Defaulting to
+     * {@code availableProcessors()} would land on the worst point of the curve on a large box.
+     *
+     * <p>{@link ParallelRangeMerge#effectiveRanges} clamps this further per run — down to 1, meaning
+     * the untouched serial path — whenever the merge budget, the staged-segment count or the
+     * descriptor budget cannot carry it. So this value is a ceiling, never a promise.
+     */
+    public static final int DEFAULT_MERGE_PARALLELISM =
+            Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() / 2));
 
     /** The §7 heap-adaptive ratio: {@code segmentBytes}/{@code mergeBudgetBytes} derive from {@code -Xmx}. */
     private static final double DEFAULT_HEAP_FRACTION = 0.08;
@@ -128,7 +158,8 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
             adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // merge-budget: same heap-adaptive shape as segmentBytes
             DEFAULT_MERGE_PARALLELISM,
             DEFAULT_MERGE_PER_STREAM_BYTES,
-            DEFAULT_SEGMENT_CODEC);
+            DEFAULT_SEGMENT_CODEC,
+            DEFAULT_MIN_PARALLEL_STAGED_BYTES);
 
     public SortConfig {
         if (segmentBytes <= 0) {
@@ -174,66 +205,70 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         if (segmentCodec == null) {
             throw new IllegalArgumentException("segment-codec must not be null");
         }
+        if (minParallelStagedBytes < 0) {
+            throw new IllegalArgumentException(
+                    "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes);
+        }
     }
 
     public SortConfig withSegmentBytes(long segmentBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withSegmentEntries(long segmentEntries) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withHeapFraction(double heapFraction) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withBuffers(int buffers) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFanIn(int fanIn) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFinalRowGroupBytes(long finalRowGroupBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withSegmentRowGroupBytes(long segmentRowGroupBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec);
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     /** Read the knobs from system properties once, applying the documented defaults. */
@@ -261,13 +296,21 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         long mergeBudgetBytes = longProp(lookup, "merge-budget-bytes", adaptiveSegmentBytes(heapFraction));
         int mergeParallelism = intProp(lookup, "merge-parallelism", DEFAULT.mergeParallelism());
         long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
+        long minParallelStagedBytes =
+                longProp(lookup, "min-parallel-staged-bytes", DEFAULT.minParallelStagedBytes());
         String segmentCodecProp = lookup.apply(PREFIX + "segment-codec");
         PageCodec segmentCodec = segmentCodecProp == null
                 ? DEFAULT.segmentCodec()
                 : parseSegmentCodec(segmentCodecProp);
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn,
                 finalFileBytes, finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism,
-                mergePerStreamBytes, segmentCodec);
+                mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+    }
+
+    public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes);
     }
 
     private static PageCodec parseSegmentCodec(String raw) {

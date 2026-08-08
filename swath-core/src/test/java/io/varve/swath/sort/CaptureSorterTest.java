@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -161,6 +163,28 @@ class CaptureSorterTest {
             assertThat(tmpFiles).as("the straddle requires the roll to have actually opened a second file")
                     .hasSize(2);
         }
+    }
+
+    @Test
+    void duplicateStateIsRangeScopedThroughTheFullParallelCapturePipeline(@TempDir Path root)
+            throws Exception {
+        Path captureDir = Files.createDirectories(root.resolve("capture"));
+        Path outputDir = Files.createDirectories(root.resolve("out"));
+        List<ListEntry> duplicateRange = new ArrayList<>(objects("a"));
+        duplicateRange.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a")));
+        writePart(captureDir, "part-0.parquet", duplicateRange);
+        writePart(captureDir, "part-1.parquet", objects("z"));
+
+        InterleavingWriterFactory delegate = new InterleavingWriterFactory();
+        SortConfig parallel = SortConfigs.base()
+                .withSegmentEntries(2)
+                .withMergeParallelism(2);
+        assertThatThrownBy(() -> new CaptureSorter(parallel, SortMetrics.NO_OP, delegate)
+                .sort(captureDir, outputDir))
+                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
+                .hasMessageContaining("'a'");
+        assertThat(delegate.rangeZeroWrote.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(delegate.rangeOneWrote.await(1, TimeUnit.SECONDS)).isTrue();
     }
 
     /**
@@ -346,5 +370,69 @@ class CaptureSorterTest {
             }
         }
         return out;
+    }
+
+    private static ListEntry obj(String key) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, null, false,
+                null, null, null, null);
+    }
+
+    private static class NoOpWriter implements SortedFileWriter {
+        private long rows;
+
+        @Override
+        public void write(ListEntry e) {
+            rows++;
+        }
+
+        @Override
+        public long rows() {
+            return rows;
+        }
+
+        @Override
+        public long dataSize() {
+            return rows;
+        }
+
+        @Override
+        public void setFileIndex(int fileIndex) {
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    private static final class InterleavingWriterFactory implements SortedFileWriterFactory {
+        private final CountDownLatch rangeZeroWrote = new CountDownLatch(1);
+        private final CountDownLatch rangeOneWrote = new CountDownLatch(1);
+
+        @Override
+        public SortedFileWriter create(Path path, int fileIndex) {
+            boolean rangeZero = path.getFileName().toString().startsWith("prange-0-");
+            return new NoOpWriter() {
+                @Override
+                public void write(ListEntry e) {
+                    try {
+                        if (rangeZero && rows() == 0) {
+                            rangeZeroWrote.countDown();
+                            if (!rangeOneWrote.await(2, TimeUnit.SECONDS)) {
+                                throw new AssertionError("range 1 did not interleave");
+                            }
+                        } else if (!rangeZero) {
+                            if (!rangeZeroWrote.await(2, TimeUnit.SECONDS)) {
+                                throw new AssertionError("range 0 did not interleave");
+                            }
+                            rangeOneWrote.countDown();
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("forced interleaving interrupted", interrupted);
+                    }
+                    super.write(e);
+                }
+            };
+        }
     }
 }
