@@ -7,16 +7,16 @@ package io.varve.swath.error;
 
 import io.varve.swath.output.DiskFull;
 
-/** Sink write / Parquet failure. Exit 1 — or 74 when the cause is a full disk. */
+/**
+ * Sink write / Parquet failure. The wrapped cause chain classifies a full disk as exit 74;
+ * otherwise this exits 1.
+ */
 public final class OutputException extends SwathException {
 
     /**
-     * {@code EX_IOERR} (sysexits.h) for the out-of-space case specifically, kept apart from the
-     * generic {@code 1} because an external runner can act on this and on nothing else here: a
-     * full workspace is fixed by giving the next attempt more space, which is the wrong response
-     * to every other sink failure. Named at the CLI boundary as
-     * {@code io.varve.swath.cli.ExitCodes#DISK_FULL} so the published table keeps one source —
-     * the same split {@code InvalidArgsException} and {@code ExitCodes#USAGE} already use.
+     * {@code EX_IOERR} (sysexits.h) for the out-of-space case. It is repeated literally because
+     * core must not depend on the CLI module; the CLI names the same published value as
+     * {@code io.varve.swath.cli.ExitCodes#DISK_FULL}.
      */
     private static final int DISK_FULL = 74;
 

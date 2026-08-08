@@ -34,8 +34,9 @@ question below.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, empty result, an already-complete resume, or stdout closed by the downstream reader (broken pipe) |
-| `1` | Unrecoverable error: listing failure, output write failure, checkpoint corruption |
+| `1` | Unrecoverable error: listing failure, non-disk-full output write failure, checkpoint corruption |
 | `2` | Bad arguments, invalid URI, invalid configuration, or a guarded refusal (unfinished/foreign output dir, format/extension mismatch) |
+| `74` | The output filesystem ran out of space (`EX_IOERR`); resumable only when the run has managed directory-dataset state |
 | `75` | Retryable stuck state (`EX_TEMPFAIL`); resumable only when the run has managed directory-dataset state |
 | `124` | Stopped by `--max-duration`; resumable only when the run has managed directory-dataset state |
 | `130` | Cancelled by SIGINT (Ctrl+C) |

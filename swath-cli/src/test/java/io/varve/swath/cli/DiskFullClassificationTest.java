@@ -12,28 +12,14 @@ import io.varve.swath.error.OutputException;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.FileSystemException;
+import java.nio.file.NoSuchFileException;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
-/**
- * Pins the two halves of "a full disk is legible from outside the process".
- *
- * <p>Both were missing together, and the combination left a large listing fleet unable to see disk
- * exhaustion at all: buckets filled a 30 GiB workspace, exited 1, and put nothing on stderr but
- * {@code swath: parquet writer failed}. An external runner classifying that run had neither a code
- * nor a message to go on, so it read the failure as memory pressure and retried on ever-larger
- * machines with the same disk.
- *
- * <ul>
- *   <li><b>The code</b> — {@link OutputException} exits {@link ExitCodes#DISK_FULL} when the cause
- *       chain holds an out-of-space {@link IOException}, and the generic {@code 1} otherwise. This
- *       is the signal a runner should classify on, because it is contractual.</li>
- *   <li><b>The message</b> — the terminal {@code swath:} line carries the cause chain, not just
- *       the domain exception's own stage name.</li>
- * </ul>
- */
 class DiskFullClassificationTest {
 
     /** The message Linux gives {@code ENOSPC}, which is all the JDK surfaces. */
@@ -63,8 +49,6 @@ class DiskFullClassificationTest {
             throw new OutputException("parquet writer failed", new IOException("Permission denied"));
         }
     }
-
-    // ---- the code -------------------------------------------------------------------------
 
     @Test
     void outOfSpaceCauseGetsItsOwnExitCode() {
@@ -96,6 +80,7 @@ class DiskFullClassificationTest {
     void everySpellingOfOutOfSpaceIsRecognisedAtAnyDepth() {
         for (String message : new String[] {
             ENOSPC, "ENOSPC", "Disk quota exceeded", "EDQUOT", "write failed: ENOSPC",
+            "write failed (EDQUOT)",
         }) {
             assertThat(new OutputException("parquet writer failed", new IOException(message))
                     .exitCode())
@@ -108,7 +93,43 @@ class DiskFullClassificationTest {
         }
     }
 
-    /** Every other sink failure keeps the generic code: the disk code must stay actionable. */
+    @Test
+    void classificationIsLocaleStable() {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr"));
+
+            assertThat(new OutputException("parquet writer failed", new IOException("DISK QUOTA EXCEEDED"))
+                    .exitCode()).isEqualTo(ExitCodes.DISK_FULL);
+        } finally {
+            Locale.setDefault(previous);
+        }
+    }
+
+    @Test
+    void aSymbolicNameInAFileSystemPathDoesNotClaimTheDiskCode() {
+        var cause = new FileSystemException("/tmp/ENOSPC/results", null, "Permission denied");
+
+        assertThat(new OutputException("parquet writer failed", cause).exitCode())
+                .isEqualTo(ExitCodes.UNEXPECTED);
+    }
+
+    @Test
+    void aFileSystemExceptionWithoutAReasonDoesNotInspectItsPath() {
+        var cause = new NoSuchFileException("/tmp/ENOSPC/results");
+
+        assertThat(new OutputException("parquet writer failed", cause).exitCode())
+                .isEqualTo(ExitCodes.UNEXPECTED);
+    }
+
+    @Test
+    void symbolicNamesMustBeDiagnosticTokens() {
+        assertThat(new OutputException("parquet writer failed", new IOException("pathENOSPCfile"))
+                .exitCode()).isEqualTo(ExitCodes.UNEXPECTED);
+        assertThat(new OutputException("parquet writer failed", new IOException("edquotation failure"))
+                .exitCode()).isEqualTo(ExitCodes.UNEXPECTED);
+    }
+
     @Test
     void otherOutputFailuresStayOnTheGenericCode() {
         assertThat(new OutputException("parquet writer failed", new IOException("Permission denied"))
@@ -117,7 +138,6 @@ class DiskFullClassificationTest {
                 .isEqualTo(ExitCodes.UNEXPECTED);
     }
 
-    /** A different domain exception is not reclassified just because a full disk is underneath. */
     @Test
     void onlyOutputFailuresClaimTheDiskCode() {
         var failure = new CheckpointException("checkpoint corrupt", new IOException(ENOSPC));
@@ -144,8 +164,6 @@ class DiskFullClassificationTest {
 
         assertThat(cmd.execute("output-failure")).isEqualTo(ExitCodes.UNEXPECTED);
     }
-
-    // ---- the message ----------------------------------------------------------------------
 
     @Test
     void theTerminalLineCarriesTheCauseNotJustTheStage() {
@@ -174,18 +192,14 @@ class DiskFullClassificationTest {
         assertThat(err.toString().strip().lines()).hasSize(1);
     }
 
-    /**
-     * Stripping the ends is not enough — an embedded line break would split the record that the
-     * stderr coordinator's lock exists to keep whole, which is the guarantee above.
-     */
     @Test
-    void anEmbeddedLineBreakIsFlattened() {
+    void controlCharactersAreEscaped() {
         var failure = new OutputException("parquet writer failed",
-                new IOException("write failed\n\tat part-00007.parquet\r\n" + ENOSPC));
+                new IOException("write failed\n\tat \u001bpart-00007.parquet\0\r\n" + ENOSPC));
 
-        assertThat(App.messageChain(failure)).doesNotContain("\n").doesNotContain("\r");
         assertThat(App.messageChain(failure))
-                .isEqualTo("parquet writer failed: write failed \tat part-00007.parquet " + ENOSPC);
+                .isEqualTo("parquet writer failed: write failed\\x0a\\x09at "
+                        + "\\x1bpart-00007.parquet\\x00\\x0d\\x0a" + ENOSPC);
     }
 
     @Test
@@ -211,7 +225,7 @@ class DiskFullClassificationTest {
      * un-deduplicated walk renders the same text twice.
      */
     @Test
-    void aRepeatedMessageIsNotPrintedTwice() {
+    void anAdjacentRepeatedMessageIsNotPrintedTwice() {
         var inner = new IOException(ENOSPC);
 
         assertThat(App.messageChain(new OutputException("parquet writer failed", inner)))
@@ -220,7 +234,21 @@ class DiskFullClassificationTest {
                 .isEqualTo(ENOSPC);
     }
 
-    /** A messageless link still names itself, or the chain silently shortens. */
+    @Test
+    void anIOExceptionCauseWrapperDoesNotRepeatItsCauseText() {
+        var inner = new IOException(ENOSPC);
+        var wrapper = new IOException(inner);
+
+        assertThat(App.messageChain(new OutputException("parquet writer failed", wrapper)))
+                .isEqualTo("parquet writer failed: " + wrapper.getMessage());
+    }
+
+    @Test
+    void distinctSuffixMessagesArePreserved() {
+        assertThat(App.messageChain(new OutputException("write failed", new IOException("failed"))))
+                .isEqualTo("write failed: failed");
+    }
+
     @Test
     void aMessagelessCauseStillNamesItself() {
         assertThat(App.messageChain(new OutputException("parquet writer failed", new IllegalStateException())))
@@ -234,6 +262,6 @@ class DiskFullClassificationTest {
         var b = new IOException("b", a);
         a.initCause(b);
 
-        assertThat(App.messageChain(b)).startsWith("b: a");
+        assertThat(App.messageChain(b)).isEqualTo("b: a");
     }
 }

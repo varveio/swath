@@ -34,19 +34,8 @@ public final class ExitCodes {
     public static final int USAGE = 2;
 
     /**
-     * The sink's filesystem ran out of space. {@code 74} is {@code EX_IOERR} (sysexits.h).
-     *
-     * <p>Split out of the generic {@link #UNEXPECTED} that covers the rest of
-     * {@code OutputException} because it is the one output failure an external runner can act on
-     * mechanically: the remedy is a bigger workspace on the next attempt, and applying that remedy
-     * to any other sink failure is wasted money. Without a code of its own the fault is legible
-     * only in the error text, which makes the runner's classification a string match on a message
-     * that is not part of any contract.
-     *
-     * <p>The {@code error} hierarchy already returns this from
-     * {@code OutputException#exitCode()} when {@code DiskFull} finds an out-of-space
-     * {@code IOException} in the cause chain; this names the same value at the CLI boundary so the
-     * published table has one source (as {@link #USAGE} does for the invalid-input exceptions).
+     * The sink's filesystem ran out of space. {@code 74} is {@code EX_IOERR} (sysexits.h), letting
+     * an external runner retry with a larger workspace rather than classify output failures by text.
      */
     public static final int DISK_FULL = 74;
 

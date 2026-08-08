@@ -7,8 +7,11 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.SwathException;
 import io.varve.swath.observability.SafeInput;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
@@ -240,47 +243,41 @@ public final class App implements Callable<Integer>, GlobalOptions.Carrier {
     }
 
     /**
-     * A domain error's own message followed by every distinct cause message beneath it, joined
-     * with {@code ": "} on ONE line.
+     * A domain error's message followed by every distinct cause message, joined with {@code ": "}
+     * as one physical line so the error coordinator can serialize the record intact.
      *
-     * <p>Printing only {@code getMessage()} loses the fault. A domain exception names the
-     * <em>stage</em> that failed — {@code OutputException("parquet writer failed", cause)} — while
-     * the cause names <em>what went wrong</em>, and it is the cause that tells an operator (or an
-     * external runner classifying the run) whether the disk filled, a file was unwritable, or the
-     * encoder rejected a row. Observed in the field: a fleet of large listings failed identically
-     * with nothing on stderr but {@code swath: parquet writer failed}, while the
-     * {@code No space left on device} underneath was discarded here.
-     *
-     * <p>One line, not a stack trace, for the reason the caller documents: the whole record is
-     * written under the coordinator's lock so nothing can splice into it, and a multi-line trace
-     * is what would make that splice-able. The trace stays behind {@code -v} on the unexpected
-     * path.
-     *
-     * <p>A link whose text the chain already ends with is skipped, because the JDK's own wrapping
-     * habit ({@code new IOException(cause)} takes {@code cause.toString()} as its message) would
-     * otherwise render as {@code x: x}.
+     * <p>Adjacent duplicate messages and the repeated cause text from {@code new IOException(cause)}
+     * are emitted once.
      */
     static String messageChain(Throwable throwable) {
         var text = new StringBuilder();
+        var visited = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
         int depthLeft = MAX_MESSAGE_CHAIN_DEPTH;
-        for (Throwable current = throwable; current != null && depthLeft > 0; current = current.getCause()) {
+        Throwable previous = null;
+        String previousPart = null;
+        for (Throwable current = throwable;
+                current != null && depthLeft > 0 && visited.add(current);
+                current = current.getCause()) {
             depthLeft--;
             String message = current.getMessage();
-            // An exception with no message still has to say something, or the chain silently
-            // shortens and the reader cannot tell a missing link from an absent one.
-            // Flatten any line break INSIDE a message too. Stripping the ends is not enough: a
-            // wrapped IOException can carry an embedded newline, and one of those would split the
-            // record the coordinator's lock exists to keep whole.
             String part = message == null || message.isBlank()
                 ? current.getClass().getSimpleName()
-                : message.strip().replaceAll("\\R+", " ");
+                : SafeInput.logText(message);
             if (text.isEmpty()) {
                 text.append(part);
-            } else if (!text.toString().endsWith(part)) {
+            } else if (!part.equals(previousPart) && !repeatsWrappedCause(previous, current)) {
                 text.append(": ").append(part);
             }
+            previous = current;
+            previousPart = part;
         }
         return text.toString();
+    }
+
+    private static boolean repeatsWrappedCause(Throwable wrapper, Throwable cause) {
+        return wrapper instanceof IOException
+                && wrapper.getCause() == cause
+                && cause.toString().equals(wrapper.getMessage());
     }
 
     public static void main(String[] args) {

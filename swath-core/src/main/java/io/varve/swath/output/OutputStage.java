@@ -27,7 +27,7 @@ import java.time.Duration;
  * <p><b>Broken pipe → clean exit (INT-12).</b> If the downstream reader closes
  * the pipe ({@code | head}), the write throws an {@link IOException}; the stage
  * recognises it ({@link BrokenPipe}) and returns cleanly so the run exits 0 with
- * no stack trace. Any other write failure is an {@link OutputException} (exit 1).
+ * no stack trace. A disk-full {@link OutputException} exits 74; other write failures exit 1.
  */
 public final class OutputStage implements Pipeline.Consumer<PageBatch> {
 
