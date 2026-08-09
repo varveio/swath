@@ -5,6 +5,7 @@
  */
 package io.varve.swath.runtime;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -39,10 +40,15 @@ class RunSortMetricsTest {
 
     @Test
     void recordStealReasonStillReaches() {
-        var metrics = new RunMetrics(new SimpleMeterRegistry());
+        var registry = new SimpleMeterRegistry();
 
-        new RunSortMetrics(metrics).recordStealReason("SORT", "merge_range_sample_capped");
+        new RunSortMetrics(new RunMetrics(registry)).recordStealReason("SORT", "merge_range_sample_capped");
 
-        assertTrue(metrics.progressSignal() >= 0, "wiring must not throw");
+        // Read the counter back off the registry, not "it did not throw": the first draft of this
+        // test asserted progressSignal() >= 0, which passes for a delegate that does nothing at all.
+        assertEquals(1.0, registry.get("swath.steal_reason")
+            .tag("outcome", "SORT")
+            .tag("reason", "merge_range_sample_capped")
+            .counter().count());
     }
 }

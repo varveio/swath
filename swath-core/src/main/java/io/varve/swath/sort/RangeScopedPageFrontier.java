@@ -113,6 +113,10 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
                 // its min), so it counts as skipped, not unread -- otherwise a segment lying wholly
                 // above hi would report a page as never-read despite having been read in full.
                 pagesSkipped++;
+                // Read and CRC-verified like any other, so it owes the watchdog a tick too. One page
+                // cannot move the 120 s window on its own, but a skipped tick on the path that
+                // ACCOUNTS for the page is the same class of gap this change exists to close.
+                metrics.markProgress();
                 pastRange = true;
                 return;
             }
