@@ -60,6 +60,18 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
     private final byte[] lo;   // inclusive, or null for -inf
     private final byte[] hi;   // exclusive, or null for +inf
 
+    /**
+     * Ticked once per page stepped over in {@link #skipToOverlapping()}.
+     *
+     * <p>The prefix walk reads and CRC-verifies roughly {@code r/R} of the staged bytes for range
+     * {@code r} before the merge emits its first row, and it emitted NOTHING while doing so. The
+     * liveness watchdog's total-freeze tripwire is a 120 s default, so on a billion-object listing
+     * this phase alone halted the JVM — the run was healthy and the signal was simply absent. The
+     * serial merge has no equivalent phase (it opens a bare frontier and reads one page per
+     * segment), which is why this only ever bit the parallel path.
+     */
+    private final SortMetrics metrics;
+
     /** Pages in the whole segment (trailer {@code totalRecords}) — the denominator for the signal. */
     private final long totalPages;
 
@@ -70,12 +82,13 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
     /** True once the scan has passed {@code hi}; the underlying stream is left un-drained. */
     private boolean pastRange;
 
-    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi, long totalPages)
-            throws IOException {
+    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi, long totalPages,
+                            SortMetrics metrics) throws IOException {
         this.inner = inner;
         this.lo = lo;
         this.hi = hi;
         this.totalPages = totalPages;
+        this.metrics = metrics;
         try {
             skipToOverlapping();
         } catch (IOException | RuntimeException e) {
@@ -108,6 +121,11 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
                 return;
             }
             pagesSkipped++;
+            // Every stepped-over page is a full read plus a CRC32C verify, so this is real work and
+            // the watchdog is entitled to see it. Ticking per page rather than per batch costs an
+            // AtomicLong increment against an I/O-bound loop, and removes any question of whether the
+            // cadence clears the stall window.
+            metrics.markProgress();
             inner.advance();
         }
     }

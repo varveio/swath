@@ -628,7 +628,7 @@ public final class ListRunner {
         // thread; the channel/downstream hold the compact packed page). Uses the SAME comparator + payload
         // codec the drain-thread SortBuffer.admit pack used, so output + durability are behavior-preserving.
         producer.enableSortPacking(new SortPagePacker(comparator, sortConfig));
-        SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
+        SortMetrics sortMetrics = new RunSortMetrics(ctx.metrics());
 
         if (reattach) {
             List<PartRef> segmentRows = sortedSegmentRows(store, runId);
@@ -826,7 +826,7 @@ public final class ListRunner {
                 stagedParts.stream().mapToLong(PartRef::rows).sum());
         List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
         Comparator<ListEntry> comparator = new ListEntryComparator();
-        SortMetrics sortMetrics = ctx.metrics()::recordStealReason;
+        SortMetrics sortMetrics = new RunSortMetrics(ctx.metrics());
         // Wrap the final-file writer factory so each row streamed into the merged output marks
         // liveness progress — during the k-way merge NO page completes, so without this the watchdog
         // would false-trip a long final merge. Throttled to every N rows in

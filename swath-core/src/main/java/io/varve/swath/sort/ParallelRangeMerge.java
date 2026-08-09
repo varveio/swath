@@ -291,6 +291,12 @@ final class ParallelRangeMerge {
                         // minKey() may hand back a buffer the reader owns; retain a copy.
                         distinct.add(frontier.minKey().clone());
                     }
+                    // This walk reads and CRC-verifies EVERY page of EVERY segment before any range
+                    // starts -- single-threaded, with nothing else running to advance the signal. It
+                    // emitted nothing, so the liveness watchdog's 120 s total-freeze tripwire halted
+                    // the JVM on any listing whose staging took longer than that to scan. The serial
+                    // merge never walks a whole segment, which is why only the parallel path tripped.
+                    metrics.markProgress();
                     frontier.advance();
                 }
             }
@@ -623,7 +629,7 @@ final class ParallelRangeMerge {
             private PageFrontierStream openScopedFrontier(Path segment) throws IOException {
                 long totalPages = PageRunSegmentReader.readTrailer(segment).totalRecords();
                 RangeScopedPageFrontier scoped = new RangeScopedPageFrontier(
-                        new PageFrontierReader(segment, metrics), lo, hi, totalPages);
+                        new PageFrontierReader(segment, metrics), lo, hi, totalPages, metrics);
                 pageFrontiers.add(scoped);
                 return scoped;
             }
