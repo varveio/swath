@@ -29,7 +29,11 @@ import java.util.List;
  * nothing. {@code listingDuration} is the listing-only clock — the same zero point, ending at the
  * listing&rarr;merge boundary ({@code RunMetrics#markListingFinished()}) — and is the honest
  * denominator for a listing-phase rate; it equals {@code duration} exactly on a run that never
- * merges. {@code sessionDuration} is the whole CLI invocation's own clock instead, seeding included
+ * merges. On a merge-only {@code --sort --resume}, where this process re-runs only the merge and
+ * lists nothing, {@code listingDuration} is near zero while {@code objects} is the full recovered
+ * dataset — so a consumer computing listing-phase rates must SKIP such runs rather than divide by
+ * that, and {@code sort.merge_only_resume: true} in the summary JSON is the tell.
+ * {@code sessionDuration} is the whole CLI invocation's own clock instead, seeding included
  * — the same span the live progress line already reports; a fresh run's seed step is the gap
  * between it and {@code duration}, and the two agree exactly on a resumed or seed-skipped run.
  * {@code sessionDuration} equals {@code duration} (never garbage) on any snapshot taken before the

@@ -60,10 +60,12 @@ final class SummaryRenderer implements RunSummarySink {
 
     /**
      * How far {@link RunSummary#sessionDuration()} must exceed {@link RunSummary#duration()}
-     * before the headline earns a second figure. {@code duration} is the listing clock (a fresh
-     * run's zero point is set AFTER seeding); {@code sessionDuration} is the whole CLI invocation,
-     * seeding included. A negligible seed (or a resumed run, where the two are always equal) keeps
-     * the one-figure line rather than printing two near-identical numbers a second apart.
+     * before the headline earns a second figure. {@code duration} is the whole post-seed run (a
+     * fresh run's zero point is set AFTER seeding, and on a {@code --sort} run it runs on through
+     * the merge/publish tail); {@link RunSummary#listingDuration()} is the listing-only span, and
+     * {@code sessionDuration} is the whole CLI invocation, seeding included. A negligible seed (or a
+     * resumed run, where the two are always equal) keeps the one-figure line rather than printing
+     * two near-identical numbers a second apart.
      */
     static final Duration SESSION_DELTA_MIN = Duration.ofSeconds(1);
 
@@ -228,20 +230,26 @@ final class SummaryRenderer implements RunSummarySink {
     }
 
     /**
-     * The block's headline: objects, the LISTING clock {@code keys_per_sec} is keyed to, and the
-     * rate itself — plus, when a fresh run's seed step made the whole session materially longer than
-     * that (§ {@link #SESSION_DELTA_MIN}), the session total too, so the two adjacent numbers an
-     * operator sees (this line and the live progress line, which is session-scoped) never disagree
-     * without explanation. {@code keys/s} sits directly after the {@code listing} figure — not the
+     * The block's headline: objects, the post-seed run clock {@code keys_per_sec} is keyed to, and
+     * the rate itself — plus, when a fresh run's seed step made the whole session materially longer
+     * than that (§ {@link #SESSION_DELTA_MIN}), the session total too, so the two adjacent numbers
+     * an operator sees (this line and the live progress line, which is session-scoped) never
+     * disagree without explanation. {@code keys/s} sits directly after the run figure — not the
      * {@code total} one — so which of the two the rate divides by is never left for the reader to
      * guess.
+     *
+     * <p>That figure is labelled {@code listing} only when it really is listing-only, i.e. when the
+     * run never crossed into a merge ({@code duration} equals {@link RunSummary#listingDuration()}).
+     * A {@code --sort} run's {@code duration} carries the post-listing merge/publish tail with it,
+     * and calling that span "listing" would misattribute merge time to the scan.
      */
     private static String headline(RunSummary summary) {
-        Duration listing = summary.duration();
+        Duration run = summary.duration();
         Duration session = summary.sessionDuration();
-        boolean materialSeed = session.minus(listing).compareTo(SESSION_DELTA_MIN) > 0;
-        String line = count(summary.objects()) + " objects in " + elapsed(listing)
-                + (materialSeed ? " listing" : "")
+        boolean materialSeed = session.minus(run).compareTo(SESSION_DELTA_MIN) > 0;
+        boolean listingOnly = run.equals(summary.listingDuration());
+        String line = count(summary.objects()) + " objects in " + elapsed(run)
+                + (materialSeed && listingOnly ? " listing" : "")
                 + SEP + count(Math.round(summary.keysPerSecond())) + " keys/s";
         return materialSeed ? line + SEP + elapsed(session) + " total" : line;
     }

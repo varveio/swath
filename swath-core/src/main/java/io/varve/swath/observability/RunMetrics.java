@@ -79,9 +79,13 @@ public final class RunMetrics {
     private final StuckErrorClassifier stuckClassifier = new StuckErrorClassifier();
     private final AtomicLong runId = new AtomicLong(-1L);
     private final AtomicLong runStartNanos = new AtomicLong();
-    // The listing->merge boundary stamp (0 = listing has not finished, which is also the terminal
-    // state of a run that never merges). See markListingFinished().
+    // The listing->merge boundary stamp, valid only while `listingFinished` is set. The flag is
+    // SEPARATE rather than a 0 sentinel on the timestamp itself, for exactly the reason spelled out
+    // for sessionClaimed below: nanoClock is a test seam a deterministic test may legitimately start
+    // at 0, and a CAS-from-0 scheme would then store 0, read as "still listing", and hand the first
+    // NON-ZERO crossing the win instead of the first one. See markListingFinished().
     private final AtomicLong listingEndNanos = new AtomicLong();
+    private final AtomicBoolean listingFinished = new AtomicBoolean();
     // The whole-invocation session clock's zero point: set exactly once, when the OUTERMOST
     // RunProgressReporter claims this run (the CLI's session-wide reporter, opened before seeding —
     // see RunProgressReporter's own javadoc) -- never by a nested/joined start. `sessionClaimed`
@@ -1883,8 +1887,8 @@ public final class RunMetrics {
 
     /** Nanos of LISTING elapsed: live until {@link #markListingFinished()}, frozen at it after. */
     private long listingElapsedNanos() {
-        long end = listingEndNanos.get();
-        return (end != 0L ? end : nanoClock.getAsLong()) - runStartNanos.get();
+        long end = listingFinished.get() ? listingEndNanos.get() : nanoClock.getAsLong();
+        return end - runStartNanos.get();
     }
 
     public void setConcurrencyTarget(long value) {
@@ -2237,12 +2241,11 @@ public final class RunMetrics {
         // empty run (compressedBytes == 0).
         long rawBytesEstimated = Math.round(bytesEstimated.count());
         // The listing-only clock: `duration` runs to summary time, so on a --sort run it already
-        // includes the merge/publish tail. Before the boundary is stamped -- an unsorted run, or a
+        // includes the merge/publish tail. Before the boundary is claimed -- an unsorted run, or a
         // mid-listing snapshot -- the two are the same span by construction.
-        long listingEnd = listingEndNanos.get();
-        Duration listingDuration = listingEnd == 0L
-                ? duration
-                : Duration.ofNanos(Math.max(0L, listingEnd - runStartNanos.get()));
+        Duration listingDuration = listingFinished.get()
+                ? Duration.ofNanos(Math.max(0L, listingEndNanos.get() - runStartNanos.get()))
+                : duration;
 
         return new RunSummary(
                 runId.get(),
@@ -2558,6 +2561,9 @@ public final class RunMetrics {
     public void markRunStarted() {
         long now = nanoClock.getAsLong();
         runStartNanos.set(now);
+        // Clear the claim BEFORE the stamp it guards: a reader between the two sees "still listing"
+        // and falls back to the live clock, never a claimed boundary pointing at a zeroed stamp.
+        listingFinished.set(false);
         listingEndNanos.set(0L);
         firstStealNanos.set(-1L);
         peakInFlightNanos.set(-1L);
@@ -2567,10 +2573,12 @@ public final class RunMetrics {
 
     /**
      * Stamp the LISTING&rarr;merge boundary — the instant this run stopped listing and handed off to
-     * the post-listing merge/publish tail. Idempotent (first call wins), so a path that reaches the
-     * boundary more than once still reports the first crossing. It scopes the tail-occupancy gauges
-     * (see {@link #tailOccupancyAvgInFlight}) and {@code listing_duration_ms}; a run that never
-     * merges never calls it, and both fall back to the live run clock.
+     * the post-listing merge/publish tail. Idempotent: the {@link #listingFinished} flag is what
+     * claims the crossing, so a path that reaches the boundary more than once reports the FIRST one
+     * even when the clock reads 0 there (see the field's comment, and {@code sessionClaimed}'s for
+     * the same rationale). It scopes the tail-occupancy gauges (see {@link
+     * #tailOccupancyAvgInFlight}) and {@code listing_duration_ms}; a run that never merges never
+     * calls it, and both fall back to the live run clock.
      *
      * <p>Reads the injectable {@code nanoClock}, NOT {@link System#nanoTime()}: this stamp feeds
      * summary and gauge values, so it must share {@link #runStartNanos}'s zero point and stay
@@ -2579,7 +2587,9 @@ public final class RunMetrics {
      * not add reads off the injectable seam (see {@link #setPhase}).
      */
     public void markListingFinished() {
-        listingEndNanos.compareAndSet(0L, nanoClock.getAsLong());
+        if (listingFinished.compareAndSet(false, true)) {
+            listingEndNanos.set(nanoClock.getAsLong());
+        }
     }
 
     private void markFirstSteal() {

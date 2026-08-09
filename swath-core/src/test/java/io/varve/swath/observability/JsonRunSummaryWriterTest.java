@@ -1160,7 +1160,7 @@ final class JsonRunSummaryWriterTest {
     void listingDurationStopsAtTheMergeBoundaryWhileDurationRunsOn(@TempDir Path dir) throws Exception {
         Path path = dir.resolve("summary.json");
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        AtomicLong clock = new AtomicLong(1_000_000_000L);   // non-zero: 0 is the unstamped sentinel
+        AtomicLong clock = new AtomicLong(1_000_000_000L);
         RunMetrics metrics = new RunMetrics(registry, clock::get);
         metrics.markRunStarted();
         clock.addAndGet(5_000_000_000L);    // 5s of listing

@@ -106,4 +106,32 @@ final class TailOccupancyListingScopeTest {
                 .as("first call wins — listing_duration_ms stays the first crossing")
                 .isEqualTo(10L);
     }
+
+    /**
+     * A boundary crossed at clock 0 is a real crossing. The stamp is claimed by a separate flag, not
+     * by a CAS from a 0 sentinel on the timestamp — a fake clock may legitimately read 0 there, and
+     * a sentinel scheme would silently leave the boundary unstamped and hand the win to the first
+     * NON-ZERO crossing instead (the same reasoning {@code sessionClaimed} is built on).
+     */
+    @Test
+    void aBoundaryStampedAtClockZeroSticks() {
+        long[] clock = {0L};
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry(), () -> clock[0]);
+        metrics.markRunStarted();       // run start and the boundary both land at clock 0
+        metrics.incrementInFlight();
+        metrics.recordEntriesEmitted(KEYS_PER_PAGE);
+        metrics.markListingFinished();
+
+        clock[0] = 500 * MS;
+        metrics.markListingFinished();   // a later crossing must not take a stamp already claimed
+
+        assertThat(metrics.summary(Duration.ofMillis(500), "WORK_STEALING", 0L, 0L)
+                .listingDuration())
+                .as("a zero-length listing is a real listing — not an unstamped boundary")
+                .isEqualTo(Duration.ZERO);
+        // The listing window has zero elapsed, so the gauges report the sampler's "unobserved" NaN
+        // rather than picking the merge's wall time back up as the run clock advances.
+        assertThat(gauge(metrics, "swath.tail_occupancy.wall_share", 10)).isNaN();
+        assertThat(gauge(metrics, "swath.tail_occupancy.avg_in_flight", 10)).isNaN();
+    }
 }

@@ -164,6 +164,7 @@ final class SummaryRendererTest {
 
     @Test
     void materialSeedRendersBothTheListingFigureAndTheSessionTotal() {
+        // An unsorted run: the run clock IS the listing clock, so the figure earns the label.
         RunSummary summary = summaryWithDurations(Duration.ofSeconds(103), Duration.ofSeconds(142));
 
         List<String> lines = SummaryRenderer.lines(AUTO, summary, diagnostics(), COMPLETED);
@@ -172,6 +173,24 @@ final class SummaryRendererTest {
                 .as("keys/s sits right after the listing figure, so the rate's denominator is "
                         + "never ambiguous between the two elapsed numbers")
                 .contains("1,500 objects in 1m43s listing").contains("keys/s")
+                .contains("2m22s total");
+    }
+
+    @Test
+    void aSortedRunsFigureIsNeverLabelledListingBecauseItCarriesTheMergeTail() {
+        // 1m43s post-seed, of which only 1m20s was listing -- the rest is the merge/publish tail.
+        RunSummary summary = summaryWithClocks(
+                Duration.ofSeconds(103), Duration.ofSeconds(142), Duration.ofSeconds(80));
+
+        List<String> lines = SummaryRenderer.lines(AUTO, summary, diagnostics(), COMPLETED);
+
+        assertThat(lines.get(0))
+                .as("the headline figure includes the merge, so labelling it 'listing' would "
+                        + "misattribute merge time to the scan")
+                .contains("1,500 objects in 1m43s")
+                .doesNotContain("listing");
+        assertThat(lines.get(0))
+                .as("the session total still earns its place — only the label is withheld")
                 .contains("2m22s total");
     }
 
@@ -446,8 +465,17 @@ final class SummaryRendererTest {
      * listing clock is the run clock.
      */
     private static RunSummary summaryWithDurations(Duration run, Duration session) {
+        return summaryWithClocks(run, session, run);
+    }
+
+    /**
+     * As {@link #summaryWithDurations}, but with the listing clock split out from the run clock —
+     * the {@code --sort} shape, where {@code duration} runs on past the listing through the
+     * merge/publish tail.
+     */
+    private static RunSummary summaryWithClocks(Duration run, Duration session, Duration listing) {
         return new RunSummary(
-                1L, 1_500L, run, session, run, WORK_STEALING, 0L, 0.0,
+                1L, 1_500L, run, session, listing, WORK_STEALING, 0L, 0.0,
                 0L, 0L, 1_500L, 0L, 0L, 0.0, -1L, -1L, 0L, 0L, 0L,
                 50.0, 0.0, -1L, -1L, -1.0, -1.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);
