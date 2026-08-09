@@ -229,6 +229,20 @@ final class SortMergeReentryContractTest {
             assertThat(summaryJson.get("sort").get("merge_only_resume").asBoolean())
                     .as("summary.sort.merge_only_resume marks these as recovered-from-checkpoint counts")
                     .isTrue();
+            // ...and every one of those rows is attributed as RECOVERED, because an earlier process
+            // listed them. This one issued zero LIST calls, so the figures measured against ITS work
+            // must read zero rather than credit a whole bucket to the merge's wall clock.
+            assertThat(summaryJson.get("recovered_objects").asLong())
+                    .as("a merge-only resume listed none of the rows it republished")
+                    .isEqualTo(keyspace.size());
+            assertThat(summaryJson.get("efficiency").get("keys_per_sec").asDouble())
+                    .as("objects - recovered_objects is 0, so this process's listing rate is 0 — "
+                            + "not a bucket's worth of keys divided by the merge's seconds")
+                    .isZero();
+            assertThat(summaryJson.get("efficiency").get("api_calls_per_1k_objects").asDouble())
+                    .as("no LIST call and no self-listed object: the per-object call figure is 0, "
+                            + "never a division against rows this process never fetched")
+                    .isZero();
         }
     }
 

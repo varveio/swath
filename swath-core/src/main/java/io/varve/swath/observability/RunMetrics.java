@@ -955,6 +955,30 @@ public final class RunMetrics {
     }
 
     /**
+     * Merge-only {@code --sort --resume} row attribution — the rows that resume's merge re-published
+     * from durable segments an EARLIER process listed. Attributes them as RECOVERED work and nothing
+     * else, so the per-second/per-API-call figures ({@code keys_per_sec}, {@code
+     * api_calls_per_1k_objects}) come out at zero for a process that issued no LIST call at all,
+     * instead of crediting a whole bucket to the merge's wall clock (see {@link
+     * #sessionObjects(long)}).
+     *
+     * <p>Deliberately NOT {@link #recordRecoveredObjects}, which is the OTHER resume shape's seam:
+     * that one also backfills {@code swath.entries.emitted}, because a reattach resume's own {@code
+     * objects} field is read off that counter and would otherwise under-report the pre-crash rows. A
+     * merge-only resume takes {@code objects} from {@code summary(..., objectsOverride)} instead, so
+     * the counter needs no backfill here — and this path must leave {@code entries.emitted}/{@code
+     * progress.units} untouched (the merge already fed {@code progress.units} row-by-row via {@link
+     * #recordProgress}, and this process listed nothing to attribute entries to). Nothing is folded
+     * into the {@link #tailOccupancy} baseline either, for the same reason: that baseline offsets
+     * {@code entries.emitted}, which stays at zero on this path, and no sample is ever taken.
+     */
+    public void recordRecoveredSortRows(long rows) {
+        if (rows > 0) {
+            recoveredObjects.addAndGet(rows);
+        }
+    }
+
+    /**
      * Reattach/partial-relist {@code --sort --resume} backfill
      * — sibling of {@link #recordRecoveredSortSegments} for the OTHER
      * resume shape. On a reattach resume, {@code ListRunner} re-lists only the non-durable TAIL:
@@ -2577,7 +2601,8 @@ public final class RunMetrics {
      * the post-listing merge/publish tail. One CAS on {@link #listingEndNanos} both claims the
      * crossing and publishes its stamp, so the first crossing wins even when the clock reads 0
      * there, and no reader can observe a claimed boundary without the stamp it is claimed with (see
-     * the field's comment). It scopes the tail-occupancy gauges (see {@link
+     * the field's comment) — there is no publication window for a concurrent gauge scrape to fall
+     * into, so no test can exercise one. It scopes the tail-occupancy gauges (see {@link
      * #tailOccupancyAvgInFlight}) and {@code listing_duration_ms}; a run that never merges never
      * calls it, and both fall back to the live run clock.
      *

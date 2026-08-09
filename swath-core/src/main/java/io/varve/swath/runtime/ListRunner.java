@@ -771,7 +771,11 @@ public final class ListRunner {
             // under-report objects:0 / sort.segments:0 despite publishing the full, correct output
             // — see RunMetrics#summary(...,objectsOverride) and #recordRecoveredSortSegments for why
             // this is NOT a blind counter replay (progress.units/entries are deliberately untouched).
+            // The rows are attributed as RECOVERED alongside: they were listed by an earlier process,
+            // so crediting them to this one's wall clock would report a keys/sec for a run that
+            // issued zero LIST calls (see RunMetrics#recordRecoveredSortRows).
             ctx.metrics().recordRecoveredSortSegments(segRows.size());
+            ctx.metrics().recordRecoveredSortRows(result.totalRows());
 
             // Progress ends before the first terminal record, exactly as in runLifecycle's epilogue:
             // the reporter this method's merge started is closed, but the CLI's session reporter is not.
