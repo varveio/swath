@@ -5,11 +5,11 @@
  */
 package io.varve.swath.runtime;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Every hook on {@code SortMetrics} must actually reach {@link RunMetrics}.
