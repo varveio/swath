@@ -213,9 +213,13 @@ keys_per_sec`.
 
 `objects` describes the **dataset the run published**, so on a resume it includes the rows a
 previous attempt already made durable (managed-Parquet parts, `--sort` staging segments) — the same
-rows the published `manifest.json` counts. Everything measured against this process's own clock or
-its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`, `overfetch_ratio`) excludes them: the
-recovered rows cost this run neither a second nor a LIST call.
+rows the published `manifest.json` counts. `recovered_objects` (since 0.2.4, additive under schema
+v2; JSON top level, emitted immediately after `objects`) is exactly that resume-backfilled count —
+`0` on a fresh run, and the row count this process never listed itself. Everything measured against
+this process's own clock or its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`,
+`overfetch_ratio`) excludes it: `objects − recovered_objects` is the this-process-only numerator
+those per-second/per-API-call figures actually divide, and the recovered rows cost this run neither a
+second nor a LIST call.
 
 **`duration_ms` is the WHOLE post-seed run clock, not the whole session.** A fresh run's seed step
 (probing the bucket's shape to tile the initial worklist) runs BEFORE this clock's zero point, so
@@ -245,8 +249,9 @@ count and the merge parallelism actually used.
 
 `listing_duration_ms` is the authoritative denominator when what you want is the listing-phase rate
 instead. Reading it back requires two corrections, both already how `keys_per_sec` itself is scoped
-(§2 above): the denominator is in milliseconds, and the numerator must exclude a resume's recovered
-rows (the `-v` progress line's `recovered_objects`, §4) since this process never listed them. So
+(above): the denominator is in milliseconds, and the numerator must exclude a resume's recovered
+rows — the summary's own top-level `recovered_objects` field (above), not a value reconstructed from
+the `-v` progress line — since this process never listed them. So
 listing keys/s is `(objects − recovered_objects) ÷ (listing_duration_ms / 1000)`, not the raw
 `objects ÷ listing_duration_ms` a reader might reach for first (that both overstates the numerator on
 a resumed run by the whole backfill, and understates the rate 1000× by dividing by milliseconds — see
@@ -311,8 +316,8 @@ A machine-readable, versioned sidecar carrying the complete end-of-run state —
 renamed, retyped, or given a new meaning. **Added fields do not bump it**, so a consumer must
 tolerate keys it does not recognise rather than treat the object as closed: version `2` has gained
 `session_duration_ms`, `cost.basis`, `engine.time_to_first_steal_ms` /
-`engine.time_to_peak_in_flight_ms`, and `listing_duration_ms` since it was first published, and will
-gain more. Key
+`engine.time_to_peak_in_flight_ms`, `listing_duration_ms`, and `recovered_objects` since it was first
+published, and will gain more. Key
 **presence** is the other axis, and it is not a schema signal: several fields are legitimately
 absent or `null` on a given write — `meters[]` on a degraded terminal write (below), the
 `time_to_*` pair when the event never happened, `cost` when the endpoint is overridden and the
@@ -378,6 +383,7 @@ downstream parser should key off, not "does `meters[]` exist".
   "session_duration_ms": 25731,
   "listing_duration_ms": 25731,
   "objects": 109858,
+  "recovered_objects": 0,
   "config": {
     "target": "s3://my-bucket", "region": "us-east-2", "format": "parquet",
     "max_parallel_listings": 64, "no_sign_request": true, "rate_limit_api": null,

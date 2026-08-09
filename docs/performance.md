@@ -219,7 +219,7 @@ whole-run `duration_ms`, merge included — so the honest listing-phase rate is
 `(objects − recovered_objects) ÷ (listing_duration_ms / 1000)`, not
 `efficiency.keys_per_sec`: the `/1000` matters (`listing_duration_ms` is
 milliseconds, and dividing by it directly gives keys per MILLISECOND, 1000×
-low), and so does excluding `recovered_objects` (the `-v` progress line's
+low), and so does excluding `recovered_objects` (the summary's own top-level
 resume-backfill count — a `--sort --resume` that recovered rows would otherwise
 have its listing rate overstated by the whole backfill, which this process
 never listed). See
