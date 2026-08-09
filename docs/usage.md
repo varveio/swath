@@ -978,12 +978,12 @@ When a run ends, swath prints a short summary block to **stderr** (stdout stays 
 
 The headline's elapsed figure is `duration_ms` — the same clock `keys/s` divides by — which starts
 only AFTER a fresh run's seed step (probing the bucket's shape to tile the initial worklist). On an
-unsorted run this genuinely is the listing clock, and the headline labels it ` listing` whenever the
+unsorted run this genuinely is the listing clock, and the headline labels it `listing` whenever the
 second (session) figure below appears. On a `--sort` run `duration_ms` also runs through the whole
 post-listing merge/publish tail, so both the headline and its `keys/s` are whole-run figures on a
 sorted run, diluted by the merge — `--report`'s `listing_duration_ms` is where the listing-phase-only
 rate lives (see [`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end)).
-The headline never prints the ` listing` label on such a run: labeling a span that carries the merge
+The headline never prints the `listing` label on such a run: labeling a span that carries the merge
 with it "listing" would misattribute the merge to the scan, so the label only ever appears when
 `duration_ms` and `listing_duration_ms` genuinely agree.
 
@@ -991,7 +991,7 @@ On a run whose seed step took a while, the headline instead carries a second
 figure, the whole session (seeding included — the same span the live progress line already
 reports), clearly labeled so which one the rate is keyed to is never ambiguous:
 
-```
+```text
   3,270,132 objects in 1m43s listing · 31,750 keys/s · 2m22s total
 ```
 
