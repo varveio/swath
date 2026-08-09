@@ -26,4 +26,24 @@ public interface SortMetrics {
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
     void recordStealReason(String outcome, String reason);
+
+    /**
+     * Advance the liveness progress signal, exactly as {@code RunMetrics.markProgress()}.
+     *
+     * <p><b>Call this from any loop that does real work without emitting a row.</b> The parallel
+     * range merge has two such loops — boundary sampling walks every page of every segment, and each
+     * range's frontier walks its own prefix — and both were silent. The liveness watchdog's
+     * total-freeze tripwire defaults to 120 s, so on a billion-object listing these phases halted a
+     * perfectly healthy JVM before the merge wrote its first row. The row-emitting path was never
+     * the problem; it ticks through a writer decorator.
+     *
+     * <p><b>The default is a no-op, and that is a trap worth naming.</b> This interface is a
+     * {@code @FunctionalInterface} wired in most places as a lambda or a method reference, which
+     * cannot supply a second method — so a caller that wires {@code metrics::recordStealReason} gets
+     * a silently non-ticking implementation. The pipeline must wire something that overrides this;
+     * {@code ListRunner} uses a named bridge with a test asserting both methods forward.
+     */
+    default void markProgress() {
+        // no-op: the null object and every test lambda record nothing.
+    }
 }
