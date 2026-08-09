@@ -126,6 +126,12 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
             // AtomicLong increment against an I/O-bound loop, and removes any question of whether the
             // cadence clears the stall window.
             metrics.markProgress();
+            // ...and this walk must be abandonable. When one range fails, the coordinator cancels its
+            // siblings and joins them before cleanup; a sibling that polls nothing walks its whole
+            // prefix first, so the join outlives the stall window, the watchdog re-traps the run, and
+            // the ORIGINAL classified failure is replaced by stuck_unknown. Polling here is what makes
+            // that cancel cooperative -- the constructor already closes the stream on the way out.
+            MergeCancellation.check();
             inner.advance();
         }
     }
