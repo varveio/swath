@@ -460,6 +460,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // compatibility. Additive under schema v2 -- NOT a v3 bump.
         root.put("listing_duration_ms", summary.listingDuration().toMillis());
         root.put("objects", summary.objects());
+        // The rows a resume carried over from a previous attempt: objects describes the DATASET, so
+        // objects - recovered_objects is the numerator for anything this process's own rate is
+        // measured on (it neither listed nor paid a LIST call for them). Previously visible only on
+        // the -v progress line. Additive under schema v2 -- NOT a v3 bump.
+        root.put("recovered_objects", summary.recoveredObjects());
 
         RunConfig rc = config.runConfig();
         writeConfig(root.putObject("config"), rc);

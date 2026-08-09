@@ -21,6 +21,14 @@ import java.util.List;
  * compressionRatio} instead render {@code 0.0} on a zero denominator, since they are always
  * computable from existing counters (no hot-path cost), just possibly vacuous on a tiny run.
  *
+ * <p>{@code recoveredObjects} is the resume-backfilled row count this process never listed itself
+ * ({@code RunMetrics#recordRecoveredObjects}), {@code 0} on a fresh run. {@code objects} describes
+ * the DATASET and so includes it; {@code objects - recoveredObjects} is the this-process-only
+ * numerator every per-second/per-API-call figure here ({@code keysPerSecond}, {@code
+ * apiCallsPer1kObjects}) already divides, since pre-crash rows cost this process neither a second
+ * nor a LIST call. Carried here so that numerator is readable off the summary rather than
+ * reconstructible only from the {@code -v} progress line.
+ *
  * <p>Three clocks, three different spans. {@code duration} is the POST-SEED WHOLE-RUN clock — it
  * starts at {@code RunMetrics#markRunStarted()}'s zero point, which a fresh run resets to AFTER
  * seeding, and ends when the summary is built. On a {@code --sort} run that end is past the merge,
@@ -60,6 +68,7 @@ import java.util.List;
 public record RunSummary(
         long runId,
         long objects,
+        long recoveredObjects,
         Duration duration,
         Duration sessionDuration,
         Duration listingDuration,

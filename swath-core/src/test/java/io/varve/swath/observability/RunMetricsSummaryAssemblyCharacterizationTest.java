@@ -47,11 +47,13 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
      * between the live progress line (session-scoped, seeding included) and this record's
      * `duration` (post-seed, a fresh run's clock starts AFTER seeding). {@code listingDuration}
      * followed it, once `duration` turned out to run PAST the listing on a sorted run (it ends at
-     * summary time, merge included). Both moved deliberately here alongside their change, not
+     * summary time, merge included), and {@code recoveredObjects} after {@code objects}, so the
+     * this-process-only rate numerator (`objects - recoveredObjects`) stops being reconstructible
+     * only from the -v progress line. All three moved deliberately here alongside their change, not
      * re-captured.
      */
     private static final List<String> EXPECTED_SUMMARY_FIELDS = List.of(
-            "runId", "objects", "duration", "sessionDuration", "listingDuration",
+            "runId", "objects", "recoveredObjects", "duration", "sessionDuration", "listingDuration",
             "strategy", "apiCalls", "costUsd",
             "outputFiles", "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "timeToFirstStealMs",
             "timeToPeakInFlightMs", "steals", "splits",
@@ -83,6 +85,9 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
 
         assertThat(s.runId()).isEqualTo(7L);
         assertThat(s.objects()).isEqualTo(910L);          // entries.emitted, incl. recordRecoveredObjects
+        // The backfilled share of that total, carried so `objects - recoveredObjects` (the 900 rows
+        // this process actually listed) is readable straight off the summary.
+        assertThat(s.recoveredObjects()).isEqualTo(10L);
         assertThat(s.keys()).isEqualTo(910L);             // keys mirrors objects
         assertThat(s.duration()).isEqualTo(Duration.ofSeconds(5));   // passed through verbatim
         // No session-wide RunProgressReporter ever claimed this RunMetrics (the workload drives

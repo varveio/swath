@@ -2250,6 +2250,7 @@ public final class RunMetrics {
         return new RunSummary(
                 runId.get(),
                 keyCount,
+                recoveredObjects.get(),
                 duration,
                 sessionDuration(duration),
                 listingDuration,

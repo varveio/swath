@@ -169,6 +169,7 @@ final class ListRunnerObservabilityTest {
                 .contains("duration_ms=")
                 .contains("listing_duration_ms=")
                 .contains("session_duration_ms=")
+                .contains("recovered_objects=")
                 .contains("api_calls_per_1k_objects=")
                 .contains("peak_rss_bytes=")
                 .contains("peak_heap_bytes=")
