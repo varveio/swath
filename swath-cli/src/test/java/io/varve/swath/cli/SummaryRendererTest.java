@@ -439,14 +439,15 @@ final class SummaryRendererTest {
     }
 
     /**
-     * A {@link RunSummary} with an explicit {@code duration} (listing)/{@code sessionDuration}
+     * A {@link RunSummary} with an explicit post-seed {@code duration}/{@code sessionDuration}
      * split, for the headline's material-vs-negligible-seed threshold tests — every other field is
      * a placeholder, since only those two clocks (plus {@code objects}/{@code keysPerSecond}) drive
-     * what {@link SummaryRenderer#lines} renders on the headline.
+     * what {@link SummaryRenderer#lines} renders on the headline. These runs never merge, so the
+     * listing clock is the run clock.
      */
-    private static RunSummary summaryWithDurations(Duration listing, Duration session) {
+    private static RunSummary summaryWithDurations(Duration run, Duration session) {
         return new RunSummary(
-                1L, 1_500L, listing, session, WORK_STEALING, 0L, 0.0,
+                1L, 1_500L, run, session, run, WORK_STEALING, 0L, 0.0,
                 0L, 0L, 1_500L, 0L, 0L, 0.0, -1L, -1L, 0L, 0L, 0L,
                 50.0, 0.0, -1L, -1L, -1.0, -1.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);

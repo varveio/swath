@@ -21,16 +21,20 @@ import java.util.List;
  * compressionRatio} instead render {@code 0.0} on a zero denominator, since they are always
  * computable from existing counters (no hot-path cost), just possibly vacuous on a tiny run.
  *
- * <p>{@code duration} is the LISTING clock — the same one {@code keysPerSecond} and every other
- * per-second/per-API-call figure divides by — {@code RunMetrics#markRunStarted()}'s zero point,
- * which a fresh run resets to AFTER seeding. {@code sessionDuration} is the whole CLI invocation's
- * own clock instead, seeding included — the same span the live progress line already reports. The
- * two agree exactly on a resumed or seed-skipped run; a fresh run's seed step is the gap between
- * them. Neither is wrong: {@code duration} is the honest throughput denominator (seeding fetches no
- * object), {@code sessionDuration} is what the operator actually waited on. {@code sessionDuration}
- * equals {@code duration} (never garbage) on any snapshot taken before the session-wide progress
- * reporter has claimed its start — a pre-seed early exit, or a caller that builds a summary directly
- * without ever starting one.
+ * <p>Three clocks, three different spans. {@code duration} is the POST-SEED WHOLE-RUN clock — it
+ * starts at {@code RunMetrics#markRunStarted()}'s zero point, which a fresh run resets to AFTER
+ * seeding, and ends when the summary is built. On a {@code --sort} run that end is past the merge,
+ * so {@code duration} includes the whole post-listing merge/publish tail, and {@code keysPerSecond}
+ * / {@code cpuEfficiency} (which divide by it) are whole-run rates diluted by a phase that lists
+ * nothing. {@code listingDuration} is the listing-only clock — the same zero point, ending at the
+ * listing&rarr;merge boundary ({@code RunMetrics#markListingFinished()}) — and is the honest
+ * denominator for a listing-phase rate; it equals {@code duration} exactly on a run that never
+ * merges. {@code sessionDuration} is the whole CLI invocation's own clock instead, seeding included
+ * — the same span the live progress line already reports; a fresh run's seed step is the gap
+ * between it and {@code duration}, and the two agree exactly on a resumed or seed-skipped run.
+ * {@code sessionDuration} equals {@code duration} (never garbage) on any snapshot taken before the
+ * session-wide progress reporter has claimed its start — a pre-seed early exit, or a caller that
+ * builds a summary directly without ever starting one.
  *
  * <p>{@code timeToFirstStealMs} and {@code timeToPeakInFlightMs} are the run's ramp-up timings —
  * milliseconds from run start to the first work steal / to the instant peak concurrency was first
@@ -54,6 +58,7 @@ public record RunSummary(
         long objects,
         Duration duration,
         Duration sessionDuration,
+        Duration listingDuration,
         String strategy,
         long apiCalls,
         double costUsd,

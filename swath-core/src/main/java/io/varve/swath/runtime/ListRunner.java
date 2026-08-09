@@ -707,6 +707,7 @@ public final class ListRunner {
                     // Listing complete + all segments durable. Latch nodes, then merge + publish.
                     store.markOutputComplete(runId);
                     store.setSortPhase(runId, SortPhase.MERGING);
+                    ctx.metrics().markListingFinished();
                     ctx.metrics().setPhase(Phase.MERGING);
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
@@ -752,6 +753,9 @@ public final class ListRunner {
         boolean summaryEmitted = false;
         try {
             store.setSortPhase(runId, SortPhase.MERGING);
+            // This process lists nothing, so the listing clock lands near zero — the honest figure
+            // for a merge-only resume, not a gap.
+            ctx.metrics().markListingFinished();
             ctx.metrics().setPhase(Phase.MERGING);
             List<PartRef> segRows = sortedSegmentRows(store, runId);
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
@@ -1376,8 +1380,9 @@ public final class ListRunner {
     }
 
     private static void logSummary(RunSummary summary) {
-        log.info("list_run_summary run_id={} objects={} duration_ms={} session_duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
+        log.info("list_run_summary run_id={} objects={} duration_ms={} listing_duration_ms={} session_duration_ms={} strategy={} api_calls={} cost_usd={} output_files={} compressed_size_bytes={} keys={} pages={} peak_in_flight={} steals={} splits={} errors={} keys_per_sec={} api_calls_per_1k_objects={} peak_rss_bytes={} peak_heap_bytes={} cpu_seconds={} cpu_efficiency={}",
                 summary.runId(), summary.objects(), summary.duration().toMillis(),
+                summary.listingDuration().toMillis(),
                 summary.sessionDuration().toMillis(), summary.strategy(),
                 summary.apiCalls(), summary.costUsd(), summary.outputFiles(), summary.compressedBytes(),
                 summary.keys(), summary.pages(), summary.peakInFlight(), summary.steals(), summary.splits(),

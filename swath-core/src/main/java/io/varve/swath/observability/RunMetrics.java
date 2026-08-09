@@ -79,6 +79,9 @@ public final class RunMetrics {
     private final StuckErrorClassifier stuckClassifier = new StuckErrorClassifier();
     private final AtomicLong runId = new AtomicLong(-1L);
     private final AtomicLong runStartNanos = new AtomicLong();
+    // The listing->merge boundary stamp (0 = listing has not finished, which is also the terminal
+    // state of a run that never merges). See markListingFinished().
+    private final AtomicLong listingEndNanos = new AtomicLong();
     // The whole-invocation session clock's zero point: set exactly once, when the OUTERMOST
     // RunProgressReporter claims this run (the CLI's session-wide reporter, opened before seeding —
     // see RunProgressReporter's own javadoc) -- never by a nested/joined start. `sessionClaimed`
@@ -173,6 +176,8 @@ public final class RunMetrics {
     private final Counter aimdTimeoutShed;
     /** {@code swath.aimd.latency_freeze}: successful-attempt latency-inflation +1-growth freezes. */
     private final Counter aimdLatencyFreeze;
+    /** {@code swath.aimd.freeze_gate_checks}: successes that reached the growth-freeze gates at all. */
+    private final Counter aimdFreezeGateChecks;
     /** {@code swath.aimd.growth_freeze}: transient-timeout +1-growth freezes (worker-storm-only). */
     private final Counter aimdGrowthFreeze;
     /** {@code swath.aimd.latency_baseline_ms}: the Vegas rolling-min healthy-latency baseline (ms). */
@@ -484,6 +489,7 @@ public final class RunMetrics {
         aimdTargetReductions = Counter.builder("swath.aimd.target_reductions").register(registry);
         aimdTimeoutShed = Counter.builder("swath.aimd.timeout_shed").register(registry);
         aimdLatencyFreeze = Counter.builder("swath.aimd.latency_freeze").register(registry);
+        aimdFreezeGateChecks = Counter.builder("swath.aimd.freeze_gate_checks").register(registry);
         aimdGrowthFreeze = Counter.builder("swath.aimd.growth_freeze").register(registry);
         Gauge.builder("swath.aimd.latency_baseline_ms", latencyBaselineMillis, AtomicLong::get).register(registry);
         // Publish client-side p50/p99 so the regime-confound RTT is real (the timer
@@ -1390,6 +1396,19 @@ public final class RunMetrics {
     }
 
     /**
+     * A successful attempt on the {@link io.varve.swath.engine.ConcurrencyGauge} reached the
+     * growth-freeze gates ({@code swath.aimd.freeze_gate_checks}) — the DENOMINATOR for {@link
+     * #recordLatencyFreeze()} and {@link #recordGrowthFreeze()}. A success that returns earlier (at
+     * {@code Tmax}, or inside a throttle cool-down) could never have frozen, so raw freeze counts
+     * alone are incomparable across runs at different saturation: a healthy run pinned at {@code
+     * Tmax} reads zero freezes by construction, not by health. {@code latency_freeze /
+     * freeze_gate_checks} is the comparable rate.
+     */
+    public void recordFreezeGateCheck() {
+        aimdFreezeGateChecks.increment();
+    }
+
+    /**
      * The transient-timeout rung froze a would-be +1 growth step on the {@link
      * io.varve.swath.engine.ConcurrencyGauge} ({@code swath.aimd.growth_freeze}). Distinct from {@link
      * #recordLatencyFreeze()} (a separate freeze rung) so post-hoc analysis can tell which rung
@@ -1840,19 +1859,32 @@ public final class RunMetrics {
 
     /**
      * The {@code pct}% tail-occupancy avg-in-flight gauge supplier — reads the CURRENT cumulative
-     * emitted-keys/elapsed-wall totals (live, mid-run values are a valid — if still-growing —
-     * approximation, same as every other pull-based gauge here) and asks {@link #tailOccupancy} to
-     * derive the last-{@code pct}% window's mean in-flight over its bounded sample buffer.
+     * emitted-keys total (live, mid-run values are a valid — if still-growing — approximation, same
+     * as every other pull-based gauge here) and asks {@link #tailOccupancy} to derive the
+     * last-{@code pct}% window's mean in-flight over its bounded sample buffer.
+     *
+     * <p>The elapsed span handed to the sampler is LISTING-scoped ({@link #listingElapsedNanos}):
+     * still growing during listing, frozen at the listing&rarr;merge boundary afterwards. The
+     * sampler only ever samples listing-time page emits, so a whole-run elapsed would open a window
+     * (and, for the wall-share sibling, a denominator) that runs past the last sample and swallows a
+     * sorted run's whole merge/publish tail — reporting the merge instead of the serial listing tail
+     * these gauges exist to screen for.
      */
     private double tailOccupancyAvgInFlight(int pct) {
         return tailOccupancy.avgInFlightForWindow(pct, Math.round(entriesEmitted.count()),
-                nanoClock.getAsLong() - runStartNanos.get());
+                listingElapsedNanos());
     }
 
     /** Sibling of {@link #tailOccupancyAvgInFlight} for the window's wall-time SHARE. */
     private double tailOccupancyWallShare(int pct) {
         return tailOccupancy.wallShareForWindow(pct, Math.round(entriesEmitted.count()),
-                nanoClock.getAsLong() - runStartNanos.get());
+                listingElapsedNanos());
+    }
+
+    /** Nanos of LISTING elapsed: live until {@link #markListingFinished()}, frozen at it after. */
+    private long listingElapsedNanos() {
+        long end = listingEndNanos.get();
+        return (end != 0L ? end : nanoClock.getAsLong()) - runStartNanos.get();
     }
 
     public void setConcurrencyTarget(long value) {
@@ -2204,12 +2236,20 @@ public final class RunMetrics {
         // not 0; the ratio only renders 0.0 via the zero-denominator guard on a genuinely
         // empty run (compressedBytes == 0).
         long rawBytesEstimated = Math.round(bytesEstimated.count());
+        // The listing-only clock: `duration` runs to summary time, so on a --sort run it already
+        // includes the merge/publish tail. Before the boundary is stamped -- an unsorted run, or a
+        // mid-listing snapshot -- the two are the same span by construction.
+        long listingEnd = listingEndNanos.get();
+        Duration listingDuration = listingEnd == 0L
+                ? duration
+                : Duration.ofNanos(Math.max(0L, listingEnd - runStartNanos.get()));
 
         return new RunSummary(
                 runId.get(),
                 keyCount,
                 duration,
                 sessionDuration(duration),
+                listingDuration,
                 strategy,
                 apiCallCount,
                 estimatedListCost(apiCallCount),
@@ -2518,10 +2558,28 @@ public final class RunMetrics {
     public void markRunStarted() {
         long now = nanoClock.getAsLong();
         runStartNanos.set(now);
+        listingEndNanos.set(0L);
         firstStealNanos.set(-1L);
         peakInFlightNanos.set(-1L);
         inFlightGauge.reset(now);
         baselineCpuNanos = ResourceMetrics.processCpuTimeNanos();
+    }
+
+    /**
+     * Stamp the LISTING&rarr;merge boundary — the instant this run stopped listing and handed off to
+     * the post-listing merge/publish tail. Idempotent (first call wins), so a path that reaches the
+     * boundary more than once still reports the first crossing. It scopes the tail-occupancy gauges
+     * (see {@link #tailOccupancyAvgInFlight}) and {@code listing_duration_ms}; a run that never
+     * merges never calls it, and both fall back to the live run clock.
+     *
+     * <p>Reads the injectable {@code nanoClock}, NOT {@link System#nanoTime()}: this stamp feeds
+     * summary and gauge values, so it must share {@link #runStartNanos}'s zero point and stay
+     * deterministic under a fake clock. It is deliberately a separate call from {@code
+     * setPhase(Phase.MERGING)} for that reason — that method's clock is a display clock, and must
+     * not add reads off the injectable seam (see {@link #setPhase}).
+     */
+    public void markListingFinished() {
+        listingEndNanos.compareAndSet(0L, nanoClock.getAsLong());
     }
 
     private void markFirstSteal() {
@@ -2536,16 +2594,16 @@ public final class RunMetrics {
     }
 
     /**
-     * The whole-invocation session clock -- {@code listingDuration} (the {@code duration} param
-     * every other caller of {@link #summary} passes) with seeding folded back in, when there was a
-     * session-wide reporter around to measure it. Falls back to {@code listingDuration} itself (the
-     * two collapse to one figure, never a garbage delta) when {@link #sessionStartNanos} was never
+     * The whole-invocation session clock -- {@code runDuration} (the post-seed {@code duration}
+     * param every caller of {@link #summary} passes) with seeding folded back in, when there was a
+     * session-wide reporter around to measure it. Falls back to {@code runDuration} itself (the two
+     * collapse to one figure, never a garbage delta) when {@link #sessionStartNanos} was never
      * claimed -- a pre-seed early exit, or a caller (most unit tests) that builds a summary without
      * ever starting a {@link RunProgressReporter}.
      */
-    private Duration sessionDuration(Duration listingDuration) {
+    private Duration sessionDuration(Duration runDuration) {
         if (!sessionClaimed.get()) {
-            return listingDuration;
+            return runDuration;
         }
         return Duration.ofNanos(Math.max(0L, nanoClock.getAsLong() - sessionStartNanos.get()));
     }

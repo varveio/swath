@@ -152,6 +152,7 @@ final class RunMetricsCharacterizationWorkload {
         m.recordAimdVote();
         m.recordAimdTargetReduction();
         m.recordTimeoutShed();
+        m.recordFreezeGateCheck();
         m.recordLatencyFreeze();
         m.recordGrowthFreeze();
         m.setLatencyBaselineMillis(42L);

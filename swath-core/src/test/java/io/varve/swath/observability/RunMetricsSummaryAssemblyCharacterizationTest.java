@@ -45,11 +45,14 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
      * {@link RunSummary}'s record components, in declaration order. FROZEN. {@code sessionDuration}
      * was ADDED right after {@code duration} — the resolution for the elapsed-scope inconsistency
      * between the live progress line (session-scoped, seeding included) and this record's
-     * `duration` (listing-scoped, a fresh run's clock starts AFTER seeding): moved deliberately here
-     * alongside that change, not re-captured.
+     * `duration` (post-seed, a fresh run's clock starts AFTER seeding). {@code listingDuration}
+     * followed it, once `duration` turned out to run PAST the listing on a sorted run (it ends at
+     * summary time, merge included). Both moved deliberately here alongside their change, not
+     * re-captured.
      */
     private static final List<String> EXPECTED_SUMMARY_FIELDS = List.of(
-            "runId", "objects", "duration", "sessionDuration", "strategy", "apiCalls", "costUsd",
+            "runId", "objects", "duration", "sessionDuration", "listingDuration",
+            "strategy", "apiCalls", "costUsd",
             "outputFiles", "compressedBytes", "keys", "pages", "peakInFlight", "avgInFlight", "timeToFirstStealMs",
             "timeToPeakInFlightMs", "steals", "splits",
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
@@ -86,6 +89,9 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         // counters directly), so sessionDuration falls back to the listing duration verbatim rather
         // than reading a garbage delta off an unset clock — see RunMetrics#sessionDuration(Duration).
         assertThat(s.sessionDuration()).isEqualTo(Duration.ofSeconds(5));
+        // The workload never crosses a listing→merge boundary (markListingFinished is never called),
+        // so the listing clock is the run clock verbatim — the unsorted-run case.
+        assertThat(s.listingDuration()).isEqualTo(Duration.ofSeconds(5));
         assertThat(s.strategy()).isEqualTo("WORK_STEALING");         // passed through verbatim
         assertThat(s.apiCalls()).isEqualTo(3L);           // the single WORK_STEALING series (production ordering)
         assertThat(s.costUsd()).isCloseTo(3 * 0.005 / 1_000.0, within(1e-12));
