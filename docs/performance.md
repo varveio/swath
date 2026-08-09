@@ -208,10 +208,16 @@ makes things worse, not better** — you add scheduling overhead to fetch work
 that does not exist yet.
 
 One caveat when reading a `--sort` run: `avg_in_flight` is averaged over the
-WHOLE run, and in-flight is zero for the entire merge phase, so a sorted run's
-figure is diluted. Rescale it to the listing phase before judging:
-`avg_in_flight × duration_ms / (duration_ms − sort.merge_ms)`. An unsorted run
-needs no correction.
+WHOLE run, and in-flight is zero for the entire post-listing merge/publish tail,
+so a sorted run's figure is diluted. Since 0.2.4 the summary carries
+`listing_duration_ms` — the listing-only clock — directly, so rescale with
+`avg_in_flight × duration_ms / listing_duration_ms`. Against a summary written
+by an older build that lacks the field, fall back to
+`avg_in_flight × duration_ms / (duration_ms − sort.merge_ms)`. The same dilution
+hits `keys_per_sec` and `cpu_efficiency` on a sorted run — both divide by the
+whole-run `duration_ms`, merge included — so the honest listing-phase rate is
+`objects ÷ listing_duration_ms`, not `efficiency.keys_per_sec`. An unsorted run
+needs no correction: `listing_duration_ms` equals `duration_ms`.
 
 ### Is the wall the remote, or you?
 
@@ -238,6 +244,15 @@ Corroborating signals for a genuinely throttling remote:
 `recovered_errors.latency_freezes` climbing, `recovered_errors.min_effective_t`
 falling, non-zero `recovered_errors.connection_aborted`. If those are flat while
 throughput stalls, it is not the remote.
+
+Read `latency_freezes`/`growth_freezes` as a **rate**, not a raw count:
+`recovered_errors.freeze_gate_checks` is the number of page successes that
+actually reached the growth-freeze gates (a success at `Tmax`, or inside a
+throttle cool-down, returns before ever checking, and so can never freeze). A
+healthy saturated run legitimately reads `latency_freezes: 0` by design, and raw
+freeze counts are not comparable across runs sitting at different saturation —
+compare `latency_freezes / freeze_gate_checks` (and `growth_freezes /
+freeze_gate_checks`) instead.
 
 ### Sizing CPU
 
@@ -346,8 +361,14 @@ in-flight utilisation from a single run and infer from those.
 ### Reading the merge's share of the wall
 
 On `--sort` runs, `sort.merge_ms ÷ session_duration_ms` is the merge's share of
-full-session wall clock; `duration_ms` is the listing clock and is not the correct
-denominator here. The listing phase parallelises across cores, and eligible large runs now
+full-session wall clock. `duration_ms` is not the right denominator for that
+FULL-SESSION share — it excludes seeding — and, despite reading as though it
+were listing-only, it was never that either: it runs through the merge tail on
+a sorted run just like `session_duration_ms` does, so `sort.merge_ms ÷
+duration_ms` is a legitimate merge share of the post-seed run, seeding excluded
+(`listing_duration_ms`, since 0.2.4, is the field to reach for instead if what
+you actually want is the listing phase's own span, seeding AND merge excluded).
+The listing phase parallelises across cores, and eligible large runs now
 use the core-derived parallel merge by default. The explicit
 `-Dswath.sort.merge-parallelism=1` baseline — or a run forced onto the serial path
 by its staged-size/resource gates — still leaves the merge unchanged as listing
@@ -398,7 +419,9 @@ Do not mix the rates represented by this campaign. MRMS's merge-object rate was 
 for the default merge versus a 733,123 objects/s serial-bracket rate; that is objects processed per
 merge wall, not listing throughput. The separate `823.7 M / 723.2 s ≈ 1.14 million objects/s` figure
 is a **derived full-session object/wall quotient**, spanning listing plus merge. Neither value is the
-run summary's listing-clock `keys_per_sec`, and neither supersedes the directly observed 655,346
+run summary's `keys_per_sec` (itself a whole-run figure on a sorted run, merge included — see
+[metrics-and-observability.md](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end)),
+and neither supersedes the directly observed 655,346
 keys/s unsorted sweep above. No exact 1.5 million keys/s result was measured.
 
 ## Where swath is slow (honest limits)

@@ -976,9 +976,13 @@ When a run ends, swath prints a short summary block to **stderr** (stdout stays 
   12 files · 84.0 MB written · peak RSS 512.0 MB
 ```
 
-The headline's elapsed figure is the **listing clock** — the same one `keys/s` divides
-by — which starts only AFTER a fresh run's seed step (probing the bucket's shape to tile the
-initial worklist). On a run whose seed step took a while, the headline instead carries a second
+The headline's elapsed figure is `duration_ms` — the same clock `keys/s` divides by — which starts
+only AFTER a fresh run's seed step (probing the bucket's shape to tile the initial worklist). On an
+unsorted run this genuinely is the listing clock; on a `--sort` run it also runs through the whole
+post-listing merge/publish tail, so both the headline and its `keys/s` are whole-run figures on a
+sorted run, diluted by the merge — `--report`'s `listing_duration_ms` is where the listing-phase-only
+rate lives (see [`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end)).
+On a run whose seed step took a while, the headline instead carries a second
 figure, the whole session (seeding included — the same span the live progress line already
 reports), clearly labeled so which one the rate is keyed to is never ambiguous:
 
@@ -989,8 +993,9 @@ reports), clearly labeled so which one the rate is keyed to is never ambiguous:
 That second figure only appears when it would actually differ from the listing one by more than
 about a second (`SummaryRenderer.SESSION_DELTA_MIN`) — a resumed run, or any run whose seed step was
 cheap, keeps the single-figure form above rather than printing two near-identical numbers. `--report`
-carries both unconditionally: `duration_ms` (listing, unchanged) and the additive `session_duration_ms`
-(the whole invocation) — see
+carries all three unconditionally: `duration_ms` (this headline's clock), the additive
+`session_duration_ms` (the whole invocation), and `listing_duration_ms` (the listing-phase-only clock,
+equal to `duration_ms` on an unsorted run) — see
 [`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end).
 
 A **faults line** — `throttled N · retried M · errors K` — is inserted only when one of those
