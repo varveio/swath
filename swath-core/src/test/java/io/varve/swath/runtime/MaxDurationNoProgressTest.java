@@ -7,6 +7,7 @@ package io.varve.swath.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +29,7 @@ import java.io.StringWriter;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -92,12 +94,38 @@ final class MaxDurationNoProgressTest {
     @Test
     void maxDurationWithProgress_staysPlainMaxDuration(@TempDir Path dir) throws Exception {
         RunContext ctx = RunContext.create();
+        // "The first bulk page succeeded" is a property of THIS fetcher, not of the global call
+        // index: a thief's 1-key pivot probe / delimiter structure probe also consumes call indices,
+        // so `idx > 0` does not mean "a bulk page already went out". A CAS on the first bulk page
+        // says exactly what is meant, and — because the winner is never gated below — cannot deadlock.
+        AtomicBoolean firstBulkPageServed = new AtomicBoolean();
         MockPageFetcher fetcher = MockPageFetcher.builder()
                 .keys(Keyspaces.exactly(500))
                 .maxKeysCap(50)
                 .interceptor((req, idx, page) -> {
                     // Let the first bulk page succeed (real progress), then cancel.
-                    if (req.maxKeys() > 1 && idx > 0) {
+                    //
+                    // The cancel must not fire until that page's objects are COUNTED, which happens
+                    // on the OUTPUT stage (OutputStage#writeBatch -> recordEntriesEmitted), several
+                    // hand-offs downstream of this fetch: the owner still has to await its durable
+                    // page commit and hand the batch to the channel. Cancelling as soon as a SECOND
+                    // page was fetched raced all of that — an idle worker sees the token first, its
+                    // CancelledException fails the engine's Scope, and shutdownNow() interrupts the
+                    // owner while it is still parked in awaitCommit, so the first page's keys never
+                    // reach the output stage and the run reports objects=0 (i.e. the summary refines
+                    // to max_duration_no_progress and this test's own premise evaporates).
+                    //
+                    // So gate on the run's own committed-progress reading — sessionObjectsEmitted(),
+                    // the EXACT quantity ListRunner#attributedStatus keys the max_duration /
+                    // max_duration_no_progress split on. It is monotonic, so once it is positive the
+                    // classification and the assertions below are pinned no matter how the workers
+                    // interleave afterwards. Holding this fetch open until then also keeps the run
+                    // from finishing before the cancel lands. Bounded (a failsafe, not a timing
+                    // assumption): a run that never emits fails here loudly instead of hanging.
+                    if (req.maxKeys() > 1 && !firstBulkPageServed.compareAndSet(false, true)) {
+                        await().pollDelay(Duration.ZERO).pollInterval(Duration.ofMillis(1))
+                                .atMost(Duration.ofSeconds(30))
+                                .until(() -> ctx.metrics().sessionObjectsEmitted() > 0L);
                         ctx.cancellation().cancel(StopReason.MAX_DURATION);
                     }
                     return page;
