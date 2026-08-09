@@ -1,52 +1,62 @@
-# swath 0.2.2
+# swath 0.2.3
 
 ## User-facing changes
 
-- Sorted listings now merge staged page-runs in parallel by default once staged output
-  passes 256 MiB, using a processor-derived fan-in (`max(1, min(8, processors / 2))`)
-  instead of the prior serial-only final merge. Output ordering, file indexes, and
-  completeness stamps are unchanged; runs still fall back to serial automatically when
-  staged size, fan-in, heap budget, file descriptors, or keyspace shape can't safely carry
-  parallel work.
-- Output failures caused by a full disk now exit with a dedicated code, `74`
-  (`EX_IOERR`), instead of the generic `1`, and the terminal error line now includes the
-  full cause chain (e.g. `swath: parquet writer failed: No space left on device`) instead
-  of a bare stage name. Every other output failure keeps exit code `1` and its prior
-  message shape.
-- Added a trace explainer (`tools/explainer/`) that turns a run's `--trace` event log into
-  a self-contained HTML report — replay, keyspace map, seed distribution, mechanism
-  ledgers — plus an optional narrated video cut. Published output is served from
-  `swath.varve.io`.
-- The README now demos a real 39.6-million-object interrupt/resume/DuckDB-query session
-  with an autoplaying GIF alongside the existing MP4.
+- Sorted listings large enough to engage the parallel merge no longer abort with
+  `error_class=stuck` (exit `75`) partway through their merge phase. Two scan phases that
+  run only on the parallel path — the boundary-sampling pass over every staged segment,
+  and each range's prefix walk to its first overlapping page — performed real work without
+  advancing the liveness progress signal, so the watchdog's total-freeze tripwire (default
+  `--idle-timeout`, 120s) halted healthy runs. Both phases now advance the signal per page.
+  No output, ordering, or completeness behaviour changes; runs that previously completed
+  are unaffected.
+- A parallel range merge that is cancelled — by the liveness watchdog's cooperative rung or
+  by a sibling range failing — now stops promptly instead of running its prefix walk to
+  completion first. Two independent causes: the watchdog's interrupt filter did not match
+  the merge's own `swath-sort-range-*` threads, and the prefix walk polled no cancellation
+  point. A consequence is that a genuine, classified merge failure is now reported as
+  itself rather than being overtaken by the stall tripwire and re-reported as
+  `stuck_unknown`.
 
 ## Evidence
 
-- Parallel merge default-on: a focused live-S3 gate on `pds-css-archive` found zero
-  full-row mismatches across a bidirectional `EXCEPT ALL`, zero physical-ordering
-  regressions, and 8 effective merge ranges with no clamp, cascade, cancellation, or FD
-  signal. Merge time fell from a 139.5s serial mean to 38.4s (3.63x); full session wall
-  from 300.5s to 194.9s. A corroborating scale sweep (GEFS/PDS/MRMS, 2-128 segments) showed
-  2.81x-3.97x merge speedups. `./gradlew build` (3,681 tests), the integration tier (15
-  tests), and the deep tier (45 tests) were all green on the tested SHA.
-- Disk-full classification: a 12-case test suite covers the exit code end-to-end through
-  the CLI entry point (direct cause, wrapped cause chains, negative cases) and the message
-  path (cause carried through, single-line output, causeless errors unchanged,
-  duplicate-message dedupe, cyclic-chain termination).
-- Trace explainer: a 29-check self-test passes with 0 failures. Building it surfaced and
-  fixed two real bugs: an unescaped-JSON-key script-injection hole in the embedded report
-  model, and an incorrect split-topology replay that had misattributed ancestry for 229 of
-  2,399 split children in the reference trace.
-- All four changes passed CI's fast, integration, deep, Docker, and CodeQL tiers, plus
-  independent review, before merging to `main`.
+- The halt is measured, not inferred. Two ~1.9-billion-object public buckets that failed on
+  every prior attempt under 0.2.2 (`its-live-data`, `usgs-lidar-public`) both completed on
+  the fix, sorted, at 16 vCPU with 8 merge ranges. Their `sort.merge_boundaries_ms` — the
+  previously silent boundary-sampling phase — was **136,483 ms and 157,039 ms**, against a
+  120,000 ms stall window. That is the failure, quantified: the phase crossed the window
+  and reported nothing while it did. It also explains the observed size threshold, since a
+  1.04-billion-object bucket's shorter sampling pass fit inside the window and completed
+  under 0.2.2.
+- The phase is fast, not slow: ~2.5 minutes at 1.9 billion objects over 45-54 GiB of
+  staging. This release restores visibility to a healthy phase rather than accelerating a
+  pathological one.
+- `RunSortMetricsTest` pins the wiring the defect actually hid in. `SortMetrics` is a
+  `@FunctionalInterface` and the pipeline bound it with a method reference, which can only
+  ever supply one method and silently inherits the no-op default for any other — so a newly
+  added hook reaches nothing, with no compile error. The named bridge is now asserted to
+  forward every hook, and the assertions were each verified to fail when the delegate is
+  broken.
+- `LivenessWatchdogTest` pins the interrupt filter against the exact thread-name shape
+  `ParallelRangeMerge` produces.
+- CI's fast, Docker and CodeQL tiers were green on the merged SHA, alongside independent
+  review of the cancellation semantics — specifically that throwing from the frontier
+  constructor's prefix walk cannot leak a stream or expose a half-constructed frontier, and
+  that interrupting a range mid-write can damage only an unpublished `.tmp` part, since
+  parts are renamed into the output directory only after every range completes and closes.
 
 ## Limits and known issues
 
-- The parallel-merge default-on decision rests on a focused gate against one workload
-  family (PDS) plus a corroborating scale sweep; it is not an exhaustive matrix across
-  bucket shapes, and MRMS physical ordering specifically was not evaluated as part of the
-  focused gate.
-- The focused merge gate ran on a single Hyperdisk Balanced persistent disk rather than
-  local SSD; speedup ratios are meaningful, but absolute times carry that storage caveat.
-- The explainer's `--video-style map` cut still uses an earlier dark palette and needs
-  re-lighting before it's used for anything published.
+- The live validation exercised the progress-tick fix. The cancellation changes are covered
+  by unit tests and review, not by a billion-object run — they govern how a trip unwinds,
+  not whether one occurs.
+- The parallel merge holds every output part open for the duration of the merge (a
+  deliberate deferred-footer design), while the file-descriptor reservation accounts for
+  the range count rather than the eventual part count. A merge producing many parts can
+  therefore exhaust the descriptor allowance that the pre-merge clamp declared safe, well
+  into a long run. Not addressed in this release: sizing it correctly means predicting part
+  count from staged bytes before the merge begins, where an over-estimate needlessly clamps
+  parallelism and an under-estimate strands the merge.
+- `--idle-timeout` remains 120s by default. Operators running billion-scale sorted listings
+  should still size it against their own staging, since any single unticked stride — a
+  large fsync, a slow finalize — can still cross it.
