@@ -207,19 +207,19 @@ proactive-cap contribution mixed into it.
 
 ## 2. `list_run_summary` (one line at run end)
 
-Core: `run_id, objects, duration_ms, listing_duration_ms, session_duration_ms, strategy, api_calls,
-cost_usd, output_files, compressed_size_bytes, keys, pages, peak_in_flight, steals, splits, errors,
-keys_per_sec`.
+Core: `run_id, objects, recovered_objects, duration_ms, listing_duration_ms, session_duration_ms,
+strategy, api_calls, cost_usd, output_files, compressed_size_bytes, keys, pages, peak_in_flight,
+steals, splits, errors, keys_per_sec`.
 
 `objects` describes the **dataset the run published**, so on a resume it includes the rows a
 previous attempt already made durable (managed-Parquet parts, `--sort` staging segments) — the same
 rows the published `manifest.json` counts. `recovered_objects` (since 0.2.4, additive under schema
-v2; JSON top level, emitted immediately after `objects`) is exactly that resume-backfilled count —
-`0` on a fresh run, and the row count this process never listed itself. Everything measured against
-this process's own clock or its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`,
-`overfetch_ratio`) excludes it: `objects − recovered_objects` is the this-process-only numerator
-those per-second/per-API-call figures actually divide, and the recovered rows cost this run neither a
-second nor a LIST call.
+v2; emitted right after `objects` on both this line and the JSON top level) is exactly that
+resume-backfilled row count — the rows this process never listed itself, `0` on a fresh run.
+Everything measured against this process's own clock or its own API calls (`keys_per_sec`,
+`api_calls_per_1k_objects`, `overfetch_ratio`) excludes it: `objects − recovered_objects` is the
+this-process-only numerator those per-second/per-API-call figures actually divide, and the recovered
+rows cost this run neither a second nor a LIST call.
 
 **`duration_ms` is the WHOLE post-seed run clock, not the whole session.** A fresh run's seed step
 (probing the bucket's shape to tile the initial worklist) runs BEFORE this clock's zero point, so
@@ -261,9 +261,13 @@ the `meters[]`-in-seconds trap above for the mirror image of that same units mis
 
 **On a merge-only `--sort --resume`** (`sort.merge_only_resume: true` — this process re-runs only the
 merge from durable staging segments, zero new LIST fetches), `listing_duration_ms` lands near zero
-while `objects` is the FULL recovered dataset — the honest figure for a run that listed nothing, not
-a gap. Listing-phase rates are meaningless for such a run; check `sort.merge_only_resume` before
-computing one.
+while `objects` is the FULL recovered dataset and `recovered_objects` equals it — the honest figures
+for a run that listed nothing, not a gap. `keys_per_sec` reads `0.0` **by construction** on such a
+run, not merely a meaningless nonzero number: its numerator is `objects − recovered_objects`, which
+is `0` here, because a process that issued zero LIST calls did no listing work to rate. A summary
+written by a build older than this fix instead let the recovered dataset stand in as this process's
+own numerator, producing a spuriously huge rate rather than `0.0` — check `sort.merge_only_resume`
+before trusting a listing-phase rate from such a summary.
 
 None of the three figures is wrong — read `duration_ms`/`keys_per_sec`/`avg_in_flight` for the
 whole-run figures the summary always reports, `listing_duration_ms` when the listing phase needs to
