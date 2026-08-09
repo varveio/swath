@@ -216,8 +216,16 @@ by an older build that lacks the field, fall back to
 `avg_in_flight × duration_ms / (duration_ms − sort.merge_ms)`. The same dilution
 hits `keys_per_sec` and `cpu_efficiency` on a sorted run — both divide by the
 whole-run `duration_ms`, merge included — so the honest listing-phase rate is
-`objects ÷ listing_duration_ms`, not `efficiency.keys_per_sec`. An unsorted run
-needs no correction: `listing_duration_ms` equals `duration_ms`.
+`(objects − recovered_objects) ÷ (listing_duration_ms / 1000)`, not
+`efficiency.keys_per_sec`: the `/1000` matters (`listing_duration_ms` is
+milliseconds, and dividing by it directly gives keys per MILLISECOND, 1000×
+low), and so does excluding `recovered_objects` (the `-v` progress line's
+resume-backfill count — a `--sort --resume` that recovered rows would otherwise
+have its listing rate overstated by the whole backfill, which this process
+never listed). See
+[metrics-and-observability.md](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end)
+for both fields. An unsorted run needs no correction to the DENOMINATOR:
+`listing_duration_ms` equals `duration_ms`.
 
 ### Is the wall the remote, or you?
 

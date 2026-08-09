@@ -42,12 +42,18 @@ aspect of a run's shape or trajectory from one artifact, without a separate metr
 join. All are omitted (not null-valued) on the construction paths where they never computed.
 
 **`sort.merge_ms` times the WHOLE post-listing tail, not the merge proper alone.** It comes from
-`swath.sort.merge.latency`, started at the listing→merge boundary and stopped once the run finishes
-— so it covers boundary sampling (broken out below as `merge_boundaries_ms`), every merge pass, the
-final output writing/finalize, and publish, not just the k-way merge itself. It is the same span the
-top-level run clocks measure as `duration_ms - listing_duration_ms` (§2/§3 of
-[`metrics-and-observability.md`](../metrics-and-observability.md)) — `listing_duration_ms` ends where
-`merge_ms` begins.
+`swath.sort.merge.latency`, started once the listing→merge boundary has already been crossed and
+stopped once the k-way merge/publish work itself returns — so it covers boundary sampling (broken out
+below as `merge_boundaries_ms`), every merge pass, the final output writing/finalize, and publish, not
+just the k-way merge itself. It is **approximately**, not exactly, the same span the top-level run
+clocks measure as `duration_ms - listing_duration_ms` (§2/§3 of
+[`metrics-and-observability.md`](../metrics-and-observability.md)): the timer starts a little AFTER
+the listing→merge boundary (the staged-segment read and merge setup that run between them), and stops
+a little BEFORE `duration_ms` does (publish's phase-latch writes and the terminal summary assembly run
+after the timer stops, not before) — so `duration_ms - listing_duration_ms` is systematically a bit
+larger than `merge_ms`. On a FAILED merge `merge_ms` never records at all (the timer's stop call sits
+on the success path only), while `duration_ms - listing_duration_ms` still measures whatever wall time
+the failing attempt spent.
 
 **`sort.merge_boundaries_ms`** is the run-total duration read from
 `swath.sort.merge.boundaries.latency`, recorded around `ParallelRangeMerge.boundaries` before any
@@ -137,8 +143,13 @@ on BOTH ends of the ratio on a `--sort` run:** the window end and the wall-time 
 by both freeze at the listing→merge boundary, rather than running to the summary's build time. A
 whole-run denominator would otherwise let the post-listing merge sit inside both the window and the
 denominator on a sorted run, so the gauge mostly reported the merge instead of a genuine serial tail.
-`avg_in_flight` needed no equivalent fix — in-flight is inherently zero once the merge begins, so it
-was already listing-scoped by construction. **Resume semantics:** a `--sort --resume`
+`avg_in_flight` needed no equivalent fix, for a different reason: the sampler only ever records a
+sample on a page emit (the same `recordEntriesEmitted` seam above), and the merge emits no keys, so no
+sample lands during it regardless of which elapsed value the query is handed — the window itself is
+selected purely by cumulative emit-index (`TailOccupancySampler#windowStats`), never by elapsed time.
+The elapsed argument's only role in `avgInFlightForWindow` is a not-yet-positive guard; it is
+`wallShareForWindow`'s own ratio, not `avgInFlightForWindow`'s window selection, that actually divides
+by it — which is exactly why only `wall_share` needed the freeze above. **Resume semantics:** a `--sort --resume`
 reattach's pre-crash backfill (`recordRecoveredObjects`) is folded into the sampler's own baseline
 rather than left to pollute the emitted-keys count it derives the two windows from, so both windows
 stay scoped to THIS process's own relisted span — the same "this process's own view, not the
@@ -320,8 +331,8 @@ Fields:
 | `divergence_depth_histogram[]` | the LCP depth where each split's pivot diverges from its range's cursor (the byte the split turns on), from `recordPivotByteRegion` | the depth distribution of splits; the last bucket is depth `>= 15`. Shallow = splitting near the root; deep = splitting inside long shared prefixes. |
 | `mass_skew_gini` | Gini over the `CHILD_MASS.{empty,tiny,small,large}` distribution | inequality of per-child emitted mass; a **coarse 4-bucket approximation** (raw per-child masses are never retained). High = bimodal empty/large = the zero-transfer-split fingerprint. |
 | `delimiter_fanout.{max,total,probes}` | `commonPrefixes().size()` at each seed + thief `delimiter=/` structure probe | the widest / total delimiter-child count observed and how many probes saw it — the bucket's branching factor. **Thief contributions saturate at `ThiefPolicy.STRUCTURE_PROBE_MAX_KEYS`**, so on a bucket whose structure is discovered at steal time rather than at seed time this under-reads the true branching factor; `STRUCTURE.fanout_capped` says how often that happened. Seed probes are unaffected (they use the full `PROBE_PAGE`). |
-| `regime.api_latency_p50_ms` / `_p99_ms` | client-side percentiles of `swath.api.latency` (now `publishPercentiles(0.5, 0.99)`) | the RTT confound; `null` when no call was timed. **ALL-CALL, not data-page-only:** every LIST call this run made feeds it, including cheap structure/pivot probes (single-key or `delimiter=/` requests) alongside real data pages — so it reads LOW of what a data page actually costs (observed: median 1.11× low at p50, up to 2.68× at p90). See `regime.worker_page_latency_p50_ms`/`_p99_ms` below for the data-page-only pair. |
-| `regime.worker_page_latency_p50_ms` / `_p99_ms` | percentiles of the `worker_page` call class's `total` phase (`swath.fetch.latency.phase{call_class=worker_page,phase=total}` — the same data `probe_latency[]`, §3 below, is built from), since 0.2.4 | the honest serial-baseline estimator: what a page fetch itself costs, with the cheap structure/pivot probes that dilute `regime.api_latency_p50_ms`/`_p99_ms` excluded. `null` when no `worker_page` call completed this run. |
+| `regime.api_latency_p50_ms` / `_p99_ms` | client-side percentiles of `swath.api.latency` (now `publishPercentiles(0.5, 0.99)`) | the RTT confound; `null` when no call was timed. **ALL-CALL, not data-page-only:** every LIST call this run made feeds it, including cheap structure/pivot probes (single-key or `delimiter=/` requests) alongside real data pages — so it reads LOW of what a data page actually costs (observed across a large production fleet, 2026-08: median ~1.11× low at p50, with the gap widening in the tail). See `regime.worker_page_latency_p50_ms`/`_p99_ms` below for the data-page-only pair. |
+| `regime.worker_page_latency_p50_ms` / `_p99_ms` | percentiles of the `worker_page` call class's `total` phase (`swath.fetch.latency.phase{call_class=worker_page,phase=total}` — the same data `probe_latency[]`, §3 below, is built from), since 0.2.4 | the closest available estimator of what a serial lister would pay per page, with the cheap structure/pivot probes that dilute `regime.api_latency_p50_ms`/`_p99_ms` excluded — not a pure one, since `total` records on the failure path too (a timed-out attempt lands in the distribution same as its all-call sibling, §1's `swath.fetch.latency.phase` row). `null` when no `worker_page` call completed this run. |
 | `regime.worker_count` / `region` | the run config (`--concurrency`, `--region`) | the two other regime confounds (`T`, region). |
 | `regime.throttle_includes_attempt_timeout` | constant `false` (since client attempt-timeouts were reclassified as transients) | client `attempt_timeout`s no longer fold into `THROTTLE.*` / the AIMD signal — they are `TRANSIENT.*` (retried, no AIMD vote). `throttle_events` counts real 503/5xx only; see also `transient_events` / `aimd_votes`. |
 | `fingerprint.{binary_sha256,git_sha,started_at,finished_at}` | process/build (best-effort; `null` when unavailable — e.g. a dev exploded-classes run has no `binary_sha256`) | run identity for reproducibility. `argv` is the **top-level** array (referenced, not duplicated). |

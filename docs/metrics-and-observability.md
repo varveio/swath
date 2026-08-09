@@ -38,7 +38,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.workers.active` | gauge | — | live concurrency target `T` (the AIMD value) |
 | `swath.in_flight.avg` | gauge | — | time-weighted average in-flight listing count since run start, folded on every in-flight transition (sample-on-change, no polling thread). Also carried end-of-run as `avg_in_flight` in the JSON summary `engine` block (§3), next to `peak_in_flight`: `peak_in_flight` saturates and blinds you once the concurrency ceiling is hit, while `avg_in_flight` shows whether the run *sustained* parallelism or merely spiked to it |
 | `swath.tail_occupancy.avg_in_flight` | gauge | `{pct}` | the mean in-flight count over the window in which the LAST `pct`% (`5` or `10`) of the run's keys were emitted — a whole-run `avg_in_flight` cannot screen for a serial tail (see [`metrics-internals.md`](internals/metrics-internals.md) §3's `trajectory` block, and this meter's own rationale there), so this is measured specifically at the END of the run instead. `NaN` before any page has emitted a key |
-| `swath.tail_occupancy.wall_share` | gauge | `{pct}` | that same last-`pct`%-of-keys window's share of the run's wall time so far — a serial tail is a SMALL key share paired with a LARGE wall-time share. Scoped to the LISTING phase on BOTH ends on a `--sort` run: the window end and the wall-time denominator both freeze at the listing→merge boundary, so the post-listing merge can never inflate this gauge — a whole-run denominator would otherwise read mostly the merge instead of a genuine serial tail. `avg_in_flight` above was already listing-scoped by construction (in-flight is inherently zero once the merge begins) and needed no fix; `NaN` under the same unobserved idiom as that meter |
+| `swath.tail_occupancy.wall_share` | gauge | `{pct}` | that same last-`pct`%-of-keys window's share of the run's wall time so far — a serial tail is a SMALL key share paired with a LARGE wall-time share. Scoped to the LISTING phase on BOTH ends on a `--sort` run: the window end and the wall-time denominator both freeze at the listing→merge boundary, so the post-listing merge can never inflate this gauge — a whole-run denominator would otherwise read mostly the merge instead of a genuine serial tail. `avg_in_flight` above needed no equivalent fix: its window is selected purely by emit-index (the last `pct`% of THIS process's listed keys), and the merge emits no keys, so no merge-time sample ever lands in that window regardless of which elapsed value is fed in — elapsed only guards against a not-yet-positive read there, it is never a divisor. `NaN` under the same unobserved idiom as that meter |
 | `swath.steals` | counter | `{result}` | steal outcomes (e.g. `CHILD_CREATED`) |
 | `swath.errors` | counter | `{type}` | errors by type (e.g. `throttle`) |
 | `swath.steal_reason` | counter | `{outcome, reason}` | engagement counters for every steal/split/seed decision path (§5); bounded enum (~30-50 `outcome.reason` combinations, same low-cardinality shape as `swath.steals{result}`) |
@@ -230,15 +230,35 @@ by tens of seconds.
 
 **`listing_duration_ms`** (since 0.2.4, additive under schema v2) is the THIRD clock, carried
 alongside the other two: the listing-only span, ending at the listing→merge boundary on a `--sort`
-run, and equal to `duration_ms` on a run that never merges. It exists because `keys_per_sec`
-(`efficiency.keys_per_sec`), `efficiency.cpu_efficiency`, and `engine.avg_in_flight` all divide by
-the whole-run `duration_ms` and deliberately KEEP that whole-run semantics for compatibility — so on
-a sorted run they are diluted by the merge (median ~20% of wall, up to ~64% observed on real sorted
-runs — see [performance.md](performance.md#reading-the-merges-share-of-the-wall)).
+run, and equal to `duration_ms` on a run that never merges. That boundary is where listing HANDS OFF
+to the merge, not the instant of the last LIST response: on a `--sort` run `listing_duration_ms`
+still includes the sort lane's final drain/encode of its staged segments (real staging work that
+happens after the last key was listed), so it is the listing-and-staging span, not a bare
+API-calls-only span. It exists because `keys_per_sec` (`efficiency.keys_per_sec`),
+`efficiency.cpu_efficiency`, and `engine.avg_in_flight` all divide by the whole-run `duration_ms` and
+deliberately KEEP that whole-run semantics for compatibility — so on a sorted run they are diluted by
+the merge. The [PR #99 field-campaign table](performance.md#the-sorted-merge) is the source for how
+much: on its shipped-default arm the merge tail ran 20–39% of session wall across the three sorted
+buckets measured (median ~32%), rising to as much as ~72% of session wall on the explicit-serial-merge
+arm — recompute from that table for any other split, since the ratio depends on the bucket's segment
+count and the merge parallelism actually used.
+
 `listing_duration_ms` is the authoritative denominator when what you want is the listing-phase rate
-instead: listing keys/s is `objects ÷ listing_duration_ms`, and rescaling `avg_in_flight` to the
-listing phase is `avg_in_flight × duration_ms ÷ listing_duration_ms` (see
+instead. Reading it back requires two corrections, both already how `keys_per_sec` itself is scoped
+(§2 above): the denominator is in milliseconds, and the numerator must exclude a resume's recovered
+rows (the `-v` progress line's `recovered_objects`, §4) since this process never listed them. So
+listing keys/s is `(objects − recovered_objects) ÷ (listing_duration_ms / 1000)`, not the raw
+`objects ÷ listing_duration_ms` a reader might reach for first (that both overstates the numerator on
+a resumed run by the whole backfill, and understates the rate 1000× by dividing by milliseconds — see
+the `meters[]`-in-seconds trap above for the mirror image of that same units mistake). Rescaling
+`avg_in_flight` to the listing phase is `avg_in_flight × duration_ms ÷ listing_duration_ms` (see
 [performance.md](performance.md#the-one-number-to-look-at-first-in-flight-utilisation)).
+
+**On a merge-only `--sort --resume`** (`sort.merge_only_resume: true` — this process re-runs only the
+merge from durable staging segments, zero new LIST fetches), `listing_duration_ms` lands near zero
+while `objects` is the FULL recovered dataset — the honest figure for a run that listed nothing, not
+a gap. Listing-phase rates are meaningless for such a run; check `sort.merge_only_resume` before
+computing one.
 
 None of the three figures is wrong — read `duration_ms`/`keys_per_sec`/`avg_in_flight` for the
 whole-run figures the summary always reports, `listing_duration_ms` when the listing phase needs to
