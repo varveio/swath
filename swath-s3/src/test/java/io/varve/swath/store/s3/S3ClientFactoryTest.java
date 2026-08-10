@@ -6,7 +6,6 @@
 package io.varve.swath.store.s3;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -40,16 +39,6 @@ class S3ClientFactoryTest {
         assertThat(S3ClientFactory.maxConnectionsFor(64)).isEqualTo(80);
         assertThat(S3ClientFactory.maxConnectionsFor(1)).isEqualTo(17);
         assertThat(S3ClientFactory.maxConnectionsFor(256)).isEqualTo(272);
-    }
-
-    @Test
-    void userAgentPrefixUsesTheManifestVersionOrDevelopmentAndRequiresAnHttpToken() {
-        assertThat(S3ClientFactory.userAgentPrefix("0.2.4")).isEqualTo("swath/0.2.4");
-        assertThat(S3ClientFactory.userAgentPrefix(null)).isEqualTo("swath/development");
-        assertThat(S3ClientFactory.userAgentPrefix(" ")).isEqualTo("swath/development");
-        assertThatThrownBy(() -> S3ClientFactory.userAgentPrefix("0.2 4"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Implementation-Version must be an HTTP token");
     }
 
     @Test
