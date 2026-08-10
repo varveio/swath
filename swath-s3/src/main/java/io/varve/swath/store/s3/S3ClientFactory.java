@@ -9,6 +9,7 @@ import io.varve.swath.observability.RunMetrics;
 import java.time.Duration;
 import software.amazon.awssdk.awscore.retry.AwsRetryStrategy;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
+import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -62,6 +63,14 @@ public final class S3ClientFactory {
         return targetConcurrency + CONNECTION_HEADROOM;
     }
 
+    /** The swath product token prepended to the SDK-generated HTTP User-Agent value. */
+    private static String userAgentPrefix() {
+        String implementationVersion = S3ClientFactory.class.getPackage().getImplementationVersion();
+        return "swath/" + (implementationVersion == null || implementationVersion.isBlank()
+                ? "development"
+                : implementationVersion);
+    }
+
     public static SdkHttpClient httpClient(int targetConcurrency) {
         return httpClient(targetConcurrency, null);
     }
@@ -107,6 +116,7 @@ public final class S3ClientFactory {
         ClientOverrideConfiguration.Builder overrideBuilder = ClientOverrideConfiguration.builder()
                 .retryStrategy(retry)
                 .apiCallAttemptTimeout(config.apiCallAttemptTimeout())
+                .putAdvancedOption(SdkAdvancedClientOption.USER_AGENT_PREFIX, userAgentPrefix())
                 // The overall per-logical-call ceiling -- see S3Config#DEFAULT_API_CALL_TIMEOUT for
                 // why it is the PRIMARY liveness guarantee.
                 .apiCallTimeout(config.apiCallTimeout());
