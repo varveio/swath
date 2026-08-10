@@ -673,6 +673,9 @@ public final class ConcurrencyGauge {
         // growth-freeze must not re-couple to pausing steals, or a timeout-heavy period would keep the
         // fleet under-parallelized even after 503-backpressure cleared. The two concerns stay independent.
         stealingAllowed = true;
+        // The freeze counters' denominator: every early return above this line is a success that
+        // could never have frozen, so only successes reaching here are comparable trials.
+        metrics.recordFreezeGateCheck();
         // Two independent growth-gate rungs (both leave T untouched; the shed owns all decreases). Each
         // records its own attribution counter so post-hoc can tell WHICH rung suppressed a growth step;
         // both may fire on the same step. We are past the cool-down and below Tmax, so a fired rung is

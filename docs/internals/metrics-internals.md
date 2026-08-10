@@ -41,10 +41,23 @@ its write/atomicity semantics, and the `stop_source`/`error_class` terminal fact
 aspect of a run's shape or trajectory from one artifact, without a separate metrics backend or a log
 join. All are omitted (not null-valued) on the construction paths where they never computed.
 
+**`sort.merge_ms` times the WHOLE post-listing tail, not the merge proper alone.** It comes from
+`swath.sort.merge.latency`, started once the listing→merge boundary has already been crossed and
+stopped once the k-way merge/publish work itself returns — so it covers boundary sampling (broken out
+below as `merge_boundaries_ms`), every merge pass, the final output writing/finalize, and publish, not
+just the k-way merge itself. It is **approximately**, not exactly, the same span the top-level run
+clocks measure as `duration_ms - listing_duration_ms` (§2/§3 of
+[`metrics-and-observability.md`](../metrics-and-observability.md)): the timer starts a little AFTER
+the listing→merge boundary (the staged-segment read and merge setup that run between them), and stops
+a little BEFORE `duration_ms` does (publish's phase-latch writes and the terminal summary assembly run
+after the timer stops, not before) — so `duration_ms - listing_duration_ms` is systematically a bit
+larger than `merge_ms`. On a FAILED merge `merge_ms` never records at all (the timer's stop call sits
+on the success path only), while `duration_ms - listing_duration_ms` still measures whatever wall time
+the failing attempt spent.
+
 **`sort.merge_boundaries_ms`** is the run-total duration read from
 `swath.sort.merge.boundaries.latency`, recorded around `ParallelRangeMerge.boundaries` before any
-range thread starts. It is a component of, not an addition to, `sort.merge_ms`: the latter comes
-from `swath.sort.merge.latency` around the whole staging-to-publish merge. Therefore
+range thread starts. It is a component of, not an addition to, `sort.merge_ms` above. Therefore
 `merge_ms - merge_boundaries_ms` isolates the range-execution/publish remainder for scaling analysis.
 Sampling fewer than two distinct keys still records the timer sample before the run falls back to
 serial; that result cannot be known without paying the sampling pass. Because the JSON field stores
@@ -125,7 +138,18 @@ keys emitted, elapsed, in-flight)` triples taken on the same already-serialized 
 seam the consumer stage's per-page key-count bump already uses (see that class's javadoc for the
 stride-gated decimation scheme once the buffer fills) — a small key share paired with a large wall-time
 share is the serial-tail signature these two gauges exist to make legible from `_swath_summary.json`
-alone, without needing the full `trajectory` bin array. **Resume semantics:** a `--sort --resume`
+alone, without needing the full `trajectory` bin array. **`wall_share` is scoped to the LISTING phase
+on BOTH ends of the ratio on a `--sort` run:** the window end and the wall-time denominator it divides
+by both freeze at the listing→merge boundary, rather than running to the summary's build time. A
+whole-run denominator would otherwise let the post-listing merge sit inside both the window and the
+denominator on a sorted run, so the gauge mostly reported the merge instead of a genuine serial tail.
+`avg_in_flight` needed no equivalent fix, for a different reason: the sampler only ever records a
+sample on a page emit (the same `recordEntriesEmitted` seam above), and the merge emits no keys, so no
+sample lands during it regardless of which elapsed value the query is handed — the window itself is
+selected purely by cumulative emit-index (`TailOccupancySampler#windowStats`), never by elapsed time.
+The elapsed argument's only role in `avgInFlightForWindow` is a not-yet-positive guard; it is
+`wallShareForWindow`'s own ratio, not `avgInFlightForWindow`'s window selection, that actually divides
+by it — which is exactly why only `wall_share` needed the freeze above. **Resume semantics:** a `--sort --resume`
 reattach's pre-crash backfill (`recordRecoveredObjects`) is folded into the sampler's own baseline
 rather than left to pollute the emitted-keys count it derives the two windows from, so both windows
 stay scoped to THIS process's own relisted span — the same "this process's own view, not the
@@ -159,7 +183,9 @@ tally covers both, though the global counters distinguish them), `demand_gated` 
 owner-split was suppressed by the saturation/demand gate — see `OWNER_SPLIT.demand_gated`, §5).
 Always present as an array (possibly empty — an empty array is itself informative: nothing is left
 in flight, e.g. a genuinely COMPLETED run has already drained every range by the time its terminal
-summary is built).
+summary is built). **On a COMPLETED run this array is always empty** — a fully-quiesced worklist has
+no live ranges left to report, by construction, not a bug to chase. The field earns its keep on a
+truncated, timed-out, or otherwise mid-run/interrupted snapshot, where live ranges genuinely remain.
 
 **`probe_latency[]`**: the per-call-class latency-phase percentile breakdown — the dedicated
 readback of `swath.fetch.latency.phase` (§1) since the generic `meters[]` array below carries a
@@ -305,7 +331,8 @@ Fields:
 | `divergence_depth_histogram[]` | the LCP depth where each split's pivot diverges from its range's cursor (the byte the split turns on), from `recordPivotByteRegion` | the depth distribution of splits; the last bucket is depth `>= 15`. Shallow = splitting near the root; deep = splitting inside long shared prefixes. |
 | `mass_skew_gini` | Gini over the `CHILD_MASS.{empty,tiny,small,large}` distribution | inequality of per-child emitted mass; a **coarse 4-bucket approximation** (raw per-child masses are never retained). High = bimodal empty/large = the zero-transfer-split fingerprint. |
 | `delimiter_fanout.{max,total,probes}` | `commonPrefixes().size()` at each seed + thief `delimiter=/` structure probe | the widest / total delimiter-child count observed and how many probes saw it — the bucket's branching factor. **Thief contributions saturate at `ThiefPolicy.STRUCTURE_PROBE_MAX_KEYS`**, so on a bucket whose structure is discovered at steal time rather than at seed time this under-reads the true branching factor; `STRUCTURE.fanout_capped` says how often that happened. Seed probes are unaffected (they use the full `PROBE_PAGE`). |
-| `regime.api_latency_p50_ms` / `_p99_ms` | client-side percentiles of `swath.api.latency` (now `publishPercentiles(0.5, 0.99)`) | the RTT confound; `null` when no call was timed. |
+| `regime.api_latency_p50_ms` / `_p99_ms` | client-side percentiles of `swath.api.latency` (now `publishPercentiles(0.5, 0.99)`) | the RTT confound; `null` when no call was timed. **ALL-CALL, not data-page-only:** every LIST call this run made feeds it, including cheap structure/pivot probes (single-key or `delimiter=/` requests) alongside real data pages — so it reads LOW of what a data page actually costs (observed across a large production fleet, 2026-08: median ~1.11× low at p50, with the gap widening in the tail). See `regime.worker_page_latency_p50_ms`/`_p99_ms` below for the data-page-only pair. |
+| `regime.worker_page_latency_p50_ms` / `_p99_ms` | percentiles of the `worker_page` call class's `total` phase (`swath.fetch.latency.phase{call_class=worker_page,phase=total}` — the same data `probe_latency[]`, §3 below, is built from), since 0.2.4 | the closest available estimator of what a serial lister would pay per page, with the cheap structure/pivot probes that dilute `regime.api_latency_p50_ms`/`_p99_ms` excluded — not a pure one, since `total` records on the failure path too (a timed-out attempt lands in the distribution same as its all-call sibling, §1's `swath.fetch.latency.phase` row). `null` when no `worker_page` call completed this run. |
 | `regime.worker_count` / `region` | the run config (`--concurrency`, `--region`) | the two other regime confounds (`T`, region). |
 | `regime.throttle_includes_attempt_timeout` | constant `false` (since client attempt-timeouts were reclassified as transients) | client `attempt_timeout`s no longer fold into `THROTTLE.*` / the AIMD signal — they are `TRANSIENT.*` (retried, no AIMD vote). `throttle_events` counts real 503/5xx only; see also `transient_events` / `aimd_votes`. |
 | `fingerprint.{binary_sha256,git_sha,started_at,finished_at}` | process/build (best-effort; `null` when unavailable — e.g. a dev exploded-classes run has no `binary_sha256`) | run identity for reproducibility. `argv` is the **top-level** array (referenced, not duplicated). |
@@ -769,8 +796,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SHED` | `timeout_storm` | the sustained-timeout SHED engaged — a starved attempt-timeout storm shed the concurrency target `T` (multiplicative ×0.5, ≤1 per jittered ~30s window; paired with `swath.aimd.timeout_shed`, NOT an AIMD vote). Since probe timeouts stopped feeding the shed gate, ONLY `slotGated=true` WORKER-fetch timeouts can trip this — a probe (pivot/structure) timeout never gates it (see `timeout_storm_probe_fed` below) | |
 | `SHED` | `timeout_storm_worker_fed` | at the SAME shed fire as `timeout_storm` above, magnitude-incremented by the number of `slotGated=true` WORKER-fetch timeouts that fed the tripped window (`ConcurrencyGauge#onTransientTimeout(boolean)`, read at fire time) — the call-class mix that fed the storm, the client-vs-server falsifier signal. Since probe timeouts stopped feeding the shed gate this is the ENTIRE gate: it equals the window's `shedWindowTimeouts` total that actually tripped the shed | |
 | `SHED` | `timeout_storm_probe_fed` | the probe-fetch (`slotGated=false`) half of the call-class split — same shed fire, same window, magnitude-incremented by the probe-timeout count. **VISIBILITY-ONLY.** A probe timeout carries no S3-backpressure signal, so it no longer feeds `shedWindowTimeouts` and can never gate/trip `timeout_storm` on its own — a pure probe-timeout storm now sheds nothing (before probe timeouts were excluded it could, the client-vs-server false positive). This counter still publishes at whatever shed a WORKER storm fires, showing the probe pressure that coexisted with it, purely as a diagnostic | |
-| `FREEZE` | `latency_inflation` | the latency-freeze rung engaged — the successful-attempt latency EWMA inflated past `LATENCY_FREEZE_FACTOR`× the rolling-min baseline, freezing the +1 growth (paired with `swath.aimd.latency_freeze`; a growth GATE, never a decrease) | |
-| `FREEZE` | `transient_timeouts` | the transient-timeout growth-freeze rung engaged — the 10s transient-timeout window (fed ONLY by `slotGated=true` WORKER-fetch timeouts, since probe transients were excluded) reached `TRANSIENT_FREEZE_THRESHOLD`, freezing the +1/doubling growth step (paired with `swath.aimd.growth_freeze`; a growth GATE, never a decrease; distinct from `latency_inflation` above so post-hoc can tell which rung suppressed a given step) | |
+| `FREEZE` | `latency_inflation` | the latency-freeze rung engaged — the successful-attempt latency EWMA inflated past `LATENCY_FREEZE_FACTOR`× the rolling-min baseline, freezing the +1 growth (paired with `swath.aimd.latency_freeze`; a growth GATE, never a decrease). Every success that reaches this and the `transient_timeouts` gate below (i.e. did NOT return early at `Tmax` or inside a throttle cool-down) also increments `swath.aimd.freeze_gate_checks` — the denominator a freeze count needs: raw `latency_freezes` is not comparable across runs at different saturation (a healthy saturated run legitimately reads `0` by design), but `latency_freezes / freeze_gate_checks` is | |
+| `FREEZE` | `transient_timeouts` | the transient-timeout growth-freeze rung engaged — the 10s transient-timeout window (fed ONLY by `slotGated=true` WORKER-fetch timeouts, since probe transients were excluded) reached `TRANSIENT_FREEZE_THRESHOLD`, freezing the +1/doubling growth step (paired with `swath.aimd.growth_freeze`; a growth GATE, never a decrease; distinct from `latency_inflation` above so post-hoc can tell which rung suppressed a given step). Shares the same `swath.aimd.freeze_gate_checks` denominator as `latency_inflation` above — `growth_freezes / freeze_gate_checks` is the comparable rate | |
 | `GROWTH` | `probe_timeout_excluded` | a probe-class transient (attempt-timeout or network fault) excluded from congestion/growth-freeze — the caller does not distinguish fault kind at this call site (it mirrors the shed-side classification, which excludes both kinds identically), so this fires for either; carries no S3-backpressure signal, so it no longer ends slow-start or feeds `FREEZE.transient_timeouts` on its own; it still increments `shedWindowProbeTimeouts` for `timeout_storm_probe_fed` visibility. Name kept as `probe_timeout_excluded` for continuity with the pre-existing metric even though network faults share the path — attempt-timeouts dominate on probes | |
 | `GROWTH` | `frozen_growth_valve` | the latency-inflation freeze VALVE engaged — while `latencyFrozen()` (and NOT `growthFrozen()`) with progress (successes above the starvation gate) and the ~30 s valve cool-down elapsed, one paced additive +1 was admitted, demoting the latency latch to a damper. Fires per admitted step; `FREEZE/latency_inflation` still fires on the same step (semantics unchanged, pre/post comparable). A growth path, never a decrease. | |
 | `THROTTLE` | `network` | REMOVED 2026-07-07 — reclassified to `TRANSIENT.network`: a client-side network fault is self-inflicted, not S3 backpressure, and must not vote AIMD down | removed |

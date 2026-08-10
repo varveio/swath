@@ -6,6 +6,7 @@
 package io.varve.swath.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.awaitility.Awaitility.await;
 
 import ch.qos.logback.classic.Level;
@@ -46,11 +47,12 @@ final class JsonRunSummaryWriterTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static RunSummary summary() {
-        // sessionDuration (31s) deliberately differs from duration (25s) -- the listing-scoped
-        // clock -- so the round-trip test below exercises BOTH the unchanged duration_ms and the
-        // new additive session_duration_ms field, rather than a value where they'd coincide.
+        // All three clocks deliberately differ -- session (31s) > run (25s) > listing (20s) -- so the
+        // round-trip test below exercises duration_ms, session_duration_ms and listing_duration_ms
+        // separately, rather than values where any two would coincide.
         return new RunSummary(
-                42L, 1000L, Duration.ofSeconds(25), Duration.ofSeconds(31), "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, 0L, Duration.ofSeconds(25), Duration.ofSeconds(31), Duration.ofSeconds(20),
+                "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
@@ -119,10 +121,12 @@ final class JsonRunSummaryWriterTest {
         assertThat(root.get("stop_reason").asText())
                 .as("completed:true ⇔ stop_reason=completed (schema v2)").isEqualTo("completed");
         assertThat(root.get("started_at").asText()).isEqualTo("2026-07-01T00:00:00Z");
-        // duration_ms stays LISTING-scoped (unchanged meaning) -- session_duration_ms is the
-        // additive, whole-invocation figure with seeding folded back in (RunSummary's javadoc).
+        // Three clocks, three spans (RunSummary's javadoc): duration_ms is the post-seed whole-run
+        // clock, session_duration_ms folds seeding back in, listing_duration_ms stops at the
+        // listing->merge boundary.
         assertThat(root.get("duration_ms").asLong()).isEqualTo(25_000L);
         assertThat(root.get("session_duration_ms").asLong()).isEqualTo(31_000L);
+        assertThat(root.get("listing_duration_ms").asLong()).isEqualTo(20_000L);
         assertThat(root.get("objects").asLong()).isEqualTo(1000L);
 
         JsonNode config = root.get("config");
@@ -206,6 +210,10 @@ final class JsonRunSummaryWriterTest {
         JsonNode regime = shape.get("regime");
         assertThat(regime.get("api_latency_p50_ms").asDouble()).isEqualTo(41.2);
         assertThat(regime.get("api_latency_p99_ms").asDouble()).isEqualTo(210.7);
+        // This summary carries no worker_page latency row, so the data-page percentiles render as
+        // JSON null rather than being omitted — a fleet parser never needs a key-presence check.
+        assertThat(regime.get("worker_page_latency_p50_ms").isNull()).isTrue();
+        assertThat(regime.get("worker_page_latency_p99_ms").isNull()).isTrue();
         assertThat(regime.get("worker_count").asInt()).isEqualTo(64);
         assertThat(regime.get("region").asText()).isEqualTo("us-east-2");
         JsonNode fingerprint = shape.get("fingerprint");
@@ -530,7 +538,8 @@ final class JsonRunSummaryWriterTest {
         // cpu_seconds/cpu_efficiency (double); JSON renders these as null, not -1 (the log-line
         // sentinel).
         RunSummary summary = new RunSummary(
-                42L, 1000L, Duration.ofSeconds(25), Duration.ofSeconds(25), "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, 0L, Duration.ofSeconds(25), Duration.ofSeconds(25), Duration.ofSeconds(25),
+                "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, -1L, -1L, -1.0, -1.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);
@@ -1039,7 +1048,7 @@ final class JsonRunSummaryWriterTest {
 
     private static RunSummary summaryWithDuration(Duration duration) {
         return new RunSummary(
-                42L, 1000L, duration, duration, "WORK_STEALING", 118L, 0.00059,
+                42L, 1000L, 0L, duration, duration, duration, "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
@@ -1065,5 +1074,189 @@ final class JsonRunSummaryWriterTest {
         JsonNode rollup = MAPPER.readTree(path.toFile()).get("recovered_errors");
         assertThat(rollup.get("attempt_timeout_events").asLong()).isZero();
         assertThat(rollup.get("min_effective_t").isNull()).isTrue();
+        assertThat(rollup.get("freeze_gate_checks").asLong())
+                .as("a run whose successes never reached the freeze gates reports zero TRIALS — "
+                        + "which is what makes its zero freeze counts readable")
+                .isZero();
+    }
+
+    /**
+     * The freeze counters are only comparable against the trials they could have fired in, so the
+     * denominator has to travel with them in the same block.
+     */
+    @Test
+    void recoveredErrorRollupCarriesTheFreezeGateDenominator(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        metrics.recordFreezeGateCheck();
+        metrics.recordFreezeGateCheck();
+        metrics.recordFreezeGateCheck();
+        metrics.recordLatencyFreeze();
+        RunSummary snapshot = summary();
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> snapshot);
+        try {
+            writer.complete(snapshot);
+        } finally {
+            writer.close();
+        }
+
+        JsonNode rollup = MAPPER.readTree(path.toFile()).get("recovered_errors");
+        assertThat(rollup.get("latency_freezes").asLong()).isEqualTo(1L);
+        assertThat(rollup.get("freeze_gate_checks").asLong()).isEqualTo(3L);
+    }
+
+    /**
+     * The regime's serial-baseline estimator is the {@code worker_page} DATA-page cost, not the
+     * all-call-classes {@code api_latency_*} (which cheap structure/pivot probes pull low).
+     */
+    @Test
+    void regimeReadsTheWorkerPagePercentilesOffTheCallClassRows(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        RunSummary snapshot = summaryWithCallClassLatency(List.of(
+                // A cheap probe class and a non-total phase, both of which must be passed over.
+                new RunSummary.CallClassLatencySummary(RunMetrics.CALL_CLASS_STRUCTURE_PROBE,
+                        RunMetrics.LATENCY_PHASE_TOTAL, 12L, 8.0, 11.0, 14.0, 15.0),
+                new RunSummary.CallClassLatencySummary(RunMetrics.CALL_CLASS_WORKER_PAGE,
+                        RunMetrics.LATENCY_PHASE_TTFB, 900L, 33.0, 60.0, 140.0, 190.0),
+                new RunSummary.CallClassLatencySummary(RunMetrics.CALL_CLASS_WORKER_PAGE,
+                        RunMetrics.LATENCY_PHASE_TOTAL, 900L, 88.0, 150.0, 420.0, 610.0)));
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                config(path, Duration.ofMinutes(10)), registryWithMeters(), Instant.now(), () -> snapshot);
+        try {
+            writer.complete(snapshot);
+        } finally {
+            writer.close();
+        }
+
+        JsonNode regime = MAPPER.readTree(path.toFile()).get("shape").get("regime");
+        assertThat(regime.get("worker_page_latency_p50_ms").asDouble()).isEqualTo(88.0);
+        assertThat(regime.get("worker_page_latency_p99_ms").asDouble()).isEqualTo(420.0);
+        assertThat(regime.get("api_latency_p50_ms").asDouble())
+                .as("the all-call-classes figure stays exactly as it was — the data-page pair is "
+                        + "additive alongside it, not a redefinition")
+                .isEqualTo(41.2);
+    }
+
+    /** {@link #summary()} with an explicit per-call-class latency row set. */
+    private static RunSummary summaryWithCallClassLatency(
+            List<RunSummary.CallClassLatencySummary> callClassLatency) {
+        return new RunSummary(
+                42L, 1000L, 0L, Duration.ofSeconds(25), Duration.ofSeconds(31), Duration.ofSeconds(20),
+                "WORK_STEALING", 118L, 0.00059,
+                4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
+                4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
+                2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
+                new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
+                shape(), null, List.of(), callClassLatency, clientCost(), null);
+    }
+
+    /**
+     * End-to-end through {@link RunMetrics} over a fake clock: {@code listing_duration_ms} is the
+     * listing-only clock, so it stops at the listing&rarr;merge boundary while {@code duration_ms}
+     * runs on through the merge/publish tail.
+     */
+    @Test
+    void listingDurationStopsAtTheMergeBoundaryWhileDurationRunsOn(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AtomicLong clock = new AtomicLong(1_000_000_000L);
+        RunMetrics metrics = new RunMetrics(registry, clock::get);
+        metrics.markRunStarted();
+        clock.addAndGet(5_000_000_000L);    // 5s of listing
+        metrics.markListingFinished();
+        clock.addAndGet(10_000_000_000L);   // 10s of merge/publish
+
+        RunSummary snapshot = metrics.summary(Duration.ofSeconds(15), "WORK_STEALING", 1L, 0L);
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> snapshot);
+        try {
+            writer.complete(snapshot);
+        } finally {
+            writer.close();
+        }
+
+        JsonNode root = MAPPER.readTree(path.toFile());
+        assertThat(root.get("duration_ms").asLong()).isEqualTo(15_000L);
+        assertThat(root.get("listing_duration_ms").asLong())
+                .as("the merge lists nothing, so it is not part of the listing clock")
+                .isEqualTo(5_000L);
+    }
+
+    /**
+     * The rate numerator a consumer needs — {@code objects - recovered_objects} — has to be
+     * computable from the artifact alone, not scraped off the {@code -v} progress line.
+     */
+    @Test
+    void recoveredObjectsIsZeroOnAFreshRunAndCarriesTheBackfillOnAResume(@TempDir Path dir) throws Exception {
+        Path fresh = dir.resolve("fresh.json");
+        SimpleMeterRegistry freshRegistry = new SimpleMeterRegistry();
+        RunMetrics freshMetrics = new RunMetrics(freshRegistry);
+        freshMetrics.markRunStarted();
+        freshMetrics.recordEntriesEmitted(900L);
+        writeSummary(fresh, freshRegistry, freshMetrics.summary(Duration.ofSeconds(5), "WORK_STEALING", 1L, 0L));
+
+        JsonNode freshRoot = MAPPER.readTree(fresh.toFile());
+        assertThat(freshRoot.get("objects").asLong()).isEqualTo(900L);
+        assertThat(freshRoot.get("recovered_objects").asLong())
+                .as("a fresh run listed everything it reports — present as 0, never omitted")
+                .isZero();
+
+        Path resumed = dir.resolve("resumed.json");
+        SimpleMeterRegistry resumedRegistry = new SimpleMeterRegistry();
+        RunMetrics resumedMetrics = new RunMetrics(resumedRegistry);
+        resumedMetrics.markRunStarted();
+        resumedMetrics.recordRecoveredObjects(348L);   // the pre-crash durable rows, backfilled
+        resumedMetrics.recordEntriesEmitted(900L);     // the tail this process actually relisted
+        writeSummary(resumed, resumedRegistry,
+                resumedMetrics.summary(Duration.ofSeconds(5), "WORK_STEALING", 1L, 0L));
+
+        JsonNode resumedRoot = MAPPER.readTree(resumed.toFile());
+        assertThat(resumedRoot.get("objects").asLong())
+                .as("objects describes the DATASET, backfill included")
+                .isEqualTo(1_248L);
+        assertThat(resumedRoot.get("recovered_objects").asLong()).isEqualTo(348L);
+        assertThat(resumedRoot.get("objects").asLong() - resumedRoot.get("recovered_objects").asLong())
+                .as("the difference is the this-process-only numerator keys_per_sec divides")
+                .isEqualTo(900L);
+        assertThat(resumedRoot.get("efficiency").get("keys_per_sec").asDouble())
+                .isCloseTo(900 / 5.0, within(1e-9));
+    }
+
+    /** Write one terminal summary and close, the shape every artifact assertion here starts from. */
+    private static void writeSummary(Path path, SimpleMeterRegistry registry, RunSummary summary) {
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> summary);
+        try {
+            writer.complete(summary);
+        } finally {
+            writer.close();
+        }
+    }
+
+    /** A run that never merges never stamps a boundary: the two clocks are one figure. */
+    @Test
+    void listingDurationEqualsDurationOnARunThatNeverMerges(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        AtomicLong clock = new AtomicLong(1_000_000_000L);
+        RunMetrics metrics = new RunMetrics(registry, clock::get);
+        metrics.markRunStarted();
+        clock.addAndGet(15_000_000_000L);
+
+        RunSummary snapshot = metrics.summary(Duration.ofSeconds(15), "WORK_STEALING", 1L, 0L);
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> snapshot);
+        try {
+            writer.complete(snapshot);
+        } finally {
+            writer.close();
+        }
+
+        JsonNode root = MAPPER.readTree(path.toFile());
+        assertThat(root.get("listing_duration_ms").asLong())
+                .isEqualTo(root.get("duration_ms").asLong())
+                .isEqualTo(15_000L);
     }
 }

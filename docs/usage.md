@@ -976,21 +976,35 @@ When a run ends, swath prints a short summary block to **stderr** (stdout stays 
   12 files · 84.0 MB written · peak RSS 512.0 MB
 ```
 
-The headline's elapsed figure is the **listing clock** — the same one `keys/s` divides
-by — which starts only AFTER a fresh run's seed step (probing the bucket's shape to tile the
-initial worklist). On a run whose seed step took a while, the headline instead carries a second
+The headline's elapsed figure is `duration_ms` — the same clock `keys/s` divides by — which starts
+only AFTER a fresh run's seed step (probing the bucket's shape to tile the initial worklist). On an
+unsorted run this genuinely is the listing clock, and the headline labels it `listing` whenever the
+second (session) figure below appears. On a `--sort` run `duration_ms` also runs through the whole
+post-listing merge/publish tail, so both the headline and its `keys/s` are whole-run figures on a
+sorted run, diluted by the merge — `--report`'s `listing_duration_ms` is where the listing-phase-only
+rate lives (see [`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end)).
+The headline never prints the `listing` label on such a run: labeling a span that carries the merge
+with it "listing" would misattribute the merge to the scan, so the label only ever appears when
+`duration_ms` and `listing_duration_ms` genuinely agree.
+
+On a run whose seed step took a while, the headline instead carries a second
 figure, the whole session (seeding included — the same span the live progress line already
 reports), clearly labeled so which one the rate is keyed to is never ambiguous:
 
-```
+```text
   3,270,132 objects in 1m43s listing · 31,750 keys/s · 2m22s total
 ```
 
-That second figure only appears when it would actually differ from the listing one by more than
-about a second (`SummaryRenderer.SESSION_DELTA_MIN`) — a resumed run, or any run whose seed step was
-cheap, keeps the single-figure form above rather than printing two near-identical numbers. `--report`
-carries both unconditionally: `duration_ms` (listing, unchanged) and the additive `session_duration_ms`
-(the whole invocation) — see
+That's an unsorted run's shape — its `duration_ms` is genuinely listing-only, so the `listing` label
+applies. A `--sort` run with the same seed/session gap prints the same two-figure form minus the
+word `listing` (`3,270,132 objects in 1m43s · 31,750 keys/s · 2m22s total`), since its elapsed figure
+carries the merge too. That second figure only appears when it would actually differ from the first
+by more than about a second (`SummaryRenderer.SESSION_DELTA_MIN`) — a resumed run, or any run whose
+seed step was cheap, keeps the single-figure form above rather than printing two near-identical
+numbers. `--report`
+carries all three unconditionally: `duration_ms` (this headline's clock), the additive
+`session_duration_ms` (the whole invocation), and `listing_duration_ms` (the listing-phase-only clock,
+equal to `duration_ms` on an unsorted run) — see
 [`metrics-and-observability.md`](metrics-and-observability.md#2-list_run_summary-one-line-at-run-end).
 
 A **faults line** — `throttled N · retried M · errors K` — is inserted only when one of those

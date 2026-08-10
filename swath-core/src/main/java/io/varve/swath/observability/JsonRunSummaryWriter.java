@@ -449,12 +449,22 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // regardless of which write path (periodic, complete(), or a close()-time retry/degrade)
         // produced the file, and regardless of whether a later write attempt silently failed.
         root.put("as_of", DateTimeFormatter.ISO_INSTANT.format(Instant.now()));
+        // duration_ms is the whole-run clock (post-seed): on a --sort run it includes the
+        // merge/publish tail, not listing alone.
         root.put("duration_ms", summary.duration().toMillis());
         // The whole-invocation session clock, seeding included -- the SAME span the live progress
-        // line reports, unlike duration_ms above (the listing-only clock keys_per_sec divides by,
-        // which keeps its meaning unchanged here). Additive under schema v2 -- NOT a v3 bump.
+        // line reports, unlike duration_ms above. Additive under schema v2 -- NOT a v3 bump.
         root.put("session_duration_ms", summary.sessionDuration().toMillis());
+        // The listing-only clock (equal to duration_ms on a run that never merges) -- the honest
+        // denominator for a listing-phase rate, since keys_per_sec/cpu_efficiency stay whole-run for
+        // compatibility. Additive under schema v2 -- NOT a v3 bump.
+        root.put("listing_duration_ms", summary.listingDuration().toMillis());
         root.put("objects", summary.objects());
+        // The rows a resume carried over from a previous attempt: objects describes the DATASET, so
+        // objects - recovered_objects is the numerator for anything this process's own rate is
+        // measured on (it neither listed nor paid a LIST call for them). Previously visible only on
+        // the -v progress line. Additive under schema v2 -- NOT a v3 bump.
+        root.put("recovered_objects", summary.recoveredObjects());
 
         RunConfig rc = config.runConfig();
         writeConfig(root.putObject("config"), rc);
@@ -644,6 +654,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         recoveredNode.put("latency_freezes", (long) counterCount("swath.aimd.latency_freeze"));
         // The transient-timeout growth-freeze rung, parallel to latency_freezes above.
         recoveredNode.put("growth_freezes", (long) counterCount("swath.aimd.growth_freeze"));
+        // The denominator for the two freeze counters above: successes that actually REACHED the
+        // growth-freeze gates. A success at Tmax (or inside a throttle cool-down) returns before the
+        // gates and can never freeze, so raw freeze counts are incomparable across runs at different
+        // saturation; latency_freezes / freeze_gate_checks is the comparable rate.
+        recoveredNode.put("freeze_gate_checks", (long) counterCount("swath.aimd.freeze_gate_checks"));
         recoveredNode.put("connection_aborted", (long) counterCount("swath.s3.pool.connection_aborted"));
         recoveredNode.put("handshakes", (long) counterCount("swath.s3.pool.handshakes"));
         // Socket-closure / IOException-wrapper faults (a non-SdkException RuntimeException whose
@@ -839,6 +854,14 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         ObjectNode regime = shape.putObject("regime");
         putDoubleOrNullBoxed(regime, "api_latency_p50_ms", s.apiLatencyP50Ms());
         putDoubleOrNullBoxed(regime, "api_latency_p99_ms", s.apiLatencyP99Ms());
+        // api_latency_* spans EVERY call class, cheap structure/pivot probes included, so it reads
+        // low of what a data page actually costs. The worker_page total is what a serial lister
+        // would pay per page — the honest serial-baseline estimator.
+        RunSummary.CallClassLatencySummary workerPage = workerPageTotalLatency(summary);
+        putDoubleOrNullBoxed(regime, "worker_page_latency_p50_ms",
+                workerPage == null ? null : workerPage.p50Ms());
+        putDoubleOrNullBoxed(regime, "worker_page_latency_p99_ms",
+                workerPage == null ? null : workerPage.p99Ms());
         regime.put("worker_count", rc.maxParallelListings());
         if (rc.region() == null) {
             regime.putNull("region");
@@ -858,6 +881,17 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         fingerprint.put("finished_at",
                 DateTimeFormatter.ISO_INSTANT.format(startedAt.plus(summary.duration())));
         // argv is the top-level "argv" array — referenced here, not duplicated.
+    }
+
+    /** The whole-call {@code worker_page} latency row, or {@code null} when no page was ever timed. */
+    private static RunSummary.CallClassLatencySummary workerPageTotalLatency(RunSummary summary) {
+        for (RunSummary.CallClassLatencySummary c : summary.callClassLatency()) {
+            if (RunMetrics.CALL_CLASS_WORKER_PAGE.equals(c.callClass())
+                    && RunMetrics.LATENCY_PHASE_TOTAL.equals(c.phase())) {
+                return c;
+            }
+        }
+        return null;
     }
 
     private static void putTextOrNull(ObjectNode node, String field, String value) {

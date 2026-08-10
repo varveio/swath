@@ -38,7 +38,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.workers.active` | gauge | — | live concurrency target `T` (the AIMD value) |
 | `swath.in_flight.avg` | gauge | — | time-weighted average in-flight listing count since run start, folded on every in-flight transition (sample-on-change, no polling thread). Also carried end-of-run as `avg_in_flight` in the JSON summary `engine` block (§3), next to `peak_in_flight`: `peak_in_flight` saturates and blinds you once the concurrency ceiling is hit, while `avg_in_flight` shows whether the run *sustained* parallelism or merely spiked to it |
 | `swath.tail_occupancy.avg_in_flight` | gauge | `{pct}` | the mean in-flight count over the window in which the LAST `pct`% (`5` or `10`) of the run's keys were emitted — a whole-run `avg_in_flight` cannot screen for a serial tail (see [`metrics-internals.md`](internals/metrics-internals.md) §3's `trajectory` block, and this meter's own rationale there), so this is measured specifically at the END of the run instead. `NaN` before any page has emitted a key |
-| `swath.tail_occupancy.wall_share` | gauge | `{pct}` | that same last-`pct`%-of-keys window's share of the run's total wall time so far — a serial tail is a SMALL key share paired with a LARGE wall-time share. `NaN` under the same unobserved idiom as the meter above |
+| `swath.tail_occupancy.wall_share` | gauge | `{pct}` | that same last-`pct`%-of-keys window's share of the run's wall time so far — a serial tail is a SMALL key share paired with a LARGE wall-time share. Scoped to the LISTING phase on BOTH ends on a `--sort` run: the window end and the wall-time denominator both freeze at the listing→merge boundary, so the post-listing merge can never inflate this gauge — a whole-run denominator would otherwise read mostly the merge instead of a genuine serial tail. `avg_in_flight` above needed no equivalent fix: its window is selected purely by emit-index (the last `pct`% of THIS process's listed keys), and the merge emits no keys, so no merge-time sample ever lands in that window regardless of which elapsed value is fed in — elapsed only guards against a not-yet-positive read there, it is never a divisor. `NaN` under the same unobserved idiom as that meter |
 | `swath.steals` | counter | `{result}` | steal outcomes (e.g. `CHILD_CREATED`) |
 | `swath.errors` | counter | `{type}` | errors by type (e.g. `throttle`) |
 | `swath.steal_reason` | counter | `{outcome, reason}` | engagement counters for every steal/split/seed decision path (§5); bounded enum (~30-50 `outcome.reason` combinations, same low-cardinality shape as `swath.steals{result}`) |
@@ -52,6 +52,7 @@ stderr is a terminal or a file — see [`usage.md`](usage.md#end-of-run-summary)
 | `swath.page.short_truncated` | counter | — | truncated pages that returned fewer than `max-keys` |
 | `swath.throttle.events` | counter | `{type}` | throttle events, typed `attempt_timeout\|slowdown\|server5xx\|network` — separates a real S3 `503 SlowDown`/5xx/network fault from a **self-inflicted** client-side attempt timeout. The distinction is load-bearing: counting swath's own 30 s timeouts as "throttle" collapses AIMD to serial with zero real `slowdown` |
 | `swath.aimd.target_reductions` | counter | — | AIMD concurrency-target reductions |
+| `swath.aimd.freeze_gate_checks` | counter | — | the number of page successes that actually REACHED the AIMD growth-freeze gates (`latency_inflation`/`transient_timeouts`, §5 of [`metrics-internals.md`](internals/metrics-internals.md)) — a success at `Tmax`, or one landing inside a throttle cool-down, returns before ever checking, so it can never freeze. This is the denominator a freeze count needs to be comparable across runs: raw `latency_freezes`/`growth_freezes` are not comparable across runs sitting at different saturation (a healthy, fully-saturated run legitimately reads `0` freezes by design), but `latency_freezes / freeze_gate_checks` and `growth_freezes / freeze_gate_checks` are. Surfaced in the JSON summary's `recovered_errors` rollup as `freeze_gate_checks` |
 | `swath.owner_split.demand_gated_t` | gauge | — | the effective concurrency target `T` observed at the INSTANT the most recent `OWNER_SPLIT.demand_gated` suppression fired — so a shed-shrunken `T` closing the owner-split demand gate is visible without cross-referencing `swath.workers.active`'s history against a log timestamp. `NaN` until the gate has fired at least once |
 | `swath.owner_split.demand_gated_t_min` | gauge | — | the LOWEST effective `T` observed across every demand-gate firing this run (the running min, mirroring `swath.aimd.target_low_water`'s idiom) — how far the shed/AIMD brake had pulled `T` down at the gate's worst observed moment. `NaN` until the gate has fired at least once |
 | `swath.queue.wait` | timer | — | producer backpressure (bounded output queue full) — one observation per page, recorded from every producer that hands a page onto the bounded output channel (`WorkStealingScan`, and the sequential `ScanProducer`/`CheckpointedScanProducer` paths), not the fetch worker exclusively. A **client-service-cost span** (§3 `client_cost[]`): publishes p50/p90/p99 |
@@ -170,6 +171,12 @@ field (the four fields may come from different attempts); acceptable at scrape g
   every run's payload carries `SUMMARY`/`GAUGE` datapoints under any value of that env var. The pin
   is forward-looking — it guarantees that any future histogram-publishing series gets a wire shape
   decided by swath, not by the ambient environment.
+- **`meters[]` percentile gauge values are in SECONDS, not milliseconds.** A published-percentile
+  gauge (e.g. `swath.api.latency{phi=0.5}`) carries its `value` in Micrometer's base time unit, which
+  is seconds — unlike every `*_ms` field the JSON summary writes directly (`probe_latency[]`,
+  `client_cost[]`, `shape.regime.api_latency_p*_ms`, `duration_ms`, `listing_duration_ms`, …), which
+  are all milliseconds. A consumer reading `meters[]` generically rather than through one of those
+  dedicated `*_ms` readbacks will silently read a value 1000× too small if it assumes milliseconds.
 
 ### 1.1 Throttle coverage: proactive cap vs. reactive AIMD backoff
 
@@ -200,32 +207,87 @@ proactive-cap contribution mixed into it.
 
 ## 2. `list_run_summary` (one line at run end)
 
-Core: `run_id, objects, duration_ms, session_duration_ms, strategy, api_calls, cost_usd, output_files,
-compressed_size_bytes, keys, pages, peak_in_flight, steals, splits, errors, keys_per_sec`.
+Core: `run_id, objects, recovered_objects, duration_ms, listing_duration_ms, session_duration_ms,
+strategy, api_calls, cost_usd, output_files, compressed_size_bytes, keys, pages, peak_in_flight,
+steals, splits, errors, keys_per_sec`.
 
 `objects` describes the **dataset the run published**, so on a resume it includes the rows a
 previous attempt already made durable (managed-Parquet parts, `--sort` staging segments) — the same
-rows the published `manifest.json` counts. Everything measured against this process's own clock or
-its own API calls (`keys_per_sec`, `api_calls_per_1k_objects`, `overfetch_ratio`) excludes them: the
-recovered rows cost this run neither a second nor a LIST call.
+rows the published `manifest.json` counts. `recovered_objects` (since 0.2.4, additive under schema
+v2; emitted right after `objects` on both this line and the JSON top level) is exactly that
+resume-backfilled row count — the rows this process never listed itself, `0` on a fresh run.
+Everything measured against this process's own clock or its own API calls (`keys_per_sec`,
+`api_calls_per_1k_objects`, `overfetch_ratio`) excludes it: `objects − recovered_objects` is the
+this-process-only numerator those per-second/per-API-call figures actually divide, and the recovered
+rows cost this run neither a second nor a LIST call.
 
-**`duration_ms` is the LISTING clock, not the whole session.** A fresh run's seed step (probing the
-bucket's shape to tile the initial worklist) runs BEFORE this clock's zero point, so `duration_ms` —
-and everything divided by it, `keys_per_sec` included — excludes seeding entirely; it is the honest
-throughput denominator, since seeding fetches no object. `session_duration_ms` is the OTHER clock,
+**`duration_ms` is the WHOLE post-seed run clock, not the whole session.** A fresh run's seed step
+(probing the bucket's shape to tile the initial worklist) runs BEFORE this clock's zero point, so
+`duration_ms` excludes seeding entirely — it is not, however, listing-only: on a `--sort` run it
+keeps running through the entire post-listing merge/publish tail too, so it is the honest
+whole-post-seed-run denominator, not a listing-phase one. `session_duration_ms` is the OTHER clock,
 carried alongside it on this same line (and at the JSON report's top level): the whole CLI
 invocation, seeding included — the same span the live progress line's `elapsed` already reports. The
 two agree exactly on a resumed run (seeding never re-runs on a normal resume) or any run whose seed
 step was cheap; a fresh run against a deeply-nested or hinted bucket is where they diverge, sometimes
-by tens of seconds. Neither figure is wrong — read `duration_ms` for throughput, `session_duration_ms`
-for "how long did the operator actually wait" — see the end-of-run summary block below, which prints
-both, clearly labeled, exactly when they diverge materially; that same clock is also what decides
-whether the block prints at all.
+by tens of seconds.
+
+**`listing_duration_ms`** (since 0.2.4, additive under schema v2) is the THIRD clock, carried
+alongside the other two: the listing-only span, ending at the listing→merge boundary on a `--sort`
+run, and equal to `duration_ms` on a run that never merges. That boundary is where listing HANDS OFF
+to the merge, not the instant of the last LIST response: on a `--sort` run `listing_duration_ms`
+still includes the sort lane's final drain/encode of its staged segments (real staging work that
+happens after the last key was listed), so it is the listing-and-staging span, not a bare
+API-calls-only span. It exists because `keys_per_sec` (`efficiency.keys_per_sec`),
+`efficiency.cpu_efficiency`, and `engine.avg_in_flight` all divide by the whole-run `duration_ms` and
+deliberately KEEP that whole-run semantics for compatibility — so on a sorted run they are diluted by
+the merge. The [PR #99 field-campaign table](performance.md#the-sorted-merge) is the source for how
+much: on its shipped-default arm the merge tail ran 20–39% of session wall across the three sorted
+buckets measured (median ~32%), rising to as much as ~72% of session wall on the explicit-serial-merge
+arm — recompute from that table for any other split, since the ratio depends on the bucket's segment
+count and the merge parallelism actually used.
+
+`listing_duration_ms` is the authoritative denominator when what you want is the listing-phase rate
+instead. Reading it back requires two corrections, both already how `keys_per_sec` itself is scoped
+(above): the denominator is in milliseconds, and the numerator must exclude a resume's recovered
+rows — the summary's own top-level `recovered_objects` field (above), not a value reconstructed from
+the `-v` progress line — since this process never listed them. So
+listing keys/s is `(objects − recovered_objects) ÷ (listing_duration_ms / 1000)`, not the raw
+`objects ÷ listing_duration_ms` a reader might reach for first (that both overstates the numerator on
+a resumed run by the whole backfill, and understates the rate 1000× by dividing by milliseconds — see
+the `meters[]`-in-seconds trap above for the mirror image of that same units mistake). Rescaling
+`avg_in_flight` to the listing phase is `avg_in_flight × duration_ms ÷ listing_duration_ms` (see
+[performance.md](performance.md#the-one-number-to-look-at-first-in-flight-utilisation)).
+
+**On a merge-only `--sort --resume`** (`sort.merge_only_resume: true` — this process re-runs only the
+merge from durable staging segments, zero new LIST fetches), `listing_duration_ms` lands near zero
+while `objects` is the FULL recovered dataset and `recovered_objects` equals it — the honest figures
+for a run that listed nothing, not a gap. `keys_per_sec` reads `0.0` **by construction** on such a
+run, not merely a meaningless nonzero number: its numerator is `objects − recovered_objects`, which
+is `0` here, because a process that issued zero LIST calls did no listing work to rate. A summary
+written by a build older than this fix instead let the recovered dataset stand in as this process's
+own numerator, producing a spuriously huge rate rather than `0.0` — check `sort.merge_only_resume`
+before trusting a listing-phase rate from such a summary.
+
+None of the three figures is wrong — read `duration_ms`/`keys_per_sec`/`avg_in_flight` for the
+whole-run figures the summary always reports, `listing_duration_ms` when the listing phase needs to
+be isolated from a `--sort` run's merge, and `session_duration_ms` for "how long did the operator
+actually wait" — see the end-of-run summary block below, which prints `duration_ms` and
+`session_duration_ms`, clearly labeled, exactly when they diverge materially; that same clock is also
+what decides whether the block prints at all.
 
 The JSON report's `engine` block additionally carries the two ramp-up timings the
 `list_run_diagnostics` line prints — `time_to_first_steal_ms` and `time_to_peak_in_flight_ms`
 (milliseconds from run start; `null` when the event never happened) — and `cost.basis` names the
 rate `cost_usd` was derived from (`rate_per_1k_usd`, `source`), so no consumer has to assume it.
+
+**`cost.api_calls` vs. `engine.pages`.** The two count different things and are not interchangeable.
+`cost.api_calls` (mirrored in the `list_run_summary` line as `api_calls`) counts every LIST request
+this run **issued**, including engine throttle-retries — the real HTTP-request count, and the only
+one of the two that measures S3 request cost (`cost_usd`, `api_calls_per_1k_objects` both derive from
+it). `engine.pages` counts pages **kept and shipped downstream**: a page whose keys were all dropped
+by a filter is fetched — and so counts toward `cost.api_calls` — but never counts toward
+`engine.pages`. Reading `pages` where `api_calls` belongs undercounts requests on any filtered run.
 
 **Efficiency / resource fields** (summary/log fields — NOT Micrometer meters; sampled once at end;
 `-1` where unavailable, e.g. off-Linux):
@@ -257,8 +319,9 @@ A machine-readable, versioned sidecar carrying the complete end-of-run state —
 **What `schema_version` promises.** It is bumped only for a **breaking** change — a field removed,
 renamed, retyped, or given a new meaning. **Added fields do not bump it**, so a consumer must
 tolerate keys it does not recognise rather than treat the object as closed: version `2` has gained
-`session_duration_ms`, `cost.basis`, and `engine.time_to_first_steal_ms` /
-`engine.time_to_peak_in_flight_ms` since it was first published, and will gain more. Key
+`session_duration_ms`, `cost.basis`, `engine.time_to_first_steal_ms` /
+`engine.time_to_peak_in_flight_ms`, `listing_duration_ms`, and `recovered_objects` since it was first
+published, and will gain more. Key
 **presence** is the other axis, and it is not a schema signal: several fields are legitimately
 absent or `null` on a given write — `meters[]` on a degraded terminal write (below), the
 `time_to_*` pair when the event never happened, `cost` when the endpoint is overridden and the
@@ -322,7 +385,9 @@ downstream parser should key off, not "does `meters[]` exist".
   "as_of": "2026-07-01T00:00:25Z",
   "duration_ms": 25731,
   "session_duration_ms": 25731,
+  "listing_duration_ms": 25731,
   "objects": 109858,
+  "recovered_objects": 0,
   "config": {
     "target": "s3://my-bucket", "region": "us-east-2", "format": "parquet",
     "max_parallel_listings": 64, "no_sign_request": true, "rate_limit_api": null,
@@ -385,6 +450,7 @@ downstream parser should key off, not "does `meters[]` exist".
     "delimiter_fanout": { "max": 37, "total": 210, "probes": 12 },
     "regime": {
       "api_latency_p50_ms": 41.2, "api_latency_p99_ms": 210.7,
+      "worker_page_latency_p50_ms": 45.6, "worker_page_latency_p99_ms": 224.9,
       "worker_count": 64, "region": "us-east-2",
       "throttle_includes_attempt_timeout": false
     },

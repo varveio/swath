@@ -76,6 +76,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
      * deliberately.
      */
     private static final List<String> EXPECTED_METER_IDS = List.of(
+            "COUNTER|swath.aimd.freeze_gate_checks|{}",
             "COUNTER|swath.aimd.growth_freeze|{}",
             "COUNTER|swath.aimd.latency_freeze|{}",
             "COUNTER|swath.aimd.target_reductions|{}",
@@ -272,6 +273,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
 
     /** Deterministic event counts for the same workload, as {@code name{tags}=count}. FROZEN. */
     private static final List<String> EXPECTED_DETERMINISTIC_COUNTS = List.of(
+            "swath.aimd.freeze_gate_checks{}=1",
             "swath.aimd.growth_freeze{}=1",
             "swath.aimd.latency_freeze{}=1",
             "swath.aimd.target_reductions{}=1",
@@ -374,7 +376,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 193;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 194;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code
