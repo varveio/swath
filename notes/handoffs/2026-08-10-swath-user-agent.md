@@ -9,6 +9,7 @@ high-throughput listing workload to the actual application and release.
 ## Where things stand
 
 - Branch: `feat/swath-user-agent`.
+- Draft PR: `https://github.com/varveio/swath/pull/104` targeting `main`.
 - Implementation commit: `9836557 feat(s3): identify swath in user agent`.
 - `S3ClientFactory` prepends `swath/<Implementation-Version>` through the AWS SDK's
   `USER_AGENT_PREFIX`; exploded builds fall back to `swath/development`.
@@ -28,7 +29,8 @@ high-throughput listing workload to the actual application and release.
 
 ## Next step
 
-No implementation work remains. The human gate may push `feat/swath-user-agent` and open the PR.
+No implementation or publishing work remains. The human gate should review PR #104 and mark it
+ready or merge it when satisfied.
 
 ## Files that matter
 
