@@ -6,12 +6,19 @@
 package io.varve.swath.store.s3;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -19,6 +26,7 @@ import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.metrics.MetricPublisher;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 
 /**
  * The S3 client is built with {@code maxConnections = T + 16}. The pool must
@@ -32,6 +40,37 @@ class S3ClientFactoryTest {
         assertThat(S3ClientFactory.maxConnectionsFor(64)).isEqualTo(80);
         assertThat(S3ClientFactory.maxConnectionsFor(1)).isEqualTo(17);
         assertThat(S3ClientFactory.maxConnectionsFor(256)).isEqualTo(272);
+    }
+
+    @Test
+    void userAgentPrefixUsesTheManifestVersionOrDevelopmentAndRequiresAnHttpToken() {
+        assertThat(S3ClientFactory.userAgentPrefix("0.2.4")).isEqualTo("swath/0.2.4");
+        assertThat(S3ClientFactory.userAgentPrefix(null)).isEqualTo("swath/development");
+        assertThat(S3ClientFactory.userAgentPrefix(" ")).isEqualTo("swath/development");
+        assertThatThrownBy(() -> S3ClientFactory.userAgentPrefix("0.2 4"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Implementation-Version must be an HTTP token");
+    }
+
+    @Test
+    void realApacheRequestPrependsSwathUserAgentToSdkMarkers() throws Exception {
+        AtomicReference<String> userAgent = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        try {
+            server.createContext("/", exchange -> respondToListRequest(exchange, userAgent));
+            server.start();
+
+            URI endpoint = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
+            try (S3Client client = S3ClientFactory.create(testConfig(Region.US_EAST_1, endpoint))) {
+                client.listObjectsV2(ListObjectsV2Request.builder().bucket("bucket").build());
+            }
+        } finally {
+            server.stop(0);
+        }
+
+        assertThat(userAgent.get()).startsWith("swath/development aws-sdk-java/2.31.78 ");
+        assertThat(userAgent.get().split("swath/", -1)).hasSize(2);
+        assertThat(userAgent.get()).contains("api/S3#2.31.78");
     }
 
     @Test
@@ -156,9 +195,13 @@ class S3ClientFactoryTest {
     }
 
     private static S3Config testConfig(Region region) {
+        return testConfig(region, URI.create("http://localhost:4566"));
+    }
+
+    private static S3Config testConfig(Region region, URI endpoint) {
         return new S3Config(
                 region,
-                URI.create("http://localhost:4566"),
+                endpoint,
                 true,
                 64,
                 S3Config.DEFAULT_MAX_ATTEMPTS,
@@ -166,5 +209,23 @@ class S3ClientFactoryTest {
                 S3Config.DEFAULT_API_CALL_TIMEOUT,
                 StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test")),
                 S3Config.DEFAULT_PROBE_ATTEMPT_TIMEOUT);
+    }
+
+    private static void respondToListRequest(HttpExchange exchange, AtomicReference<String> userAgent)
+            throws IOException {
+        userAgent.set(exchange.getRequestHeaders().getFirst("User-Agent"));
+        byte[] response = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <Name>bucket</Name>
+                  <MaxKeys>1000</MaxKeys>
+                  <IsTruncated>false</IsTruncated>
+                </ListBucketResult>
+                """.getBytes();
+        exchange.getResponseHeaders().set("Content-Type", "application/xml");
+        exchange.sendResponseHeaders(200, response.length);
+        try (OutputStream body = exchange.getResponseBody()) {
+            body.write(response);
+        }
     }
 }

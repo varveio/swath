@@ -9,6 +9,7 @@ import io.varve.swath.observability.RunMetrics;
 import java.time.Duration;
 import software.amazon.awssdk.awscore.retry.AwsRetryStrategy;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
+import software.amazon.awssdk.core.client.config.SdkAdvancedClientOption;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -42,6 +43,9 @@ public final class S3ClientFactory {
     /** The connection-pool headroom over the concurrency target. */
     public static final int CONNECTION_HEADROOM = 16;
 
+    private static final String USER_AGENT_PRODUCT = "swath";
+    private static final String DEVELOPMENT_VERSION = "development";
+
     // Connection-freshness hedge: an idle ESTABLISHED socket can be silently reaped by a
     // NAT/conntrack table, then reused, blackholing the next read to the attempt timeout. Evicting
     // idle/aged connections and keeping TCP liveness on reduces those hangs if that is the
@@ -60,6 +64,37 @@ public final class S3ClientFactory {
     /** The Apache pool size for a given concurrency target {@code T} (= T + 16). */
     public static int maxConnectionsFor(int targetConcurrency) {
         return targetConcurrency + CONNECTION_HEADROOM;
+    }
+
+    /** The swath product token prepended to the SDK-generated HTTP User-Agent value. */
+    static String userAgentPrefix() {
+        return userAgentPrefix(S3ClientFactory.class.getPackage().getImplementationVersion());
+    }
+
+    static String userAgentPrefix(String implementationVersion) {
+        String version = implementationVersion == null || implementationVersion.isBlank()
+                ? DEVELOPMENT_VERSION
+                : implementationVersion;
+        if (!isHttpToken(version)) {
+            throw new IllegalStateException("Implementation-Version must be an HTTP token");
+        }
+        return USER_AGENT_PRODUCT + "/" + version;
+    }
+
+    private static boolean isHttpToken(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (!(character == '!' || character == '#' || character == '$' || character == '%'
+                    || character == '&' || character == '\'' || character == '*' || character == '+'
+                    || character == '-' || character == '.' || character == '^' || character == '_'
+                    || character == '`' || character == '|' || character == '~'
+                    || character >= '0' && character <= '9'
+                    || character >= 'A' && character <= 'Z'
+                    || character >= 'a' && character <= 'z')) {
+                return false;
+            }
+        }
+        return !value.isEmpty();
     }
 
     public static SdkHttpClient httpClient(int targetConcurrency) {
@@ -107,6 +142,7 @@ public final class S3ClientFactory {
         ClientOverrideConfiguration.Builder overrideBuilder = ClientOverrideConfiguration.builder()
                 .retryStrategy(retry)
                 .apiCallAttemptTimeout(config.apiCallAttemptTimeout())
+                .putAdvancedOption(SdkAdvancedClientOption.USER_AGENT_PREFIX, userAgentPrefix())
                 // The overall per-logical-call ceiling -- see S3Config#DEFAULT_API_CALL_TIMEOUT for
                 // why it is the PRIMARY liveness guarantee.
                 .apiCallTimeout(config.apiCallTimeout());
