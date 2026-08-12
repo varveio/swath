@@ -260,11 +260,13 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Positional read into caller-owned scratch storage (does not move the channel position). */
     void readAt(long position, ByteBuffer destination) throws IOException {
+        long pos = position;
         while (destination.hasRemaining()) {
-            int read = channel.read(destination, position + destination.position());
+            int read = channel.read(destination, pos);
             if (read < 0) {
                 throw new EOFException("unexpected EOF reading page-run segment " + path);
             }
+            pos += read;
         }
     }
 

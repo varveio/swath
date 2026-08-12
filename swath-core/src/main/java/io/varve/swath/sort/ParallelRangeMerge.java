@@ -133,6 +133,11 @@ final class ParallelRangeMerge {
     private final IntSupplier softFdLimitSupplier;
     private final String workerThreadPrefix;
 
+    private enum SampleSource {
+        EMBEDDED,
+        SCAN
+    }
+
     /**
      * Every final-output part this merge has opened, across all ranges — the failure path's handle on
      * them. Synchronized because range threads register concurrently. One instance per merge, so it
@@ -265,11 +270,6 @@ final class ParallelRangeMerge {
      * assigned to exactly one range by an exact per-row key compare in {@link RangeFilteredStream},
      * whatever the boundaries are.
      */
-    private enum SampleSource {
-        EMBEDDED,
-        SCAN
-    }
-
     private static SampleSource sampleKeys(Path segment, TreeSet<byte[]> distinct, SortMetrics metrics)
             throws IOException {
         if (SortTransform.isPageRunSegment(segment)) {

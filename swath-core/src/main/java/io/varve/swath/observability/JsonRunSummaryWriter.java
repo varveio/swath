@@ -748,13 +748,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_boundaries_ms", timerTotalMs("swath.sort.merge.boundaries.latency"));
         sortNode.put("merge_boundary_embedded_entries",
                 (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
-        sortNode.put("merge_boundary_embedded_bytes",
-                (long) counterCount("swath.sort.merge.boundaries.embedded.bytes"));
-        sortNode.put("merge_boundary_scan_bytes",
-                (long) counterCount("swath.sort.merge.boundaries.scan.bytes"));
-        sortNode.put("merge_boundary_bytes",
-                (long) (counterCount("swath.sort.merge.boundaries.embedded.bytes")
-                        + counterCount("swath.sort.merge.boundaries.scan.bytes")));
+        double embeddedBytes = counterCount("swath.sort.merge.boundaries.embedded.bytes");
+        double scanBytes = counterCount("swath.sort.merge.boundaries.scan.bytes");
+        sortNode.put("merge_boundary_embedded_bytes", (long) embeddedBytes);
+        sortNode.put("merge_boundary_scan_bytes", (long) scanBytes);
+        sortNode.put("merge_boundary_bytes", (long) (embeddedBytes + scanBytes));
         sortNode.put("page_runs_per_buffer", distributionMean("swath.sort.page_runs_per_buffer"));
         sortNode.put("buffer_sort_fallbacks", (long) stealReasonCount("SORT", "buffer_sort_fallback"));
         // A merge-only `--sort --resume` (the listing was already complete in the
