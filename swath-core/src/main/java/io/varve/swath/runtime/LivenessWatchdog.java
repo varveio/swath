@@ -52,8 +52,8 @@ import org.slf4j.LoggerFactory;
  * <p><b>Phase-awareness.</b> The progress signal ({@link RunMetrics#progressSignal()}) advances in
  * every phase — page/object completion during LISTING, sort-segment flush while the encoder drains,
  * and {@link RunMetrics#markProgress()} ticks through the sort-merge tail (every merge-write stride)
- * and the finalize/publish tail (byte-keyed ticks while each final part's footer flushes and its
- * multi-GB manifest MD5 streams) — so a nearly-done sorted run in its final k-way merge or its manifest
+ * and the finalize/publish tail (footer-boundary ticks; byte-keyed ticks additionally remain on the
+ * metadata-less manifest-validation fallback) — so a nearly-done sorted run in its final k-way merge or its manifest
  * finalize (no page completes, but rows/bytes still move) does NOT false-trip. The one residual gap is
  * a single {@code fsync} of a multi-GB part: that is one blocking syscall with no intra-call ticks, so
  * the tick lands immediately before it and a finalize whose fsync alone exceeds the stall window can

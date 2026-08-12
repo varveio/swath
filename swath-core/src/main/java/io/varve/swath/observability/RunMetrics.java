@@ -233,6 +233,15 @@ public final class RunMetrics {
     private final Counter sortMergeBoundaryEmbeddedEntries;
     private final Counter sortMergeBoundaryEmbeddedBytes;
     private final Counter sortMergeBoundaryScanBytes;
+    private final Timer sortFinalizeCloseLatency;
+    private final Timer sortFinalizeLatency;
+    private final Timer sortPublicationLatency;
+    private final Counter sortManifestMd5Bytes;
+    private final Timer sortManifestMd5Latency;
+    private final Counter sortManifestBoundsRows;
+    private final Counter sortManifestBoundsBytes;
+    private final Timer sortManifestBoundsLatency;
+    private final AtomicLong sortFinalizeParallelism = new AtomicLong();
     private final Timer sortBackpressureWait;
     private final DistributionSummary sortPageRunsPerBuffer;
 
@@ -560,6 +569,18 @@ public final class RunMetrics {
                 .baseUnit("bytes").register(registry);
         sortMergeBoundaryScanBytes = Counter.builder("swath.sort.merge.boundaries.scan.bytes")
                 .baseUnit("bytes").register(registry);
+        sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency").register(registry);
+        sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
+        sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
+        sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")
+                .baseUnit("bytes").register(registry);
+        sortManifestMd5Latency = runScopedTimer("swath.sort.manifest.md5.latency").register(registry);
+        sortManifestBoundsRows = Counter.builder("swath.sort.manifest.bounds.rows").register(registry);
+        sortManifestBoundsBytes = Counter.builder("swath.sort.manifest.bounds.bytes")
+                .baseUnit("bytes").register(registry);
+        sortManifestBoundsLatency = runScopedTimer("swath.sort.manifest.bounds.latency").register(registry);
+        Gauge.builder("swath.sort.finalize.parallelism", sortFinalizeParallelism, AtomicLong::get)
+                .register(registry);
         sortBackpressureWait = runScopedTimer("swath.sort.backpressure.wait").register(registry);
         sortPageRunsPerBuffer = runScopedSummary("swath.sort.page_runs_per_buffer").register(registry);
         // Peak in-flight staging bytes / handoff-queue depth / off-thread buffer count — see
@@ -1097,6 +1118,42 @@ public final class RunMetrics {
         sortMergeBoundaryEmbeddedEntries.increment(embeddedEntries);
         sortMergeBoundaryEmbeddedBytes.increment(embeddedBytes);
         sortMergeBoundaryScanBytes.increment(scanBytes);
+    }
+
+    /** One final part's footer-write + fsync durability span. */
+    public void recordSortFinalizeClose(long nanos) {
+        long nonNegative = Math.max(0L, nanos);
+        sortFinalizeCloseLatency.record(nonNegative, TimeUnit.NANOSECONDS);
+        sortFinalizeLatency.record(nonNegative, TimeUnit.NANOSECONDS);
+    }
+
+    /** Incremental exact-byte digest work performed by a final writer (or safe readback fallback). */
+    public void recordSortManifestMd5(long bytes, long nanos) {
+        sortManifestMd5Bytes.increment(Math.max(0L, bytes));
+        sortManifestMd5Latency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    /** Exact first/last/row observation work; inline writers record zero post-close scan latency. */
+    public void recordSortManifestBounds(long rows, long bytes, long nanos) {
+        sortManifestBoundsRows.increment(Math.max(0L, rows));
+        sortManifestBoundsBytes.increment(Math.max(0L, bytes));
+        sortManifestBoundsLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    /** Manifest/state/symlink/_SUCCESS publication after every final part is durably closed. */
+    public void recordSortPublication(long nanos) {
+        long nonNegative = Math.max(0L, nanos);
+        sortPublicationLatency.record(nonNegative, TimeUnit.NANOSECONDS);
+    }
+
+    /** Metadata assembly/validation plus local publication after all final writers closed. */
+    public void recordSortFinalizeTail(long nanos) {
+        sortFinalizeLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    /** Effective number of independently-writing final ranges (1 on the serial path). */
+    public void recordSortFinalizeParallelism(int parallelism) {
+        sortFinalizeParallelism.set(Math.max(1, parallelism));
     }
 
     public void recordProbeFetch() {

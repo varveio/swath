@@ -11,10 +11,12 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,33 @@ class SortedParquetWriterTest {
 
     private static SortConfig config(Map<String, String> overrides) {
         return SortConfig.fromProperties(key -> overrides.get(key.substring("swath.sort.".length())));
+    }
+
+    @Test
+    void durableClosePublishesByteExactImmutableMetadata(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        SortedParquetWriter writer =
+                new SortedParquetWriter(path, config(Map.of()), SortMode.OBJECTS, 1);
+        writer.write(object("alpha"));
+        writer.write(object("omega"));
+
+        assertThat(writer.finalMetadata())
+                .as("open/unfsynced output must never expose publishable metadata")
+                .isEmpty();
+
+        writer.markFinal();
+        writer.close();
+        FinalPartMetadata metadata = writer.finalMetadata().orElseThrow();
+        assertThat(metadata.rows()).isEqualTo(2);
+        assertThat(metadata.bytes()).isEqualTo(Files.size(path));
+        assertThat(metadata.md5()).isEqualTo(DigestUtils.md5Hex(Files.readAllBytes(path)));
+        assertThat(metadata.minKey()).isEqualTo("alpha");
+        assertThat(metadata.maxKey()).isEqualTo("omega");
+        assertThat(metadata.boundsBytes()).isEqualTo("alpha".length() + "omega".length());
+
+        // Idempotent close cannot replace or mutate the already trusted snapshot.
+        writer.close();
+        assertThat(writer.finalMetadata()).contains(metadata);
     }
 
     @Test

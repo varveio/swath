@@ -145,7 +145,7 @@ class SortTransformTest {
         boolean[] observed = {false};
         PublishListener listener = (finalFiles, rows) -> {
             observed[0] = true;
-            assertThat(finalFiles).allMatch(Files::exists);            // renamed into place already
+            assertThat(finalFiles).allMatch(p -> Files.exists(p.path())); // renamed into place already
             assertThat(rows).isEqualTo(2);
             assertThat(staging).allMatch(Files::exists);               // staging NOT yet deleted
             assertThat(Files.exists(dirs.staging)).as("staging dir not yet removed").isTrue();
@@ -238,7 +238,8 @@ class SortTransformTest {
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b")));
 
         List<Path> published = new ArrayList<>();
-        PublishListener listener = (finalFiles, rows) -> published.addAll(finalFiles);
+        PublishListener listener = (finalFiles, rows) ->
+                published.addAll(finalFiles.stream().map(FinalPart::path).toList());
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
                 .transform(staging, dirs.output, dirs.staging, listener);
 

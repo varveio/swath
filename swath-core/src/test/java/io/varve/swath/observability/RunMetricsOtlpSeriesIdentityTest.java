@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 131;
+    static final int EXPECTED_OTLP_METER_COUNT = 140;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -133,6 +133,9 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
+            "COUNTER|swath.sort.manifest.bounds.bytes|{}",
+            "COUNTER|swath.sort.manifest.bounds.rows|{}",
+            "COUNTER|swath.sort.manifest.md5.bytes|{}",
             "COUNTER|swath.sort.merge.passes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
@@ -184,6 +187,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.s3.pool.leased|{}",
             "GAUGE|swath.s3.pool.max|{}",
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
+            "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
@@ -220,9 +224,14 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.rate_limit.wait|{}",
             "TIMER|swath.run.duration|{}",
             "TIMER|swath.sort.backpressure.wait|{}",
+            "TIMER|swath.sort.finalize.close.latency|{}",
+            "TIMER|swath.sort.finalize.latency|{}",
+            "TIMER|swath.sort.manifest.bounds.latency|{}",
+            "TIMER|swath.sort.manifest.md5.latency|{}",
             "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
-            "TIMER|swath.sort.merge.range.latency|{}");
+            "TIMER|swath.sort.merge.range.latency|{}",
+            "TIMER|swath.sort.publication.latency|{}");
 
     /**
      * The 22 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the

@@ -6,7 +6,6 @@
 package io.varve.swath.sort;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -23,5 +22,5 @@ public interface PublishListener {
     /** Publishes nothing — the null-object implementation. */
     PublishListener NO_OP = (finalFiles, totalRows) -> { };
 
-    void onPublished(List<Path> finalFiles, long totalRows) throws IOException;
+    void onPublished(List<FinalPart> finalParts, long totalRows) throws IOException;
 }
