@@ -122,14 +122,6 @@ final class ParallelRangeMerge {
 
     private static final Logger log = LoggerFactory.getLogger(ParallelRangeMerge.class);
 
-    /**
-     * Boundary-sample cap per segment. The sample only has to resolve {@code R-1} evenly spaced split
-     * points out of at most a few dozen ranges, so thousands of candidates per segment is already far
-     * more resolution than the split can use; retaining one per PAGE would scale the sampler's heap
-     * with the listing's row count, which is exactly what {@code I11} forbids elsewhere.
-     */
-    private static final int MAX_SAMPLES_PER_SEGMENT = 4_096;
-
     private static final AtomicLong MERGE_SEQUENCE = new AtomicLong();
 
     private final SortConfig config;
@@ -219,8 +211,19 @@ final class ParallelRangeMerge {
     static List<byte[]> boundaries(List<Path> segments, int desiredRanges, SortMetrics metrics)
             throws IOException {
         TreeSet<byte[]> distinct = new TreeSet<>(KeyBytes::compareUnsigned);
+        boolean embedded = false;
+        boolean scanned = false;
         for (Path segment : segments) {
-            sampleKeys(segment, distinct, metrics);
+            SampleSource source = sampleKeys(segment, distinct, metrics);
+            embedded |= source == SampleSource.EMBEDDED;
+            scanned |= source == SampleSource.SCAN;
+        }
+        if (embedded && scanned) {
+            metrics.recordStealReason("SORT", "merge_boundary_source_mixed");
+        } else if (embedded) {
+            metrics.recordStealReason("SORT", "merge_boundary_source_embedded");
+        } else {
+            metrics.recordStealReason("SORT", "merge_boundary_source_scan");
         }
         if (distinct.size() < 2) {
             return null;   // cannot split — degenerate, fall back to serial
@@ -249,11 +252,9 @@ final class ParallelRangeMerge {
      *
      * <ul>
      *   <li><b>Page-run</b> ({@code .pageseg}, the live listing lane's format): each page's
-     *       {@code minKey}, walked with a {@link PageFrontierReader}. The frontier parses only the
-     *       record body's leading fields, so this costs a pass over the segment's framing, not a
-     *       decode. {@code minKey()} returns the reader's INTERNAL buffer (read-only, not
-     *       defensively copied — the hot merge path relies on that), so it is cloned before being
-     *       retained here.</li>
+     *       {@code minKey}, normally loaded from the bounded trailer extension. A legacy, unknown,
+     *       or invalid extension falls back transactionally to a {@link PageFrontierReader} scan of
+     *       that segment; provisional extension keys never reach the global set.</li>
      *   <li><b>Columnar Parquet</b> (the {@link CaptureSorter} fixture path, and this class's own
      *       cascade intermediates): each row group's first key from
      *       {@link SortedFileIndex#firstKeysPerRowGroup}.</li>
@@ -264,20 +265,46 @@ final class ParallelRangeMerge {
      * assigned to exactly one range by an exact per-row key compare in {@link RangeFilteredStream},
      * whatever the boundaries are.
      */
-    private static void sampleKeys(Path segment, TreeSet<byte[]> distinct, SortMetrics metrics)
+    private enum SampleSource {
+        EMBEDDED,
+        SCAN
+    }
+
+    private static SampleSource sampleKeys(Path segment, TreeSet<byte[]> distinct, SortMetrics metrics)
             throws IOException {
         if (SortTransform.isPageRunSegment(segment)) {
+            PageRunBoundarySample.ReadResult embedded;
+            long framedRecordBytes;
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(segment)) {
+                embedded = PageRunBoundarySample.read(io);
+                long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+                framedRecordBytes = io.trailerStart >= PageRunSegmentWriter.HEADER_BYTES
+                                && io.trailerStart <= fixedTailStart
+                        ? io.trailerStart - PageRunSegmentWriter.HEADER_BYTES
+                        : 0;
+            }
+            if (embedded.valid()) {
+                for (byte[] key : embedded.keys()) {
+                    distinct.add(key);
+                }
+                if (embedded.totalRecords() > PageRunBoundarySample.MAX_ENTRIES) {
+                    metrics.recordStealReason("SORT", "merge_range_sample_capped");
+                }
+                metrics.recordBoundaryIo(embedded.keys().size(), embedded.bytesRead(), 0);
+                metrics.markProgress();
+                return SampleSource.EMBEDDED;
+            }
+            recordFallback(embedded.status(), metrics);
+
             // Stride: a page holds ~1000 entries, so an unsampled walk retains one key per ~1000 rows
             // -- ~1M cloned keys plus TreeSet overhead on a billion-row listing, held serially before
             // any range starts. Boundary choice affects BALANCE ONLY (see the class javadoc), so
-            // thinning the sample cannot cost correctness; MAX_SAMPLES_PER_SEGMENT keeps far more
-            // candidates than the R-1 splits ever consume.
-            long totalPages = PageRunSegmentReader.readTrailer(segment).totalRecords();
+            // thinning the sample cannot cost correctness; PageRunBoundarySample.MAX_ENTRIES keeps
+            // far more candidates than the R-1 splits ever consume.
+            long totalPages = embedded.totalRecords();
             // Ceiling division: floor would leave stride == 1 up to 2 x the cap (retaining ~8k keys
             // for a 4097-page segment), so the "cap" would not be one.
-            long stride = totalPages <= MAX_SAMPLES_PER_SEGMENT
-                    ? 1
-                    : (totalPages + MAX_SAMPLES_PER_SEGMENT - 1) / MAX_SAMPLES_PER_SEGMENT;
+            long stride = PageRunBoundarySample.stride(totalPages);
             if (stride > 1) {
                 // Instrumentation (AGENTS.md "instrument every new algo path"): the cap changes which
                 // boundaries get chosen, so a run whose ranges balanced badly needs to be able to tell
@@ -300,10 +327,31 @@ final class ParallelRangeMerge {
                     frontier.advance();
                 }
             }
-            return;
+            metrics.recordBoundaryIo(0, embedded.bytesRead(), framedRecordBytes);
+            return SampleSource.SCAN;
         }
         for (SortedFileIndex.RowGroupKey rg : SortedFileIndex.firstKeysPerRowGroup(segment)) {
             distinct.add(rg.firstKey());
+        }
+        metrics.recordBoundaryIo(0, 0, 0);
+        return SampleSource.SCAN;
+    }
+
+    private static void recordFallback(PageRunBoundarySample.Status status, SortMetrics metrics) {
+        switch (status) {
+            case ABSENT -> metrics.recordStealReason("SORT", "merge_boundary_fallback_absent");
+            case UNKNOWN -> metrics.recordStealReason("SORT", "merge_boundary_fallback_unknown");
+            case INVALID_LENGTH ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_length");
+            case INVALID_COUNT ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_count");
+            case INVALID_CRC ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_crc");
+            case INVALID_ORDER ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_order");
+            case INVALID_BOUNDS ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_bounds");
+            case EMBEDDED -> throw new AssertionError("valid sample cannot fall back");
         }
     }
 

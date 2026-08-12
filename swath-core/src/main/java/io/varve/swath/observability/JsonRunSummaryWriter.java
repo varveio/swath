@@ -746,6 +746,15 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // because it is the one term that does not shrink as R rises: subtract it to see the ranges'
         // own scaling. Zero on the default serial merge, which never samples boundaries.
         sortNode.put("merge_boundaries_ms", timerTotalMs("swath.sort.merge.boundaries.latency"));
+        sortNode.put("merge_boundary_embedded_entries",
+                (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
+        sortNode.put("merge_boundary_embedded_bytes",
+                (long) counterCount("swath.sort.merge.boundaries.embedded.bytes"));
+        sortNode.put("merge_boundary_scan_bytes",
+                (long) counterCount("swath.sort.merge.boundaries.scan.bytes"));
+        sortNode.put("merge_boundary_bytes",
+                (long) (counterCount("swath.sort.merge.boundaries.embedded.bytes")
+                        + counterCount("swath.sort.merge.boundaries.scan.bytes")));
         sortNode.put("page_runs_per_buffer", distributionMean("swath.sort.page_runs_per_buffer"));
         sortNode.put("buffer_sort_fallbacks", (long) stealReasonCount("SORT", "buffer_sort_fallback"));
         // A merge-only `--sort --resume` (the listing was already complete in the

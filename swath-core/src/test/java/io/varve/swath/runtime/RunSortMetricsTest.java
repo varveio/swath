@@ -51,4 +51,15 @@ class RunSortMetricsTest {
             .tag("reason", "merge_range_sample_capped")
             .counter().count());
     }
+
+    @Test
+    void boundaryIoStillReaches() {
+        var registry = new SimpleMeterRegistry();
+
+        new RunSortMetrics(new RunMetrics(registry)).recordBoundaryIo(7, 123, 456);
+
+        assertEquals(7.0, registry.get("swath.sort.merge.boundaries.embedded.entries").counter().count());
+        assertEquals(123.0, registry.get("swath.sort.merge.boundaries.embedded.bytes").counter().count());
+        assertEquals(456.0, registry.get("swath.sort.merge.boundaries.scan.bytes").counter().count());
+    }
 }

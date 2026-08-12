@@ -737,13 +737,10 @@ class SortTransformPageRunParallelMergePropTest {
      *
      * <p><b>What actually catches it, and why that matters.</b> Ranges that abandon their tail never
      * reach {@code checkComplete}, so the obvious worry is that a corrupt trailer slips past. It does
-     * not, because {@link ParallelRangeMerge#boundaries} drains every page of every segment to EOF
-     * while sampling boundary keys, and that pass runs the cross-check before any range opens. This
-     * test therefore pins the END-TO-END guarantee (corrupt trailer ⇒ merge fails) rather than any
-     * one mechanism; it would still pass if the sampling pass were replaced, provided whatever
-     * replaced it kept the check. Note the consequence for anyone optimising the sampler: making it
-     * stop early — for instance by seeking rather than walking — would remove this check, and the
-     * guarantee would then rest solely on the last range draining its inputs.
+     * not, because the last unbounded range drains every page of every segment to EOF and runs the
+     * cross-check. This test pins the END-TO-END guarantee (corrupt trailer ⇒ merge fails), including
+     * the post-embedded-sample integrity timing where the failure may arrive after sibling ranges
+     * have started writing temporary parts.
      */
     @Example
     void aCorruptTrailerStillFailsTheParallelMerge() throws IOException {

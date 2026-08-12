@@ -31,11 +31,11 @@ public interface SortMetrics {
      * Advance the liveness progress signal, exactly as {@code RunMetrics.markProgress()}.
      *
      * <p><b>Call this from any loop that does real work without emitting a row.</b> The parallel
-     * range merge has two such loops — boundary sampling walks every page of every segment, and each
-     * range's frontier walks its own prefix — and both were silent. The liveness watchdog's
-     * total-freeze tripwire defaults to 120 s, so on a billion-object listing these phases halted a
-     * perfectly healthy JVM before the merge wrote its first row. The row-emitting path was never
-     * the problem; it ticks through a writer decorator.
+     * range merge can have two such loops — a legacy/fallback boundary scan walks every page of its
+     * segment, and each range's frontier walks its own prefix — and both were silent. The liveness
+     * watchdog's total-freeze tripwire defaults to 120 s, so on a billion-object listing these phases
+     * halted a perfectly healthy JVM before the merge wrote its first row. The row-emitting path was
+     * never the problem; it ticks through a writer decorator.
      *
      * <p><b>The default is a no-op, and that is a trap worth naming.</b> This interface is a
      * {@code @FunctionalInterface} wired in most places as a lambda or a method reference, which
@@ -45,5 +45,13 @@ public interface SortMetrics {
      */
     default void markProgress() {
         // no-op: the null object and every test lambda record nothing.
+    }
+
+    /**
+     * Record page-run boundary-selection IO: extension bytes actually read and framed record bytes
+     * traversed by fallback scans. Parquet index metadata is deliberately outside these byte totals.
+     */
+    default void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        // no-op: overridden by the live runtime bridge.
     }
 }

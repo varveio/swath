@@ -733,6 +733,45 @@ which owns the at-most-once-text durability questions it would reopen):
   (`SORT.merge_redone`), regardless of how many cascade passes the redo
   itself needs to run.
 
+### 6.1 Page-run v1 trailer extension
+
+Each original listing-phase page-run segment embeds the parallel merge's exact bounded page-minimum
+sample in an optional extension between `segMaxKey` and the existing fixed EOF tail. Cascade
+intermediates are created only after boundary selection and omit the unused extension, avoiding a
+write-side reread of their streamed pages. `FORMAT_VERSION` remains 1,
+`trailerStart` still points at `segMinKey`, and the final 28 bytes are unchanged, so a pre-extension
+reader continues to stream exactly `totalRecords` and ignores the extra bytes:
+
+```text
+records*
+segMinKey u16-len-prefixed
+segMaxKey u16-len-prefixed
+[extensionMagic u32][type u16][version u16][payloadLength u32][entryCount u32]
+payload: entryCount * [keyLength u16][key]
+[crc32c u32]
+[trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
+```
+
+For `P` pages the sample stride is `max(1, ceil(P / 4096))`; minima at physical page ordinals
+`0, stride, 2*stride, ...` are retained, including repeats. The block CRC covers its complete header
+and payload, excluding only the CRC field. A reader bounds the extension against the fixed tail,
+validates lengths before allocation, caps the declared count at `min(P, 4096)`, requires the exact
+systematic count and non-decreasing unsigned keys, and publishes no provisional key until every
+check passes. The first sampled key must equal `segMinKey`, the last must not exceed `segMaxKey`,
+and an empty sample requires empty bounds. An absent, unknown, or invalid extension falls back for that segment to the legacy
+full-page scan. Mixed legacy/new input therefore selects the same boundaries as an all-legacy scan.
+
+Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
+issuing per-key writes; the reader streams the bounded extension with O(extension bytes / 64 KiB)
+positioned reads. Reader peak storage is the retained sample-key arrays plus one 64 KiB scratch
+buffer, never a second full-extension copy.
+
+The embedded sample replaces only the boundary prologue's integrity pass. The last unbounded
+parallel range still drains every page of every original segment and performs the authoritative
+page CRC, min-monotonicity, and trailer-count checks before publication can succeed. A late failure
+cancels sibling ranges and sweeps partial range output; no manifest, state, or success marker is
+published.
+
 ---
 
 ## 7. Config defaults (single source of truth)
