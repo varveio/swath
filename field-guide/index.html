@@ -1581,10 +1581,9 @@
     </div>
     <div class="col">
       <p>
-        §6 made a strong claim — no row lost or duplicated across splits, steals,
-        crashes, and resumes. A claim like that is worth exactly as much as the
-        machinery that would catch its violation, so this page owes you a look at
-        that machinery.
+        No row lost, none duplicated — across splits, steals, crashes, and resumes.
+        A guarantee like that is worth exactly as much as the machinery that would
+        catch its violation. This is that machinery.
       </p>
       <p>
         The invariants are written law, not folklore: each carries a number
@@ -1604,8 +1603,8 @@
         <li><b>kill&nbsp;-9, for real.</b> Integration suites SIGKILL a live listing
           process mid-run — no shutdown hooks, no goodbye — then resume and require
           the same complete listing a crash-free run would have produced: nothing
-          missing, nothing doubled. §6’s recovery rule is exercised as a fact, not
-          an argument.</li>
+          missing, nothing doubled. The recovery rule above is exercised as a fact,
+          not an argument.</li>
         <li><b>A replay of real buckets.</b> A replay server serves captured listings
           of real buckets back over real HTTP, with measured per-request-shape latency
           profiles injected — millions-of-objects realism, deterministic and free,
