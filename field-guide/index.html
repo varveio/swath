@@ -755,7 +755,7 @@
       <summary>On this page</summary>
       <div class="toc-cols">
         <div>
-          <h3>The story · ~6 min</h3>
+          <h3>The story · ~7 min</h3>
           <ol>
             <li><a href="#reveal">513 guesses, and the one that mattered</a></li>
             <li><a href="#how">A miniature model of the mechanism</a></li>
@@ -765,6 +765,7 @@
             <li><a href="#steal">The steal, and its ladder of evidence</a></li>
             <li><a href="#laws">What the engine learned from real buckets</a></li>
             <li><a href="#durability">Commit before emit, and the two cursors</a></li>
+            <li><a href="#proof">How the guarantees are enforced</a></li>
             <li><a href="#limits">Where it honestly cannot win</a></li>
             <li><a href="#run">The actual 39.7M run</a></li>
           </ol>
@@ -1572,10 +1573,66 @@
     </div>
   </section>
 
+  <!-- ══════════════════════════════════════════════════ -->
+  <section id="proof">
+    <div class="sec-head">
+      <span class="eyebrow">§7</span>
+      <h2>How the guarantees are enforced</h2>
+    </div>
+    <div class="col">
+      <p>
+        §6 made a strong claim — no row lost or duplicated across splits, steals,
+        crashes, and resumes. A claim like that is worth exactly as much as the
+        machinery that would catch its violation, so this page owes you a look at
+        that machinery.
+      </p>
+      <p>
+        The invariants are written law, not folklore: each carries a number
+        (<em class="term">I1–I12</em>) in the repository’s design pack, and the
+        contribution rules require that a high-risk unit’s adversarial test — the
+        one trying to break no-gap/no-overlap, or resume-after-crash — is authored
+        or reviewed independently of the code’s author. The test that wants the code
+        to fail is never written only by the person who wants it to pass.
+      </p>
+      <p>Then the instruments, each answering a different kind of distrust:</p>
+      <ul class="tight">
+        <li><b>Adversarial keyspaces, in memory.</b> Property suites drive the real
+          engine over generated pathological keyspaces — <span class="mono">0xFF</span>
+          bytes, supplementary-plane characters, boundary shapes built to break pivot
+          math — and assert the listing is complete and duplicate-free under every
+          split/steal interleaving they can provoke.</li>
+        <li><b>kill&nbsp;-9, for real.</b> Integration suites SIGKILL a live listing
+          process mid-run — no shutdown hooks, no goodbye — then resume and require
+          the same complete listing a crash-free run would have produced: nothing
+          missing, nothing doubled. §6’s recovery rule is exercised as a fact, not
+          an argument.</li>
+        <li><b>A replay of real buckets.</b> A replay server serves captured listings
+          of real buckets back over real HTTP, with measured per-request-shape latency
+          profiles injected — millions-of-objects realism, deterministic and free,
+          without touching S3. The server’s own fidelity is itself tested by diffing
+          its responses against recorded real-S3 traffic, page for page.</li>
+        <li><b>A deterministic simulator.</b> The real split/steal decision code runs
+          against a modelled store in virtual time — same seed, byte-identical run —
+          so a policy pathology found once can be replayed exactly, thousands of
+          times, while it is being fixed.</li>
+        <li><b>An independent reader.</b> Parquet output is verified with DuckDB — a
+          reader that shares no code with the writer.</li>
+      </ul>
+      <p>
+        One structural choice makes all of this bite harder:
+        <span class="mono">--checkpoint none</span> is not a separate fast path — it
+        is the same durable machinery pointed at an in-memory database. There is one
+        code path, so the invariants are exercised by every run and every test, not
+        only the checkpointed ones.
+      </p>
+      <p class="src">Source: <a href="https://github.com/varveio/swath/blob/main/docs/ops/dev/TESTING.md"><span class="mono">docs/ops/dev/TESTING.md</span></a> · <a href="https://github.com/varveio/swath/blob/main/docs/swath-replay-server.md"><span class="mono">docs/swath-replay-server.md</span></a></p>
+    </div>
+  </section>
+
   <!-- ══════════════════════════════════════════════════════ -->
   <section id="limits">
     <div class="sec-head">
-      <span class="eyebrow">§7</span>
+      <span class="eyebrow">§8</span>
       <h2>Where it honestly cannot win</h2>
     </div>
     <div class="col">
