@@ -26,10 +26,10 @@
     --paper-3:#DDE0D3;
     --ink:    #131A18;
     --ink-2:  #4E5A55;
-    --ink-3:  #59635D;
+    --ink-3:  #7C8781;
     --rule:   #CBD0C2;
     --accent: #0D6E60;
-    --signal: #875806;
+    --signal: #9A6710;
     --shadow: 0 1px 0 #FFFFFF80, 0 1px 3px #131A1810;
     --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
     --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
@@ -37,7 +37,7 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --paper:#0E1312; --paper-2:#161D1B; --paper-3:#1E2724;
-      --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#829089; --rule:#29332F;
+      --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#74807A; --rule:#29332F;
       --accent:#56C9B1; --signal:#E0AC55;
       --shadow: 0 1px 3px #00000060;
     }
@@ -50,9 +50,6 @@
   }
   .wrap { max-width: 44rem; margin: 0 auto; }
   a { color: var(--accent); text-underline-offset: 3px; }
-  a:focus-visible, pre:focus-visible {
-    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px;
-  }
   .mono { font-family: var(--mono); }
 
   .eyebrow {
@@ -82,23 +79,6 @@
   }
   .cta a.primary { background: var(--accent); border-color: var(--accent); color: var(--paper); }
   .cta a:hover { filter: brightness(1.05); }
-
-  .first-run {
-    margin: 0 0 2.6rem; padding: 1.15rem 1.2rem 1.2rem;
-    border: 1px solid var(--rule); border-top: 3px solid var(--accent);
-    background: var(--paper-2); box-shadow: var(--shadow);
-  }
-  .first-run h2 {
-    font-family: var(--mono); font-size: 1rem; font-weight: 600;
-    margin: 0.25rem 0 0.75rem;
-  }
-  .first-run pre {
-    font-family: var(--mono); font-size: 0.75rem; line-height: 1.6;
-    overflow-x: auto; padding: 0.9rem 1rem; margin: 0 0 0.85rem;
-    border: 1px solid var(--rule); background: var(--paper); white-space: pre;
-  }
-  .first-run p { font-size: 0.91rem; color: var(--ink-2); margin-bottom: 0.8rem; }
-  .first-run p:last-child { margin-bottom: 0; }
 
   .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-bottom: 2.6rem; }
   @media (max-width: 40rem) { .doors { grid-template-columns: 1fr; } }
@@ -140,47 +120,21 @@
 <body>
 <div class="wrap">
 
-  <header>
   <div class="eyebrow"><a href="https://varve.io">Varve</a> · open source</div>
   <h1>swath</h1>
   <p class="tag">Parallel, resumable S3 listing for very large buckets.</p>
 
   <p class="what">
-    For when you need every key in a bucket too big to list one page at a time —
-    and there's no fresh S3 Inventory to fall back on. Swath lists; it never reads
-    object contents.
-  </p>
-  <p class="what">
-    It divides the unknown keyspace into guessed ranges, <strong>corrects the guesses
-    while it lists</strong>, and writes JSONL, TSV, or crash-resumable Parquet.
+    swath divides an unknown S3 keyspace into guessed ranges, <strong>corrects the guesses
+    while it lists</strong> — splitting overloaded ranges so idle workers can take the
+    other half — and writes JSONL, TSV, or crash-resumable Parquet. It never reads object
+    contents, and <span class="mono">--concurrency</span> is a ceiling, not a target.
   </p>
 
   <div class="cta">
     <a class="primary" href="https://github.com/varveio/swath">View on GitHub</a>
-    <a href="https://github.com/varveio/swath/blob/main/docs/install.md">Install &amp; quickstart</a>
+    <a href="https://github.com/varveio/swath#quickstart">Quick start</a>
   </div>
-  </header>
-
-  <main>
-  <section class="first-run" aria-labelledby="first-run-heading">
-    <div class="eyebrow">First run · a real public bucket</div>
-    <h2 id="first-run-heading">Verify Swath with one day of NOAA model output</h2>
-    <pre tabindex="0"><code>docker run --rm ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/estofs.20210101/ \
-  --region us-east-1 --no-sign-request --format tsv &gt; /dev/null</code></pre>
-    <p>
-      Docker required; no Swath or JDK installation. This public prefix contains about
-      5,200 objects and lists anonymously in a few seconds. Object rows are discarded;
-      the summary reports objects, time, API calls, and estimated request cost. No AWS
-      account or credentials are needed.
-    </p>
-    <p>
-      This small slice checks installation and connectivity, not scale. It comes from
-      the same NOAA bucket as the recorded 39.7M-object run below. The
-      <a href="https://github.com/varveio/swath/blob/main/docs/install.md">maintained install and quickstart guide</a>
-      shows how to keep the result as crash-resumable Parquet.
-    </p>
-  </section>
 
   <div class="doors">
     <a class="door" href="field-guide/">
@@ -191,8 +145,8 @@
     </a>
     <a class="door run" href="runs/noaa-gestofs-pds/">
       <div class="k">Interrogate a real run</div>
-      <h2>A recorded 39.7M-object listing</h2>
-      <p>The same NOAA bucket as the demo slice, listed with 128 workers and rendered
+      <h2>39.7M objects · 128 workers</h2>
+      <p>One recorded listing of <span class="mono">s3://noaa-gestofs-pds</span>, rendered
       from its 89,230-event trace: replay, seed distribution, mechanism ledgers.</p>
     </a>
   </div>
@@ -200,24 +154,17 @@
   <figure class="filmbox">
     <div class="k">36 seconds of that run</div>
     <video controls muted playsinline preload="metadata" poster="assets/poster.png"
-      src="assets/swath-noaa-gestofs.mp4"
-      aria-label="Supplementary terminal footage from the recorded NOAA listing">
-      Supplementary terminal footage. Read the
-      <a href="runs/noaa-gestofs-pds/">accessible trace report</a> for the recorded run.
-    </video>
+      src="assets/swath-noaa-gestofs.mp4"></video>
     <figcaption>
-      Supplementary terminal footage: one guess out of 513 secretly held 68% of the
-      bucket. Every frame is rendered from the run's own trace. The
-      <a href="runs/noaa-gestofs-pds/">trace report</a> contains the evidence and full context.
+      One guess out of 513 secretly held 68% of the bucket. Every frame is rendered from
+      the run's own trace — the one derived panel says so on screen.
     </figcaption>
   </figure>
-  </main>
 
   <footer>
-    Swath ships <span class="mono">list</span> and <span class="mono">resume</span> — crash-safe
-    checkpoint/resume and optional globally sorted Parquet included. On the roadmap:
-    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned-bucket listing,
-    and object stores beyond S3.
+    swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
+    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
+    stores beyond S3 are roadmap. Flags and output schemas may still change.
     <div class="colophon">
       <svg viewBox="0 0 64 64" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
