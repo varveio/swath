@@ -5,9 +5,61 @@
 **Lists very large S3 buckets in parallel, working out how to split the keyspace
 while it lists.**
 
-![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)
+Use swath when you need every key in a bucket too big to list one page at a time,
+and there is no fresh S3 Inventory or S3 Metadata table to fall back on. It reads
+listings, never object contents. If you already have a current precomputed listing,
+use that instead: querying it is strictly cheaper than any live
+`ListObjectsV2` lister, swath included.
 
-**Real 39.6-million-object run:** interrupt the listing, resume it from checkpoint,
+## Quickstart
+
+With Docker installed, this lists a real public prefix without requiring an AWS
+account, credentials, a local Swath installation, or a JDK:
+
+```bash
+docker run --rm ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/estofs.20210101/ \
+  --region us-east-1 --no-sign-request --format tsv > /dev/null
+```
+
+One day of NOAA's global surge model output on AWS Open Data contains about
+5,200 objects and should finish in a few seconds. The object rows are discarded
+for this installation and connectivity check; Swath's summary on stderr reports
+the objects, elapsed time, API calls, and estimated request cost. Anonymous LIST
+requests are not associated with your AWS account. This small slice validates
+the workflow, not Swath's scaling claims; the recorded full-bucket run below is
+the scale and mechanism evidence.
+
+To keep the same listing as crash-resumable Parquet, create a host directory and
+run the container as your user so it can write through the bind mount:
+
+```bash
+mkdir -p out
+docker run --rm -t --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/estofs.20210101/ \
+  --region us-east-1 --no-sign-request \
+  --format parquet -o /out/data
+```
+
+This produces `out/data/data/*.parquet` plus `out/data/manifest.json`. Every
+object is one row; the most useful columns are the byte-exact `key`, `size`,
+`last_modified`, `etag`, `storage_class`, and `row_type`. DuckDB, Athena, Spark,
+and Trino can query the directory dataset directly, with no merge step. Resume
+an interrupted Docker run from its last committed cursor with:
+
+```bash
+docker run --rm -t --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest resume /out/data
+```
+
+See [`docs/install.md`](docs/install.md) for every install path, download
+verification, private-bucket credentials, and the maintained quickstart. The
+complete output schema is in [`docs/usage.md`](docs/usage.md).
+
+![Swath demo: interrupt and resume a 39.7-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)
+
+**Real 39.7-million-object run:** interrupt the listing, resume it from checkpoint,
 then query the Parquet inventory with DuckDB.
 
 S3 lists a bucket one page at a time: 1000 keys per request, strictly in
@@ -18,9 +70,10 @@ the keyspace is free; knowing whether the split was balanced costs a listing.
 
 swath guesses disjoint ranges blind, starts workers on the guesses, and corrects
 them as real keys come back — stealing work across a fixed pool when a range turns
-out denser or emptier than the guess assumed. No prefix hints, no pre-pass, no
-prior knowledge of how the keys are laid out. The name fits the method: the
-keyspace is tiled into adjacent ranges and swept in parallel, like mown swaths.
+out denser or emptier than the guess assumed. It needs no user-supplied prefix
+hints and no full listing pre-pass; one bounded delimiter probe helps seed the
+initial guesses. The name fits the method: the keyspace is tiled into adjacent
+ranges and swept in parallel, like mown swaths.
 
 To see the mechanism rather than read it, the
 [visual field guide](https://swath.varve.io/field-guide/) walks the range
@@ -29,71 +82,17 @@ guess secretly held 68% of the bucket — with the
 [generated trace report](https://swath.varve.io/runs/noaa-gestofs-pds/) of that
 run to interrogate. Both live at [swath.varve.io](https://swath.varve.io/).
 
-swath is built and maintained by [Varve](https://varve.io/) — we catalog the
-datasets inside object storage from listing structure alone, never object
-contents. swath is the listing layer underneath it, and we wanted it inspectable
-by the people who would have to trust it.
+swath is built and maintained by [Varve](https://varve.io/), a system of record
+for object storage.
 
 It is a **Java 25** CLI for general-purpose S3 buckets (directory buckets are not
-supported), distributed as a self-contained jar and an installable launcher.
+supported), distributed as a signed multi-arch Docker image, self-contained jar,
+and application-distribution archives.
 
-**Status: pre-1.0.** The `list` and `resume` commands are built and tested,
-including globally sorted Parquet output and crash-safe checkpoint/resume. Still
-planned: the `inspect` and `diff` subcommands, versioned-bucket listing, and
-object stores beyond S3 (there are internal design seams, but no supported
-backend SPI yet) — see
-[`ROADMAP.md`](ROADMAP.md). Flags and output schemas may still change before 1.0.
-
-## Quickstart
-
-Tagged releases ship a signed multi-arch Docker image, a self-contained
-uber-jar, and application-distribution archives — grab the newest from the
-[releases page](https://github.com/varveio/swath/releases). See
-[`docs/install.md`](docs/install.md) for every install path, download
-verification, and a fuller quickstart.
-
-```bash
-docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:latest \
-  list s3://my-bucket/prefix/ --no-sign-request --format parquet -o /out/data
-```
-
-Or from source:
-
-```bash
-./gradlew :swath-cli:installDist
-export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
-swath list s3://my-bucket/prefix/ --no-sign-request --format parquet -o out/
-```
-
-Every object becomes one row. The columns you will use most:
-
-```text
-key              BINARY       raw key bytes, byte-exact, never UTF-8 coerced
-size             INT64        object size in bytes
-last_modified    TIMESTAMP    micros, UTC
-etag             UTF8         quotes stripped, multipart ETags kept verbatim
-storage_class    UTF8         STANDARD, GLACIER, ...
-row_type         UTF8         OBJECT | COMMON_PREFIX (DELETE_MARKER reserved)
-```
-
-Owner, checksum, and versioning columns are always present too, reserved for
-versioned listing rather than populated by it. The full schema is in
-[`docs/usage.md`](docs/usage.md).
-
-Resume an interrupted run from its output directory:
-
-```bash
-swath resume out/
-```
-
-## When not to use it
-
-swath reads listings, never objects. It is **LIST-only** by design, and it exists
-for buckets where a precomputed listing (AWS S3 Inventory or S3 Metadata tables)
-isn't an option — not enabled, too stale, or on a bucket you don't own. If you
-already have a fresh Inventory or Metadata table you can query, use that: reading a
-precomputed listing is strictly cheaper than any live `ListObjectsV2` lister, swath
-included, and swath will tell you so rather than pretend otherwise.
+Swath ships `list` and `resume` — crash-safe checkpoint/resume and optional
+globally sorted Parquet included. On the roadmap: `inspect`, `diff`,
+versioned-bucket listing, and object stores beyond S3. See
+[`ROADMAP.md`](ROADMAP.md).
 
 ## Behaviour and limits
 
@@ -105,10 +104,11 @@ included, and swath will tell you so rather than pretend otherwise.
   heap. Active pipeline buffers are configuration-bounded; Parquet output also
   retains metadata proportional to finalized part count, and `--sort` retains
   metadata proportional to staging-segment count.
-- **Published scale evidence is still thin.** The CI gate pins heap behaviour at
-  100,000 keys — a regression guard, not a scale measurement. Larger runs are in
-  progress; their figures, and a throughput number, will land in
-  [`docs/performance.md`](docs/performance.md).
+- **The published large-run evidence is one recorded 39.7-million-object
+  listing.** It demonstrates the mechanism under substantial skew, but is not a
+  comparative benchmark or a broad characterization of performance. The CI gate
+  also pins heap behaviour at 100,000 keys as a regression guard, not a scale
+  measurement. See [`docs/performance.md`](docs/performance.md).
 - **Costs one LIST request per 1000 keys.** A billion-key bucket is roughly 1M
   requests — about $5 at a $0.005-per-1000-requests reference rate — before probe
   and retry overhead, and before egress if you run it outside the bucket's region.

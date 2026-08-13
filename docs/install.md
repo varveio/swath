@@ -11,14 +11,18 @@ custody), and attached to the
 ## Docker
 
 ```
-docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath \
-  list s3://my-bucket/prefix/ --no-sign-request \
+mkdir -p out
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/estofs.20210101/ \
+  --region us-east-1 --no-sign-request \
   --format parquet -o /out/data
 ```
 
 Images are published to `ghcr.io/varveio/swath`; `:latest` and the `X.Y.Z`
-semver tags are owned solely by releases, and a bare image name resolves to
-`:latest`. Drop `--no-sign-request` and add credentials for a private bucket. See
+semver tags are owned solely by releases. The command above lists a small public
+demo prefix without AWS credentials. For a private bucket, replace the target,
+drop `--no-sign-request`, and use the normal AWS credential chain. See
 [`packaging-and-docker.md`](packaging-and-docker.md) for the image's signal
 handling, tag scheme, and how to pin a digest rather than a mutable tag.
 
@@ -66,23 +70,25 @@ module graph.
 
 ## Quickstart
 
-Once you have a `swath` binary (any of the above), point it at a bucket and
-look at the result on your terminal — no flags beyond the target:
+Once you have a `swath` binary (any of the above), try the verified public demo
+prefix and look at the result on your terminal:
 
 ```
-swath list s3://my-bucket/prefix/ --no-sign-request
+swath list s3://noaa-gestofs-pds/estofs.20210101/ \
+  --region us-east-1 --no-sign-request
 ```
 
 On a terminal this prints an aligned table; piped to a file or another
-program it switches to TSV instead (`--format auto`, the default). Drop
-`--no-sign-request` to list a bucket you have credentials for — swath then
-uses the standard AWS credential chain (environment, profile, instance role;
-see [`faq.md`](faq.md)).
+program it switches to TSV instead (`--format auto`, the default). For your own
+bucket, replace the target and region. Drop `--no-sign-request` when using
+credentials — swath then uses the standard AWS credential chain (environment,
+profile, instance role; see [`faq.md`](faq.md)).
 
 For real output you'll keep, write a Parquet dataset:
 
 ```
-swath list s3://my-bucket/prefix/ --no-sign-request -o out/ --format parquet
+swath list s3://noaa-gestofs-pds/estofs.20210101/ \
+  --region us-east-1 --no-sign-request -o out/ --format parquet
 ```
 
 This produces a directory dataset — `out/data/*.parquet` plus
