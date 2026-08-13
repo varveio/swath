@@ -34,12 +34,12 @@
     --paper-3:    #DDE0D3;
     --ink:        #131A18;
     --ink-2:      #4E5A55;
-    --ink-3:      #7C8781;
+    --ink-3:      #59635D;
     --rule:       #CBD0C2;
     --accent:     #0D6E60;
     --accent-sub: #0D6E6014;
-    --signal:     #9A6710;
-    --signal-sub: #9A671018;
+    --signal:     #875806;
+    --signal-sub: #87580618;
     --alert:      #A33F28;
     --alert-sub:  #A33F2814;
 
@@ -62,7 +62,7 @@
       --paper-3:    #1E2724;
       --ink:        #E7EBE3;
       --ink-2:      #9BA69F;
-      --ink-3:      #74807A;
+      --ink-3:      #829089;
       --rule:       #29332F;
       --accent:     #56C9B1;
       --accent-sub: #56C9B11A;
@@ -79,16 +79,16 @@
   }
   :root[data-theme="light"] {
     --paper:#F1F2EB; --paper-2:#E7E9DF; --paper-3:#DDE0D3;
-    --ink:#131A18; --ink-2:#4E5A55; --ink-3:#7C8781; --rule:#CBD0C2;
+    --ink:#131A18; --ink-2:#4E5A55; --ink-3:#59635D; --rule:#CBD0C2;
     --accent:#0D6E60; --accent-sub:#0D6E6014;
-    --signal:#9A6710; --signal-sub:#9A671018;
+    --signal:#875806; --signal-sub:#87580618;
     --alert:#A33F28; --alert-sub:#A33F2814;
     --w1:#0D6E60; --w2:#2E7C86; --w3:#46765A; --w4:#6E7B3C; --w5:#38617E; --w6:#7A6A46;
     --shadow: 0 1px 0 #FFFFFF80, 0 1px 3px #131A1810;
   }
   :root[data-theme="dark"] {
     --paper:#0E1312; --paper-2:#161D1B; --paper-3:#1E2724;
-    --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#74807A; --rule:#29332F;
+    --ink:#E7EBE3; --ink-2:#9BA69F; --ink-3:#829089; --rule:#29332F;
     --accent:#56C9B1; --accent-sub:#56C9B11A;
     --signal:#E0AC55; --signal-sub:#E0AC551A;
     --alert:#E4826A; --alert-sub:#E4826A1A;
@@ -121,6 +121,11 @@
   p { margin: 0 0 1.05em; }
   a { color: var(--accent); text-underline-offset: 3px; }
   a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+  summary:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
     border-radius: 2px;
@@ -722,7 +727,8 @@
       <strong>swath</strong> is an open-source command-line tool that lists very large S3 buckets
       in parallel and writes the result to Parquet you can resume after a crash. It is for anyone
       who has waited on a bucket too big to enumerate one page at a time, and has no usable
-      Inventory report to fall back on. This page is how it works.
+      Inventory report to fall back on. This page is how it works. To run it first, use the
+      <a href="https://github.com/varveio/swath/blob/main/docs/install.md">install and quickstart guide</a>.
     </p>
     <p class="standfirst" style="margin-bottom:0;">
       swath guessed <strong>513 adjacent ranges</strong> and started listing. One of those
@@ -749,6 +755,7 @@
       <a class="primary" href="#reveal">See what it got wrong</a>
       <a href="#how">How the engine works</a>
       <a href="#run">See the measured run</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/install.md">Use it — install &amp; quickstart</a>
     </div>
 
     <details class="toc">
@@ -782,6 +789,8 @@
       </div>
     </details>
   </header>
+
+  <main>
 
   <!-- ══════════════════════════════════════════════════════ -->
   <section id="reveal">
@@ -1754,7 +1763,7 @@
     <div class="cta" style="margin-top:1.6rem;">
       <a class="primary" href="https://swath.varve.io/runs/noaa-gestofs-pds/">Open the full trace report</a>
       <a href="https://github.com/varveio/swath">View the source</a>
-      <a href="https://github.com/varveio/swath#quickstart">Install swath</a>
+      <a href="https://github.com/varveio/swath/blob/main/docs/install.md">Install swath</a>
       <a href="#dives">Read the deep dives</a>
     </div>
 
@@ -2135,15 +2144,18 @@
     </details>
   </section>
 
+  </main>
+
   <footer>
     Built from the swath internals pack — <span class="mono">docs/internals/overview.md</span>,
     <span class="mono">architecture.md</span>, <span class="mono">algorithms.md</span>,
     <span class="mono">contracts.md</span>, and <span class="mono">build-and-modules.md</span> —
     which are re-derived from the shipped code. Where this page and the source disagree, the
     source wins.<br>
-    swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
-    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
-    stores beyond S3 are roadmap. Flags and output schemas may still change.
+    Swath ships <span class="mono">list</span> and <span class="mono">resume</span> — crash-safe
+    checkpoint/resume and optional globally sorted Parquet included. On the roadmap:
+    <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned-bucket listing,
+    and object stores beyond S3.
     <div class="colophon">
       <svg viewBox="0 0 64 64" aria-hidden="true">
         <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="4.2">
