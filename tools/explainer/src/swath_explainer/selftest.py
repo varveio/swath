@@ -40,8 +40,10 @@ SELF_TEST_TRACE = [
 
 def self_test():
     failures = []
+    ran = [0]
 
     def check(label, got, want):
+        ran[0] += 1
         if got != want:
             failures.append("%s: got %r, want %r" % (label, got, want))
 
@@ -103,11 +105,21 @@ def self_test():
     check("hostile key cannot close the script block",
           "</script><script>" in hostile_page, False)
     check("anonymized page withholds keys", "a/q" in page, False)
-    check("page is standalone", "http://" in page or "https://" in page, False)
+    # Self-contained means the page FETCHES nothing; plain anchors are allowed. The
+    # default footer links to the project; --no-links strips every URL from the page.
+    check("page fetches nothing",
+          'src="http' in page or "<link" in page or "url(http" in page or "@import" in page,
+          False)
+    check("default page links to the project", "https://github.com/varveio/swath" in page, True)
+    check("default page links to the field guide", "https://swath.varve.io/field-guide/" in page, True)
+    bare = render(build_model(list(SELF_TEST_TRACE), 0, "self-test", True), links=False)
+    check("no-links page carries no URLs", "http://" in bare or "https://" in bare, False)
+    check("title reaches the head", "<title>self-test</title>" in page, True)
+    check("description reaches the head", '<meta name="description"' in page, True)
 
     for line in failures:
         print("FAIL " + line, file=sys.stderr)
-    print("self-test: 29 checks, %d failures" % len(failures), file=sys.stderr)
+    print("self-test: %d checks, %d failures" % (ran[0], len(failures)), file=sys.stderr)
     return 1 if failures else 0
 
 

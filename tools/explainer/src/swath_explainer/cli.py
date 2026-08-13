@@ -26,6 +26,9 @@ def main(argv=None):
     parser.add_argument("--title", help="page heading (default: the trace file's stem)")
     parser.add_argument("--anonymize", action="store_true",
                         help="withhold every key name; emit positions and counts only")
+    parser.add_argument("--no-links", action="store_true",
+                        help="omit the site-links footer, leaving a page with no URLs at all; "
+                             "the report never fetches anything either way")
     parser.add_argument("--video", action="store_true",
                         help="emit a 1080x1350 capture page for recording a share-ready clip; "
                              "drive it via window.__seek(ms) and encode the frames")
@@ -56,7 +59,8 @@ def main(argv=None):
 
     model = build_model(events, skipped, args.title or args.trace.stem, args.anonymize)
     out = args.out or args.trace.with_suffix(".html")
-    page = render_video(model, args.video_style) if args.video else render_report(model)
+    page = (render_video(model, args.video_style) if args.video
+            else render_report(model, links=not args.no_links))
     out.write_text(page, encoding="utf-8")
 
     meta, F = model["meta"], model["findings"]

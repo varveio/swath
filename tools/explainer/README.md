@@ -24,7 +24,7 @@ tools/explainer/
     ├── model.py                  # the reduction: figures, lineage, findings
     ├── render.py                 # model + template -> page
     ├── cli.py                    # argument handling
-    ├── selftest.py               # 29 checks, no inputs needed
+    ├── selftest.py               # internal checks, no inputs needed
     └── templates/
         ├── report.html           # the explainer report
         ├── video-strip.html      # video: the algorithm as it happens
@@ -49,17 +49,22 @@ uv run tools/explainer/explainer.py run.trace.jsonl -o run.html
 ```
 
 Open `run.html`. One file, no CDN, no external images, safe from `file://`, light and dark.
+The page carries a real `<title>` and description computed from the run (so a shared link
+identifies itself), and a one-line footer pointing at the project and the field guide —
+plain anchors, nothing fetched. `--no-links` strips the footer when the page must carry
+no URLs at all.
 
 ```text
 explainer.py TRACE.jsonl [-o OUT.html] [--title NAME] [--anonymize]
                              [--video [--video-style strip|map]]
-explainer.py --self-test              # 29 checks, no inputs needed
+explainer.py --self-test              # internal checks, no inputs needed
 ```
 
 | Flag | What it does |
 |---|---|
 | `--title` | Page heading. Defaults to the trace file's stem. |
 | `--anonymize` | Withhold every key name — positions and counts only. Use when the picture has to travel further than the trace does. |
+| `--no-links` | Omit the site-links footer, leaving a page with no URLs at all. The report never fetches anything either way. |
 | `--video` | Emit a 1080×1350 capture page instead of the report (see below). |
 | `--video-style` | `strip` (default) or `map`. Two different arguments about the same run. |
 
