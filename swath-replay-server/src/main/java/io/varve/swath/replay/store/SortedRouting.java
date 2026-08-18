@@ -67,6 +67,45 @@ public final class SortedRouting {
         return new QueryPlan(touchedFiles(index, startRg, upper), upper);
     }
 
+    /**
+     * How many times {@code limit} a row group must hold before a speculative read is worth trying.
+     * The speculation fails only when {@code from} lands within {@code limit} rows of the group's
+     * end, so a group holding {@code 4x} the limit fails at most a quarter of the time and the
+     * expected cost stays well under the invariant plan's.
+     */
+    private static final int SPECULATION_HEADROOM = 4;
+
+    /**
+     * The <b>speculative</b> plan: bound at the end of {@code from}'s own row group and read only
+     * that group, instead of the invariant plan's guaranteed-sufficient window.
+     *
+     * <p>The invariant bound must assume {@code from} sits at the very last row of its group and so
+     * counts zero rows from it — which, with row groups far larger than a page, means a 1,000-row
+     * page reads two whole groups to return rows that almost always live in the first. DuckDB
+     * decodes whole row groups, so that assumption is paid in full on every cold read.
+     *
+     * <p>This bound is <b>not</b> guaranteed to hold {@code limit} rows, which is why the caller
+     * must widen when it comes up short — see {@link SortedParquetStore#rows}. It is safe because a
+     * tighter upper bound can only ever return a <i>prefix</i> of the looser bound's rows: same
+     * {@code from}, same order, same fixture. A short read is therefore always detectable by count
+     * and never by content, and a full read is byte-identical to the invariant one.
+     *
+     * <p>Returns {@code null} when speculating is not worth it: no tighter bound exists, or the
+     * group is too small relative to {@code limit} for the gamble to pay.
+     */
+    static QueryPlan speculativePlan(List<IndexEntry> index, ByteKey from, ByteKey toExclusive, int limit) {
+        if (index.isEmpty() || limit <= 0) {
+            return null;
+        }
+        int startRg = startRowGroup(index, from);
+        if (startRg + 1 >= index.size()
+                || index.get(startRg).rowCount() < (long) limit * SPECULATION_HEADROOM) {
+            return null;
+        }
+        ByteKey upper = tighter(index.get(startRg + 1).firstKey(), toExclusive);
+        return new QueryPlan(touchedFiles(index, startRg, upper), upper);
+    }
+
     /** The row group that contains {@code from}: the last one whose first key is {@code <= from}. */
     public static int startRowGroup(List<IndexEntry> index, ByteKey from) {
         if (from == null) {

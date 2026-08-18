@@ -197,6 +197,31 @@ public final class ReplayMetrics {
                 .register(registry));
     }
 
+    /** {@code routing.speculative} outcome: the tight window held a full page; a row group's decode saved. */
+    public static final String SPECULATION_HIT = "hit";
+
+    /** {@code routing.speculative} outcome: the tight window came up short and the invariant window was re-read. */
+    public static final String SPECULATION_WIDENED = "widened";
+
+    /** {@code routing.speculative} outcome: not attempted (no tighter bound exists, or the row group is too small). */
+    public static final String SPECULATION_DECLINED = "declined";
+
+    /**
+     * Records how a bounded range read chose its upper bound: {@code hit} (the tight
+     * single-row-group window held a full page), {@code widened} (it came up short and the
+     * guaranteed-sufficient window was re-read), or {@code declined} (not worth attempting).
+     *
+     * <p>The counter is the engagement signal for the speculation: {@code hit} is a row group's
+     * decode saved, {@code widened} is a query wasted, and the ratio between them is the only way to
+     * tell post-hoc whether the gamble is paying on a given fixture's row-group geometry. A fixture
+     * whose groups are barely larger than a page would show mostly {@code declined}; one showing
+     * mostly {@code widened} would mean the headroom constant is set wrong for it.
+     */
+    public void recordSpeculativeBound(String outcome) {
+        Counter.builder("swath.replay.routing.speculative")
+                .tag("outcome", outcome).register(registry).increment();
+    }
+
     /**
      * Records one request the server could not serve within its injected latency profile, tagged
      * with the request's shape, plus how far past the profile it went.

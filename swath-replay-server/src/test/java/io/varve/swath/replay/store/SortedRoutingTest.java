@@ -26,6 +26,48 @@ class SortedRoutingTest {
     private static final Path F2 = Path.of("part-00002.parquet");
 
     @Test
+    void speculatesOnASingleRowGroupWhenItDwarfsThePage() {
+        // Real geometry: 8MB row groups hold ~260k rows, a page asks for 1,001.
+        List<IndexEntry> index = List.of(
+                rg(F1, 0, "a", 260_000), rg(F1, 1, "m", 260_000), rg(F1, 2, "s", 260_000));
+
+        SortedRouting.QueryPlan invariant = SortedRouting.plan(index, key("a"), null, 1_001);
+        SortedRouting.QueryPlan speculative = SortedRouting.speculativePlan(index, key("a"), null, 1_001);
+
+        // The invariant bound must assume `from` is the last row of rg0, so it reads rg0 AND rg1.
+        assertThat(bytes(invariant.upperBound())).isEqualTo("s");
+        // The speculation reads rg0 alone -- right on all but the last 1,001 rows of the group.
+        assertThat(bytes(speculative.upperBound())).isEqualTo("m");
+    }
+
+    @Test
+    void declinesToSpeculateWhenTheRowGroupIsNotBigEnoughToPayFor() {
+        // A group only twice the page size fails the gamble too often to be worth the wasted query.
+        List<IndexEntry> index = List.of(rg(F1, 0, "a", 2_000), rg(F1, 1, "m", 2_000));
+
+        assertThat(SortedRouting.speculativePlan(index, key("a"), null, 1_001)).isNull();
+    }
+
+    @Test
+    void declinesToSpeculateOnTheLastRowGroupBecauseNoTighterBoundExists() {
+        List<IndexEntry> index = List.of(rg(F1, 0, "a", 260_000));
+
+        assertThat(SortedRouting.speculativePlan(index, key("a"), null, 1_001)).isNull();
+    }
+
+    @Test
+    void speculativeBoundStillYieldsToATighterCallerWindow() {
+        List<IndexEntry> index = List.of(
+                rg(F1, 0, "a", 260_000), rg(F1, 1, "m", 260_000), rg(F1, 2, "s", 260_000));
+
+        SortedRouting.QueryPlan speculative =
+                SortedRouting.speculativePlan(index, key("a"), key("c"), 1_001);
+
+        // The caller's own prefix bound is tighter than the row group's end; it wins.
+        assertThat(bytes(speculative.upperBound())).isEqualTo("c");
+    }
+
+    @Test
     void upperBoundIsTheSmallestBoundaryHoldingAtLeastLimitRowsAcrossShortGroups() {
         // Four two-row groups in one file: a,c,e,g. from="a" (in rg0), limit=3.
         List<IndexEntry> index = List.of(

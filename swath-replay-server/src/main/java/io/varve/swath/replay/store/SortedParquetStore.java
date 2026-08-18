@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -141,20 +142,57 @@ public final class SortedParquetStore implements ListingStore {
         if (plan.isEmpty()) {
             return List.of();
         }
+        SortedRouting.QueryPlan speculative = SortedRouting.speculativePlan(index, from, toExclusive, limit);
+        if (speculative != null && Objects.equals(speculative.upperBound(), plan.upperBound())) {
+            // The caller's own window already bounds at or inside the group end; nothing to gain.
+            speculative = null;
+        }
         Connection connection = pool.borrow();
         try {
             if (!recordPageReadLatency) {
-                return query(connection, plan.files(), from, fromInclusive, plan.upperBound(), limit, projection);
+                return readSpeculatively(connection, speculative, plan, from, fromInclusive, limit, projection);
             }
             var sample = metrics.startPageReadTimer();
             try {
-                return query(connection, plan.files(), from, fromInclusive, plan.upperBound(), limit, projection);
+                return readSpeculatively(connection, speculative, plan, from, fromInclusive, limit, projection);
             } finally {
                 metrics.recordPageRead(sample);
             }
         } finally {
             pool.release(connection);
         }
+    }
+
+    /**
+     * Reads the speculative window first and widens to the invariant one only if it came up short.
+     *
+     * <p>The gamble is sound because a tighter upper bound returns a prefix of what a looser one
+     * would: a full-count result is byte-identical to the invariant read, and a short one is the
+     * only signal that needs acting on. Correctness therefore never depends on the guess, only cost
+     * does — a widened read costs one wasted query, a hit saves a whole row group's decode.
+     */
+    private List<ListedObject> readSpeculatively(Connection connection, SortedRouting.QueryPlan speculative,
+                                                 SortedRouting.QueryPlan plan, ByteKey from,
+                                                 boolean fromInclusive, int limit, Projection projection) {
+        if (speculative == null) {
+            metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_DECLINED);
+            return query(connection, plan.files(), from, fromInclusive, speculativeUpper(speculative, plan),
+                    limit, projection);
+        }
+        List<ListedObject> rows = query(connection, speculative.files(), from, fromInclusive,
+                speculative.upperBound(), limit, projection);
+        if (rows.size() >= limit) {
+            metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_HIT);
+            return rows;
+        }
+        // Short: either the group's tail really did run out before `limit`, or the listing ends
+        // here. The invariant window is the only one that can tell those apart, so re-read it.
+        metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_WIDENED);
+        return query(connection, plan.files(), from, fromInclusive, plan.upperBound(), limit, projection);
+    }
+
+    private static ByteKey speculativeUpper(SortedRouting.QueryPlan speculative, SortedRouting.QueryPlan plan) {
+        return speculative == null ? plan.upperBound() : speculative.upperBound();
     }
 
     /**
