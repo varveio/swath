@@ -12,6 +12,7 @@ import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.protocol.Successor;
 import io.varve.swath.replay.server.ReplayMetrics;
 import io.varve.swath.sort.RowGroupOrderException;
+import io.varve.swath.sort.SortedRangeReader;
 import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -26,8 +27,10 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -85,10 +88,23 @@ import java.util.Set;
  */
 public final class SortedParquetStore implements ListingStore {
 
+    /**
+     * Whether a range read is answered by Parquet's own page index ({@link SortedRangeReader}) rather
+     * than by a bounded DuckDB {@code read_parquet} query. On by default; set
+     * {@code -Dswath.replay.sorted.range-reads=duckdb} to serve them the old way.
+     *
+     * <p>The switch exists because the two paths must be able to answer the same request in the same
+     * process for the differential suites to mean anything — and because a serving path this new
+     * should have a way back that does not require a release.
+     */
+    private static final boolean PARQUET_RANGE_READS =
+            !"duckdb".equalsIgnoreCase(System.getProperty("swath.replay.sorted.range-reads", "parquet"));
+
     private final List<IndexEntry> index;
     private final DuckDbConnectionPool pool;
     private final ReplayMetrics metrics;
     private final boolean recordPageReadLatency;
+    private final Map<Path, SortedRangeReader> rangeReaders;
 
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
         this(files, index, metrics, defaultConnectionCount());
@@ -123,6 +139,7 @@ public final class SortedParquetStore implements ListingStore {
         validateIndexWithinFiles(this.index, files);
         this.metrics = metrics;
         this.recordPageReadLatency = recordPageReadLatency;
+        this.rangeReaders = PARQUET_RANGE_READS ? openRangeReaders(files) : Map.of();
         List<Connection> pooled = openPool(connectionCount);
         this.pool = new DuckDbConnectionPool(pooled,
                 "interrupted waiting for a sorted Parquet connection",
@@ -141,6 +158,17 @@ public final class SortedParquetStore implements ListingStore {
         SortedRouting.QueryPlan plan = SortedRouting.plan(index, from, toExclusive, limit);
         if (plan.isEmpty()) {
             return List.of();
+        }
+        if (!rangeReaders.isEmpty()) {
+            if (!recordPageReadLatency) {
+                return rangeRead(from, fromInclusive, toExclusive, limit, projection);
+            }
+            var readerSample = metrics.startPageReadTimer();
+            try {
+                return rangeRead(from, fromInclusive, toExclusive, limit, projection);
+            } finally {
+                metrics.recordPageRead(readerSample);
+            }
         }
         SortedRouting.QueryPlan speculative = SortedRouting.speculativePlan(index, from, toExclusive, limit);
         if (speculative != null && Objects.equals(speculative.upperBound(), plan.upperBound())) {
@@ -193,6 +221,68 @@ public final class SortedParquetStore implements ListingStore {
 
     private static ByteKey speculativeUpper(SortedRouting.QueryPlan speculative, SortedRouting.QueryPlan plan) {
         return speculative == null ? plan.upperBound() : speculative.upperBound();
+    }
+
+    /**
+     * A range read answered by the Parquet page index, file by file in key order.
+     *
+     * <p>No upper-bound routing is needed here, and that is the point: the invariant bound exists to
+     * stop DuckDB scanning to the end of the file, whereas this reader stops as soon as it has
+     * {@code limit} rows and skips pages the index rules out. Only the caller's own {@code
+     * toExclusive} is passed down, because that one is part of the answer rather than a performance
+     * device.
+     *
+     * <p>A rolled multi-file fixture is range-partitioned in file order, so reading the files in
+     * index order and concatenating preserves global key order; only the first file starts at {@code
+     * from}, every later one starts at its own beginning.
+     */
+    private List<ListedObject> rangeRead(ByteKey from, boolean fromInclusive, ByteKey toExclusive,
+                                         int limit, Projection projection) {
+        byte[] lower = from == null ? null : from.toByteArray();
+        byte[] upper = toExclusive == null ? null : toExclusive.toByteArray();
+        boolean inclusive = fromInclusive;
+        List<ListedObject> out = new ArrayList<>(Math.min(limit, 1024));
+        Path previous = null;
+        int rows = 0;
+        boolean success = false;
+        var sample = metrics.startParquetQueryTimer();
+        try {
+            for (int rg = SortedRouting.startRowGroup(index, from); rg < index.size() && out.size() < limit; rg++) {
+                Path file = index.get(rg).file();
+                if (file.equals(previous)) {
+                    continue;   // the index is per row group; the reader works a whole file at a time
+                }
+                previous = file;
+                for (SortedRowGroupReader.ObjectRow row :
+                        rangeReaders.get(file).range(lower, inclusive, upper, limit - out.size(),
+                                projection.owner())) {
+                    out.add(new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
+                            row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
+                            row.checksumAlgorithm(), row.checksumType()));
+                }
+                lower = null;
+                inclusive = true;
+            }
+            rows = out.size();
+            success = true;
+            return out;
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to range-read the sorted Parquet fixture", e);
+        } finally {
+            metrics.recordParquetQuery(sample, rows, success);
+        }
+    }
+
+    private static Map<Path, SortedRangeReader> openRangeReaders(List<Path> files) {
+        Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
+        try {
+            for (Path file : files) {
+                readers.put(file, new SortedRangeReader(file));
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to open a sorted Parquet range reader", e);
+        }
+        return Map.copyOf(readers);
     }
 
     /**

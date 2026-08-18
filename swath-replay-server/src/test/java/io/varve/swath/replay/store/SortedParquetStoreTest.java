@@ -438,9 +438,16 @@ class SortedParquetStoreTest {
      * the buggy count would (every row, object or not) in three "row groups": {a0}=1, the b-run=9,
      * the c-run=9. Requesting {@code limit=9} (maxKeys=8) from the start: the invariant accumulates the
      * b-run's rowCount (9) and stops there, bounding the query at {@code c0} — but only ONE real
-     * OBJECT row (a0) lies below that bound, so the store returns just 1 row where a correct
+     * OBJECT row (a0) lies below that bound, so the DuckDB path returned just 1 row where a correct
      * (OBJECT-count-based) invariant would have returned 9 — silent truncation of the 9 real objects
      * (c0..c8) that exist just past the wrongly-tight bound.
+     *
+     * <p><b>The page-index range reader does not have this defect</b>, and the reason is structural
+     * rather than lucky: the invariant bound exists to stop a SQL scan running to the end of the
+     * file, so its correctness rests on the index's row counts being right. The reader has no such
+     * bound — it reads forward from the file the index points at and stops when it holds {@code
+     * limit} rows — so the index can miscount freely without truncating anything. This test now pins
+     * that immunity. The truncation above remains real for {@code -Dswath.replay.sorted.range-reads=duckdb}.
      */
     @Test
     void redCase_mixedRowTypeIndexUndercountsRowsAndSilentlyTruncates(@TempDir Path dir) throws IOException {
@@ -465,9 +472,12 @@ class SortedParquetStoreTest {
 
         try (SortedParquetStore store = new SortedParquetStore(List.of(file), corruptedIndex, new ReplayMetrics(), 1)) {
             List<ListedObject> rows = store.rows(null, true, null, 9, Projection.KEYS_ONLY);   // maxKeys=8, limit=9
-            // The bug: only "a0" comes back, even though 9 more OBJECT rows (c0..c8) exist in the file.
-            assertThat(keyStrings(rows)).containsExactly("a0");
-            assertThat(rows.size()).isLessThan(9);
+            // The page-index range reader is immune to the miscount, because it never asks the index
+            // how many rows a bound must span -- it reads forward from the file the index points at
+            // and stops once it holds `limit` OBJECT rows. The nine real objects come back, and the
+            // nine COMMON_PREFIX rows are dropped on row_type rather than served as objects.
+            assertThat(keyStrings(rows))
+                    .containsExactly("a0", "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7");
         }
     }
 

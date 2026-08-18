@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import org.apache.parquet.column.ColumnDescriptor;
@@ -297,16 +298,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
             List<ObjectRow> out = new ArrayList<>((int) rowCount);
             for (long i = 0; i < rowCount; i++) {
                 Group g = rowReader.read();
-                out.add(new ObjectRow(
-                        g.getBinary(KEY_FIELD, 0).getBytes(),
-                        optLong(g, "size"),
-                        optLong(g, "last_modified"),
-                        optString(g, "etag"),
-                        optString(g, "storage_class"),
-                        includeOwner ? optString(g, "owner_id") : null,
-                        includeOwner ? optString(g, "owner_display_name") : null,
-                        optString(g, "checksum_algorithm"),
-                        optString(g, "checksum_type")));
+                out.add(toObjectRow(g, g.getBinary(KEY_FIELD, 0).getBytes(), includeOwner));
             }
             return out;
         }
@@ -315,6 +307,55 @@ public final class SortedRowGroupReader implements AutoCloseable {
     @Override
     public void close() throws IOException {
         reader.close();
+    }
+
+    /**
+     * The listing projection over {@code full}, with or without the owner columns — shared with
+     * {@link SortedRangeReader} so the two readers cannot drift on which columns a served row has.
+     */
+    static MessageType objectProjection(MessageType full, boolean includeOwner) {
+        return objectProjection(full, includeOwner, false);
+    }
+
+    /**
+     * As {@link #objectProjection(MessageType, boolean)}, optionally carrying {@code row_type}.
+     *
+     * <p>{@link SortedRangeReader} needs it: sorted-serving eligibility is supposed to guarantee
+     * every row group is pure {@code OBJECT}, but a reader that trusts that guarantee absolutely
+     * would serve a rolled-up common prefix as though it were an object on any fixture where the
+     * guarantee slipped. Decoding one more column is the cost of not doing that.
+     */
+    static MessageType objectProjection(MessageType full, boolean includeOwner, boolean includeRowType) {
+        String[] fields = includeOwner ? OBJECT_FIELDS_WITH_OWNER : OBJECT_FIELDS_WITHOUT_OWNER;
+        if (includeRowType) {
+            String[] withRowType = Arrays.copyOf(fields, fields.length + 1);
+            withRowType[fields.length] = ROW_TYPE_FIELD;
+            fields = withRowType;
+        }
+        return project(full, fields);
+    }
+
+    /** The value {@code row_type} carries for a listed object, as opposed to a rolled-up prefix. */
+    static final String OBJECT_ROW_TYPE = "OBJECT";
+
+    static final String ROW_TYPE_FIELD = "row_type";
+
+    /**
+     * Maps one decoded record to an {@link ObjectRow}. Shared with {@link SortedRangeReader} for the
+     * same reason as {@link #objectProjection}: two readers feeding the same serving path must agree
+     * on every field, including which ones an owner-less projection nulls out.
+     */
+    static ObjectRow toObjectRow(Group g, byte[] key, boolean includeOwner) {
+        return new ObjectRow(
+                key,
+                optLong(g, "size"),
+                optLong(g, "last_modified"),
+                optString(g, "etag"),
+                optString(g, "storage_class"),
+                includeOwner ? optString(g, "owner_id") : null,
+                includeOwner ? optString(g, "owner_display_name") : null,
+                optString(g, "checksum_algorithm"),
+                optString(g, "checksum_type"));
     }
 
     private static MessageType project(MessageType full, String... fields) {
