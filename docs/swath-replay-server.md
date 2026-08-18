@@ -158,6 +158,15 @@ returned common prefix, which a network proxy cannot infer. Jitter is derived fr
 bytes, so the same request gets the same delay. `prod-commoncrawl` is a built-in reference
 profile. Injection is off by default.
 
+### The delay is a deadline, not a surcharge
+
+Injected latency is the request's total target time. After serving the page, the server
+waits only for the remainder, so the client observes `max(server_cost, profile)`, not
+`server_cost + profile`. Requests that exceed their profile increment
+`swath.replay.inject.overrun{shape}` and record the excess in
+`swath.replay.inject.overrun.ms{shape}`; a run with material overruns measured the replay
+server rather than the intended profile.
+
 ### Compressed time (`--latency-scale`)
 
 `--latency-scale N` divides every injected base and `/cp` delay by `N`:
@@ -232,6 +241,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens` | Rollup vs walk and skip-scan I/O. |
 | `page.read.latency`, `fixture.list.latency` | Store read and complete pager operation. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
+| `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are

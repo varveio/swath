@@ -198,6 +198,27 @@ public final class ReplayMetrics {
     }
 
     /**
+     * Records one request the server could not serve within its injected latency profile, tagged
+     * with the request's shape, plus how far past the profile it went.
+     *
+     * <p>This is the fairness gate for any benchmark run against an injected profile. While the
+     * server is faster than the backend it imitates, every client observes exactly the profile and
+     * the server is invisible. Once it is slower, the client observes the server instead — and it
+     * does so unevenly, because server cost depends on the access pattern the client happens to
+     * have. A run whose overruns are a negligible fraction of its requests measured what it meant
+     * to; a run full of them measured the harness. Only a counter can tell those apart after the
+     * fact, and the server that could have said so is usually gone by then.
+     */
+    public void recordInjectionOverrun(ShapeLatency.Shape shape, long overshootNanos) {
+        String tag = shape.name().toLowerCase(Locale.ROOT);
+        Counter.builder("swath.replay.inject.overrun")
+                .tag("shape", tag).register(registry).increment();
+        DistributionSummary.builder("swath.replay.inject.overrun.ms")
+                .tag("shape", tag).register(registry)
+                .record(overshootNanos / 1_000_000.0);
+    }
+
+    /**
      * Records one request-time refusal of a fixture the sorted path cannot serve, tagged with the
      * typed reason ({@code row_group_disorder}: a row group's own rows are not in ascending order,
      * which eligibility cannot see because it proves the ascent of row-group <em>first</em> keys
