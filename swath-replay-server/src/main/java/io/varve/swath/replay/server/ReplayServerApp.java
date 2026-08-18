@@ -60,17 +60,26 @@ public final class ReplayServerApp implements Callable<Integer> {
                 ? options.parquetConnections : DuckDbListingStore.defaultConnectionCount();
         ShapeLatency injected =
                 ShapeLatency.parse(options.injectLatency, options.latencyJitter, options.latencyScale);
+        long startedNanos = System.nanoTime();
         try (ReplayServer server = injected == null
                 ? new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode)
                 : new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode,
                         injected)) {
             server.start();
-            System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
-                            + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s%n",
-                    options.host, server.port(), bucket, fixture.toAbsolutePath(),
-                    server.resolvedServingMode(), connections,
-                    injected == null ? "off" : options.injectLatency, options.latencyScale);
-            server.join();
+            // Opened after the fixture is served, so a reader that can reach /metrics knows the
+            // index derive is already done and the numbers it reads are serving numbers.
+            try (MetricsEndpoint metrics = options.metricsPort < 0 ? null
+                    : MetricsEndpoint.start(options.host, options.metricsPort, server.metrics().registry(),
+                            server.resolvedServingMode().toString(), startedNanos)) {
+                System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
+                                + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
+                                + "metrics_endpoint=%s%n",
+                        options.host, server.port(), bucket, fixture.toAbsolutePath(),
+                        server.resolvedServingMode(), connections,
+                        injected == null ? "off" : options.injectLatency, options.latencyScale,
+                        metrics == null ? "off" : "http://%s:%d/metrics".formatted(options.host, metrics.port()));
+                server.join();
+            }
         }
         return 0;
     }

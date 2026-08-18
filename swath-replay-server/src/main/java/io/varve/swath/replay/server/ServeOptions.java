@@ -31,6 +31,13 @@ final class ServeOptions {
                     + "sorted (require a sorted fixture, fail otherwise), duckdb (force role-1 oracle).")
     ServingMode servingMode;
 
+    @Option(names = "--metrics-port", defaultValue = "-1",
+            description = "Serve this server's own meters as JSON on a second port (GET /metrics, "
+                    + "GET /healthz). Negative disables it (the default); 0 binds a free port, "
+                    + "reported in the startup line. A scrape never touches the serving path, so "
+                    + "reading the metrics cannot perturb them.")
+    int metricsPort;
+
     @Option(names = "--inject-latency", paramLabel = "SPEC",
             description = "Per-request-shape fault latency: 'prod-commoncrawl' or a "
                     + "shape=delay list (worker_page|pivot_probe|structure_probe; e.g. "

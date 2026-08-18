@@ -85,6 +85,49 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
 
+## Reading a running server's meters (`--metrics-port`)
+
+`serve` keeps every meter in the table under "Metrics And Tuning" below, but a
+long-running server has no `bench` report to print them into. `--metrics-port`
+exposes them over HTTP for as long as the server runs:
+
+```bash
+swath-replay-server serve ... --metrics-port 19192
+
+curl -s http://127.0.0.1:19192/metrics | jq .
+```
+
+Two paths and nothing else: `GET /metrics` returns the whole registry as JSON,
+`GET /healthz` returns `ok` once the server is listening — which is also the
+readiness signal to poll before starting a client, since a large fixture's index
+derive is not instant. A negative port (the default) disables the endpoint; `0`
+binds a free port and reports it in the startup line, which carries
+`metrics_endpoint=` whenever the endpoint is on.
+
+The payload is `{schema_version, serving_mode, uptime_ms, sampled_at_epoch_ms,
+meters[]}`. Each meter carries its `name`, `type` (`timer`, `counter`,
+`distribution`, `gauge`), and `tags`; a timer adds `count`, `sum_ms`, `mean_ms`,
+`max_ms`, `p50_ms`, `p99_ms` — the same values `bench` reports, read the same
+way, so a scrape and a bench report of the same run agree. Meters are emitted in
+a stable order so two scrapes diff cleanly, and `uptime_ms` lets a reader bound
+an interval without trusting its own clock against the server's.
+
+**It is a second port on purpose.** A scrape never enters the serving path: it
+takes no read permit, receives no injected latency, and increments no request
+counter, so polling cannot perturb what it measures — and it still answers while
+every serving thread is parked in an injected sleep, which is exactly when an
+answer is most wanted. Its thread pool is deliberately tiny (4), because taxing
+the box to answer a diagnostic would tax the measurement the diagnostic exists
+to validate.
+
+**Poll it; do not wait for shutdown.** There is no dump-on-exit, by design: a
+server run as a sidecar is typically *killed* when the process it serves exits
+(GCP Batch's background runnables work exactly this way), so anything written on
+shutdown is written by a code path that may never run. Scrape before a measured
+window opens, poll through it, and scrape again at the end — the series is what
+shows whether the server stayed out of the way, which a single aggregate at the
+end cannot.
+
 `delimiter=/` uses a native skip-scan that advances past each returned common prefix and
 stops at `max-keys`; other delimiter shapes use the ordinary range walk. If a stepped row
 group proves internally disordered, sorted mode returns `500 InternalError` and increments
