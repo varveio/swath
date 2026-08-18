@@ -11,6 +11,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -172,6 +173,28 @@ public final class ReplayMetrics {
     public void recordPrefetchMiss(String reason) {
         Counter.builder("swath.replay.prefetch.window.miss")
                 .tag("reason", reason).register(registry).increment();
+    }
+
+    /**
+     * Records the server's own cost of serving one request, tagged with the request's
+     * {@link ShapeLatency.Shape shape} — {@code worker_page}, {@code pivot_probe} or
+     * {@code structure_probe}, the same three the latency injector keys on.
+     *
+     * <p>The shapes cost wildly different amounts to serve and are issued in wildly different
+     * proportions by different clients: a work-stealing scan probes constantly, a sequential pager
+     * only ever asks for worker pages. An untagged average over that mixture describes no client in
+     * particular, and moves when the client's mixture moves rather than when the server does — which
+     * is exactly the wrong behavior for a number whose job is to prove the server was not the
+     * bottleneck.
+     *
+     * <p>Timed around the fixture read and <b>excluding</b> any injected delay: this measures what
+     * the server costs, not what it was told to pretend to cost.
+     */
+    public void recordShapedRequest(Timer.Sample sample, ShapeLatency.Shape shape) {
+        sample.stop(Timer.builder("swath.replay.request.latency")
+                .tag("shape", shape.name().toLowerCase(Locale.ROOT))
+                .publishPercentiles(0.5, 0.99)
+                .register(registry));
     }
 
     /**

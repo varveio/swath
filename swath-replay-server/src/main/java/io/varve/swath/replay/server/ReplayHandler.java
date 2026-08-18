@@ -110,6 +110,10 @@ final class ReplayHandler extends Handler.Abstract {
 
     private S3ListResult boundedList(S3ListRequest listRequest) {
         S3ListResult result;
+        // Started before the permit wait, unlike page.read.latency: what a client experiences from a
+        // saturated server includes queueing for a connection, and this timer is the one asked
+        // whether the server kept out of the way.
+        var shaped = metrics.startTimer();
         if (readPermits == null) {
             result = fixture.list(listRequest);
         } else {
@@ -125,6 +129,9 @@ final class ReplayHandler extends Handler.Abstract {
                 readPermits.release();
             }
         }
+        // Stopped before the injected sleep, so the meter reports the server's own cost and never
+        // the delay it was configured to pretend to.
+        metrics.recordShapedRequest(shaped, ShapeLatency.classify(listRequest));
         sleepFor(latency.apply(listRequest, result));
         return result;
     }

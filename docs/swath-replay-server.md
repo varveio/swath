@@ -112,6 +112,10 @@ way, so a scrape and a bench report of the same run agree. Meters are emitted in
 a stable order so two scrapes diff cleanly, and `uptime_ms` lets a reader bound
 an interval without trusting its own clock against the server's.
 
+Read server headroom from `swath.replay.request.latency{shape}` per request shape,
+against the injected profile for that same shape. A pooled average would hide the
+important case because clients issue different mixtures of differently priced requests.
+
 **It is a second port on purpose.** A scrape never enters the serving path: it
 takes no read permit, receives no injected latency, and increments no request
 counter, so polling cannot perturb what it measures — and it still answers while
@@ -227,6 +231,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens` | Rollup vs walk and skip-scan I/O. |
 | `page.read.latency`, `fixture.list.latency` | Store read and complete pager operation. |
+| `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are

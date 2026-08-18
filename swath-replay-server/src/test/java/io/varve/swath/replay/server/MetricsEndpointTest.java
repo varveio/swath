@@ -60,6 +60,27 @@ class MetricsEndpointTest {
     }
 
     @Test
+    void separatesRequestLatencyByShape() throws Exception {
+        try (ReplayServer server = server()) {
+            server.start();
+            try (MetricsEndpoint endpoint = MetricsEndpoint.start("127.0.0.1", 0,
+                    server.metrics().registry(), "sorted", System.nanoTime())) {
+
+                HttpProbe.response(server, "/bucket?list-type=2");                    // worker page
+                HttpProbe.response(server, "/bucket?list-type=2&max-keys=1");         // pivot probe
+                HttpProbe.response(server, "/bucket?list-type=2&delimiter=%2F");      // structure probe
+                String body = scrape(endpoint, "/metrics");
+
+                // One timer per shape, so an average is never taken over a mixture that belongs to
+                // the client rather than to the server.
+                assertThat(body).contains("\"shape\":\"worker_page\"");
+                assertThat(body).contains("\"shape\":\"pivot_probe\"");
+                assertThat(body).contains("\"shape\":\"structure_probe\"");
+            }
+        }
+    }
+
+    @Test
     void answersHealthzAndRefusesAnythingElse() throws Exception {
         try (ReplayServer server = server()) {
             server.start();
