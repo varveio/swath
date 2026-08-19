@@ -164,19 +164,16 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * can hold {@code from} — every page before it is neither read nor decoded — and carrying only
      * the pages that can hold a key below {@code toExclusive}.
      *
-     * <p><b>Why a whole-group cursor was the wrong shape.</b> {@link #openKeyCursor(int)} starts at
-     * row 0 and {@link KeyCursor#advanceTo} walks forward to the target, decoding every key it steps
-     * over. A row group holds hundreds of thousands of rows, so a skip-scan hop landing in the middle
-     * of one paid for half a row group's keys to answer a question about one — and paid it again for
-     * the next group. Parquet's page index answers "which page can hold this key" from the footer
-     * alone, which is the same question at a hundredth of the cost.
+     * <p>{@link #openKeyCursor(int)} starts at row 0 and {@link KeyCursor#advanceTo} walks forward,
+     * decoding every key it steps over; a hop landing in the middle of a row group therefore paid for
+     * half of it to answer a question about one row, and paid again in the next group. The page index
+     * answers "which page can hold this key" from the footer.
      *
-     * <p>The cursor keeps every property the skip-scan relies on: it is still forward-only and still
-     * resumable, so a later hop landing in the same page run costs only the rows between the two
-     * positions, and {@link KeyCursor#position()} still reports a row index within the row group
-     * (the surviving pages are contiguous from the first, so the offset is exact). The page filter
-     * prunes pages, never rows, so the first surviving page normally holds rows before {@code from}
-     * — {@code advanceTo} steps past them exactly as it always did.
+     * <p>Every property the skip-scan relies on survives: still forward-only and still resumable, so
+     * a later hop in the same page run costs only the rows between the two positions, and {@link
+     * KeyCursor#position()} still reports a row index within the row group. The page filter prunes
+     * pages, never rows, so the first surviving page normally holds rows below {@code from} —
+     * {@code advanceTo} steps past them as it always did.
      *
      * @param from        lower bound to position at; {@code null} opens at the group's first row
      * @param inclusive   whether {@code from} itself qualifies
@@ -203,16 +200,12 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * Loads the next window of at most {@link KeyCursor#WINDOW_ROWS} rows of {@code eligible} starting
      * at page {@code fromPage}, or {@code null} once no eligible page is left.
      *
-     * <p>Whole pages, because a page is what Parquet can address; the window is a row budget only so
-     * that "a few pages" means the same thing whatever the pages hold.
-     *
-     * <p><b>A window is always a contiguous run of pages</b>, so that {@code firstRow + rows} is a row
-     * index and {@link KeyCursor#position()} keeps meaning what it says. A pruned page in the middle
-     * of a window would break that silently — the cursor would report a position short of the true
-     * one by the gap. Ending the window at a gap instead costs nothing: the next window re-seats the
-     * position at its own first row, which is how the cursor already crosses a boundary. (With the
-     * ascending-pages guard a range predicate cannot produce an interior gap at all; this keeps the
-     * arithmetic true rather than true-by-argument.)
+     * <p>Whole pages, because a page is what Parquet can address; the row budget only makes "a few
+     * pages" mean the same thing whatever the pages hold. A window is always a <b>contiguous</b> run
+     * of pages, so that {@code firstRow + rows} is a row index and {@link KeyCursor#position()} keeps
+     * meaning what it says — a pruned page mid-window would skew it by the gap, silently. Ending the
+     * window at a gap costs nothing, since the next window re-seats the position at its own first row
+     * anyway.
      */
     private Window loadWindow(int blockIndex, RowRanges eligible, OffsetIndex offsets, long rowCount,
                               int fromPage) throws IOException {
@@ -262,23 +255,17 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * Refuses a row group whose key column's <b>pages</b> are not in ascending order, before a single
      * row of it is read.
      *
-     * <p><b>The per-row ascent check is no longer sufficient on its own.</b> That check proves what it
-     * steps over, and it was sufficient while a cursor read the whole row group. A cursor that prunes
-     * pages by the page index never reads the pages it prunes — and on a disordered group the page
-     * index is exactly what misleads it: a page whose keys sort below the target has a {@code max}
-     * below the target too, so it is pruned, and the rows in it are dropped from the listing without
-     * anything reading them and without anything to check. Measured on a deliberately disordered
-     * three-page group: the whole-group cursor threw at the offending row; the pruning cursor returned
-     * a listing quietly missing a third of the group.
+     * <p>The per-row ascent check proves what it steps over, which was everything while a cursor read
+     * the whole row group. A cursor that prunes pages never reads the pages it prunes — and on a
+     * disordered group the page index is what misleads it: a page whose keys sort below the target
+     * has a {@code max} below the target too, so it is pruned, and its rows leave the listing with
+     * nothing having read them and nothing to check.
      *
-     * <p>Parquet already computes this: {@code BoundaryOrder} over the column index's per-page
-     * min/max. It is a footer read, already cached per (reader, row group), and it costs no I/O per
-     * request. It is <em>complementary</em> to the per-row check, not a replacement — a single page
-     * is trivially "ascending" whatever its rows do, and disorder inside a page is caught where it
-     * always was, by the rows being read.
-     *
-     * <p>A column index that is absent at all is not disorder and is not reported as such: this
-     * declines to judge, and the read fails on the offset index it also needs.
+     * <p>Parquet already computes this as {@code BoundaryOrder} over the column index's per-page
+     * min/max: a footer read, cached per row group, no I/O per request. It is <em>complementary</em>
+     * to the per-row check — a single page is trivially ascending whatever its rows do, so disorder
+     * inside a page is still caught by the rows being read. An absent column index is not disorder
+     * and is not reported as one; the read then fails on the offset index it also needs.
      */
     private static void requirePagesAscend(ColumnIndexStore indexStore, Path file, int blockIndex) {
         ColumnIndex keyIndex = indexStore.getColumnIndex(KEY_COLUMN_PATH);
@@ -333,12 +320,9 @@ public final class SortedRowGroupReader implements AutoCloseable {
         /**
          * Rows a single load pulls in.
          *
-         * <p>The cursor used to load its whole row group. That was invisible while a row group was
-         * one or two dozen pages; once a served fixture writes pages a listing page wide, a 400,000-row
-         * group is several hundred of them, and a hop that wants one key was reading every one — a
-         * root-level rollup measured most of its cost there. A few pages is what a hop actually
-         * consumes, and a scan that consumes more just loads the next window; nothing about the
-         * cursor's contract changes, only how much it reads ahead of being asked.
+         * <p>The cursor used to load its whole row group, which was invisible while a group was a
+         * dozen pages and is not once a served fixture writes pages a listing page wide. A few pages
+         * is what a hop consumes; a scan that consumes more just loads the next window.
          */
         static final long WINDOW_ROWS = 8192;
 

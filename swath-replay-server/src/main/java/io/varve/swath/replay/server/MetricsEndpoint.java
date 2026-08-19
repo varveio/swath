@@ -22,11 +22,10 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
  * A read-only HTTP surface over a running {@code serve}'s meters: {@code GET /metrics} answers the
  * whole registry as JSON, {@code GET /healthz} answers {@code ok} once the server is listening.
  *
- * <p><b>Why an endpoint and not a report file.</b> The consumer is a benchmark harness that runs the
- * server as a sidecar and the tool under test as the foreground process. When the tool exits the
- * sidecar is <em>killed</em>, not asked to stop — GCP Batch's background runnables work exactly this
- * way — so anything written on shutdown is written by a code path that may never run. A scrape the
- * harness pulls while the run is still alive survives any death the server suffers afterwards.
+ * <p><b>Why an endpoint and not a report file.</b> Run as a sidecar, this server is typically
+ * <em>killed</em> when the process it serves exits, rather than asked to stop — so anything written
+ * on shutdown is written by a code path that may never run. A scrape taken while the run is alive
+ * survives any death the server suffers afterwards.
  *
  * <p><b>Why a second port.</b> Scraping must not be observable in what is being measured. On its own
  * connector a scrape never enters the serving path: it takes no read permit, receives no injected

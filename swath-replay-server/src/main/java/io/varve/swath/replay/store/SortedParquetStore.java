@@ -42,30 +42,22 @@ import java.util.concurrent.BlockingQueue;
  * <h2>Why not a query engine</h2>
  * This store used to answer a range read with a bounded {@code read_parquet} query, and DuckDB does
  * not consume the Parquet ColumnIndex/OffsetIndex for a {@code WHERE + ORDER BY + LIMIT} shape — an
- * {@code EXPLAIN ANALYZE} gate measured rows-scanned equal to the full spanned row groups, with zero
+ * {@code EXPLAIN ANALYZE} gate measured rows scanned equal to the full spanned row groups, with zero
  * slack. A row group holds hundreds of thousands of rows and a listing page asks for about a
- * thousand, so a cold page decoded most of a row group to return a fraction of a percent of it. That
- * path is gone; a single reader serves every range read, and the DuckDB store survives only as the
- * role-1 store for fixtures that cannot be served sorted at all.
+ * thousand, so a cold page decoded most of a row group to return a fraction of a percent of it.
+ * {@link DuckDbListingStore} survives as the role-1 store for fixtures that cannot be served sorted
+ * at all.
  *
- * <h2>What a cold page costs, and why</h2>
- * A bounded read decodes, per column, at least one whole <b>page</b> — the page index prunes pages,
- * never rows, and every encoding a page carries decodes strictly forward. Three things follow, and
- * all three are load-bearing:
- * <ul>
- *   <li>The <b>read is bounded to the rows the answer can need</b> ({@link
- *       SortedRangeReader#range}). A listing page has no upper key bound to state, so the page filter
- *       alone selects every page from the seek to the end of the row group.</li>
- *   <li>The fixture is <b>written with pages a listing page wide</b> ({@code
- *       SortConfig#DEFAULT_FINAL_PAGE_ROWS}), not parquet's 20,000-row default.</li>
- *   <li>The fixture is written with <b>small dictionaries</b> ({@code
- *       ListEntryParquetWriters#SERVED_DICTIONARY_BYTES}), because a dictionary is decoded in full
- *       before its column yields a single value.</li>
- * </ul>
- * Together those took a cold 1,000-key page on a 788,903-row fixture from 21.7 ms to ~4 ms, and made
- * the cost scale with the answer's size instead of being flat in it. An old fixture still serves
- * correct answers — the geometry is a Parquet-internal choice, not a format change — it just does not
- * get the write-side share of that until it is re-sorted.
+ * <h2>What a cold page costs</h2>
+ * A bounded read decodes at least one whole <b>page</b> per column, because the page index prunes
+ * pages and a page's encodings decode strictly forward. Three things follow, all load-bearing: the
+ * read is bounded to the rows the answer can need ({@link SortedRangeReader#range}, since a listing
+ * page states no upper key bound); the fixture is written with pages a listing page wide ({@code
+ * SortConfig#DEFAULT_FINAL_PAGE_ROWS}); and it is written with small dictionaries ({@code
+ * ListEntryParquetWriters#SERVED_DICTIONARY_BYTES}), a dictionary being decoded in full before its
+ * column yields a value. Together they make a page's cost scale with the answer rather than being
+ * flat in it. An older fixture still serves correct answers — the geometry is a Parquet-internal
+ * choice, not a format change — and picks up the write-side share when it is next sorted.
  *
  * <p>Edge cases are first-class: an <b>empty fixture</b> (no row groups ⇒ empty index) returns no
  * rows; a {@code from} <b>before the first key</b> starts at row group 0; and a range that lies
@@ -84,8 +76,8 @@ import java.util.concurrent.BlockingQueue;
  * <p>Row groups are addressed by the routing index and never scanned for, so a read touches no group
  * before the one it starts in. Readers are pooled because a Parquet reader carries mutable per-read
  * state; the pool width is the store's request-concurrency bound. This class caches no decoded rows;
- * {@link WindowedListingStore} may still wrap it to amortize sequential pages, but at ~4 ms a cold
- * page that is a much smaller difference than it was when a page cost 200 ms.
+ * {@link WindowedListingStore} may still wrap it to amortize sequential pages, though that buys much
+ * less than it did when a cold page cost two orders of magnitude more.
  *
  * <h2>The {@code delimiter=/} skip-scan</h2>
  * {@link #delimitedRollup} answers a rollup as a series of index hops against the row-group routing
@@ -150,13 +142,10 @@ public final class SortedParquetStore implements ListingStore {
      *
      * <p>This used to mirror {@link DuckDbListingStore#defaultConnectionCount()}, a CPU-bounded
      * {@code min(4, cores)}. That was right when a pooled slot was a DuckDB connection, which owns a
-     * thread pool and is a CPU resource; it is wrong now that a slot is a Parquet file handle plus its
-     * decoded footer. Decoding is still CPU work, so there is nothing to gain from many multiples of
-     * the core count — but a request stalled on a page the OS has not got cached should not also be
-     * holding the only slot on a small machine, and 4 was a low ceiling for that on any box.
-     *
-     * <p>Kept a small multiple of the cores rather than an arbitrary constant, with a floor of 8 so a
-     * 2-vCPU box (the colocated-sidecar shape) has headroom, and a ceiling so a large machine does not
+     * thread pool; it is wrong now that a slot is a Parquet file handle plus its decoded footer.
+     * Decoding is still CPU work, so many multiples of the core count buy nothing — but a request
+     * stalled on an uncached page should not hold the only slot on a small machine. Hence a small
+     * multiple of the cores, floored so a 2-core box has headroom and capped so a large one does not
      * hold hundreds of open footers per file for no throughput.
      */
     public static int defaultConnectionCount() {
@@ -371,10 +360,9 @@ public final class SortedParquetStore implements ListingStore {
      * further hop that lands in the same one — steps forward to the cursor's position. The key cursor
      * is <em>resumable</em>, not a bulk decode: a row group here can be far larger than the directory a
      * single hop is chasing, so it decodes only the rows strictly between the previous hop's position
-     * and this one's, however many that is, rather than the whole group up front. It is also opened
-     * <em>at the page that can hold the hop's target</em> rather than at the group's first row, so a
-     * hop landing in the middle of a row group does not decode the half of it that lies behind. Before
-     * any of that, a
+     * and this one's, rather than the whole group up front. It is opened <em>at the page that can hold
+     * the hop's target</em> rather than at the group's first row, so a hop landing mid-group does not
+     * decode the half that lies behind. Before any of that, a
      * hop first tries a zero-I/O shortcut off the routing index alone (see the loop's own comment): a
      * row group whose first key and successor group's first key already share a common prefix is, by
      * sortedness, entirely that one common prefix — skip it whole, no Parquet read at all. On a bucket
@@ -387,14 +375,10 @@ public final class SortedParquetStore implements ListingStore {
      *       inside a directory does not re-emit that directory; only the very first hop can trigger
      *       this, since every later cursor is already past the previous entry) and jump the cursor to
      *       {@link ByteKeys#successor}{@code (P)} inclusive, past {@code P}'s whole subtree in one hop.
-     *   <li>No {@code /} after the prefix → a bare object directly under it. This is the only hop that
-     *       pays for the full row (all nine {@code ListedObject} columns) rather than just the key
-     *       column, and it reads them through the same pooled, page-index-driven {@link
-     *       SortedRangeReader} the range path uses — <b>a page of rows at a time</b>, not one row per
-     *       hop (see {@link #objectAt}). It used to bulk-decode the whole row group instead, on the
-     *       reasoning that bare objects under a scanned prefix are rare — but "rare" is a property of
-     *       the bucket, and on a fixture where they are not rare that decode measured <b>~700&nbsp;ms
-     *       to return one row</b>. Advance the cursor past this exact key (exclusive) and continue.
+     *   <li>No {@code /} after the prefix → a bare object directly under it. The only hop that pays
+     *       for the full row rather than just the key column, read through the same pooled
+     *       page-index reader the range path uses, a run of rows at a time ({@link #objectAt}).
+     *       Advance the cursor past this exact key (exclusive) and continue.
      *   <li>The cursor lands past every key in its row group (a gap — {@code successor(P)} is rarely an
      *       actual key) → jump straight to the next group's first key; the last group exhausting the
      *       fixture ends the scan.
@@ -544,15 +528,14 @@ public final class SortedParquetStore implements ListingStore {
      * The full row at {@code key} — every listing column — read through the pooled page-index reader
      * the range path uses, <b>a run of rows at a time</b>.
      *
-     * <p>A bare object is one hop of the skip-scan, and hops are what the scan is O(). Reading one row
-     * per hop is therefore correct and, on a directory that is mostly bare objects, quadratic in
-     * disguise: a rollup returning 1,001 of them measured <b>1.1&nbsp;s</b>, all of it a thousand
-     * separate page-index seeks landing in the same handful of pages. Bare objects under one prefix
-     * are consecutive in key order, so {@code want} of them cost one read.
+     * <p>A bare object is one hop, and hops are what the scan is O(). Reading one row per hop is
+     * correct and, on a directory that is mostly bare objects, a thousand separate page-index seeks
+     * landing in the same handful of pages. Bare objects under one prefix are consecutive in key
+     * order, so {@code want} of them cost one read.
      *
      * <p>{@code lookahead} is validated by exact key, never by position: the scan may jump to a
-     * successor at any hop, and a row buffered from before the jump must not be served for after it.
-     * A miss simply refills, so the buffer is a saving and never a source of truth.
+     * successor at any hop, and a row buffered before the jump must not be served after it. A miss
+     * refills, so the buffer is a saving and never a source of truth.
      */
     private SortedRowGroupReader.ObjectRow objectAt(Deque<SortedRowGroupReader.ObjectRow> lookahead,
                                                     IndexEntry entry, byte[] key, byte[] upper, int want,

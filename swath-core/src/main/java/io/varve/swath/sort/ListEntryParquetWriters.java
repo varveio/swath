@@ -35,26 +35,17 @@ final class ListEntryParquetWriters {
     /**
      * The dictionary a <b>served</b> file's column chunk may carry, in bytes.
      *
-     * <p>A dictionary must be read and decoded <em>in full</em> before a single value of its column
-     * chunk can be read, so its cost falls on every request that touches the column however few rows
-     * that request wants — while its benefit is proportional to how often values repeat. For a
-     * seek-served file that is the wrong way round, and the damage is proportional to the
-     * dictionary's size. Parquet already falls back to a plain/delta encoding once a chunk's
-     * dictionary outgrows this cap; setting the cap low is what makes the fallback fire on the
-     * columns that deserve it.
+     * <p>A dictionary is decoded <em>in full</em> before its column yields a single value, so its
+     * cost falls on every request that touches the column while its benefit is proportional to how
+     * often values repeat — for a seek-served file, the wrong way round, and worse the larger it
+     * gets. Parquet falls back to a plain/delta encoding once a chunk's dictionary outgrows this cap;
+     * setting the cap low is what makes the fallback fire on the columns that deserve it. 8&nbsp;KiB
+     * is about a page's worth of entries: the point where decoding the dictionary stops being cheaper
+     * than decoding the page it serves.
      *
-     * <p>8&nbsp;KiB is about a page's worth of entries — the point at which decoding the dictionary
-     * stops being cheaper than decoding the page it exists to serve. Measured on a real fixture, it
-     * is both the fastest and the smallest of the settings tried: {@code size}, with ~200,000 distinct
-     * values per row group, had been carrying a dictionary that cost <b>2.9 ms to decode</b> on every
-     * request — by itself the largest single cost in a 1,000-row page read — and that
-     * {@code DELTA_BINARY_PACKED} then stored ~10 % smaller anyway. The enum-like columns (storage
-     * class, checksum pair, row type, owner, version) sit far under the cap and keep their
-     * dictionaries untouched.
-     *
-     * <p>A cap, not a column list: which columns repeat is a property of the <em>bucket</em>, not of
-     * the schema, so a hardcoded list would be right for one fixture and wrong for the next. Measured
-     * a further 362&nbsp;KB smaller than the equivalent list, on the fixture the list was chosen for.
+     * <p>A cap rather than a list of columns to exclude, because which columns repeat is a property
+     * of the bucket, not of the schema — and measured smaller as well as faster than the equivalent
+     * list, on the fixture that list was chosen for.
      */
     static final int SERVED_DICTIONARY_BYTES = 8 * 1024;
 

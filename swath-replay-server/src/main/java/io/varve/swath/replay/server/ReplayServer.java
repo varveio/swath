@@ -62,9 +62,8 @@ public final class ReplayServer implements AutoCloseable {
      * serving thread, so an in-flight request occupies one for the whole profile. Jetty's default
      * pool stops at 200 threads; a client fanning out wider than that has its excess requests queued
      * in the connector, and the wait lands on the client as latency from a server that is, by CPU,
-     * asleep. Since one subject in the s3-listing-study fans out 256 ways and cannot be told
-     * otherwise, a default of 200 would have silently measured that tool against a different backend
-     * than every other one.
+     * asleep. A client that fans out wider than the pool — and some cannot be told not to — would
+     * then be measured against a different backend than a narrower one.
      */
     public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
                         ServingMode mode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
@@ -74,10 +73,9 @@ public final class ReplayServer implements AutoCloseable {
     }
 
     /**
-     * The default ceiling on concurrently served requests — comfortably above the widest fan-out any
-     * subject in the s3-listing-study issues (256), because a request parked in an injected sleep
-     * holds its thread for the whole profile and a queued one is indistinguishable, to the client,
-     * from a slow server.
+     * The default ceiling on concurrently served requests, set comfortably above the widest fan-out a
+     * listing client is likely to drive: a request parked in an injected sleep holds its thread for
+     * the whole profile, and a queued one is indistinguishable, to the client, from a slow server.
      */
     public static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 512;
 

@@ -136,9 +136,9 @@ the box to answer a diagnostic would tax the measurement the diagnostic exists
 to validate.
 
 **Poll it; do not wait for shutdown.** There is no dump-on-exit, by design: a
-server run as a sidecar is typically *killed* when the process it serves exits
-(GCP Batch's background runnables work exactly this way), so anything written on
-shutdown is written by a code path that may never run. Scrape before a measured
+server run as a sidecar is typically *killed* when the process it serves exits,
+rather than asked to stop, so anything written on shutdown is written by a code
+path that may never run. Scrape before a measured
 window opens, poll through it, and scrape again at the end — the series is what
 shows whether the server stayed out of the way, which a single aggregate at the
 end cannot.

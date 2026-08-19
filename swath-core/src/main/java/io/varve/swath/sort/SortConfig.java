@@ -103,26 +103,17 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
     /**
      * Default for {@code finalPageRows}: <b>1,024</b> rows per data page in the final, served file.
      *
-     * <p><b>A page is the unit of random access.</b> Parquet's page index prunes whole pages, never
-     * rows, and every encoding a page carries (delta-byte-array, RLE-dictionary) decodes strictly
-     * forward — so a bounded key-range read decodes, per column, at least one whole page, however few
-     * rows it wanted. The page's row count is therefore the floor on the cost of a cold seek.
+     * <p>A page is the unit of random access — the page index prunes whole pages, never rows, and a
+     * page's encodings decode strictly forward — so a bounded key-range read decodes at least one
+     * whole page per column however few rows it wanted. Parquet's own default caps a page at 20,000
+     * rows, and its byte cap only binds on columns wide enough to reach it, so every narrow column
+     * sat at 20,000 and a thousand-row read cost the same as a one-row read. 1,024 is one listing
+     * page, the request shape a served file exists for.
      *
-     * <p>Parquet's own default caps a page at 20,000 rows, and the byte cap ({@code PAGE_BYTES})
-     * only binds on wide columns: measured on a real sorted fixture, {@code key} self-limited to
-     * ~9,463 rows/page while <em>every other column</em> — {@code size}, {@code etag},
-     * {@code last_modified}, the checksum and owner columns — sat at exactly 20,000. A
-     * thousand-row listing page thus decoded ~150,000 values across the projection to return 1,000,
-     * and measured <b>flat from {@code max-keys=1} to {@code max-keys=1000}</b>: the read was paying
-     * for the page, not for the answer.
-     *
-     * <p>1,024 is one S3 listing page rounded up to a power of two — the request shape this format is
-     * served for. It costs page headers and index entries (a page count that rises with the ratio to
-     * the old cap) and some encoding efficiency, since delta and dictionary runs restart per page.
-     * The write-side price is paid once per fixture; the read-side saving is paid back on every
-     * request, which is the trade a replay fixture exists to make. Not to be confused with
-     * {@code PAGE_BYTES}: shrinking the <em>byte</em> cap was measured dead from both directions
-     * (2026-07-04 P1/P4) because it also fragments the wide columns that were never the problem.
+     * <p>It is paid for in page headers, index entries and some encoding efficiency, once per
+     * fixture, against a saving on every request. Distinct from the data-page BYTE cap, which two
+     * gates (2026-07-04 P1/P4) measured dead in both directions: that one also fragments the wide
+     * columns that were never the problem.
      */
     public static final int DEFAULT_FINAL_PAGE_ROWS = 1024;
 

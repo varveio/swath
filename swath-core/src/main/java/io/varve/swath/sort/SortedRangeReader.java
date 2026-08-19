@@ -200,19 +200,17 @@ public final class SortedRangeReader implements AutoCloseable {
      * The head of {@code ranges} that can still be needed once {@code want} more rows would satisfy
      * the request — the difference between reading a page and reading a row group's whole tail.
      *
-     * <p><b>Why this is not the page filter's job.</b> A listing page is a request for {@code n} rows
-     * <em>at or after</em> a key, with no upper key bound to state; the predicate is therefore
-     * {@code key >= from}, and every page from the seek to the end of the row group satisfies it. The
-     * decode loop stops as soon as it holds {@code limit} rows, but {@link
-     * ParquetFileReader#readFilteredRowGroup} has by then already read and buffered every one of those
-     * pages, across every projected column. That is why a bounded read measured <b>flat</b> from
-     * {@code max-keys=1} to {@code max-keys=1000}: the answer's size was never what it cost.
+     * <p>A listing page asks for {@code n} rows <em>at or after</em> a key, with no upper key bound
+     * to state, so the predicate is {@code key >= from} and every page from the seek to the end of the
+     * row group satisfies it. The decode loop stops at {@code limit}; {@link
+     * ParquetFileReader#readFilteredRowGroup} has by then already read every one of those pages,
+     * across every projected column.
      *
-     * <p>The window is {@code want} rows plus one page's worth of slack, because only the <em>first</em>
-     * surviving page can hold rows before {@code from} (pages are in key order, so every later page
-     * starts at or after it) and those rows are skipped without being returned. With that slack the
-     * window provably holds {@code want} qualifying rows whenever the group's remaining rows do, so
-     * the caller's widen path is a correctness backstop rather than an expected cost.
+     * <p>The window is {@code want} rows plus one page of slack, because only the <em>first</em>
+     * surviving page can hold rows below {@code from} — pages are in key order, so every later one
+     * starts at or after it. With that slack the window holds {@code want} qualifying rows whenever
+     * the group's remaining rows do, which is what makes the caller's widen path a backstop rather
+     * than an expected cost.
      */
     private static RowRanges firstRowsOf(RowRanges ranges, ColumnIndexStore indexStore, int want) {
         long first = ranges.iterator().nextLong();
