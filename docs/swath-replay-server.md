@@ -143,6 +143,10 @@ window opens, poll through it, and scrape again at the end — the series is wha
 shows whether the server stayed out of the way, which a single aggregate at the
 end cannot.
 
+Set the `swath.replay.slow-request-log-ms` system property to log the request shape,
+range parameters, result size, and server cost for requests exceeding the threshold.
+Negative or unset disables this diagnostic.
+
 `delimiter=/` uses a native skip-scan that advances past each returned common prefix and
 stops at `max-keys`; other delimiter shapes use the ordinary range walk. If a stepped row
 group proves internally disordered, sorted mode returns `500 InternalError` and increments
