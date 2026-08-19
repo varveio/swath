@@ -5,7 +5,6 @@
  */
 package io.varve.swath.replay.server;
 
-import io.varve.swath.replay.store.DuckDbListingStore;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -64,9 +63,11 @@ public final class BenchCommand implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        int connections = parquetConnections > 0 ? parquetConnections : DuckDbListingStore.defaultConnectionCount();
+        // Passed through unresolved: this command runs one server per requested mode, so a single
+        // pre-resolved default would hand every mode the same number and hide exactly the per-mode
+        // difference the comparison exists to show. <= 0 means "each mode's own default".
         var options = new TokenWalkBenchmark.Options(
-                fixture, bucket, host, new ArrayList<>(modes), maxKeys, prefix, delimiter, connections);
+                fixture, bucket, host, new ArrayList<>(modes), maxKeys, prefix, delimiter, parquetConnections);
         TokenWalkBenchmark.Report report = TokenWalkBenchmark.run(options);
         System.out.print(report.humanTable());
         if (json != null) {

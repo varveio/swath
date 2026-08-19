@@ -22,6 +22,7 @@ public final class ReplayServer implements AutoCloseable {
     private final AutoCloseable ownedFixture;
     private final ReplayMetrics metrics;
     private final ServingMode resolvedMode;
+    private final int resolvedParquetConnections;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public ReplayServer(String host, int port, String bucket, Path fixture) {
@@ -124,6 +125,7 @@ public final class ReplayServer implements AutoCloseable {
         this.ownedFixture = ownedFixture;
         this.metrics = metrics;
         this.resolvedMode = resolvedMode;
+        this.resolvedParquetConnections = maxConcurrentReads;
         ServerConnector connector = new ServerConnector(server);
         connector.setHost(host);
         connector.setPort(port);
@@ -134,6 +136,18 @@ public final class ReplayServer implements AutoCloseable {
     /** The concrete serving path this server resolved to ({@link ServingMode#SORTED} or {@link ServingMode#DUCKDB}). */
     public ServingMode resolvedServingMode() {
         return resolvedMode;
+    }
+
+    /**
+     * The pooled-reader count this server actually opened with — the requested one, or the resolved
+     * mode's own default when none was requested.
+     *
+     * <p>Exposed because the two differ, and only the server knows which it got: the default belongs
+     * to the store the mode resolves to, and that resolution happens here rather than in the caller.
+     * A caller that wants to report the value it is serving under has to ask, not assume.
+     */
+    public int resolvedParquetConnections() {
+        return resolvedParquetConnections;
     }
 
     public void start() throws Exception {

@@ -16,6 +16,8 @@ import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
+import io.varve.swath.replay.store.DuckDbListingStore;
+import io.varve.swath.replay.store.SortedParquetStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
@@ -316,5 +318,49 @@ class ReplayServingFactoryTest {
                 .filter(e -> e instanceof S3ResultEntry.ObjectResult)
                 .map(e -> ByteKeys.utf8(e.key()))
                 .toList();
+    }
+
+    /**
+     * The default belongs to the mode, and the mode is resolved here rather than by the caller.
+     *
+     * <p>Regression: the {@code serve} and {@code bench} commands used to resolve the default
+     * themselves, both via {@link DuckDbListingStore#defaultConnectionCount()}. Because that result
+     * is positive, the mode-aware branch below became unreachable from the CLI and
+     * {@code --serving-mode sorted} with no flag opened four readers instead of the eight-to-
+     * thirty-two the sorted store asks for. The factory was already right; nothing asserted that its
+     * callers let it be right, so the two tests below go through {@link ReplayServer} -- the seam the
+     * commands actually use -- and not through {@code open} alone.
+     */
+    @Test
+    void sortedModeWithNoRequestedCountTakesTheSortedStoreDefault(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", sorted, 0, ServingMode.SORTED)) {
+            assertThat(server.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
+            assertThat(server.resolvedParquetConnections())
+                    .isEqualTo(SortedParquetStore.defaultConnectionCount())
+                    .isNotEqualTo(DuckDbListingStore.defaultConnectionCount());
+        }
+    }
+
+    @Test
+    void duckDbModeWithNoRequestedCountTakesTheDuckDbDefault(@TempDir Path dir) throws Exception {
+        Path plain = dir.resolve("plain.parquet");
+        writeUnsortedPart(plain, "a", "b", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", plain, 0, ServingMode.DUCKDB)) {
+            assertThat(server.resolvedServingMode()).isEqualTo(ServingMode.DUCKDB);
+            assertThat(server.resolvedParquetConnections())
+                    .isEqualTo(DuckDbListingStore.defaultConnectionCount());
+        }
+    }
+
+    @Test
+    void anExplicitCountIsHonouredOverTheModeDefault(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", sorted, 3, ServingMode.SORTED)) {
+            assertThat(server.resolvedParquetConnections()).isEqualTo(3);
+        }
     }
 }

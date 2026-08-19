@@ -96,6 +96,12 @@ Jetty's implicit 200-thread default. It defaults to 512 and is reported as
 `max_concurrent_requests=` at startup. Set it at or above the widest client fan-out so
 connector queueing is not mistaken for backend latency.
 
+`--parquet-connections 0` uses the selected store's own reader default:
+`max(8, min(32, 2 × cores))` for sorted serving and `min(4, cores)` for DuckDB.
+Size this for concurrent decode work, not total requests: readers are returned before
+injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
+very large pools can waste file descriptors and heap.
+
 ## Reading a running server's meters (`--metrics-port`)
 
 `serve` keeps every meter in the table under "Metrics And Tuning" below, but a
