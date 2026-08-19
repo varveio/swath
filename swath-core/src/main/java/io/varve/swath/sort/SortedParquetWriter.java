@@ -22,7 +22,8 @@ import org.apache.parquet.schema.MessageType;
 
 /**
  * The final-file writer: the high-level {@link ParquetWriter} path with small, seek-friendly row
- * groups ({@code final-row-group-bytes}) and the static sortedness stamp in the footer key-value
+ * groups ({@code final-row-group-bytes}) and pages ({@code final-page-rows} — the granularity a
+ * bounded key-range read actually pays for) and the static sortedness stamp in the footer key-value
  * metadata, written via {@link WriteSupport#finalizeWrite()}, the one footer-KV hook the high-level
  * writer supports. {@link #close()} finalizes + fsyncs, matching
  * {@link io.varve.swath.output.parquet.PartWriter}/{@link SegmentParquetSink}'s durability discipline —
@@ -95,7 +96,8 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // the range-local stamp the parallel path exists to fix.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
-        this.writer = ListEntryParquetWriters.build(path, writeSupport, config.finalRowGroupBytes());
+        this.writer = ListEntryParquetWriters.build(path, writeSupport, config.finalRowGroupBytes(),
+                ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
     }
 
     @Override

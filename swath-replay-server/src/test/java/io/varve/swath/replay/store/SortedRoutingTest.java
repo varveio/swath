@@ -15,10 +15,13 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
- * The upper-bound invariant and its edge cases in isolation (no DuckDB, no files) — the routing math
- * that guarantees a bounded query's window holds at least {@code limit} rows past the range start
- * while enough rows remain, clamps to open at the tail, intersects with the prefix upper bound, and touches
- * only the file(s) the range spans.
+ * {@link SortedRouting#startRowGroup} in isolation (no files, no reader): the "which row group
+ * contains this key" search, at every boundary case a real range read can land on.
+ *
+ * <p>This class used to also pin an upper-bound invariant — the window a bounded SQL query had to be
+ * given so it would not scan to the end of the file. The store reads through Parquet's page index
+ * now and stops as soon as it holds the rows it was asked for, so there is no window to plan and
+ * nothing left here but the search.
  */
 class SortedRoutingTest {
 
@@ -26,136 +29,59 @@ class SortedRoutingTest {
     private static final Path F2 = Path.of("part-00002.parquet");
 
     @Test
-    void speculatesOnASingleRowGroupWhenItDwarfsThePage() {
-        // Real geometry: 8MB row groups hold ~260k rows, a page asks for 1,001.
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 260_000), rg(F1, 1, "m", 260_000), rg(F1, 2, "s", 260_000));
-
-        SortedRouting.QueryPlan invariant = SortedRouting.plan(index, key("a"), null, 1_001);
-        SortedRouting.QueryPlan speculative = SortedRouting.speculativePlan(index, key("a"), null, 1_001);
-
-        // The invariant bound must assume `from` is the last row of rg0, so it reads rg0 AND rg1.
-        assertThat(bytes(invariant.upperBound())).isEqualTo("s");
-        // The speculation reads rg0 alone -- right on all but the last 1,001 rows of the group.
-        assertThat(bytes(speculative.upperBound())).isEqualTo("m");
+    void emptyIndexStartsAtZero() {
+        assertThat(SortedRouting.startRowGroup(List.of(), key("a"))).isZero();
     }
 
     @Test
-    void declinesToSpeculateWhenTheRowGroupIsNotBigEnoughToPayFor() {
-        // A group only twice the page size fails the gamble too often to be worth the wasted query.
-        List<IndexEntry> index = List.of(rg(F1, 0, "a", 2_000), rg(F1, 1, "m", 2_000));
-
-        assertThat(SortedRouting.speculativePlan(index, key("a"), null, 1_001)).isNull();
-    }
-
-    @Test
-    void declinesToSpeculateOnTheLastRowGroupBecauseNoTighterBoundExists() {
-        List<IndexEntry> index = List.of(rg(F1, 0, "a", 260_000));
-
-        assertThat(SortedRouting.speculativePlan(index, key("a"), null, 1_001)).isNull();
-    }
-
-    @Test
-    void speculativeBoundStillYieldsToATighterCallerWindow() {
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 260_000), rg(F1, 1, "m", 260_000), rg(F1, 2, "s", 260_000));
-
-        SortedRouting.QueryPlan speculative =
-                SortedRouting.speculativePlan(index, key("a"), key("c"), 1_001);
-
-        // The caller's own prefix bound is tighter than the row group's end; it wins.
-        assertThat(bytes(speculative.upperBound())).isEqualTo("c");
-    }
-
-    @Test
-    void upperBoundIsTheSmallestBoundaryHoldingAtLeastLimitRowsAcrossShortGroups() {
-        // Four two-row groups in one file: a,c,e,g. from="a" (in rg0), limit=3.
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 2), rg(F1, 1, "c", 2), rg(F1, 2, "e", 2), rg(F1, 3, "g", 2));
-
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, key("a"), null, 3);
-
-        // rg1(2) < 3, rg1+rg2(4) >= 3 -> bound at firstKey(rg3) = "g" (conservatively skips rg0).
-        assertThat(bytes(plan.upperBound())).isEqualTo("g");
-        assertThat(plan.files()).containsExactly(F1);
-    }
-
-    @Test
-    void clampsToAnOpenUpperBoundWhenTheTailCannotSupplyLimitRows() {
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 2), rg(F1, 1, "c", 2), rg(F1, 2, "e", 2));
-
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, key("e"), null, 100);
-
-        assertThat(plan.upperBound()).isNull();                 // open: nothing after "e" reaches 100
-        assertThat(plan.files()).containsExactly(F1);
-    }
-
-    @Test
-    void intersectsTheInvariantBoundWithTheCallerPrefixUpperBound() {
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 2), rg(F1, 1, "c", 2), rg(F1, 2, "e", 2), rg(F1, 3, "g", 2));
-
-        // Invariant bound would be "g", but the prefix upper bound "d" is tighter.
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, key("a"), key("d"), 3);
-
-        assertThat(bytes(plan.upperBound())).isEqualTo("d");
-    }
-
-    @Test
-    void emptyIndexTouchesNoFiles() {
-        assertThat(SortedRouting.plan(List.of(), key("a"), null, 1000).isEmpty()).isTrue();
+    void anAbsentLowerBoundStartsAtTheFirstRowGroup() {
+        assertThat(SortedRouting.startRowGroup(index(entry(F1, 0, "a", 10), entry(F1, 1, "m", 10)), null))
+                .isZero();
     }
 
     @Test
     void fromBeforeTheFirstKeyStartsAtRowGroupZero() {
-        List<IndexEntry> index = List.of(rg(F1, 0, "m", 2), rg(F1, 1, "q", 2));
-
+        List<IndexEntry> index = index(entry(F1, 0, "m", 10), entry(F1, 1, "s", 10));
         assertThat(SortedRouting.startRowGroup(index, key("a"))).isZero();
     }
 
     @Test
-    void fromInOrPastTheLastRowGroupYieldsAnOpenBoundOverThatGroupOnly() {
-        List<IndexEntry> index = List.of(rg(F1, 0, "a", 2), rg(F2, 0, "e", 2));
-
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, key("z"), null, 1000);
-
-        assertThat(SortedRouting.startRowGroup(index, key("z"))).isEqualTo(1);
-        assertThat(plan.upperBound()).isNull();
-        assertThat(plan.files()).containsExactly(F2);
+    void fromInsideAGroupStartsAtThatGroup() {
+        List<IndexEntry> index = index(entry(F1, 0, "a", 10), entry(F1, 1, "m", 10), entry(F1, 2, "s", 10));
+        assertThat(SortedRouting.startRowGroup(index, key("p"))).isEqualTo(1);
     }
 
     @Test
-    void aRangeEntirelyBelowTheFirstKeyTouchesNoFiles() {
-        List<IndexEntry> index = List.of(rg(F1, 0, "m", 2), rg(F1, 1, "q", 2));
-
-        // from open, but the prefix upper bound "m" == first key -> window [.., "m") is empty.
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, null, key("m"), 1000);
-
-        assertThat(plan.isEmpty()).isTrue();
+    void aFromEqualToAGroupsFirstKeyStartsAtThatGroupNotThePreviousOne() {
+        // The boundary the whole search turns on: "contains" is inclusive of the group's own first key.
+        List<IndexEntry> index = index(entry(F1, 0, "a", 10), entry(F1, 1, "m", 10));
+        assertThat(SortedRouting.startRowGroup(index, key("m"))).isEqualTo(1);
     }
 
     @Test
-    void aWindowSpanningTwoFilesTouchesBothInKeyOrder() {
-        // f1: a,c ; f2: e,g. from="a", limit large enough to reach into f2.
-        List<IndexEntry> index = List.of(
-                rg(F1, 0, "a", 2), rg(F1, 1, "c", 2), rg(F2, 0, "e", 2), rg(F2, 1, "g", 2));
-
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, key("a"), null, 5);
-
-        assertThat(plan.upperBound()).isNull();                 // 2+2+2 < 5 -> open tail
-        assertThat(plan.files()).containsExactly(F1, F2);
+    void fromPastTheLastGroupsFirstKeyStartsAtTheLastGroup() {
+        List<IndexEntry> index = index(entry(F1, 0, "a", 10), entry(F1, 1, "m", 10));
+        assertThat(SortedRouting.startRowGroup(index, key("zzz"))).isEqualTo(1);
     }
 
-    private static IndexEntry rg(Path file, int rowGroup, String firstKey, long rowCount) {
+    @Test
+    void theSearchSpansFilesBecauseTheIndexIsGlobalNotPerFile() {
+        List<IndexEntry> index = index(
+                entry(F1, 0, "a", 10), entry(F1, 1, "m", 10), entry(F2, 0, "s", 10), entry(F2, 1, "w", 10));
+        assertThat(SortedRouting.startRowGroup(index, key("t"))).isEqualTo(2);
+        assertThat(SortedRouting.startRowGroup(index, key("s"))).isEqualTo(2);
+        assertThat(SortedRouting.startRowGroup(index, key("w"))).isEqualTo(3);
+    }
+
+    private static List<IndexEntry> index(IndexEntry... entries) {
+        return List.of(entries);
+    }
+
+    private static IndexEntry entry(Path file, int rowGroup, String firstKey, long rowCount) {
         return new IndexEntry(file, rowGroup, key(firstKey), rowCount);
     }
 
-    private static ByteKey key(String value) {
-        return ByteKey.copyOf(value.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static String bytes(ByteKey key) {
-        return key == null ? null : new String(key.toByteArray(), StandardCharsets.UTF_8);
+    private static ByteKey key(String s) {
+        return ByteKey.copyOf(s.getBytes(StandardCharsets.UTF_8));
     }
 }

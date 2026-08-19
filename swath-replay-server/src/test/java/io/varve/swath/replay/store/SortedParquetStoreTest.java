@@ -83,6 +83,127 @@ class SortedParquetStoreTest {
         }
     }
 
+    /**
+     * The bounded read must never return fewer rows than exist, at any seek position or any limit.
+     *
+     * <p>This is the correctness half of the change that made a cold page cost what its answer costs
+     * rather than what its row group costs. A listing page states no upper key bound — the predicate
+     * is {@code key >= from} — so Parquet's page filter selects every page from the seek to the end of
+     * the row group, and the reader used to read all of them and then stop decoding at {@code limit}.
+     * It now bounds the read to the rows the answer can need. The bound is what could go wrong: cut it
+     * one row short and a page silently loses its last key, which no client can distinguish from the
+     * listing genuinely ending there.
+     *
+     * <p>Small pages and a single row group on purpose. The window is sized as {@code limit} plus one
+     * page's worth of slack, because only the first surviving page can hold rows <em>before</em>
+     * {@code from} — so the cases that exercise the arithmetic are seeks landing mid-page at limits
+     * either side of the page size, which is what the sweep below covers exhaustively.
+     */
+    @Test
+    void aBoundedReadIsNeverShortAtAnySeekPositionOrLimit(@TempDir Path dir) throws IOException {
+        List<String> keys = keys(3000);
+        Fixture fixture = writeSorted(dir, SortConfigs.pagesOf(64), keys);
+        assertThat(fixture.index).hasSize(1);   // one row group: the pages, not the groups, are the unit
+
+        try (SortedParquetStore store = store(fixture)) {
+            for (int limit : new int[] {1, 2, 63, 64, 65, 128, 129, 1000}) {
+                for (int at = 0; at < keys.size(); at += 37) {   // 37: coprime with 64, so every offset
+                    String from = keys.get(at);
+                    assertThat(keyStrings(store.rows(key(from), true, null, limit, Projection.KEYS_ONLY)))
+                            .as("limit=%d from=%s (row %d, page offset %d)", limit, from, at, at % 64)
+                            .isEqualTo(expected(keys, from, true, null, limit));
+                }
+            }
+        }
+    }
+
+    /**
+     * The same sweep, but where the answer has to be assembled from <b>more than one row group</b>.
+     *
+     * <p>The single-group sweep above cannot reach the multi-block path: with the window sized to
+     * {@code limit} plus a page, a read that starts near the end of a group comes up short there and
+     * must carry on into the next one — and each later group is entered with no lower bound at all,
+     * which is a different window computation from the first. Small pages AND small row groups
+     * together are what make that happen; either alone leaves the window spanning everything, and
+     * {@code firstRowsOf} then hands back the full ranges unchanged.
+     */
+    @Test
+    void aBoundedReadIsNeverShortAcrossRowGroupBoundaries(@TempDir Path dir) throws IOException {
+        List<String> keys = keys(2000);
+        Fixture fixture = writeSorted(dir, SortConfigs.manySmallRowGroups().withFinalPageRows(64), keys);
+        assertThat(fixture.index).hasSizeGreaterThan(4);   // the multi-group path is actually exercised
+
+        try (SortedParquetStore store = store(fixture)) {
+            for (int limit : new int[] {1, 63, 64, 65, 200, 500, 2001}) {
+                for (int at = 0; at < keys.size(); at += 29) {
+                    String from = keys.get(at);
+                    assertThat(keyStrings(store.rows(key(from), true, null, limit, Projection.KEYS_ONLY)))
+                            .as("limit=%d from=%s (row %d)", limit, from, at)
+                            .isEqualTo(expected(keys, from, true, null, limit));
+                }
+            }
+        }
+    }
+
+    /** The same, with an exclusive lower bound and a caller upper bound in play. */
+    @Test
+    void aBoundedReadIsNeverShortWithExclusiveAndUpperBounds(@TempDir Path dir) throws IOException {
+        List<String> keys = keys(1500);
+        Fixture fixture = writeSorted(dir, SortConfigs.pagesOf(64), keys);
+
+        try (SortedParquetStore store = store(fixture)) {
+            for (int at = 0; at < keys.size() - 200; at += 53) {
+                String from = keys.get(at);
+                String to = keys.get(at + 200);
+                for (int limit : new int[] {1, 64, 65, 199, 200, 201}) {
+                    assertThat(keyStrings(store.rows(key(from), false, key(to), limit, Projection.KEYS_ONLY)))
+                            .as("limit=%d (%s, %s)", limit, from, to)
+                            .isEqualTo(expected(keys, from, false, to, limit));
+                }
+            }
+        }
+    }
+
+    /**
+     * A rollup whose entries are <b>bare objects</b>, deep inside a large row group, must carry every
+     * served field of each one.
+     *
+     * <p>The skip-scan used to answer this hop by bulk-decoding the whole row group and indexing into
+     * it by cursor position, on the reasoning that bare objects directly under a scanned prefix are
+     * rare. "Rare" is a property of the bucket: on a fixture where they are not rare, that decode
+     * measured ~700 ms to return a single row. It now fetches exactly the one row through the same
+     * pooled page-index reader the range path uses — a different code path reaching the same values,
+     * which is what this pins.
+     */
+    @Test
+    void aRollupOfBareObjectsCarriesEveryFieldOfEachRow(@TempDir Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 2000; i++) {
+            keys.add(String.format("flat/obj-%05d", i));   // no further '/': every one is a bare object
+        }
+        Fixture fixture = writeSorted(dir, SortConfigs.pagesOf(64), keys);
+
+        try (SortedParquetStore store = store(fixture)) {
+            List<ListingStore.DelimitedEntry> rollup = store.delimitedRollup(
+                    key("flat/"), true, null, "flat/".getBytes(StandardCharsets.UTF_8), slash(), 500,
+                    Projection.WITH_OWNER);
+
+            // limit + 1: the skip-scan collects one past the page so the pager can detect truncation.
+            assertThat(rollup).hasSize(501);
+            assertThat(rollup).allSatisfy(entry -> assertThat(entry.commonPrefix()).isNull());
+            assertThat(rollup.stream().map(e -> ByteKeys.utf8(e.object().key())).toList())
+                    .isEqualTo(keys.subList(0, 501));
+            assertThat(rollup).allSatisfy(entry -> {
+                assertThat(entry.object().etag()).isEqualTo("etag");
+                assertThat(entry.object().storageClass()).isEqualTo("STANDARD");
+                assertThat(entry.object().ownerId()).isEqualTo("owner-id");
+                assertThat(entry.object().ownerDisplayName()).isEqualTo("owner-display");
+                assertThat(entry.object().checksumAlgorithm()).isEqualTo("CRC32");
+                assertThat(entry.object().checksumType()).isEqualTo("FULL_OBJECT");
+            });
+        }
+    }
+
     @Test
     void emptyFixtureReturnsNoRows(@TempDir Path dir) throws IOException {
         Fixture fixture = writeSorted(dir, manySmallGroups());   // no keys

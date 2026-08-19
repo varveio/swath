@@ -16,54 +16,63 @@ import io.varve.swath.sort.SortedRangeReader;
 import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 
 /**
- * A {@link ListingStore} backed by bounded {@code read_parquet} queries over a stamped, globally
- * sorted swath Parquet fixture. It never materialises a temp database and never builds an
- * index — the in-memory row-group routing index ({@link IndexEntry}, derived once at startup) turns
- * each range read into <b>one</b> tight {@code key >|>= ? AND key < :bound ORDER BY key LIMIT ?}
- * query limited to the file(s) the range spans, avoiding a whole-fixture top-N query.
+ * A {@link ListingStore} over a stamped, globally sorted swath Parquet fixture, answered by
+ * <b>Parquet's own page index</b> rather than by a query engine. It never materialises a temp
+ * database and never builds an index: the in-memory row-group routing index ({@link IndexEntry},
+ * derived once at startup) says which row group a range starts in, and {@link SortedRangeReader}
+ * reads it there.
  *
- * <h2>Upper bound by invariant, never a constant</h2>
- * The exclusive {@code :bound} — the query's {@code key < ?} parameter — is computed by
- * {@link SortedRouting}, which guarantees {@code [from, bound)} holds at least {@code limit} rows
- * if that many exist within {@code [from, toExclusive)} ({@code limit} is the pager's
- * {@code maxKeys + 1}), routing off the derived index only, never Parquet footer stats.
+ * <h2>Why not a query engine</h2>
+ * This store used to answer a range read with a bounded {@code read_parquet} query, and DuckDB does
+ * not consume the Parquet ColumnIndex/OffsetIndex for a {@code WHERE + ORDER BY + LIMIT} shape — an
+ * {@code EXPLAIN ANALYZE} gate measured rows-scanned equal to the full spanned row groups, with zero
+ * slack. A row group holds hundreds of thousands of rows and a listing page asks for about a
+ * thousand, so a cold page decoded most of a row group to return a fraction of a percent of it. That
+ * path is gone; a single reader serves every range read, and the DuckDB store survives only as the
+ * role-1 store for fixtures that cannot be served sorted at all.
  *
- * <p><b>The invariant assumes {@code rowCount == OBJECT-row-count} per row group.</b> That is only
- * sound because sorted-serving <em>eligibility</em> ({@code SortedFixtures#loadIndex}) refuses any
- * file with a row group that isn't provably pure {@code row_type='OBJECT'} (a mixed-row-type file —
- * see {@code docs/internals/metrics-internals.md} §8, {@code mixed_row_types} — is never handed to this
- * store; it falls back to the materialized DuckDB store instead). The {@code WHERE row_type =
- * 'OBJECT'} clause in every
- * query built here is therefore belt-and-braces — eligibility already guarantees purity — not what
- * makes the invariant correct.
+ * <h2>What a cold page costs, and why</h2>
+ * A bounded read decodes, per column, at least one whole <b>page</b> — the page index prunes pages,
+ * never rows, and every encoding a page carries decodes strictly forward. Three things follow, and
+ * all three are load-bearing:
+ * <ul>
+ *   <li>The <b>read is bounded to the rows the answer can need</b> ({@link
+ *       SortedRangeReader#range}). A listing page has no upper key bound to state, so the page filter
+ *       alone selects every page from the seek to the end of the row group.</li>
+ *   <li>The fixture is <b>written with pages a listing page wide</b> ({@code
+ *       SortConfig#DEFAULT_FINAL_PAGE_ROWS}), not parquet's 20,000-row default.</li>
+ *   <li>The fixture is written with <b>small dictionaries</b> ({@code
+ *       ListEntryParquetWriters#SERVED_DICTIONARY_BYTES}), because a dictionary is decoded in full
+ *       before its column yields a single value.</li>
+ * </ul>
+ * Together those took a cold 1,000-key page on a 788,903-row fixture from 21.7 ms to ~4 ms, and made
+ * the cost scale with the answer's size instead of being flat in it. An old fixture still serves
+ * correct answers — the geometry is a Parquet-internal choice, not a format change — it just does not
+ * get the write-side share of that until it is re-sorted.
  *
  * <p>Edge cases are first-class: an <b>empty fixture</b> (no row groups ⇒ empty index) returns no
- * rows; a {@code from} <b>before the first key</b> starts at row group 0; a {@code from}
- * <b>in or past the last row group</b> yields an open upper bound (read to end of file); and a range
- * that lies entirely below the first key or above {@code toExclusive} touches no files at all.
+ * rows; a {@code from} <b>before the first key</b> starts at row group 0; and a range that lies
+ * entirely below the first key or above {@code toExclusive} touches no rows at all.
  *
- * <p>DuckDB's Parquet metadata cache is enabled per connection so repeated pages over the
- * same file reuse the decoded footer. Owner columns are decoded only when {@link Projection#owner()}
- * — the whole point of the projection, unlike the DuckDB store where they are behavior-cheap.
+ * <p>Owner columns are decoded only when {@link Projection#owner()} — the whole point of the
+ * projection, unlike the DuckDB store where they are behavior-cheap.
  *
  * <p>Unlike {@link DuckDbListingStore}, this store assumes the <b>canonical</b> current schema
  * unconditionally (no {@code owner_display_name}/{@code checksum_type} legacy-column backfill): every
@@ -72,39 +81,27 @@ import java.util.Set;
  * sorted file for this store to tolerate — unlike {@code DuckDbListingStore}, which must also serve
  * arbitrary pre-existing unsorted captures written by older schema versions.
  *
- * <h2>Performance characteristics</h2>
- * Each bare-store {@link #rows} read executes one bounded DuckDB query. The per-connection object
- * cache retains Parquet metadata, but this class does not cache decoded rows or query results.
- * Production wiring normally wraps it in {@link WindowedListingStore}, which amortizes delegate reads
- * across sequential pages while keeping memory bounded. Query shape, pool size, and cache changes must
- * preserve the routing invariant above and should be evaluated with the replay server's {@code bench}
- * command on representative fixtures; no fixed page latency is implied by this implementation.
+ * <p>Row groups are addressed by the routing index and never scanned for, so a read touches no group
+ * before the one it starts in. Readers are pooled because a Parquet reader carries mutable per-read
+ * state; the pool width is the store's request-concurrency bound. This class caches no decoded rows;
+ * {@link WindowedListingStore} may still wrap it to amortize sequential pages, but at ~4 ms a cold
+ * page that is a much smaller difference than it was when a page cost 200 ms.
  *
  * <h2>The {@code delimiter=/} skip-scan</h2>
- * {@link #delimitedRollup} does not go through DuckDB at all: it answers a rollup as a series of
- * index hops directly against the row-group routing index, each hop random-accessing exactly the one
- * row group ({@link SortedRowGroupReader}, in {@code swath-core}) a scan cursor currently lands in —
- * O(entries emitted), never O(subtree). See its own javadoc for the algorithm.
+ * {@link #delimitedRollup} answers a rollup as a series of index hops against the row-group routing
+ * index, each hop random-accessing exactly the one row group ({@link SortedRowGroupReader}, in
+ * {@code swath-core}) a scan cursor currently lands in — O(entries emitted), never O(subtree). See
+ * its own javadoc for the algorithm.
  */
 public final class SortedParquetStore implements ListingStore {
 
-    /**
-     * Whether a range read is answered by Parquet's own page index ({@link SortedRangeReader}) rather
-     * than by a bounded DuckDB {@code read_parquet} query. On by default; set
-     * {@code -Dswath.replay.sorted.range-reads=duckdb} to serve them the old way.
-     *
-     * <p>The switch exists because the two paths must be able to answer the same request in the same
-     * process for the differential suites to mean anything — and because a serving path this new
-     * should have a way back that does not require a release.
-     */
-    private static final boolean PARQUET_RANGE_READS =
-            !"duckdb".equalsIgnoreCase(System.getProperty("swath.replay.sorted.range-reads", "parquet"));
-
     private final List<IndexEntry> index;
-    private final DuckDbConnectionPool pool;
     private final ReplayMetrics metrics;
     private final boolean recordPageReadLatency;
     private final Map<Path, SortedRangeReader> rangeReaders;
+    private final Map<Path, BlockingQueue<SortedRowGroupReader>> groupReaders;
+    /** Every group reader this store made, borrowed or not — {@link #close()} closes the list, not the pool. */
+    private final List<SortedRowGroupReader> ownedGroupReaders;
 
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
         this(files, index, metrics, defaultConnectionCount());
@@ -116,8 +113,8 @@ public final class SortedParquetStore implements ListingStore {
      * @param index          the derived {@code (file, rowGroup, firstKey, rowCount)} routing index,
      *                       globally ascending by first key (its sanity was checked at load)
      * @param metrics        records {@code swath.replay.page.read.latency} per read
-     * @param connectionCount pooled in-memory DuckDB connections (== the natural request-concurrency
-     *                        bound), each with the Parquet metadata cache enabled
+     * @param connectionCount pooled Parquet readers per file (== the natural request-concurrency
+     *                        bound); see {@link #defaultConnectionCount()}
      */
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics,
                               int connectionCount) {
@@ -139,88 +136,45 @@ public final class SortedParquetStore implements ListingStore {
         validateIndexWithinFiles(this.index, files);
         this.metrics = metrics;
         this.recordPageReadLatency = recordPageReadLatency;
-        this.rangeReaders = PARQUET_RANGE_READS ? openRangeReaders(files, connectionCount) : Map.of();
-        List<Connection> pooled = openPool(connectionCount);
-        this.pool = new DuckDbConnectionPool(pooled,
-                "interrupted waiting for a sorted Parquet connection",
-                "sorted Parquet connection pool rejected a returned connection",
-                "failed to close sorted Parquet store");
+        if (connectionCount < 1) {
+            throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
+        }
+        this.rangeReaders = openRangeReaders(files, connectionCount);
+        this.groupReaders = openGroupReaders(files, connectionCount);
+        this.ownedGroupReaders = groupReaders.values().stream()
+                .flatMap(java.util.Collection::stream).toList();
     }
 
-    /** The CPU-bounded default connection count, mirroring {@link DuckDbListingStore}. */
+    /**
+     * Default pooled readers per file — and so the store's request-concurrency bound.
+     *
+     * <p>This used to mirror {@link DuckDbListingStore#defaultConnectionCount()}, a CPU-bounded
+     * {@code min(4, cores)}. That was right when a pooled slot was a DuckDB connection, which owns a
+     * thread pool and is a CPU resource; it is wrong now that a slot is a Parquet file handle plus its
+     * decoded footer. Decoding is still CPU work, so there is nothing to gain from many multiples of
+     * the core count — but a request stalled on a page the OS has not got cached should not also be
+     * holding the only slot on a small machine, and 4 was a low ceiling for that on any box.
+     *
+     * <p>Kept a small multiple of the cores rather than an arbitrary constant, with a floor of 8 so a
+     * 2-vCPU box (the colocated-sidecar shape) has headroom, and a ceiling so a large machine does not
+     * hold hundreds of open footers per file for no throughput.
+     */
     public static int defaultConnectionCount() {
-        return DuckDbListingStore.defaultConnectionCount();
+        return Math.max(8, Math.min(32, 2 * Runtime.getRuntime().availableProcessors()));
     }
 
     @Override
     public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                    Projection projection) {
-        SortedRouting.QueryPlan plan = SortedRouting.plan(index, from, toExclusive, limit);
-        if (plan.isEmpty()) {
-            return List.of();
+        if (!recordPageReadLatency) {
+            return rangeRead(from, fromInclusive, toExclusive, limit, projection);
         }
-        if (!rangeReaders.isEmpty()) {
-            if (!recordPageReadLatency) {
-                return rangeRead(from, fromInclusive, toExclusive, limit, projection);
-            }
-            var readerSample = metrics.startPageReadTimer();
-            try {
-                return rangeRead(from, fromInclusive, toExclusive, limit, projection);
-            } finally {
-                metrics.recordPageRead(readerSample);
-            }
-        }
-        SortedRouting.QueryPlan speculative = SortedRouting.speculativePlan(index, from, toExclusive, limit);
-        if (speculative != null && Objects.equals(speculative.upperBound(), plan.upperBound())) {
-            // The caller's own window already bounds at or inside the group end; nothing to gain.
-            speculative = null;
-        }
-        Connection connection = pool.borrow();
+        var sample = metrics.startPageReadTimer();
         try {
-            if (!recordPageReadLatency) {
-                return readSpeculatively(connection, speculative, plan, from, fromInclusive, limit, projection);
-            }
-            var sample = metrics.startPageReadTimer();
-            try {
-                return readSpeculatively(connection, speculative, plan, from, fromInclusive, limit, projection);
-            } finally {
-                metrics.recordPageRead(sample);
-            }
+            return rangeRead(from, fromInclusive, toExclusive, limit, projection);
         } finally {
-            pool.release(connection);
+            metrics.recordPageRead(sample);
         }
-    }
-
-    /**
-     * Reads the speculative window first and widens to the invariant one only if it came up short.
-     *
-     * <p>The gamble is sound because a tighter upper bound returns a prefix of what a looser one
-     * would: a full-count result is byte-identical to the invariant read, and a short one is the
-     * only signal that needs acting on. Correctness therefore never depends on the guess, only cost
-     * does — a widened read costs one wasted query, a hit saves a whole row group's decode.
-     */
-    private List<ListedObject> readSpeculatively(Connection connection, SortedRouting.QueryPlan speculative,
-                                                 SortedRouting.QueryPlan plan, ByteKey from,
-                                                 boolean fromInclusive, int limit, Projection projection) {
-        if (speculative == null) {
-            metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_DECLINED);
-            return query(connection, plan.files(), from, fromInclusive, speculativeUpper(speculative, plan),
-                    limit, projection);
-        }
-        List<ListedObject> rows = query(connection, speculative.files(), from, fromInclusive,
-                speculative.upperBound(), limit, projection);
-        if (rows.size() >= limit) {
-            metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_HIT);
-            return rows;
-        }
-        // Short: either the group's tail really did run out before `limit`, or the listing ends
-        // here. The invariant window is the only one that can tell those apart, so re-read it.
-        metrics.recordSpeculativeBound(ReplayMetrics.SPECULATION_WIDENED);
-        return query(connection, plan.files(), from, fromInclusive, plan.upperBound(), limit, projection);
-    }
-
-    private static ByteKey speculativeUpper(SortedRouting.QueryPlan speculative, SortedRouting.QueryPlan plan) {
-        return speculative == null ? plan.upperBound() : speculative.upperBound();
     }
 
     /**
@@ -257,7 +211,7 @@ public final class SortedParquetStore implements ListingStore {
                 // the reader is told rather than left to look; later files start at their own first.
                 int startBlock = lower == null ? 0 : index.get(rg).rowGroup();
                 for (SortedRowGroupReader.ObjectRow row :
-                        rangeReaders.get(file).range(startBlock, lower, inclusive, upper,
+                        rangeReader(file).range(startBlock, lower, inclusive, upper,
                                 limit - out.size(), projection.owner())) {
                     out.add(new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
                             row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
@@ -276,13 +230,71 @@ public final class SortedParquetStore implements ListingStore {
         }
     }
 
+    /**
+     * One pool of {@link SortedRowGroupReader}s per file, for the delimiter skip-scan.
+     *
+     * <p>The skip-scan used to construct a reader per request, which re-parsed the footer — the same
+     * per-request footer parse the range path was pooled to avoid, and a cost that <em>rises</em> with
+     * the small pages a served fixture is written with, because the offset and column indexes it
+     * carries grow with the page count. A {@code SortedRowGroupReader} holds mutable per-read state
+     * (its requested schema, its open page store), so it is pooled rather than shared, exactly as the
+     * range readers are.
+     */
+    private static Map<Path, BlockingQueue<SortedRowGroupReader>> openGroupReaders(List<Path> files,
+                                                                                   int poolSize) {
+        Map<Path, BlockingQueue<SortedRowGroupReader>> readers = new LinkedHashMap<>();
+        try {
+            for (Path file : files) {
+                BlockingQueue<SortedRowGroupReader> pool = new ArrayBlockingQueue<>(Math.max(1, poolSize));
+                for (int i = 0; i < Math.max(1, poolSize); i++) {
+                    pool.add(new SortedRowGroupReader(file));
+                }
+                readers.put(file.toAbsolutePath(), pool);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to open a sorted Parquet row-group reader", e);
+        }
+        return Map.copyOf(readers);
+    }
+
+    /**
+     * The readers for {@code file}, looked up the same way {@link #validateIndexWithinFiles} admits an
+     * index entry — by absolute path. Keying on the raw {@link Path} would let an index that named its
+     * files relatively pass validation and then miss the map, which is a {@code NullPointerException}
+     * at read time rather than the clear rejection the validation exists to give.
+     */
+    private SortedRangeReader rangeReader(Path file) {
+        SortedRangeReader reader = rangeReaders.get(file.toAbsolutePath());
+        if (reader == null) {
+            throw new IllegalStateException("no sorted Parquet reader for fixture file " + file);
+        }
+        return reader;
+    }
+
+    private BlockingQueue<SortedRowGroupReader> pool(Path file) {
+        BlockingQueue<SortedRowGroupReader> readers = groupReaders.get(file.toAbsolutePath());
+        if (readers == null) {
+            throw new IllegalStateException("no sorted Parquet row-group reader for fixture file " + file);
+        }
+        return readers;
+    }
+
+    private SortedRowGroupReader borrowGroupReader(Path file) {
+        try {
+            return pool(file).take();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted waiting for a sorted Parquet row-group reader", e);
+        }
+    }
+
     private static Map<Path, SortedRangeReader> openRangeReaders(List<Path> files, int poolSize) {
         Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
         try {
             for (Path file : files) {
                 // Same width as the DuckDB pool it replaces: one reader per concurrent request the
                 // store is sized for, since a Parquet reader carries per-read state.
-                readers.put(file, new SortedRangeReader(file, poolSize));
+                readers.put(file.toAbsolutePath(), new SortedRangeReader(file, poolSize));
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to open a sorted Parquet range reader", e);
@@ -324,11 +336,29 @@ public final class SortedParquetStore implements ListingStore {
         }
     }
 
+    /**
+     * Closes every reader this store opened — the row-group readers and the range readers alike,
+     * whether or not they are currently in their pool.
+     *
+     * <p>Both halves are load-bearing. Iterating the <em>pools</em> would skip anything a request
+     * still holds, and the range readers were being missed entirely: they are the sole serving path
+     * now, and each owns one open {@code ParquetFileReader} per pooled slot per file.
+     */
     @Override
     public void close() {
-        RuntimeException failure = pool.close();
-        if (failure != null) {
-            throw failure;
+        for (SortedRowGroupReader reader : ownedGroupReaders) {
+            closeQuietly(reader);
+        }
+        for (SortedRangeReader reader : rangeReaders.values()) {
+            closeQuietly(reader);
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable reader) {
+        try {
+            reader.close();
+        } catch (Exception e) {
+            // Best effort: a fixture reader holds no state a failed close could corrupt.
         }
     }
 
@@ -341,7 +371,10 @@ public final class SortedParquetStore implements ListingStore {
      * further hop that lands in the same one — steps forward to the cursor's position. The key cursor
      * is <em>resumable</em>, not a bulk decode: a row group here can be far larger than the directory a
      * single hop is chasing, so it decodes only the rows strictly between the previous hop's position
-     * and this one's, however many that is, rather than the whole group up front. Before any of that, a
+     * and this one's, however many that is, rather than the whole group up front. It is also opened
+     * <em>at the page that can hold the hop's target</em> rather than at the group's first row, so a
+     * hop landing in the middle of a row group does not decode the half of it that lies behind. Before
+     * any of that, a
      * hop first tries a zero-I/O shortcut off the routing index alone (see the loop's own comment): a
      * row group whose first key and successor group's first key already share a common prefix is, by
      * sortedness, entirely that one common prefix — skip it whole, no Parquet read at all. On a bucket
@@ -355,11 +388,13 @@ public final class SortedParquetStore implements ListingStore {
      *       this, since every later cursor is already past the previous entry) and jump the cursor to
      *       {@link ByteKeys#successor}{@code (P)} inclusive, past {@code P}'s whole subtree in one hop.
      *   <li>No {@code /} after the prefix → a bare object directly under it. This is the only hop that
-     *       pays for the full row (all nine {@code ListedObject} columns, via {@link
-     *       SortedRowGroupReader#rows}) rather than just the key column — bare objects directly under a
-     *       scanned prefix are rare in a real bucket, so bulk-decoding the row group's other eight
-     *       columns here, rather than threading a single-row-index deeper into the Parquet reader, is
-     *       the simpler trade. Advance the cursor past this exact key (exclusive) and continue.
+     *       pays for the full row (all nine {@code ListedObject} columns) rather than just the key
+     *       column, and it reads them through the same pooled, page-index-driven {@link
+     *       SortedRangeReader} the range path uses — <b>a page of rows at a time</b>, not one row per
+     *       hop (see {@link #objectAt}). It used to bulk-decode the whole row group instead, on the
+     *       reasoning that bare objects under a scanned prefix are rare — but "rare" is a property of
+     *       the bucket, and on a fixture where they are not rare that decode measured <b>~700&nbsp;ms
+     *       to return one row</b>. Advance the cursor past this exact key (exclusive) and continue.
      *   <li>The cursor lands past every key in its row group (a gap — {@code successor(P)} is rarely an
      *       actual key) → jump straight to the next group's first key; the last group exhausting the
      *       fixture ends the scan.
@@ -383,7 +418,7 @@ public final class SortedParquetStore implements ListingStore {
         SortedRowGroupReader reader = null;
         int cachedBlockIndex = -1;
         SortedRowGroupReader.KeyCursor keyCursor = null;
-        List<SortedRowGroupReader.ObjectRow> cachedRows = null;
+        Deque<SortedRowGroupReader.ObjectRow> lookahead = new ArrayDeque<>();
         try {
             hop:
             while (out.size() < limit + 1) {
@@ -429,9 +464,18 @@ public final class SortedParquetStore implements ListingStore {
                         keyCursor = null;
                     }
                     if (reader != null) {
-                        reader.close();
+                        // Cleared BEFORE the return, so the `finally` cannot return it a second time if
+                        // the borrow below throws. A double return is not a leak but the opposite and
+                        // worse: with a contended pool the add succeeds and one reader is in the pool
+                        // twice, so two requests borrow the same non-thread-safe instance and race on
+                        // its requested schema and its open page store.
+                        SortedRowGroupReader done = reader;
+                        Path doneFile = openFile;
+                        reader = null;
+                        openFile = null;
+                        pool(doneFile).add(done);
                     }
-                    reader = new SortedRowGroupReader(entry.file());
+                    reader = borrowGroupReader(entry.file());
                     openFile = entry.file();
                     cachedBlockIndex = -1;
                 }
@@ -439,9 +483,10 @@ public final class SortedParquetStore implements ListingStore {
                     if (keyCursor != null) {
                         keyCursor.close();
                     }
-                    keyCursor = reader.openKeyCursor(entry.rowGroup());
+                    // Opened at the page that can hold this hop's target, not at the group's first row,
+                    // and carrying no page that can only hold keys at/above the scan's upper bound.
+                    keyCursor = reader.openKeyCursor(entry.rowGroup(), cursor, inclusive, upper);
                     cachedBlockIndex = entry.rowGroup();
-                    cachedRows = null;   // decoded lazily below, only if a bare object actually needs it
                     // A row-group open the zero-I/O shortcut above didn't catch (the group straddles a
                     // prefix boundary, or is the fixture's last group). Counted so a test can pin the
                     // skip-scan's cost to O(prefixes emitted) rather than O(keys under the prefix) —
@@ -478,10 +523,8 @@ public final class SortedParquetStore implements ListingStore {
                         }
                     }
                 } else {
-                    if (cachedRows == null) {
-                        cachedRows = reader.rows(entry.rowGroup(), projection.owner());
-                    }
-                    out.add(new DelimitedEntry(null, toListedObject(cachedRows.get((int) keyCursor.position()))));
+                    out.add(new DelimitedEntry(null, toListedObject(objectAt(
+                            lookahead, entry, key, upper, limit + 1 - out.size(), projection.owner()))));
                     cursor = key;
                     inclusive = false;
                 }
@@ -491,10 +534,42 @@ public final class SortedParquetStore implements ListingStore {
                 keyCursor.close();
             }
             if (reader != null) {
-                reader.close();
+                pool(openFile).add(reader);
             }
         }
         return out;
+    }
+
+    /**
+     * The full row at {@code key} — every listing column — read through the pooled page-index reader
+     * the range path uses, <b>a run of rows at a time</b>.
+     *
+     * <p>A bare object is one hop of the skip-scan, and hops are what the scan is O(). Reading one row
+     * per hop is therefore correct and, on a directory that is mostly bare objects, quadratic in
+     * disguise: a rollup returning 1,001 of them measured <b>1.1&nbsp;s</b>, all of it a thousand
+     * separate page-index seeks landing in the same handful of pages. Bare objects under one prefix
+     * are consecutive in key order, so {@code want} of them cost one read.
+     *
+     * <p>{@code lookahead} is validated by exact key, never by position: the scan may jump to a
+     * successor at any hop, and a row buffered from before the jump must not be served for after it.
+     * A miss simply refills, so the buffer is a saving and never a source of truth.
+     */
+    private SortedRowGroupReader.ObjectRow objectAt(Deque<SortedRowGroupReader.ObjectRow> lookahead,
+                                                    IndexEntry entry, byte[] key, byte[] upper, int want,
+                                                    boolean includeOwner) throws IOException {
+        if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().key(), key)) {
+            lookahead.clear();
+            lookahead.addAll(rangeReader(entry.file())
+                    .range(entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
+        }
+        SortedRowGroupReader.ObjectRow row = lookahead.poll();
+        if (row != null && Arrays.equals(row.key(), key)) {
+            return row;
+        }
+        // Only reachable if the key vanished between the cursor reading it and this read, which the
+        // skip-scan cannot recover from silently.
+        throw new IllegalStateException("sorted fixture has no OBJECT row at a key its own key cursor "
+                + "just returned, in " + entry.file() + " row group " + entry.rowGroup());
     }
 
     /**
@@ -545,69 +620,6 @@ public final class SortedParquetStore implements ListingStore {
         return shifted.getEpochSecond() * 1_000_000L + shifted.getNano() / 1_000L;
     }
 
-    private List<ListedObject> query(Connection connection, List<Path> files, ByteKey from,
-                                     boolean fromInclusive, ByteKey upper, int limit, Projection projection) {
-        String sql = buildSql(files, from, fromInclusive, upper, projection);
-        var sample = metrics.startParquetQueryTimer();
-        int rows = 0;
-        boolean success = false;
-        try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            int i = 1;
-            if (from != null) {
-                ps.setBytes(i++, from.toByteArray());
-            }
-            if (upper != null) {
-                ps.setBytes(i++, upper.toByteArray());
-            }
-            ps.setInt(i, limit);
-            try (ResultSet rs = ps.executeQuery()) {
-                List<ListedObject> out = new ArrayList<>();
-                while (rs.next()) {
-                    out.add(RowMapper.read(rs));
-                }
-                rows = out.size();
-                success = true;
-                return out;
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("failed to query sorted Parquet store", e);
-        } finally {
-            metrics.recordParquetQuery(sample, rows, success);
-        }
-    }
-
-    private static String buildSql(List<Path> files, ByteKey from, boolean fromInclusive, ByteKey upper,
-                                   Projection projection) {
-        String ownerId = projection.owner() ? "owner_id" : "NULL::VARCHAR AS owner_id";
-        String ownerDisplayName = projection.owner()
-                ? "owner_display_name" : "NULL::VARCHAR AS owner_display_name";
-        StringBuilder sql = new StringBuilder()
-                .append("SELECT hex(key) AS key_hex, size, last_modified, etag, storage_class, ")
-                .append(ownerId).append(", ").append(ownerDisplayName)
-                .append(", checksum_algorithm, checksum_type FROM read_parquet(")
-                .append(fileList(files))
-                .append(") WHERE row_type = 'OBJECT'");
-        if (from != null) {
-            sql.append(fromInclusive ? " AND key >= ?" : " AND key > ?");
-        }
-        if (upper != null) {
-            sql.append(" AND key < ?");
-        }
-        sql.append(" ORDER BY key LIMIT ?");
-        return sql.toString();
-    }
-
-    private static String fileList(List<Path> files) {
-        StringBuilder out = new StringBuilder("[");
-        for (int i = 0; i < files.size(); i++) {
-            if (i > 0) {
-                out.append(", ");
-            }
-            out.append(RowMapper.sqlString(files.get(i).toAbsolutePath().toString()));
-        }
-        return out.append(']').toString();
-    }
-
     private static void validateIndexWithinFiles(List<IndexEntry> index, List<Path> files) {
         Set<Path> known = new LinkedHashSet<>();
         for (Path f : files) {
@@ -619,54 +631,5 @@ public final class SortedParquetStore implements ListingStore {
                         "index references a file outside the fixture: " + entry.file());
             }
         }
-    }
-
-    private List<Connection> openPool(int connectionCount) {
-        if (connectionCount < 1) {
-            throw new IllegalArgumentException("connection count must be at least 1, got " + connectionCount);
-        }
-        List<Connection> out = new ArrayList<>(connectionCount);
-        try {
-            int threadsPerConnection = threadsPerConnection(connectionCount);
-            for (int i = 0; i < connectionCount; i++) {
-                out.add(openConnection(threadsPerConnection));
-            }
-            return out;
-        } catch (SQLException | RuntimeException e) {
-            for (Connection connection : out) {
-                try {
-                    connection.close();
-                } catch (SQLException closeError) {
-                    e.addSuppressed(closeError);
-                }
-            }
-            throw new IllegalStateException("failed to open sorted Parquet store", e);
-        }
-    }
-
-    /**
-     * DuckDB threads to give each pooled connection. Every connection is an independent in-memory
-     * DuckDB instance and defaults its thread pool to the machine's core count — so an N-connection
-     * pool defaults to N x cores threads on cores cores. That oversubscription is invisible on a
-     * single-client walk and catastrophic under a real work-stealing client: concurrent range reads
-     * stop sharing the machine and start fighting for it, and per-query latency degrades
-     * super-linearly in the number of in-flight requests. Divide the machine across the pool instead,
-     * with a floor of one thread so a large pool still works.
-     */
-    private static int threadsPerConnection(int connectionCount) {
-        return Math.max(1, Runtime.getRuntime().availableProcessors() / connectionCount);
-    }
-
-    private static Connection openConnection(int threadsPerConnection) throws SQLException {
-        Connection connection = DriverManager.getConnection("jdbc:duckdb:");
-        try (var st = connection.createStatement()) {
-            st.execute("SET threads=" + threadsPerConnection);
-            // Keep decoded Parquet footers across pages on this connection, so a bounded read never
-            // re-reads the row-group index. DuckDB renamed this from the older `enable_object_cache`,
-            // which still parses but is a documented no-op ("[PLACEHOLDER] Legacy setting - does
-            // nothing") — setting the old name silently bought nothing.
-            st.execute("SET parquet_metadata_cache=true");
-        }
-        return connection;
     }
 }

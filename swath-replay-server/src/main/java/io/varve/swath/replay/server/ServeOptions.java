@@ -23,12 +23,16 @@ final class ServeOptions {
     int port;
 
     @Option(names = "--parquet-connections", defaultValue = "0",
-            description = "DuckDB connections for concurrent Parquet replay reads; 0 uses the CPU-bounded default.")
+            description = "Concurrent fixture readers, which is also this server's read-concurrency "
+                    + "bound: a request beyond it queues. Set it above the widest fan-out any client "
+                    + "will drive, or the server's own cost starts varying with the client's "
+                    + "concurrency. 0 uses the store's default.")
     int parquetConnections;
 
-    @Option(names = "--serving-mode", defaultValue = "auto",
-            description = "How to serve the fixture: auto (sorted when stamped+objects+sane, else DuckDB), "
-                    + "sorted (require a sorted fixture, fail otherwise), duckdb (force role-1 oracle).")
+    @Option(names = "--serving-mode", defaultValue = "sorted",
+            description = "How to serve the fixture: sorted (the default -- require a stamped, "
+                    + "objects-mode, strictly-sorted fixture and fail by name otherwise), or duckdb "
+                    + "(force the role-1 oracle, which serves any capture).")
     ServingMode servingMode;
 
     @Option(names = "--metrics-port", defaultValue = "-1",

@@ -38,8 +38,8 @@ public final class BenchCommand implements Callable<Integer> {
     @Option(names = "--host", defaultValue = "127.0.0.1", description = "Bind host for the temporary server(s).")
     String host;
 
-    @Option(names = "--modes", defaultValue = "auto", split = ",",
-            description = "Serving mode(s) to benchmark: auto, duckdb, sorted. Comma-separated to run the SAME "
+    @Option(names = "--modes", defaultValue = "sorted", split = ",",
+            description = "Serving mode(s) to benchmark: sorted, duckdb. Comma-separated to run the SAME "
                     + "fixture through more than one mode in this invocation (e.g. sorted,duckdb), reporting a "
                     + "ratio of each later mode against the first.")
     List<ServingMode> modes;

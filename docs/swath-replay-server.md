@@ -68,14 +68,13 @@ swath-replay-server serve \
   --fixture "$RUN_DIR/sorted" \
   --bucket digitalcorpora \
   --host 127.0.0.1 --port 19090 \
-  --serving-mode auto
+  --serving-mode sorted
 ```
 
 `--serving-mode` selects the fixture path:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Use direct sorted serving only if every file has a recognized object-mode sortedness stamp, complete multi-file indexes, pure object rows, and a sane ascending row-group index. Otherwise log the reason and use DuckDB. |
 | `sorted` | Require that direct path and fail startup if eligibility cannot be proved. Use this for a focused test. |
 | `duckdb` | Materialize and index the fixture in temporary DuckDB storage. This is the independent oracle and legacy fallback. |
 
@@ -84,6 +83,11 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 `swath.replay.prefetch.enabled` (`true`), `swath.replay.prefetch.window-rows` (`12500`),
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
+
+Sorted mode reads Parquet's page index directly and stops once it has the requested rows.
+Final sorted files therefore default to 1,024 rows per data page
+(`swath.sort.final-page-rows`); a page is the smallest unit a bounded read can decode.
+Older fixtures remain correct and can be re-sorted to adopt the smaller seek geometry.
 
 ## Serving concurrency (`--max-concurrent-requests`)
 

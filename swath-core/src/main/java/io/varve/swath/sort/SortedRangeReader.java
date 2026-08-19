@@ -26,7 +26,9 @@ import org.apache.parquet.filter2.predicate.Operators;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.BlockMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
+import org.apache.parquet.internal.column.columnindex.OffsetIndex;
 import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
+import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
 import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.io.LocalInputFile;
@@ -143,29 +145,24 @@ public final class SortedRangeReader implements AutoCloseable {
         try {
             reader.setRequestedSchema(schema);
             for (int block = Math.max(0, startRowGroup); block < blocks.size() && out.size() < limit; block++) {
+                ColumnIndexStore indexStore = reader.getColumnIndexStore(block);
                 RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
-                        filter, reader.getColumnIndexStore(block), FILTERED_COLUMNS,
-                        blocks.get(block).getRowCount());
+                        filter, indexStore, FILTERED_COLUMNS, blocks.get(block).getRowCount());
                 if (ranges.rowCount() == 0) {
                     continue;   // no page in this group can hold the range
                 }
-                try (PageReadStore pages = reader.readFilteredRowGroup(block, ranges)) {
-                    long rowCount = pages.getRowCount();
-                    RecordReader<Group> rowReader =
-                            columnIo.getRecordReader(pages, new GroupRecordConverter(schema));
-                    for (long i = 0; i < rowCount && out.size() < limit; i++) {
-                        Group g = rowReader.read();
-                        if (!isObject(g)) {
-                            // Eligibility should have excluded a fixture carrying anything else, but a
-                            // reader that assumes it would serve a rolled-up prefix as an object.
-                            continue;
-                        }
-                        byte[] key = g.getBinary(KEY_FIELD, 0).getBytes();
-                        if (!inRange(key, from, fromInclusive, toExclusive)) {
-                            continue;   // the index prunes pages, never rows
-                        }
-                        out.add(SortedRowGroupReader.toObjectRow(g, key, includeOwner));
-                    }
+                RowRanges wanted = firstRowsOf(ranges, indexStore, limit - out.size());
+                int before = out.size();
+                readInto(out, reader, columnIo, schema, block, wanted, from, fromInclusive, toExclusive,
+                        limit, includeOwner);
+                if (out.size() - before < limit - before && wanted.rowCount() < ranges.rowCount()) {
+                    // The window is sized to hold `limit` qualifying rows whenever every row in it is
+                    // an OBJECT, which is exactly what sorted-serving eligibility promises. Coming up
+                    // short means the promise did not hold, so re-read the whole surviving range —
+                    // correctness never rides on the window, only cost does.
+                    out.subList(before, out.size()).clear();
+                    readInto(out, reader, columnIo, schema, block, ranges, from, fromInclusive,
+                            toExclusive, limit, includeOwner);
                 }
             }
         } finally {
@@ -173,6 +170,93 @@ public final class SortedRangeReader implements AutoCloseable {
         }
         return out;
     }
+
+    /** Decodes {@code ranges} of one row group into {@code out}, stopping at {@code limit} rows. */
+    private void readInto(List<ObjectRow> out, ParquetFileReader reader, MessageColumnIO columnIo,
+                          MessageType schema, int block, RowRanges ranges, byte[] from,
+                          boolean fromInclusive, byte[] toExclusive, int limit, boolean includeOwner)
+            throws IOException {
+        try (PageReadStore pages = reader.readFilteredRowGroup(block, ranges)) {
+            long rowCount = pages.getRowCount();
+            RecordReader<Group> rowReader =
+                    columnIo.getRecordReader(pages, new GroupRecordConverter(schema));
+            for (long i = 0; i < rowCount && out.size() < limit; i++) {
+                Group g = rowReader.read();
+                if (!isObject(g)) {
+                    // Eligibility should have excluded a fixture carrying anything else, but a
+                    // reader that assumes it would serve a rolled-up prefix as an object.
+                    continue;
+                }
+                byte[] key = g.getBinary(KEY_FIELD, 0).getBytes();
+                if (!inRange(key, from, fromInclusive, toExclusive)) {
+                    continue;   // the index prunes pages, never rows
+                }
+                out.add(SortedRowGroupReader.toObjectRow(g, key, includeOwner));
+            }
+        }
+    }
+
+    /**
+     * The head of {@code ranges} that can still be needed once {@code want} more rows would satisfy
+     * the request — the difference between reading a page and reading a row group's whole tail.
+     *
+     * <p><b>Why this is not the page filter's job.</b> A listing page is a request for {@code n} rows
+     * <em>at or after</em> a key, with no upper key bound to state; the predicate is therefore
+     * {@code key >= from}, and every page from the seek to the end of the row group satisfies it. The
+     * decode loop stops as soon as it holds {@code limit} rows, but {@link
+     * ParquetFileReader#readFilteredRowGroup} has by then already read and buffered every one of those
+     * pages, across every projected column. That is why a bounded read measured <b>flat</b> from
+     * {@code max-keys=1} to {@code max-keys=1000}: the answer's size was never what it cost.
+     *
+     * <p>The window is {@code want} rows plus one page's worth of slack, because only the <em>first</em>
+     * surviving page can hold rows before {@code from} (pages are in key order, so every later page
+     * starts at or after it) and those rows are skipped without being returned. With that slack the
+     * window provably holds {@code want} qualifying rows whenever the group's remaining rows do, so
+     * the caller's widen path is a correctness backstop rather than an expected cost.
+     */
+    private static RowRanges firstRowsOf(RowRanges ranges, ColumnIndexStore indexStore, int want) {
+        long first = ranges.iterator().nextLong();
+        long slack = pageRowsAt(indexStore, first);
+        long end = first + slack + want;
+        if (end <= 0 || end >= first + ranges.rowCount()) {
+            return ranges;   // overflow, or the window already spans everything that survived
+        }
+        return RowRanges.intersection(ranges, RowRanges.createSingle(end));
+    }
+
+    /**
+     * Rows in the key-column page that starts at row {@code firstRow} — the window's slack.
+     *
+     * <p>Every "don't know" answer here returns a slack large enough to decline to bound at all
+     * ({@link #firstRowsOf} then reads the full surviving ranges), because under-stating the slack is
+     * the one error that could shorten a page. A fixture with no page index cannot be read by this
+     * class in the first place, but that must fail on the read, not on a silently narrowed window.
+     */
+    private static long pageRowsAt(ColumnIndexStore indexStore, long firstRow) {
+        OffsetIndex offsets;
+        try {
+            offsets = indexStore.getOffsetIndex(ColumnPath.get(KEY_FIELD));
+        } catch (ColumnIndexStore.MissingOffsetIndexException e) {
+            return DO_NOT_BOUND;
+        }
+        if (offsets == null) {
+            return DO_NOT_BOUND;
+        }
+        int pages = offsets.getPageCount();
+        for (int p = 0; p < pages; p++) {
+            if (offsets.getFirstRowIndex(p) == firstRow) {
+                return p + 1 < pages ? offsets.getFirstRowIndex(p + 1) - firstRow : DO_NOT_BOUND;
+            }
+        }
+        return DO_NOT_BOUND;   // not page-aligned: decline to bound rather than under-read
+    }
+
+    /**
+     * A slack big enough that {@link #firstRowsOf}'s window always spans everything that survived the
+     * page filter — i.e. "decline to bound". Well below {@link Long#MAX_VALUE} so adding a caller's
+     * {@code limit} to it cannot overflow.
+     */
+    private static final long DO_NOT_BOUND = Long.MAX_VALUE / 4;
 
     private ParquetFileReader borrow() {
         try {

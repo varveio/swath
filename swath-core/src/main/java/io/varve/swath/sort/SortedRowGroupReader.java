@@ -7,22 +7,36 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.ColumnReader;
 import org.apache.parquet.column.impl.ColumnReadStoreImpl;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
+import org.apache.parquet.filter2.compat.FilterCompat;
+import org.apache.parquet.filter2.predicate.FilterApi;
+import org.apache.parquet.filter2.predicate.FilterPredicate;
+import org.apache.parquet.filter2.predicate.Operators;
 import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.metadata.ColumnPath;
+import org.apache.parquet.internal.column.columnindex.BoundaryOrder;
+import org.apache.parquet.internal.column.columnindex.ColumnIndex;
+import org.apache.parquet.internal.column.columnindex.OffsetIndex;
+import org.apache.parquet.internal.filter2.columnindex.ColumnIndexFilter;
+import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
+import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
+import org.apache.parquet.io.api.Binary;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
 
@@ -105,8 +119,12 @@ public final class SortedRowGroupReader implements AutoCloseable {
         }
     }
 
+    private static final ColumnPath KEY_COLUMN_PATH = ColumnPath.get(KEY_FIELD);
+    private static final Set<ColumnPath> KEY_COLUMN = Set.of(KEY_COLUMN_PATH);
+
     private final Path file;
     private final ParquetFileReader reader;
+    private final List<org.apache.parquet.hadoop.metadata.BlockMetaData> blocks;
     private final ColumnIOFactory columnIoFactory = new ColumnIOFactory();
     private final String createdBy;
     private final MessageType keySchema;
@@ -121,6 +139,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
         this.file = file;
         this.reader = ParquetFileReader.open(new LocalInputFile(file));
         this.createdBy = reader.getFooter().getFileMetaData().getCreatedBy();
+        this.blocks = List.copyOf(reader.getFooter().getBlocks());
         MessageType full = reader.getFooter().getFileMetaData().getSchema();
         this.keySchema = project(full, KEY_FIELD);
         this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
@@ -137,10 +156,153 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * a bulk list.
      */
     public KeyCursor openKeyCursor(int blockIndex) throws IOException {
+        return openKeyCursor(blockIndex, null, true, null);
+    }
+
+    /**
+     * As {@link #openKeyCursor(int)}, but positioned at the first row of the first <b>page</b> that
+     * can hold {@code from} — every page before it is neither read nor decoded — and carrying only
+     * the pages that can hold a key below {@code toExclusive}.
+     *
+     * <p><b>Why a whole-group cursor was the wrong shape.</b> {@link #openKeyCursor(int)} starts at
+     * row 0 and {@link KeyCursor#advanceTo} walks forward to the target, decoding every key it steps
+     * over. A row group holds hundreds of thousands of rows, so a skip-scan hop landing in the middle
+     * of one paid for half a row group's keys to answer a question about one — and paid it again for
+     * the next group. Parquet's page index answers "which page can hold this key" from the footer
+     * alone, which is the same question at a hundredth of the cost.
+     *
+     * <p>The cursor keeps every property the skip-scan relies on: it is still forward-only and still
+     * resumable, so a later hop landing in the same page run costs only the rows between the two
+     * positions, and {@link KeyCursor#position()} still reports a row index within the row group
+     * (the surviving pages are contiguous from the first, so the offset is exact). The page filter
+     * prunes pages, never rows, so the first surviving page normally holds rows before {@code from}
+     * — {@code advanceTo} steps past them exactly as it always did.
+     *
+     * @param from        lower bound to position at; {@code null} opens at the group's first row
+     * @param inclusive   whether {@code from} itself qualifies
+     * @param toExclusive optional upper bound; pages that can only hold keys at or above it are not read
+     */
+    public KeyCursor openKeyCursor(int blockIndex, byte[] from, boolean inclusive, byte[] toExclusive)
+            throws IOException {
+        long rowCount = blocks.get(blockIndex).getRowCount();
+        ColumnIndexStore indexStore = reader.getColumnIndexStore(blockIndex);
+        requirePagesAscend(indexStore, file, blockIndex);
+        RowRanges eligible = from == null && toExclusive == null
+                ? RowRanges.createSingle(rowCount)
+                : ColumnIndexFilter.calculateRowRanges(
+                        FilterCompat.get(keyBetween(from, inclusive, toExclusive)),
+                        indexStore, KEY_COLUMN, rowCount);
+        if (eligible.rowCount() == 0) {
+            return KeyCursor.exhausted(file, blockIndex);
+        }
+        OffsetIndex offsets = indexStore.getOffsetIndex(KEY_COLUMN_PATH);
+        return new KeyCursor(this, file, blockIndex, eligible, offsets, rowCount);
+    }
+
+    /**
+     * Loads the next window of at most {@link KeyCursor#WINDOW_ROWS} rows of {@code eligible} starting
+     * at page {@code fromPage}, or {@code null} once no eligible page is left.
+     *
+     * <p>Whole pages, because a page is what Parquet can address; the window is a row budget only so
+     * that "a few pages" means the same thing whatever the pages hold.
+     *
+     * <p><b>A window is always a contiguous run of pages</b>, so that {@code firstRow + rows} is a row
+     * index and {@link KeyCursor#position()} keeps meaning what it says. A pruned page in the middle
+     * of a window would break that silently — the cursor would report a position short of the true
+     * one by the gap. Ending the window at a gap instead costs nothing: the next window re-seats the
+     * position at its own first row, which is how the cursor already crosses a boundary. (With the
+     * ascending-pages guard a range predicate cannot produce an interior gap at all; this keeps the
+     * arithmetic true rather than true-by-argument.)
+     */
+    private Window loadWindow(int blockIndex, RowRanges eligible, OffsetIndex offsets, long rowCount,
+                              int fromPage) throws IOException {
+        int pageCount = offsets.getPageCount();
+        List<Integer> pages = new ArrayList<>();
+        long rows = 0;
+        int page = fromPage;
+        for (; page < pageCount && rows < KeyCursor.WINDOW_ROWS; page++) {
+            long first = offsets.getFirstRowIndex(page);
+            long last = offsets.getLastRowIndex(page, rowCount);
+            if (!eligible.isOverlapping(first, last)) {
+                if (pages.isEmpty()) {
+                    continue;   // still skipping ahead to the first page that can hold the range
+                }
+                break;   // a gap ENDS the window; see below
+            }
+            pages.add(page);
+            rows += last - first + 1;
+        }
+        if (pages.isEmpty()) {
+            return null;
+        }
         reader.setRequestedSchema(keySchema);
-        PageReadStore pages = reader.readRowGroup(blockIndex);
-        RecordReader<Group> rowReader = keyColumnIo.getRecordReader(pages, new GroupRecordConverter(keySchema));
-        return new KeyCursor(file, blockIndex, pages, rowReader, pages.getRowCount());
+        RowRanges window = RowRanges.create(rowCount,
+                pages.stream().mapToInt(Integer::intValue).iterator(), offsets);
+        PageReadStore store = reader.readFilteredRowGroup(blockIndex, window);
+        try {
+            RecordReader<Group> rowReader =
+                    keyColumnIo.getRecordReader(store, new GroupRecordConverter(keySchema));
+            return new Window(store, rowReader, offsets.getFirstRowIndex(pages.getFirst()),
+                    window.rowCount(), page);
+        } catch (RuntimeException | Error e) {
+            store.close();   // the page buffers are ours until a Window owns them
+            throw e;
+        }
+    }
+
+    /**
+     * One loaded stretch of a row group's key column: the pages behind it, the reader over them, the
+     * row index it starts at, how many rows it carries, and the page to resume from.
+     */
+    private record Window(PageReadStore pages, RecordReader<Group> rowReader, long firstRow, long rows,
+                          int nextPage) {
+    }
+
+    /**
+     * Refuses a row group whose key column's <b>pages</b> are not in ascending order, before a single
+     * row of it is read.
+     *
+     * <p><b>The per-row ascent check is no longer sufficient on its own.</b> That check proves what it
+     * steps over, and it was sufficient while a cursor read the whole row group. A cursor that prunes
+     * pages by the page index never reads the pages it prunes — and on a disordered group the page
+     * index is exactly what misleads it: a page whose keys sort below the target has a {@code max}
+     * below the target too, so it is pruned, and the rows in it are dropped from the listing without
+     * anything reading them and without anything to check. Measured on a deliberately disordered
+     * three-page group: the whole-group cursor threw at the offending row; the pruning cursor returned
+     * a listing quietly missing a third of the group.
+     *
+     * <p>Parquet already computes this: {@code BoundaryOrder} over the column index's per-page
+     * min/max. It is a footer read, already cached per (reader, row group), and it costs no I/O per
+     * request. It is <em>complementary</em> to the per-row check, not a replacement — a single page
+     * is trivially "ascending" whatever its rows do, and disorder inside a page is caught where it
+     * always was, by the rows being read.
+     *
+     * <p>A column index that is absent at all is not disorder and is not reported as such: this
+     * declines to judge, and the read fails on the offset index it also needs.
+     */
+    private static void requirePagesAscend(ColumnIndexStore indexStore, Path file, int blockIndex) {
+        ColumnIndex keyIndex = indexStore.getColumnIndex(KEY_COLUMN_PATH);
+        if (keyIndex == null || keyIndex.getBoundaryOrder() == BoundaryOrder.ASCENDING) {
+            return;
+        }
+        // row -1: the disorder is a property of the group's page boundaries, not of any one row.
+        throw RowGroupOrderException.at(file, blockIndex, -1,
+                "its keys must be in strictly ascending unsigned order, but the column index reports "
+                        + "its pages " + keyIndex.getBoundaryOrder());
+    }
+
+    /** The page-index predicate for {@code [from, toExclusive)}; at least one bound is non-null. */
+    private static FilterPredicate keyBetween(byte[] from, boolean inclusive, byte[] toExclusive) {
+        Operators.BinaryColumn key = FilterApi.binaryColumn(KEY_FIELD);
+        FilterPredicate lower = from == null ? null
+                : inclusive ? FilterApi.gtEq(key, Binary.fromConstantByteArray(from.clone()))
+                            : FilterApi.gt(key, Binary.fromConstantByteArray(from.clone()));
+        FilterPredicate upper = toExclusive == null ? null
+                : FilterApi.lt(key, Binary.fromConstantByteArray(toExclusive.clone()));
+        if (lower == null) {
+            return upper;
+        }
+        return upper == null ? lower : FilterApi.and(lower, upper);
     }
 
     /**
@@ -168,33 +330,100 @@ public final class SortedRowGroupReader implements AutoCloseable {
      */
     public static final class KeyCursor implements AutoCloseable {
 
+        /**
+         * Rows a single load pulls in.
+         *
+         * <p>The cursor used to load its whole row group. That was invisible while a row group was
+         * one or two dozen pages; once a served fixture writes pages a listing page wide, a 400,000-row
+         * group is several hundred of them, and a hop that wants one key was reading every one — a
+         * root-level rollup measured most of its cost there. A few pages is what a hop actually
+         * consumes, and a scan that consumes more just loads the next window; nothing about the
+         * cursor's contract changes, only how much it reads ahead of being asked.
+         */
+        static final long WINDOW_ROWS = 8192;
+
+        private final SortedRowGroupReader owner;
         private final Path file;
         private final int blockIndex;
-        private final PageReadStore pages;
-        private final RecordReader<Group> rowReader;
-        private final long rowCount;
-        private long position = -1;
+        private final RowRanges eligible;
+        private final OffsetIndex offsets;
+        private final long groupRowCount;
+
+        private Window window;
+        private long windowEnd;      // exclusive row index of the loaded window
+        private int nextPage;
+        private long position;
         private byte[] currentKey;
 
-        private KeyCursor(Path file, int blockIndex, PageReadStore pages, RecordReader<Group> rowReader,
-                          long rowCount) {
+        private KeyCursor(SortedRowGroupReader owner, Path file, int blockIndex, RowRanges eligible,
+                          OffsetIndex offsets, long groupRowCount) throws IOException {
+            this.owner = owner;
             this.file = file;
             this.blockIndex = blockIndex;
-            this.pages = pages;
-            this.rowReader = rowReader;
-            this.rowCount = rowCount;
-            step();
+            this.eligible = eligible;
+            this.offsets = offsets;
+            this.groupRowCount = groupRowCount;
+            this.nextPage = 0;
+            if (!loadNextWindow()) {
+                this.position = 0;
+                return;
+            }
+            this.position = window.firstRow() - 1;
+            try {
+                step();
+            } catch (RuntimeException | Error e) {
+                // The caller never receives this cursor, so nothing else can close its page buffers.
+                close();
+                throw e;
+            }
+        }
+
+        /** A cursor over a row group no page of which can hold the requested range. */
+        private static KeyCursor exhausted(Path file, int blockIndex) {
+            return new KeyCursor(file, blockIndex);
+        }
+
+        private KeyCursor(Path file, int blockIndex) {
+            this.owner = null;
+            this.file = file;
+            this.blockIndex = blockIndex;
+            this.eligible = RowRanges.EMPTY;
+            this.offsets = null;
+            this.groupRowCount = 0;
+            this.window = null;
+            this.windowEnd = 0;
+            this.nextPage = 0;
+            this.position = 0;
+            this.currentKey = null;
+        }
+
+        private boolean loadNextWindow() throws IOException {
+            if (window != null) {
+                window.pages().close();
+                window = null;
+            }
+            Window next = owner.loadWindow(blockIndex, eligible, offsets, groupRowCount, nextPage);
+            if (next == null) {
+                return false;
+            }
+            window = next;
+            windowEnd = next.firstRow() + next.rows();
+            nextPage = next.nextPage();
+            return true;
         }
 
         @Override
         public void close() {
-            pages.close();
+            if (window != null) {
+                window.pages().close();
+                window = null;
+            }
         }
 
         private void step() {
             byte[] previousKey = currentKey;
             position++;
-            currentKey = position < rowCount ? rowReader.read().getBinary(KEY_FIELD, 0).getBytes() : null;
+            currentKey = readAt(position);
             if (currentKey != null && previousKey != null
                     && KeyBytes.compareUnsigned(previousKey, currentKey) >= 0) {
                 throw RowGroupOrderException.at(file, blockIndex, position,
@@ -202,6 +431,26 @@ public final class SortedRowGroupReader implements AutoCloseable {
                                 + " (" + HexFormat.of().formatHex(currentKey)
                                 + ") is at or below its predecessor");
             }
+        }
+
+        /** The key at row {@code row}, loading the next window if the current one ends before it. */
+        private byte[] readAt(long row) {
+            if (window == null) {
+                return null;
+            }
+            if (row >= windowEnd) {
+                try {
+                    if (!loadNextWindow()) {
+                        return null;
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(
+                            "failed to read the next key window of " + file + " row group " + blockIndex, e);
+                }
+                // A window boundary is a page boundary, so the next window resumes exactly here.
+                position = window.firstRow();
+            }
+            return window.rowReader().read().getBinary(KEY_FIELD, 0).getBytes();
         }
 
         /** Whether a current row is available — {@code false} once the group is exhausted. */

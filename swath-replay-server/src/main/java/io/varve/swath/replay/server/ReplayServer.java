@@ -25,7 +25,11 @@ public final class ReplayServer implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public ReplayServer(String host, int port, String bucket, Path fixture) {
-        this(host, port, bucket, fixture, 0, ServingMode.AUTO);
+        // DUCKDB, not the CLI's `sorted` default: this constructor's callers are the in-process
+        // ones — the conformance comparator serving raw HAR captures, and tests over arbitrary
+        // fixtures — for which "works on any capture" is the point. A served benchmark goes through
+        // the CLI, where the operator states the mode.
+        this(host, port, bucket, fixture, 0, ServingMode.DUCKDB);
     }
 
     public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,

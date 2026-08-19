@@ -7,103 +7,31 @@ package io.varve.swath.replay.store;
 
 import io.varve.swath.replay.fixture.SortedFixtures.IndexEntry;
 import io.varve.swath.replay.protocol.ByteKey;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
- * The pure routing math behind {@link SortedParquetStore}: turn a range read into the exclusive upper
- * bound and the set of files a single bounded {@code read_parquet} must touch, using only the derived
- * {@code (file, rowGroup, firstKey, rowCount)} index — never Parquet footer stats (§9.1), which may
- * be truncated for long keys and silently misroute. No I/O, no DuckDB — extracted so the upper-bound
- * invariant and its edge cases are unit-testable in isolation.
+ * The pure routing math behind {@link SortedParquetStore}: which row group a key lives in, from the
+ * derived {@code (file, rowGroup, firstKey, rowCount)} index alone — never Parquet footer stats
+ * (§9.1), which may be truncated for long keys and silently misroute. No I/O — extracted so the
+ * search and its boundary cases are unit-testable in isolation.
  *
- * <p><b>Upper bound by invariant.</b> {@code from} may sit anywhere inside its row group, so the math
- * conservatively counts <b>zero</b> rows from that group and accumulates whole following groups'
- * {@code rowCount}s until the total reaches {@code limit} ({@code = maxKeys + 1}), then bounds at the
- * first key of the next group after that (with 50–100k-row groups this is typically {@code
- * minKey(RG_{i+2})}). It clamps to an <b>open</b> bound when the tail cannot supply {@code limit}
- * rows, and intersects with the caller's {@code toExclusive} (the prefix upper bound) by taking the
- * tighter of the two — guaranteeing {@code [from, bound)} holds at least
- * {@code limit} rows whenever that many exist within the caller's window
- * {@code [from, toExclusive)}.
+ * <p><b>This class used to plan bounded queries.</b> It computed an exclusive upper bound (by
+ * accumulating whole row groups' {@code rowCount} until they could supply {@code limit}) and the set
+ * of files that window spanned, because the store answered a range read with a SQL query that would
+ * otherwise scan to the end of the file. The store now reads through Parquet's page index and stops
+ * as soon as it holds {@code limit} rows, so there is nothing left to bound: a reader that stops does
+ * not need stopping. The planner, its speculative variant, and the {@code rowCount}-must-equal-the-
+ * OBJECT-row-count assumption they all rested on went with it — the last was a real hazard, since an
+ * undercounting index could silently truncate a listing, which the page-index reader is immune to.
  *
- * <p><b>{@code rowCount} is assumed to equal the row group's OBJECT-row count</b> (delete markers
- * can't reach a sorted file — they carry a {@code version_id} and fail the sort-fixture versioned
- * fail-fast, §0.6 — but a legacy delimiter'd capture's {@code COMMON_PREFIX} rows can). That
- * assumption is sound only because sorted-serving eligibility ({@code SortedFixtures#loadIndex})
- * refuses to build an index over any row group that isn't provably pure {@code
- * row_type='OBJECT'} — this class never re-checks that itself; it trusts the index it was handed.
- *
- * <p>The class is public for one member only: {@link #startRowGroup}, the "which row group contains
- * this key" search. A second in-tree store keys off the very same derived index — {@code swath-sim}'s
- * decode-once streaming tier seeks to the group a fresh cursor lands in — and re-deriving that search
- * there would make two places responsible for agreeing on what "contains" means at a group boundary.
- * Everything else here is the bounded-query planner {@link SortedParquetStore} alone needs and stays
- * package-private.
+ * <p>{@link #startRowGroup} survives because two in-tree stores key off the same derived index — this
+ * one, and {@code swath-sim}'s decode-once streaming tier seeking to the group a fresh cursor lands
+ * in — and re-deriving that search there would make two places responsible for agreeing on what
+ * "contains" means at a group boundary.
  */
 public final class SortedRouting {
 
     private SortedRouting() {
-    }
-
-    /** The files a read touches, in key order, and its exclusive upper bound ({@code null} = open). */
-    record QueryPlan(List<Path> files, ByteKey upperBound) {
-
-        boolean isEmpty() {
-            return files.isEmpty();
-        }
-    }
-
-    static QueryPlan plan(List<IndexEntry> index, ByteKey from, ByteKey toExclusive, int limit) {
-        if (index.isEmpty() || limit <= 0) {
-            return new QueryPlan(List.of(), null);
-        }
-        int startRg = startRowGroup(index, from);
-        ByteKey invariantBound = invariantUpperBound(index, startRg, limit);
-        ByteKey upper = tighter(invariantBound, toExclusive);
-        return new QueryPlan(touchedFiles(index, startRg, upper), upper);
-    }
-
-    /**
-     * How many times {@code limit} a row group must hold before a speculative read is worth trying.
-     * The speculation fails only when {@code from} lands within {@code limit} rows of the group's
-     * end, so a group holding {@code 4x} the limit fails at most a quarter of the time and the
-     * expected cost stays well under the invariant plan's.
-     */
-    private static final int SPECULATION_HEADROOM = 4;
-
-    /**
-     * The <b>speculative</b> plan: bound at the end of {@code from}'s own row group and read only
-     * that group, instead of the invariant plan's guaranteed-sufficient window.
-     *
-     * <p>The invariant bound must assume {@code from} sits at the very last row of its group and so
-     * counts zero rows from it — which, with row groups far larger than a page, means a 1,000-row
-     * page reads two whole groups to return rows that almost always live in the first. DuckDB
-     * decodes whole row groups, so that assumption is paid in full on every cold read.
-     *
-     * <p>This bound is <b>not</b> guaranteed to hold {@code limit} rows, which is why the caller
-     * must widen when it comes up short — see {@link SortedParquetStore#rows}. It is safe because a
-     * tighter upper bound can only ever return a <i>prefix</i> of the looser bound's rows: same
-     * {@code from}, same order, same fixture. A short read is therefore always detectable by count
-     * and never by content, and a full read is byte-identical to the invariant one.
-     *
-     * <p>Returns {@code null} when speculating is not worth it: no tighter bound exists, or the
-     * group is too small relative to {@code limit} for the gamble to pay.
-     */
-    static QueryPlan speculativePlan(List<IndexEntry> index, ByteKey from, ByteKey toExclusive, int limit) {
-        if (index.isEmpty() || limit <= 0) {
-            return null;
-        }
-        int startRg = startRowGroup(index, from);
-        if (startRg + 1 >= index.size()
-                || index.get(startRg).rowCount() < (long) limit * SPECULATION_HEADROOM) {
-            return null;
-        }
-        ByteKey upper = tighter(index.get(startRg + 1).firstKey(), toExclusive);
-        return new QueryPlan(touchedFiles(index, startRg, upper), upper);
     }
 
     /** The row group that contains {@code from}: the last one whose first key is {@code <= from}. */
@@ -111,60 +39,19 @@ public final class SortedRouting {
         if (from == null) {
             return 0;
         }
-        return Math.max(0, countFirstKeys(index, from, true) - 1);
+        return Math.max(0, countFirstKeys(index, from) - 1);
     }
 
     /**
-     * The invariant exclusive upper bound: accumulate whole row groups <b>after</b> {@code startRg}
-     * until their combined {@code rowCount} reaches {@code limit}, then bound at the first key of the
-     * next group; {@code null} (open) when the tail cannot supply {@code limit} rows.
+     * Count of index entries whose first key is {@code <= key}. The index is globally ascending, so a
+     * binary search suffices.
      */
-    static ByteKey invariantUpperBound(List<IndexEntry> index, int startRg, int limit) {
-        long accumulated = 0;
-        for (int k = startRg + 1; k < index.size(); k++) {
-            accumulated += index.get(k).rowCount();
-            if (accumulated >= limit) {
-                return (k + 1 < index.size()) ? index.get(k + 1).firstKey() : null;
-            }
-        }
-        return null;
-    }
-
-    /** The distinct files of the row groups the window {@code [startRg, upper)} spans, in key order. */
-    static List<Path> touchedFiles(List<IndexEntry> index, int startRg, ByteKey upper) {
-        int last = (upper == null) ? index.size() - 1 : countFirstKeys(index, upper, false) - 1;
-        if (last < startRg) {
-            return List.of();
-        }
-        Set<Path> files = new LinkedHashSet<>();
-        for (int k = startRg; k <= last; k++) {
-            files.add(index.get(k).file());
-        }
-        return new ArrayList<>(files);
-    }
-
-    static ByteKey tighter(ByteKey a, ByteKey b) {
-        if (a == null) {
-            return b;
-        }
-        if (b == null) {
-            return a;
-        }
-        return a.compareTo(b) <= 0 ? a : b;
-    }
-
-    /**
-     * Count of index entries whose first key is {@code <= key} (when {@code orEqual}) or {@code < key}.
-     * The index is globally ascending, so a binary search suffices.
-     */
-    private static int countFirstKeys(List<IndexEntry> index, ByteKey key, boolean orEqual) {
+    private static int countFirstKeys(List<IndexEntry> index, ByteKey key) {
         int lo = 0;
         int hi = index.size();
         while (lo < hi) {
             int mid = (lo + hi) >>> 1;
-            int cmp = index.get(mid).firstKey().compareTo(key);
-            boolean before = orEqual ? cmp <= 0 : cmp < 0;
-            if (before) {
+            if (index.get(mid).firstKey().compareTo(key) <= 0) {
                 lo = mid + 1;
             } else {
                 hi = mid;

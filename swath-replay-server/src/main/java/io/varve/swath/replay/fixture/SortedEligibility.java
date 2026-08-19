@@ -15,7 +15,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,14 +31,6 @@ import org.slf4j.LoggerFactory;
 public final class SortedEligibility {
 
     private static final Logger log = LoggerFactory.getLogger(SortedEligibility.class);
-
-    /**
-     * Reasons {@link SortedFixtures#loadIndex} already records {@code serving.fallback} for itself
-     * (when asked to) — a caller recording its own post-decision fallback reason must not repeat
-     * these, or a decline would double-count the counter.
-     */
-    public static final Set<String> RECORDED_BY_LOAD_INDEX =
-            Set.of(SortedFixtures.SANITY_FAILED, SortedFixtures.MIXED_ROW_TYPES);
 
     private SortedEligibility() {
     }

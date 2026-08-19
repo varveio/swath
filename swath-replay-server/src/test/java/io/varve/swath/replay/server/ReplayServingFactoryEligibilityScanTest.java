@@ -57,11 +57,12 @@ class ReplayServingFactoryEligibilityScanTest {
         // content doesn't matter, only that the stamp is absent).
         writeUnsortedPartInPlace(middle, "unstamped-x", "unstamped-y");
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.AUTO, 1);
+        assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no_stamp");
+
+        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.DUCKDB, 1);
         try {
-            assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "no_stamp").counter().count()).isEqualTo(1.0);
             // DuckDB role-1 still serves every key from every file in the directory, correctly.
             List<String> served = keys(result.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
@@ -74,12 +75,11 @@ class ReplayServingFactoryEligibilityScanTest {
     /**
      * (b) A MIDDLE file is stamped {@code mode=versions} — a shape no existing multi-file test covers
      * (the mixed-row-type / unsupported-mode regressions in {@code ReplayServingFactoryTest} are all
-     * single-file). {@code auto} must decline with {@code unsupported_mode} before ever reaching the
-     * completeness check or the good final file; {@code --serving-mode sorted} must hard-fail the same
-     * way.
+     * single-file). {@code --serving-mode sorted} must hard-fail with {@code unsupported_mode} before
+     * ever reaching the completeness check or the good final file.
      */
     @Test
-    void aMiddleFileStampedVersionsModeFallsBackWithUnsupportedMode(@TempDir Path dir) throws IOException {
+    void aMiddleFileStampedVersionsModeIsRefusedAsUnsupportedMode(@TempDir Path dir) throws IOException {
         Path fixtureDir = rollToNFiles(dir, "a", "m", "z");
         List<Path> files = SortedFixtures.resolveFiles(fixtureDir);
         assertThat(files).hasSize(3);
@@ -91,15 +91,6 @@ class ReplayServingFactoryEligibilityScanTest {
             writer.write(objectEntry("m"));
         }
         assertThat(SortStamp.read(middle)).hasValueSatisfying(s -> assertThat(s.mode()).isEqualTo(SortMode.VERSIONS));
-
-        ReplayServingFactory.Result autoResult = ReplayServingFactory.open(fixtureDir, ServingMode.AUTO, 1);
-        try {
-            assertThat(autoResult.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(autoResult.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "unsupported_mode").counter().count()).isEqualTo(1.0);
-        } finally {
-            autoResult.fixture().close();
-        }
 
         assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -115,11 +106,11 @@ class ReplayServingFactoryEligibilityScanTest {
      * deleted — as if the process crashed after renaming files 1 and 2, skipped 3 somehow, then died
      * before 4 could ever be reached — leaves indices {1, 3, 4} against {@code n=3}: index 4 exceeds
      * the observed count, so the contiguity check itself (not just "no final present") catches it.
-     * {@code auto} must fall back with {@code incomplete_multifile}; DuckDB must still serve whatever
+     * {@code sorted} must refuse it as {@code incomplete_multifile}; DuckDB must still serve whatever
      * genuinely remains on disk.
      */
     @Test
-    void aRealMiddleFileDeletedFromAFourFileRollFallsBackAsIncompleteMultifile(@TempDir Path dir)
+    void aRealMiddleFileDeletedFromAFourFileRollIsRefusedAsIncompleteMultifile(@TempDir Path dir)
             throws IOException {
         Path fixtureDir = rollToNFiles(dir, "a", "m", "p", "z");
         List<Path> files = SortedFixtures.resolveFiles(fixtureDir);
@@ -131,11 +122,12 @@ class ReplayServingFactoryEligibilityScanTest {
         });
         Files.delete(middle);
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.AUTO, 1);
+        assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("incomplete_multifile");
+
+        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.DUCKDB, 1);
         try {
-            assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "incomplete_multifile").counter().count()).isEqualTo(1.0);
             List<String> served = keys(result.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
             assertThat(served).containsExactlyInAnyOrder("a", "p", "z");   // "m" genuinely gone from disk
