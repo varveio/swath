@@ -174,10 +174,11 @@ For repeatable performance experiments, use the
 
 ## 6. Exit codes
 
-The canonical table is in [Using swath](usage.md#exit-codes). Automation should interpret
-the process code together with `complete`, `stop_source`, and `error_class` in the report.
-In particular, code 1 can identify the resumable sorted-output disk guard rather than an
-unexpected failure.
+The canonical table is in [Using swath](usage.md#exit-codes). Automation should normally
+interpret the process code together with `complete`, `stop_source`, and `error_class` in the
+report. The code-1 sorted-output disk guard is the exception: inspect terminal or log output
+for `sort_disk_precheck_refused` or `sort_disk_exhaustion_imminent`. A startup refusal may
+create no report, and the emergency in-run halt can leave only a stale heartbeat report.
 
 ## 7. Run trace (`--trace`)
 

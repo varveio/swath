@@ -204,7 +204,7 @@ The normative schema, including common-prefix and future delete-marker semantics
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, an empty result, an already-complete resume, or a downstream reader closing stdout |
-| `1` | Unexpected runtime failure, or a resumable sorted-output disk guard (`error_class=sort_disk_exhausted`) |
+| `1` | Unexpected runtime failure, or a resumable sorted-output disk guard (see the markers below) |
 | `2` | Bad arguments, URI, configuration, changed resume identity, or a guarded output refusal |
 | `74` | Output filesystem full (`EX_IOERR`) |
 | `75` | A retryable stuck partial (`EX_TEMPFAIL`), such as exhausted transient retries or the liveness watchdog |
@@ -215,8 +215,13 @@ The normative schema, including common-prefix and future delete-marker semantics
 Codes 74, 75, 124, 130, and 143 leave resumable work only when the run uses a managed
 Parquet directory. A deterministic failure may still recur when resumed; read the terminal
 error and `_swath_summary.json` rather than classifying from the code alone.
-Code 1 is not always fatal: the sorted-output startup and periodic disk guards use it for a
-resumable stop and identify that case with `error_class=sort_disk_exhausted`.
+
+Code 1 is not always fatal. The sorted-output disk guards identify their resumable case in
+the terminal or logs with `sort_disk_precheck_refused` at startup or
+`sort_disk_exhaustion_imminent` during a run. Both markers carry
+`error_class=sort_disk_exhausted`, `stop_reason=sort_disk_exhausted`, and `resumable=true`.
+Do not rely on the JSON report for this distinction: a startup refusal may create no report,
+and the emergency in-run halt can leave only the last periodic heartbeat.
 
 ## Progress and reports
 
