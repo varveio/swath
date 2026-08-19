@@ -30,6 +30,31 @@ final class ReplayHandler extends Handler.Abstract {
 
     private static final Logger log = LoggerFactory.getLogger(ReplayHandler.class);
 
+    /**
+     * Log every request whose own cost exceeds this many milliseconds, with the parameters that
+     * produced it. Negative (the default) disables the log entirely.
+     *
+     * <p>{@code inject.overrun{shape}} says how many requests were slower than the profile they
+     * were imitating, and {@code request.latency{shape}} says roughly how slow — but neither says
+     * <b>which</b>, and a shape's cost is not uniform across a keyspace. A rollup over a prefix
+     * holding ten objects and one over a prefix holding ten million are the same meter. When a
+     * run's overruns concentrate in a handful of requests — which is the interesting case, because
+     * it is the one a bigger machine does not fix — the only useful next question is what those
+     * requests asked for, and the meters cannot answer it. This line can.
+     *
+     * <p>A system property rather than a CLI option, mirroring {@code swath.replay.prefetch.*}: it
+     * is a diagnostic a run turns on when it has a tail to explain, not a serving parameter that a
+     * receipt has to state. Off, it costs one {@code long} comparison against a {@code static
+     * final} per request.
+     */
+    private static final String SLOW_REQUEST_LOG_PROPERTY = "swath.replay.slow-request-log-ms";
+    private static final long SLOW_REQUEST_LOG_NANOS = slowRequestLogNanos();
+
+    private static long slowRequestLogNanos() {
+        long millis = Long.getLong(SLOW_REQUEST_LOG_PROPERTY, -1L);
+        return millis < 0 ? -1L : millis * 1_000_000L;
+    }
+
     private final String bucket;
     private final ListingFixture fixture;
     private final ReplayMetrics metrics;
@@ -135,8 +160,37 @@ final class ReplayHandler extends Handler.Abstract {
         // the delay it was configured to pretend to.
         ShapeLatency.Shape shape = ShapeLatency.classify(listRequest);
         metrics.recordShapedRequest(shaped, shape);
+        logIfSlow(listRequest, result, servedNanos, shape);
         sleepToDeadline(latency.apply(listRequest, result), servedNanos, shape);
         return result;
+    }
+
+    /**
+     * Name a request the meters can only count. See {@link #SLOW_REQUEST_LOG_PROPERTY}.
+     *
+     * <p>Logged after the request is served and before the injected sleep, so the number reported is
+     * the server's own cost and never the delay it was told to pretend to — the same boundary
+     * {@code request.latency} draws.
+     */
+    private static void logIfSlow(S3ListRequest request, S3ListResult result, long servedNanos,
+                                  ShapeLatency.Shape shape) {
+        if (SLOW_REQUEST_LOG_NANOS < 0 || servedNanos < SLOW_REQUEST_LOG_NANOS) {
+            return;
+        }
+        log.warn("replay slow request shape={} ms={} prefix={} delimiter={} start_after={} "
+                        + "continuation={} max_keys={} entries={} truncated={}",
+                shape, servedNanos / 1_000_000.0, render(request.prefix()), render(request.delimiter()),
+                render(request.startAfter()), request.continuationToken() == null ? "none" : "yes",
+                request.maxKeys(), result.entries().size(), result.truncated());
+    }
+
+    /**
+     * A request parameter as text for one log line. ISO-8859-1 because a key is bytes and this has
+     * to be lossless per byte rather than valid UTF-8 — a replacement character would hide exactly
+     * the odd key most likely to be interesting here.
+     */
+    private static String render(byte[] value) {
+        return value == null || value.length == 0 ? "-" : new String(value, StandardCharsets.ISO_8859_1);
     }
 
     /**
