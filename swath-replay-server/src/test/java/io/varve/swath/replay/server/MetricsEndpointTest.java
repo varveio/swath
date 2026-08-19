@@ -116,4 +116,37 @@ class MetricsEndpointTest {
                     HttpResponse.BodyHandlers.ofString());
         }
     }
+
+    /**
+     * The sidecar case: a consumer in the container beside this one cannot read the server's cgroup,
+     * so if these are not on the wire they are not obtainable at all, and "was the server saturated?"
+     * goes back to being inferred from throughput times service time.
+     *
+     * <p>{@code process.cpu.usage} is asserted to be a real number rather than merely present:
+     * micrometer publishes the gauge whether or not the platform bean can answer it, and a NaN
+     * serialises to a shape a reader would take for a measurement.
+     */
+    @Test
+    void publishesTheProcessOwnCpuHeapAndThreadsForASidecarConsumer() throws Exception {
+        try (ReplayServer server = server()) {
+            server.start();
+            try (MetricsEndpoint endpoint = MetricsEndpoint.start("127.0.0.1", 0,
+                    server.metrics().registry(), "sorted", System.nanoTime())) {
+
+                HttpProbe.response(server, "/bucket?list-type=2");
+                String body = scrape(endpoint, "/metrics");
+
+                assertThat(body).contains("\"process.cpu.usage\"");
+                assertThat(body).contains("\"system.cpu.count\"");
+                assertThat(body).contains("\"jvm.memory.used\"");
+                assertThat(body).contains("\"jvm.threads.live\"");
+                assertThat(body).contains("\"jvm.gc.pause\"");
+
+                assertThat(body).doesNotContain("NaN");
+                // Not [^}]* -- an empty tag map serialises as `"tags":{}` and ends the class early.
+                assertThat(body).containsPattern("\"name\":\"process.cpu.usage\".*?\"value\":-?[0-9]");
+                assertThat(body).containsPattern("\"name\":\"system.cpu.count\".*?\"value\":[0-9]");
+            }
+        }
+    }
 }

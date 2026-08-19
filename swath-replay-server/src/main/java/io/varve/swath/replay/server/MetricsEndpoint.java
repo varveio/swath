@@ -6,6 +6,11 @@
 package io.varve.swath.replay.server;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics;
+import io.micrometer.core.instrument.binder.jvm.JvmHeapPressureMetrics;
+import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics;
+import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics;
+import io.micrometer.core.instrument.binder.system.ProcessorMetrics;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import org.eclipse.jetty.http.HttpHeader;
@@ -42,9 +47,44 @@ final class MetricsEndpoint implements AutoCloseable {
     private static final int MIN_THREADS = 1;
 
     private final Server server;
+    private final JvmGcMetrics gc;
+    private final JvmHeapPressureMetrics heapPressure;
 
-    private MetricsEndpoint(Server server) {
+    private MetricsEndpoint(Server server, JvmGcMetrics gc, JvmHeapPressureMetrics heapPressure) {
         this.server = server;
+        this.gc = gc;
+        this.heapPressure = heapPressure;
+    }
+
+    /**
+     * Binds what the process knows about itself: heap, GC, threads, and its own CPU.
+     *
+     * <p><b>Why this belongs here and not in the serving path.</b> A sidecar's consumer cannot read
+     * these any other way. Its cgroup is not visible from the container beside it — {@code
+     * /sys/fs/cgroup} is namespaced — so a harness wanting to know whether the server was saturated
+     * has had to infer it from throughput times service time, which is an inference that has been
+     * wrong in both directions. The scrape already crosses the container boundary; the numbers
+     * should cross with it.
+     *
+     * <p>Bound at the endpoint rather than at the registry because these exist to be scraped: no
+     * {@code --metrics-port}, no consumer, no reason to pay for the GC notification listeners.
+     *
+     * <p>{@code jvm.gc.*} and {@code jvm.memory.pressure} are the pair that says whether a pause,
+     * rather than a slow read, is what pushed a request past its injected deadline — a question the
+     * request timers alone cannot answer, since a pause lands inside them.
+     */
+    private static Binders bindProcessMeters(MeterRegistry registry) {
+        new JvmMemoryMetrics().bindTo(registry);
+        new JvmThreadMetrics().bindTo(registry);
+        new ProcessorMetrics().bindTo(registry);
+        JvmGcMetrics gc = new JvmGcMetrics();
+        gc.bindTo(registry);
+        JvmHeapPressureMetrics heapPressure = new JvmHeapPressureMetrics();
+        heapPressure.bindTo(registry);
+        return new Binders(gc, heapPressure);
+    }
+
+    private record Binders(JvmGcMetrics gc, JvmHeapPressureMetrics heapPressure) {
     }
 
     /**
@@ -62,8 +102,9 @@ final class MetricsEndpoint implements AutoCloseable {
         connector.setPort(port);
         server.addConnector(connector);
         server.setHandler(new MetricsHandler(registry, servingMode, startedNanos));
+        Binders binders = bindProcessMeters(registry);
         server.start();
-        return new MetricsEndpoint(server);
+        return new MetricsEndpoint(server, binders.gc(), binders.heapPressure());
     }
 
     int port() {
@@ -72,7 +113,14 @@ final class MetricsEndpoint implements AutoCloseable {
 
     @Override
     public void close() throws Exception {
-        server.stop();
+        // Both binders register GC notification listeners; closing them is what unregisters those.
+        // Stop the server first so nothing is mid-scrape when the meters go away.
+        try {
+            server.stop();
+        } finally {
+            heapPressure.close();
+            gc.close();
+        }
     }
 
     private static final class MetricsHandler extends Handler.Abstract {
