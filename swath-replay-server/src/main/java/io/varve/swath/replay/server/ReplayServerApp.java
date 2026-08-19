@@ -62,9 +62,10 @@ public final class ReplayServerApp implements Callable<Integer> {
                 ShapeLatency.parse(options.injectLatency, options.latencyJitter, options.latencyScale);
         long startedNanos = System.nanoTime();
         try (ReplayServer server = injected == null
-                ? new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode)
+                ? new ReplayServer(options.host, options.port, bucket, fixture, connections,
+                        options.servingMode, options.maxConcurrentRequests)
                 : new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode,
-                        injected)) {
+                        injected, options.maxConcurrentRequests)) {
             server.start();
             // Opened after the fixture is served, so a reader that can reach /metrics knows the
             // index derive is already done and the numbers it reads are serving numbers.
@@ -73,11 +74,12 @@ public final class ReplayServerApp implements Callable<Integer> {
                             server.resolvedServingMode().toString(), startedNanos)) {
                 System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
                                 + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
-                                + "metrics_endpoint=%s%n",
+                                + "metrics_endpoint=%s max_concurrent_requests=%d%n",
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),
                         server.resolvedServingMode(), connections,
                         injected == null ? "off" : options.injectLatency, options.latencyScale,
-                        metrics == null ? "off" : "http://%s:%d/metrics".formatted(options.host, metrics.port()));
+                        metrics == null ? "off" : "http://%s:%d/metrics".formatted(options.host, metrics.port()),
+                        options.maxConcurrentRequests);
                 server.join();
             }
         }

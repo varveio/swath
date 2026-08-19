@@ -139,7 +139,7 @@ public final class SortedParquetStore implements ListingStore {
         validateIndexWithinFiles(this.index, files);
         this.metrics = metrics;
         this.recordPageReadLatency = recordPageReadLatency;
-        this.rangeReaders = PARQUET_RANGE_READS ? openRangeReaders(files) : Map.of();
+        this.rangeReaders = PARQUET_RANGE_READS ? openRangeReaders(files, connectionCount) : Map.of();
         List<Connection> pooled = openPool(connectionCount);
         this.pool = new DuckDbConnectionPool(pooled,
                 "interrupted waiting for a sorted Parquet connection",
@@ -253,9 +253,12 @@ public final class SortedParquetStore implements ListingStore {
                     continue;   // the index is per row group; the reader works a whole file at a time
                 }
                 previous = file;
+                // The routing index already knows which physical row group the range starts in, so
+                // the reader is told rather than left to look; later files start at their own first.
+                int startBlock = lower == null ? 0 : index.get(rg).rowGroup();
                 for (SortedRowGroupReader.ObjectRow row :
-                        rangeReaders.get(file).range(lower, inclusive, upper, limit - out.size(),
-                                projection.owner())) {
+                        rangeReaders.get(file).range(startBlock, lower, inclusive, upper,
+                                limit - out.size(), projection.owner())) {
                     out.add(new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
                             row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
                             row.checksumAlgorithm(), row.checksumType()));
@@ -273,11 +276,13 @@ public final class SortedParquetStore implements ListingStore {
         }
     }
 
-    private static Map<Path, SortedRangeReader> openRangeReaders(List<Path> files) {
+    private static Map<Path, SortedRangeReader> openRangeReaders(List<Path> files, int poolSize) {
         Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
         try {
             for (Path file : files) {
-                readers.put(file, new SortedRangeReader(file));
+                // Same width as the DuckDB pool it replaces: one reader per concurrent request the
+                // store is sized for, since a Parquet reader carries per-read state.
+                readers.put(file, new SortedRangeReader(file, poolSize));
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to open a sorted Parquet range reader", e);

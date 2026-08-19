@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
 public final class ReplayServer implements AutoCloseable {
 
@@ -32,6 +33,13 @@ public final class ReplayServer implements AutoCloseable {
         this(host, port, bucket, fixture, parquetConnections, mode, (req, result) -> Duration.ZERO);
     }
 
+    /** As above, with an explicit concurrently-served-request ceiling (see the latency overload). */
+    public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
+                        ServingMode mode, int maxConcurrentRequests) {
+        this(host, port, bucket, fixture, parquetConnections, mode, (req, result) -> Duration.ZERO,
+                maxConcurrentRequests);
+    }
+
     /**
      * As above, with per-request latency injection on the production serving path — the {@code
      * serve} command's {@code --inject-latency} wiring. The hook sees the request and the result it
@@ -40,13 +48,40 @@ public final class ReplayServer implements AutoCloseable {
      */
     public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
                         ServingMode mode, BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
-        this(host, port, bucket, ReplayServingFactory.open(fixture, mode, parquetConnections), latency);
+        this(host, port, bucket, fixture, parquetConnections, mode, latency, DEFAULT_MAX_CONCURRENT_REQUESTS);
     }
 
+    /**
+     * As above, with an explicit ceiling on concurrently served requests.
+     *
+     * <p>It has to be explicit because injected latency is a <b>blocking</b> sleep held on the
+     * serving thread, so an in-flight request occupies one for the whole profile. Jetty's default
+     * pool stops at 200 threads; a client fanning out wider than that has its excess requests queued
+     * in the connector, and the wait lands on the client as latency from a server that is, by CPU,
+     * asleep. Since one subject in the s3-listing-study fans out 256 ways and cannot be told
+     * otherwise, a default of 200 would have silently measured that tool against a different backend
+     * than every other one.
+     */
+    public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
+                        ServingMode mode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                        int maxConcurrentRequests) {
+        this(host, port, bucket, ReplayServingFactory.open(fixture, mode, parquetConnections), latency,
+                maxConcurrentRequests);
+    }
+
+    /**
+     * The default ceiling on concurrently served requests — comfortably above the widest fan-out any
+     * subject in the s3-listing-study issues (256), because a request parked in an injected sleep
+     * holds its thread for the whole profile and a queued one is indistinguishable, to the client,
+     * from a slow server.
+     */
+    public static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 512;
+
     private ReplayServer(String host, int port, String bucket, ReplayServingFactory.Result fixture,
-                         BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
+                         BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                         int maxConcurrentRequests) {
         this(host, port, bucket, fixture.fixture(), fixture.fixture(), fixture.metrics(),
-                fixture.maxConcurrentReads(), fixture.resolvedMode(), latency);
+                fixture.maxConcurrentReads(), fixture.resolvedMode(), latency, maxConcurrentRequests);
     }
 
     // Package-private (not private) so tests can exercise close()'s idempotency/suppression
@@ -73,7 +108,17 @@ public final class ReplayServer implements AutoCloseable {
     private ReplayServer(String host, int port, String bucket, ListingFixture fixture,
                           AutoCloseable ownedFixture, ReplayMetrics metrics, int maxConcurrentReads,
                           ServingMode resolvedMode, BiFunction<S3ListRequest, S3ListResult, Duration> latency) {
-        this.server = new Server();
+        this(host, port, bucket, fixture, ownedFixture, metrics, maxConcurrentReads, resolvedMode, latency,
+                DEFAULT_MAX_CONCURRENT_REQUESTS);
+    }
+
+    private ReplayServer(String host, int port, String bucket, ListingFixture fixture,
+                          AutoCloseable ownedFixture, ReplayMetrics metrics, int maxConcurrentReads,
+                          ServingMode resolvedMode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                          int maxConcurrentRequests) {
+        QueuedThreadPool pool = new QueuedThreadPool(Math.max(8, maxConcurrentRequests));
+        pool.setName("replay-serve");
+        this.server = new Server(pool);
         this.ownedFixture = ownedFixture;
         this.metrics = metrics;
         this.resolvedMode = resolvedMode;

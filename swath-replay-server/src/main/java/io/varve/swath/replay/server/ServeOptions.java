@@ -38,6 +38,14 @@ final class ServeOptions {
                     + "reading the metrics cannot perturb them.")
     int metricsPort;
 
+    @Option(names = "--max-concurrent-requests", defaultValue = "512",
+            description = "Ceiling on requests served at once. Injected latency is a blocking sleep "
+                    + "held on the serving thread, so an in-flight request occupies one for the whole "
+                    + "profile; a client fanning out wider than this has its excess queued, and the "
+                    + "wait reaches it as latency from a server that is, by CPU, asleep. Raise it "
+                    + "above the widest fan-out any client will use.")
+    int maxConcurrentRequests;
+
     @Option(names = "--inject-latency", paramLabel = "SPEC",
             description = "Per-request-shape fault latency: 'prod-commoncrawl' or a "
                     + "shape=delay list (worker_page|pivot_probe|structure_probe; e.g. "

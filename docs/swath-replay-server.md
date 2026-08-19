@@ -85,6 +85,13 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
 
+## Serving concurrency (`--max-concurrent-requests`)
+
+Injected latency blocks a serving thread, so the request ceiling is explicit rather than
+Jetty's implicit 200-thread default. It defaults to 512 and is reported as
+`max_concurrent_requests=` at startup. Set it at or above the widest client fan-out so
+connector queueing is not mistaken for backend latency.
+
 ## Reading a running server's meters (`--metrics-port`)
 
 `serve` keeps every meter in the table under "Metrics And Tuning" below, but a
