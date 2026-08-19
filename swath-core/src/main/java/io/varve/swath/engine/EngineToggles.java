@@ -26,8 +26,8 @@ import java.util.Map;
  * readahead} is opt-in/default-off, and {@code mass_aware_seed} is opt-out/default-on. Turning a
  * mechanism off silences its own counters and fires an explicit {@code TOGGLE.<name>_off} mark
  * (§5 discipline, {@code docs/internals/metrics-internals.md}), so post-hoc analysis never has to
- * infer an ablation from absence alone. Per-toggle effects, defaults, and measured cost profiles
- * are the ablation and performance-toggle tables in {@code docs/configuration.md}.
+ * infer an ablation from absence alone. Per-toggle effects and defaults are documented in the
+ * ablation and performance-toggle tables in {@code docs/configuration.md}.
  *
  * <ul>
  *   <li>{@code owner_split} — {@link WorkStealingScan}'s owner-side proactive self-split.</li>

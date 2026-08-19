@@ -85,9 +85,11 @@ the tail after the last durable cursor. On clean completion it removes the check
 resuming a completed directory is a successful no-op.
 
 If swath says the output is complete, use `--overwrite` on a new `list` command to
-replace it deliberately. If it reports that the run identity changed, resume with the
-original bucket, prefix, filters, and output options, or use `--restart` to discard the
-old checkpoint.
+replace it deliberately. If it reports that the run identity changed, rerun the original
+`swath list ...` invocation with the same bucket, prefix, filters, output options, and
+destination. Add `--restart` to that `list` command only when you intend to discard the old
+checkpoint. `swath resume` accepts the run directory and safe runtime controls; it does not
+accept identity options or `--restart`.
 
 ## 5. Use your bucket
 

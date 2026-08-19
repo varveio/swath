@@ -78,9 +78,9 @@ swath-replay-server serve \
 
 Sorted mode derives an in-memory first-key-per-row-group index and performs bounded Parquet
 reads. A bounded sequential-window cache is enabled by default. Its system properties are
-`swath.replay.prefetch.enabled` (`true`), `window-rows` (`12500`), and `max-windows`
-(`96`). Size `window-rows` at least as large as one row group's row count or repeated fills
-will decode the same group.
+`swath.replay.prefetch.enabled` (`true`), `swath.replay.prefetch.window-rows` (`12500`),
+and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
+row group's row count or repeated fills will decode the same group.
 
 `delimiter=/` uses a native skip-scan that advances past each returned common prefix and
 stops at `max-keys`; other delimiter shapes use the ordinary range walk. If a stepped row

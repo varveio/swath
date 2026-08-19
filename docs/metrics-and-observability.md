@@ -174,18 +174,10 @@ For repeatable performance experiments, use the
 
 ## 6. Exit codes
 
-| Code | Meaning |
-| ---: | --- |
-| `0` | Success, including a downstream pipe that closed after accepting partial text output. Check `swath.output.broken_pipe` when truncation matters. |
-| `1` | Unexpected or otherwise unclassified runtime failure. |
-| `2` | Invalid command or configuration. |
-| `74` | Output filesystem full. |
-| `75` | A retryable stuck partial, such as exhausted transient retries or the liveness watchdog. |
-| `124` | `--max-duration` expired. |
-| `130` | Interrupted (`SIGINT`). |
-| `143` | Terminated (`SIGTERM`). |
-
-Automation should also inspect `complete`, `stop_source`, and `error_class` in the report.
+The canonical table is in [Using swath](usage.md#exit-codes). Automation should interpret
+the process code together with `complete`, `stop_source`, and `error_class` in the report.
+In particular, code 1 can identify the resumable sorted-output disk guard rather than an
+unexpected failure.
 
 ## 7. Run trace (`--trace`)
 

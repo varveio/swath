@@ -23,7 +23,7 @@ overlap.
 
 The shipped product is a Java 25 CLI for general-purpose S3 buckets. It supports:
 
-- recursive object listing and common-prefix listing;
+- recursive current-object listing;
 - current objects, with schema support for delete markers and versions;
 - JSONL, TSV, table, and managed Parquet output;
 - filtering by key, size, modification time, and storage class;

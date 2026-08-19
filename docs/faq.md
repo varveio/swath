@@ -57,8 +57,11 @@ managed path that is a symlink.
 ## Sorted output reports insufficient disk
 
 During the final merge, compressed staging data and final Parquet coexist. Move the run
-to a larger volume or free space, then resume. The guard is conservative because a new
-run cannot know its final object count before listing. Bypass it with
+to a larger device only if you can mount or bind it at the exact absolute output path
+recorded in the checkpoint; otherwise swath refuses the moved run. The simplest recovery
+is to free space or expand the current volume in place, then resume. If the original path
+cannot be preserved, start a fresh run at the new destination. The guard is conservative
+because a new run cannot know its final object count before listing. Bypass it with
 `--tune sort.ignore-disk-check=on` only after sizing independently. See
 [Sorted output](usage.md#sorted-output).
 
