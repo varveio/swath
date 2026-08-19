@@ -45,7 +45,7 @@
   and contains exactly one `swath/` token — not a byte of the SDK's own value is
   disturbed.
 - The size of the mislabelling this release fixes is measured, not assumed: the
-  [PR #99 field-campaign table](performance.md#the-sorted-merge) recorded the merge tail
+  [PR #99 field-campaign table](../../performance.md#the-sorted-merge) recorded the merge tail
   at 20-39% of session wall time across three sorted buckets on the shipped-default merge
   arm (median ~32%), rising to as much as ~72% of session wall on the explicit-serial-merge
   arm. That is how much of "listing" was actually merge before this fix.

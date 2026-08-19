@@ -103,10 +103,10 @@ tasks.named<JavaExec>("run") {
 }
 
 tasks.named<Test>("test") {
-    // TuneOptionsTest reads docs/usage.md at runtime to check the `--tune` table against the
+    // TuneOptionsTest reads docs/configuration.md at runtime to check the `--tune` table against the
     // registry. Without this, Gradle only tracks compiled classes/resources as inputs, so a
     // docs-only edit leaves the task UP-TO-DATE and the doc/code parity check silently never runs.
-    inputs.file(rootProject.file("docs/usage.md")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.file("docs/configuration.md")).withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {

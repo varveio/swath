@@ -42,7 +42,7 @@ final class BearerTokenOptions {
 
     // One description for both commands, so it must hold on both: the GCS worked example that used
     // to live here named --endpoint-url/--force-path-style, which `swath resume` does not accept
-    // (they are restored from the checkpoint). It lives in docs/usage.md instead.
+    // (they are restored from the checkpoint). It lives in docs/operating.md instead.
     @Resume(ResumeClass.FREE)
     @Option(names = "--bearer-token-command", paramLabel = "CMD",
             description = "Shell command whose stdout is a fresh OAuth bearer token (e.g. 'gcloud "

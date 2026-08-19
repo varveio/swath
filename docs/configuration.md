@@ -1,209 +1,157 @@
-# Configuration reference
+# Configuration and advanced controls
 
-One place to see every environment variable, flag, `--tune` knob, and `-D`
-system property, with its default. This is a lookup table, not a tutorial — see
-[`usage.md`](usage.md) for what each one actually does and why.
+The generated CLI help is the canonical list of visible flags and defaults:
+
+```bash
+swath list --help
+swath resume --help
+swath list --tune help
+```
+
+This page documents configuration sources that are not self-evident from help, plus the
+expert and diagnostic controls. For ordinary output and resume choices, see
+[Using swath](usage.md).
+
+## Precedence
+
+An explicit CLI option wins over an environment value. AWS SDK environment values win
+over shared profile or compute-role discovery according to the SDK's normal provider
+chains. A resumed run restores its persisted identity and connection context; explicitly
+re-passed soft context can override it, but identity-changing output, filter, and run-shape
+settings are refused.
+
+`--bearer-token-command` is deliberately never stored in a checkpoint. A checkpoint must
+not decide what shell command a later process executes, and a literal token embedded in a
+command must not be persisted. Re-pass the command when resuming a bearer-authenticated
+endpoint.
 
 ## Environment variables
 
-### AWS SDK (standard, not swath-specific)
+### AWS SDK
 
-swath authenticates and connects through the AWS SDK's own default chains, so
-it honors the same environment variables any AWS SDK v2 client does.
-
-| Variable | Effect | Overridden by |
+| Variable | Purpose | Explicit override |
 | --- | --- | --- |
-| `AWS_REGION`, `AWS_DEFAULT_REGION` | Region, if `--region` is unset | `--region` |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Static credentials | `--profile`, `--no-sign-request` |
-| `AWS_PROFILE` | Default credentials profile | `--profile` |
-| `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | Web-identity credentials (OIDC, e.g. GKE/EKS workload identity), auto-refreshed | `--profile`, `--no-sign-request` |
-| `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3` | S3 endpoint override (SDK-level default; applies only when `--endpoint-url` is not passed) | `--endpoint-url` |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | Region when no CLI region is set | `--region` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Static credentials | `--profile`, `--no-sign-request`, or bearer-token auth |
+| `AWS_PROFILE` | Shared-config profile | `--profile` |
+| `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | Auto-refreshed OIDC/web-identity credentials | `--profile`, `--no-sign-request`, or bearer-token auth |
+| `AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3` | SDK endpoint default | `--endpoint-url` |
 
-### swath's own
+swath bundles the AWS STS module, so the standard web-identity flow works in EKS, GKE,
+and similar environments.
 
-| Variable | Default | Effect | Overridden by |
-| --- | --- | --- | --- |
-| `SWATH_OTLP_ENDPOINT` | unset (no export) | OTLP metrics collector URL | `--metrics-endpoint`, `--no-metrics` |
-| `SWATH_OTLP_INTERVAL` | 5s step | OTLP export cadence | — |
-| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME` | unset | OTel-standard resource attributes merged onto exported metrics | — |
-| `SWATH_OPTS`, `JAVA_OPTS` | unset | Extra JVM flags for the `installDist` launcher script only (no effect on the uber-jar or Docker image) | — |
-| `JAVA_TOOL_OPTIONS` | unset | Extra JVM flags read by the JVM itself (works for the uber-jar, `installDist`, and Docker) | — |
+### swath, OpenTelemetry, Java, and the terminal
 
-### Terminal / color (cross-tool convention, not swath-specific)
-
-Affects only the end-of-run summary block under `--color=auto` (the default);
-irrelevant with an explicit `--color=always`/`--color=never`, which wins over
-all of these.
-
-| Variable | Effect | Overridden by |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `NO_COLOR` | Set to *any* value (even empty) — disables color, per [no-color.org](https://no-color.org) | `--color=always`/`--color=never` |
-| `TERM=dumb` | Disables color | `--color=always`/`--color=never` |
-| `CLICOLOR_FORCE` | Set to any value — forces color even off a terminal (the `gh` convention) | `NO_COLOR`, `TERM=dumb`, `--color=always`/`--color=never` |
+| `SWATH_OTLP_ENDPOINT` | unset | OTLP metrics destination; overridden by `--metrics-endpoint`, disabled by `--no-metrics` |
+| `SWATH_OTLP_INTERVAL` | `5s` | OTLP export step |
+| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME` | unset | Standard OpenTelemetry resource attributes |
+| `SWATH_OPTS`, `JAVA_OPTS` | unset | JVM flags read by the `installDist` launcher only |
+| `JAVA_TOOL_OPTIONS` | unset | JVM flags read by Java itself; works with the jar, launcher, and Docker image |
+| `NO_COLOR` | unset | Disables automatic color when set to any value |
+| `TERM=dumb` | environment | Disables automatic color and terminal redraws |
+| `CLICOLOR_FORCE` | unset | Forces automatic color off a terminal |
 
-## Flags and defaults
+An explicit `--color=always` or `--color=never` wins over terminal environment signals.
 
-### S3 connection
+## Tuning (`--tune`)
 
-| Flag | Default |
-| --- | --- |
-| `--region` | AWS SDK default region chain |
-| `--profile` | AWS SDK default credential chain |
-| `--no-sign-request` | off |
-| `--endpoint-url` | unset |
-| `--force-path-style` | on when `--endpoint-url` is set |
-| `--bearer-token-command` | unset |
-| `--bearer-token-refresh-interval` | `45m` (requires `--bearer-token-command`) |
-| `--fetch-owner` | off |
-| `--requester-pays` | off |
+`--tune KEY=VALUE` holds typed expert settings that should not crowd the everyday flag
+surface. It is repeatable. Invalid values fail before swath opens a checkpoint or contacts
+the object store. Ask the running binary for all keys or one key:
 
-### Output
+```bash
+swath list --tune help
+swath list --tune seed.mode=?
+```
 
-| Flag | Default |
-| --- | --- |
-| `-o, --output` | stdout |
-| `--output-type` | inferred from `-o` |
-| `--format` | `auto` (table on a TTY, TSV piped) |
-| `--parquet-part-size` | `256mb` |
-| `--part-rotation-interval` | `30s` |
-| `--part-rotation-max-rows` | `2000000` |
-| `--sort` / `--no-sort` | `--no-sort` |
-| `--report` | `<output>/_swath_summary.json` for every non-stdout Parquet destination (including FILE-kind `*.parquet`), else none |
-| `--stats` / `--no-stats` | auto — the end-of-run summary block prints when a run exceeds 1.5 s, produces durable output, or stops short of finishing, unless `-q`; `--stats` forces it past every gate, `--no-stats` suppresses it |
-| `--progress` / `--no-progress` | auto — the live **display** prints when stderr is a terminal and neither `-q` nor `-v` was given; `--progress` forces it past every gate (a non-terminal stderr and `-q` alike), `--no-progress` suppresses both surfaces, and an explicit `--progress-interval` opts in on its own. Where the display stands down, progress falls back to the structured INFO `progress` log record — which, being a log record, prints only under `-v`; at the default WARN level a run without the display shows no progress at all |
+The following table is machine-checked against the code registry.
 
-### Filters
+| Key | Type / range | Default | Stability | Resume class | Applies to | Effect |
+| --- | --- | --- | --- | --- | --- | --- |
+| `engine.readahead` | `on or off` | `off` | experimental | free | fresh list | Speculatively fetch ahead on sustained dense tails; can trade API calls and memory for lower wall time. |
+| `seed.mode` | `shallow, none, or hints` | `shallow` | stable (`hints` reserved) | identity | fresh list | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
+| `parquet.writers` | `integer 2..4` | `3` | stable | free | fresh list | Set the bounded Parquet writer pool; FILE-kind Parquet still resolves to one writer. |
+| `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
+| `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass sorted-output free-space checks. Size the staging volume independently first. |
 
-Every filter is unset by default (no filtering). They compose as an AND chain:
-a row must pass all of them. Changing any of them between runs is refused on
-`swath resume` — use `--restart`.
+`seed.mode` contributes to the run identity and cannot change on resume. Of the current
+keys, only `sort.ignore-disk-check` applies to `swath resume`; the others affect fresh-list
+construction or output lanes.
 
-| Flag | Default |
-| --- | --- |
-| `--include REGEX` | unset (every key kept) |
-| `--exclude REGEX` | unset (nothing dropped) |
-| `--min-size SIZE` | unset (no lower bound); accepts size suffixes, e.g. `1k`, `256mb` |
-| `--max-size SIZE` | unset (no upper bound); must be `>= --min-size` |
-| `--modified-since DATE` | unset (no lower bound); UTC when the value carries no offset |
-| `--modified-until DATE` | unset (no upper bound); must be `>= --modified-since` |
-| `--storage-class CLASS[,CLASS]` | unset (every class); comma-separated, e.g. `STANDARD,GLACIER` |
+## Diagnostic engine toggles
 
-`--include`/`--exclude` take Java regexes and are **substring** matches on the
-key's UTF-8 view — anchor with `^`/`$` yourself for a whole-key match.
-`--storage-class` is case-insensitive. The size, mtime, and storage-class
-filters key on the *row type*, not on a missing value: a common prefix carries
-none of the three fields and passes all three unconditionally, while a delete
-marker passes the size and storage-class bounds but **is judged by mtime**
-whenever it carries a timestamp. The one asymmetry is storage class on an object
-row — an object whose storage class the listing did not return is **dropped** by
-`--storage-class`, not waved through.
+`--engine-toggle NAME=VALUE` exists for controlled A/B experiments and rollback, not
+routine performance tuning. Every non-default run identifies its effective toggles in
+the startup log and JSON report. The output key set is unchanged; these controls alter
+scheduling and pivot choices.
 
-### Concurrency and liveness
+The supported default is all values below. The one supported non-default rollback is:
 
-| Flag | Default |
-| --- | --- |
-| `--concurrency` | `64` (AIMD ceiling; live value adapts within `[1, T]`) |
-| `--object-listing-queue-size` | `50000` |
-| `--request-rate` | unset (uncapped) |
-| `--progress-interval` | `1s` when the progress line redraws on a terminal, `30s` for appended records (floor `1s`; a faster value is rejected, not clamped) |
-| `--max-duration` | unset (no timebox) |
-| `--idle-timeout` | `120s` |
-| `--no-progress-timeout` | `10m` |
+```bash
+--engine-toggle rate_anchored_sensing=off \
+--engine-toggle tail_floor=current
+```
 
-### Checkpoint and resume
+That pair restores the pre-0.2.0 sensing and owner-tail-floor behavior. Other deviations
+are diagnostic.
 
-| Flag | Default |
-| --- | --- |
-| `--checkpoint` | `auto` |
-| `--restart` | off |
-| `--overwrite` / `--force` | off |
-
-`auto` is durable only for a DIRECTORY-dataset Parquet output, where it creates
-`<dir>/.swath/checkpoint.sqlite`; for stdout it uses ephemeral state. FILE-kind
-text and Parquet destinations reject `auto` and explicit checkpoint paths and
-require `--checkpoint none`. Both `none` and ephemeral `auto` still run the
-work-stealing engine; they simply cannot be resumed. `swath resume <dir>` opens
-the managed co-located checkpoint and does not accept an arbitrary SQLite path.
-
-### Metrics and diagnostics
-
-| Flag | Default |
-| --- | --- |
-| `--metrics-endpoint` | unset (or `SWATH_OTLP_ENDPOINT`) |
-| `--no-metrics` | off |
-| `--trace` | off |
-| `--engine-toggle` | every toggle defaults `on` except `readahead` (`off`); see [`usage.md`](usage.md#diagnostic-tier-ablation---engine-toggle) — diagnostic tier, not a supported configuration, except the documented `rate_anchored_sensing=off` + `tail_floor=current` rollback |
-
-`--trace` is available with every checkpoint mode, including `--checkpoint
-none`. Trace JSONL contains real key bounds and pivots; the JSON run summary can
-also contain targets, arguments, filters, and sampled keyspace bounds. Treat
-both as sensitive run artifacts.
-
-### Global
-
-| Flag | Default |
-| --- | --- |
-| `-v` / `-vv` / `-vvv` | off (INFO / DEBUG / TRACE) |
-| `-q, --quiet` | off (ERROR / off — `-q` / `-qq`; wins over `-v`) |
-| `--color` | `auto` — colors the end-of-run summary block only when stderr is a terminal, unless `NO_COLOR`/`TERM=dumb` disables it or `CLICOLOR_FORCE` forces it; `always`/`never` win over all of that, including `NO_COLOR` |
-| `-h, --help` | — (prints help and exits) |
-| `-V, --version` | — (prints version and exits) |
-
-## `--tune` registry
-
-`--tune KEY=VALUE` (repeatable) is the expert-settings namespace; run
-`swath list ... --tune help` for the live registry.
-
-| Key | Default | Meaning |
+| Name | Default | What a non-default value changes |
 | --- | --- | --- |
-| `engine.readahead` | `off` | Speculative dense-tail readahead |
-| `seed.mode` | `shallow` | Initial keyspace discovery strategy (`shallow`, `none`, `hints` reserved) |
-| `parquet.writers` | `3` | Bounded Parquet writer pool size (`2..4`) |
-| `summary.interval` | `--progress-interval` when given, else `30s` | JSON run-summary flush cadence — it follows the *configured* interval, never the redrawing display's faster tick |
-| `sort.ignore-disk-check` | `off` | Skip `--sort`'s pre-run and periodic disk-space guard |
+| `owner_split` | `on` | `off` removes proactive owner-side carving, leaving idle-worker stealing. |
+| `density_ewma` | `on` | `off` replaces the observed density fraction with its fixed dense-case ceiling. |
+| `radix_bands` | `on` | `off` disables seed-time radix subdivision of dense flat regions. |
+| `structure_probes` | `on` | `off` disables demand-driven `delimiter=/` discovery during stealing. |
+| `far_ahead` | `on` | `off` pins bounded-range pivots to a plain midpoint. |
+| `alphabet_pivots` | `on` | `off` stops using the observed key alphabet during interpolation. |
+| `reflect` | `on` | `off` disables density-reflected placement and also prevents `reflect_lift`. |
+| `confetti_feedback` | `on` | `off` disables feedback that suppresses repeatedly tiny owner-split children. |
+| `reflect_lift` | `on` | `off` disables only the degenerate-pivot lift while keeping other reflection active. |
+| `fanout_tiling` | `on` | `off` disables zero-probe tiling of truncated `key=value/` fan-outs. |
+| `mass_aware_seed` | `on` | `off` disables sampling that distinguishes one heavy seed subtree from many tiny leaves. |
+| `rate_anchored_sensing` | `on` | `off` selects the legacy remaining-work estimate. |
+| `tail_floor` | `reach_floored` | Accepts `current`, `est_direct`, or `reach_floored` for the owner-split tail gate. |
+| `readahead` | `off` | `on` enables speculative dense-tail fetches; prefer `--tune engine.readahead=on`. |
 
-See [`usage.md`](usage.md#tuning---tune) for what each knob actually changes and
-the resume-applicability rules.
+Exact mechanisms and engagement counters are in the
+[algorithm reference](internals/algorithms.md) and
+[instrument registry](internals/metrics-internals.md#5-instrumentation-discipline--post-hoc-classification-why-swath-emits-so-much).
 
-## JVM system properties
+## Sorted-output JVM properties
 
-Dev-tier knobs, set with `-D` on the JVM (`java -Dswath.sort.fan-in=64 -jar
-swath.jar …`, or via `JAVA_TOOL_OPTIONS`) — **not** CLI flags, so they do not
-appear in `--help`. The `swath.sort.*` set governs `--sort` only. **Only the
-binding merge width is echoed back:** the JSON run-summary's `sort` block reports
-the runtime-clamped fan-in as `sort.effective_fan_in`, and none of the other
-properties below are recorded anywhere in the summary — so keep the invocation
-if you want to know what a tuned run was tuned with. Watch the near-collision
-while reading one: summary `sort.segment_bytes` is the total staging bytes
-*written* across all segments, not the `swath.sort.segment-bytes` roll
-threshold. All sizes are bytes.
+These development-tier controls are Java system properties, not CLI flags. Pass them
+with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS` /
+`SWATH_OPTS`. Keep the invocation with the report: most are not echoed into the summary.
 
-| Property | Default | When you'd touch it |
+| Property | Default | Purpose |
 | --- | --- | --- |
-| `swath.sort.heap-fraction` | `0.08` | **Sizing.** The single lever that moves both staging-segment size and the merge budget together; prefer it over setting either directly |
-| `swath.sort.final-file-bytes` | `1 GiB` (roll threshold for multi-file sorted output) | **Output shape.** Smaller ⇒ more, smaller parts; `Long.MAX_VALUE` ⇒ one file |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | **Merge speed.** Maximum concurrent key ranges for the final merge; `1` is the explicit serial opt-out. Runtime staged-size, configured-fan-in, heap, and descriptor gates can reduce it further — see [`usage.md`](usage.md#parallel-range-merge) |
-| `swath.sort.min-parallel-staged-bytes` | `256 MiB` | **Small-run floor.** Below this much staged input, keep the final merge serial so boundary sampling and extra output parts do not cost more than they save |
-| `swath.sort.segment-codec` | `LZ4` (`NONE`, `LZ4`, `ZSTD1`) | Staging disk pressure vs CPU |
-| `swath.sort.segment-bytes` | heap-adaptive: `max(64 MiB, heap-fraction × -Xmx)` | Rarely — overrides the adaptive sizing above |
-| `swath.sort.merge-budget-bytes` | heap-adaptive, same shape as `segment-bytes` | Rarely — same |
-| `swath.sort.fan-in` | `10000` (runtime-clamped by the budget and `ulimit -n`) | Rarely — the runtime clamps usually bind first |
-| `swath.sort.final-row-group-bytes` | `8 MiB` | Rarely — the published file's seek granularity |
-| `swath.sort.segment-entries` | unbounded (the bytes gate governs) | Rarely — a backstop entry cap |
-| `swath.sort.buffers` | `2` (must be `>= 2`) | Internal — the in-flight sealed-buffer corridor |
-| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Internal — the divisor bounding the effective fan-in |
-| `swath.sort.segment-row-group-bytes` | `1 MiB` | Internal — columnar-Parquet staging only |
-| `swath.git.sha` | unset (falls back to the jar's implementation version) | The commit stamped into the summary's `shape.fingerprint` |
+| `swath.sort.heap-fraction` | `0.08` | Derive staging-segment and merge budgets from `-Xmx`. |
+| `swath.sort.segment-bytes` | `max(64 MiB, heap-fraction × -Xmx)` | Override the adaptive staging flush threshold. |
+| `swath.sort.segment-entries` | effectively unbounded | Secondary segment entry cap. |
+| `swath.sort.buffers` | `2`, minimum `2` | Fill buffer plus bounded off-thread encode buffers. |
+| `swath.sort.segment-codec` | `LZ4` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
+| `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by memory and open files. |
+| `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Heap budget for open merge streams. |
+| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Conservative per-stream divisor used by the merge planner. |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum contiguous key ranges in the final merge; `1` forces serial. |
+| `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller merges serial. |
+| `swath.sort.final-file-bytes` | `1 GiB` | Roll threshold for final sorted parts. |
+| `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
+| `swath.sort.segment-row-group-bytes` | `1 MiB` | Legacy columnar-staging path only. |
+| `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |
 
-**Ergonomics caveat, stated plainly:** everything above is reachable *only* as a JVM system
-property. There is no CLI flag and no `--tune` key for any of it, so tuning a containerized run
-means threading `JAVA_TOOL_OPTIONS` through your orchestration. (The published image bakes no
-default JVM args, so there is nothing of its own to preserve when you set that variable — see the
-[`Dockerfile`](../Dockerfile). An image that DID bake flags would need them repeated, because an
-environment variable replaces the Dockerfile `ENV` rather than appending to it.) A knob reachable
-only this way tends
-not to get exercised; promoting the operator-facing ones (the first four rows) to typed `--tune`
-keys is a known follow-up, not a settled design.
+The realized merge width is constrained by the staged segment count, heap budget, and
+file-descriptor budget. The report's `sort.effective_fan_in` and engagement reasons show
+what actually bound. See [the sorted merge](performance.md#the-sorted-merge) before
+changing these values.
 
-See [`usage.md`](usage.md#sorted-output---sort) for which knob actually binds and
-how to size the staging volume.
+## Sensitive diagnostics
+
+`--trace PATH` writes key bounds and pivots to JSONL. `_swath_summary.json` can include
+the target URI, arguments, filters, slow-range bounds, and key samples. Neither is a
+sanitized telemetry envelope; review and redact it before sharing.
+
+OTLP export is off unless `--metrics-endpoint` or `SWATH_OTLP_ENDPOINT` configures it.
+`--no-metrics` disables export even when the environment sets an endpoint. See
+[Metrics and observability](metrics-and-observability.md) for meter semantics.

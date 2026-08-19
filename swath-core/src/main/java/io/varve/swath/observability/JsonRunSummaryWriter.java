@@ -768,7 +768,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_progress_units", (long) counterCount("swath.progress.units"));
         // Sort observability polish: the binding merge-pass-width knob (SortConfig#effectiveFanIn),
         // echoed directly so a run is self-describing about which knob binds — instead of only
-        // being inferable from segments/passes (docs/usage.md "Which knob actually binds"). Null
+        // being inferable from segments/passes (docs/metrics-and-observability.md §3). Null
         // when the caller passes the pre-fan-in RunConfig constructor.
         if (rc.sortEffectiveFanIn() == null) {
             sortNode.putNull("effective_fan_in");

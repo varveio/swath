@@ -303,7 +303,7 @@ final class EngineTogglesParseTest {
 
     /**
      * The sensing/tail-floor pair are defaults together. Pin both halves in one place, and pin the
-     * documented rollback — {@code docs/usage.md} promises that this exact pair of toggles restores
+     * documented rollback — {@code docs/configuration.md} promises that this exact pair of toggles restores
      * the pre-flip engine behaviour, so a future default change cannot silently break that promise.
      */
     @Test

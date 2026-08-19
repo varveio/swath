@@ -22,12 +22,12 @@ import java.util.Map;
  * <p><b>EXPERIMENTAL / DIAGNOSTIC — not a supported configuration.</b> {@link #DEFAULT} is the
  * only supported configuration, with one documented exception: {@code rate_anchored_sensing=off}
  * together with {@code tail_floor=current} is the supported rollback to pre-0.2.0 engine behaviour
- * ({@code docs/usage.md}). The ten ablation toggles below default {@code true}, {@code
+ * ({@code docs/configuration.md}). The ten ablation toggles below default {@code true}, {@code
  * readahead} is opt-in/default-off, and {@code mass_aware_seed} is opt-out/default-on. Turning a
  * mechanism off silences its own counters and fires an explicit {@code TOGGLE.<name>_off} mark
  * (§5 discipline, {@code docs/internals/metrics-internals.md}), so post-hoc analysis never has to
  * infer an ablation from absence alone. Per-toggle effects, defaults, and measured cost profiles
- * are the ablation and performance-toggle tables in {@code docs/usage.md}.
+ * are the ablation and performance-toggle tables in {@code docs/configuration.md}.
  *
  * <ul>
  *   <li>{@code owner_split} — {@link WorkStealingScan}'s owner-side proactive self-split.</li>
@@ -45,7 +45,7 @@ import java.util.Map;
  *       OwnerSelfSplit#maybeOwnerSelfSplit}.</li>
  *   <li>{@code fanout_tiling} — {@code SeedStep}'s zero-probe {@code key=value/} partition-fanout
  *       tiling; its interaction with {@code mass_aware_seed} is the precedence rule in {@code
- *       docs/usage.md}.</li>
+ *       docs/configuration.md}.</li>
  *   <li>{@code reflect_lift} — the reflect-lift alone, independent of plain {@code reflect}
  *       staying active; gated on {@code reflect() && reflectLift()}.</li>
  *   <li>{@code readahead} — opt-in, default OFF: lets {@link RangeScanner} engage {@link
