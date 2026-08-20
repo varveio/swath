@@ -2,18 +2,37 @@
 
 # swath
 
-**List very large S3 buckets in parallel, without choosing prefixes or partitions first.**
+**Parallel, resumable S3 listing for very large buckets.**
 
-![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)
+`swath` is an open-source CLI for finding out **what is in a very large S3 bucket
+right now**. It turns a live `ListObjectsV2` scan into a stream or a query-ready
+Parquet inventory, filling the gap between a simple `aws s3 ls` or SDK loop and a
+precomputed S3 Inventory.
 
-S3 normally exposes a bucket as one ordered sequence of pages. That is simple, but a
-single sequence leaves most of a large machine idle. swath starts workers at different
-points in the keyspace, watches what they actually find, and moves work from busy ranges
-to idle workers. It discovers the useful partitions while it lists.
+- **Parallel without pre-partitioning.** swath learns the bucket's key distribution while
+  it lists, then moves work from dense ranges to idle workers. Flat keys, deep prefix
+  trees, and badly skewed layouts do not need different partitioning scripts.
+- **Resume instead of restarting.** Managed Parquet output checkpoints progress and
+  resumes after Ctrl+C or a crash, while keeping active memory buffers bounded.
+- **Analyze without downloading objects.** swath reads metadata only. Stream a table,
+  TSV, or JSONL, or query the Parquet result directly with tools such as DuckDB.
 
-The result can stream as a table, TSV, or JSONL, or be written as a resumable Parquet
-dataset. Global sorting is available with `--sort` when you need it; unsorted output is
-the faster default.
+Use swath when a fresh S3 Inventory or S3 Metadata table is unavailable, stale, or
+controlled by somebody else, and a serial listing is too slow.
+
+**Start with the [visual field guide](https://swath.varve.io/field-guide/).** It explains
+why S3 listing is difficult to parallelize, then walks through swath's range model,
+safe splitting, work stealing, checkpoints, and the cases where swath is not the right
+tool.
+
+[![Swath demo: interrupt and resume a 39.7-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
+
+*A real 39.7-million-object run: one of 513 initial range guesses held 68% of the
+bucket. swath discovered the imbalance while listing and split the busy ranges so idle
+workers could help. [Explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
+or [see the visual field guide](https://swath.varve.io/field-guide/).*
+
+<a id="quickstart"></a>
 
 ## Try it
 
@@ -63,7 +82,7 @@ swath list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
 swath resume out/
 ```
 
-## The idea
+## How it works
 
 Imagine that one worker owns the key range `(A, Z]`. It lists forward from `A`. When
 another worker becomes idle, swath chooses a pivot such as `M` and atomically changes
@@ -85,15 +104,16 @@ swath may re-list an unfinished tail but does not rewrite finalized parts. The e
 range, split, and resume contracts are documented under
 [internals](docs/internals/overview.md).
 
-## What it is good at
+## When to use it
 
 - Large general-purpose S3 buckets with unknown, skewed, flat, or deeply nested key
   distributions.
 - Listings where S3 Inventory or S3 Metadata is unavailable, stale, or controlled by
   somebody else.
-- Bounded-memory streaming into Parquet, JSONL, TSV, or a terminal table.
+- Streaming with bounded active buffers into Parquet, JSONL, TSV, or a terminal table.
 - Long-running inventories that need crash-safe checkpoint and resume.
-- Producing globally sorted Parquet when downstream readers require key order.
+- Producing globally sorted Parquet when downstream readers require key order (opt-in;
+  unsorted output is the faster default).
 
 swath reads listings only. It never fetches object bodies. Filters are applied after
 listing, so they reduce output size but not LIST requests.
