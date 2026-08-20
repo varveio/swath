@@ -36,44 +36,36 @@ or [see the visual field guide](https://swath.varve.io/field-guide/).*
 
 ## Try it
 
-This lists 11 objects from the same anonymously readable NOAA bucket shown in the demo:
-
-```bash
-docker run --rm ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
-  --no-sign-request --region us-east-1
-```
-
-To save a resumable Parquet dataset:
+This is the exact listing shown in the demo. It scans the entire public NOAA bucket—
+39.7 million objects in the recorded run—and saves a resumable Parquet dataset:
 
 ```bash
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  list s3://noaa-gestofs-pds/ \
   --no-sign-request --region us-east-1 \
-  --format parquet -o /out/noaa-gestofs-sample
+  --concurrency 128 \
+  --format parquet -o /out/noaa-gestofs-pds
 ```
 
 If the DuckDB CLI is installed, query the result directly—there is no conversion or
 compaction step:
 
 ```bash
-duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
+duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
 ```
 
 If the listing is interrupted, the output directory is the run handle:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-sample
+  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
 ```
 
-The video runs the same Parquet command against the bucket root, adds
-`--concurrency 128`, and writes to `/out/noaa-gestofs-pds`. That is a
-39.7-million-object run, not a quickstart; the
-[getting-started guide](docs/getting-started.md#5-run-the-full-demo-optional) gives the
-exact command and its cost and resource context.
+The recorded run made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around
+1.7 GB RSS. Read the [request-cost guidance](docs/operating.md#request-cost) before
+reproducing it.
 
 For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
 credentials into the container. Docker does not automatically inherit a host AWS profile;
@@ -89,10 +81,11 @@ Building from source requires JDK 25:
 ```bash
 ./gradlew :swath-cli:installDist
 export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
-swath list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+swath list s3://noaa-gestofs-pds/ \
   --no-sign-request --region us-east-1 \
-  --format parquet -o out/noaa-gestofs-sample
-swath resume out/noaa-gestofs-sample
+  --concurrency 128 \
+  --format parquet -o out/noaa-gestofs-pds
+swath resume out/noaa-gestofs-pds
 ```
 
 ## How it works

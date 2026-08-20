@@ -1,9 +1,8 @@
 # Getting started
 
-This guide uses Docker to make a public listing, save a managed Parquet dataset, query it,
-and show how the same output directory resumes after an interruption. The example target
-is an 11-object slice of the same public NOAA bucket shown in the README demo; replace it
-with your own bucket after the public command works.
+This guide uses Docker to run the same public listing as the README video, query its
+managed Parquet dataset, and resume it after an interruption. This is a real large-bucket
+run: the recording listed 39,585,029 objects.
 
 **Shell note:** the commands use a Bash-compatible shell on Linux or macOS. On Windows
 PowerShell, create the directory with `New-Item -ItemType Directory -Force out`, replace
@@ -24,42 +23,35 @@ docker run --rm ghcr.io/varveio/swath:latest --version
 
 This should print the swath version and exit without contacting S3.
 
-## 2. List a public prefix
+## 2. Run the public demo
 
-Run a one-shot listing to stdout:
-
-```bash
-docker run --rm ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
-  --no-sign-request --region us-east-1
-```
-
-Because Docker's stdout is not a terminal, the default `auto` format resolves to TSV.
-Each line describes one object. swath reads listing metadata; it never downloads object
-contents.
-
-The command is anonymous and needs no AWS credentials. If the exact command fails, use
-the [troubleshooting guide](faq.md) for the reported access, network, or Docker error
-instead of adding credentials to this public example.
-
-## 3. Save and query a Parquet dataset
-
-Create a host directory and mount it at `/out`. Running the container as your current
-user avoids root-owned output on Linux:
+Create a host directory and run the exact listing command shown in the demo. Running the
+container as your current user avoids root-owned output on Linux:
 
 ```bash
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  list s3://noaa-gestofs-pds/ \
   --no-sign-request --region us-east-1 \
-  --format parquet -o /out/noaa-gestofs-sample
+  --concurrency 128 \
+  --format parquet -o /out/noaa-gestofs-pds
 ```
 
-The host's `out/noaa-gestofs-sample/` directory is now a managed Parquet dataset:
+The command is anonymous and needs no AWS credentials. If the exact command fails, use
+the [troubleshooting guide](faq.md) for the reported access, network, or Docker error
+instead of adding credentials to this public example.
+
+swath reads listing metadata; it never downloads object contents. The recorded run made
+41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around 1.7 GB RSS. Read the
+[request-cost guidance](operating.md#request-cost) before reproducing it.
+
+## 3. Query the Parquet dataset
+
+When the listing completes, `out/noaa-gestofs-pds/` is a managed Parquet dataset:
 
 ```text
-out/noaa-gestofs-sample/
+out/noaa-gestofs-pds/
   data/                   Parquet part files
   manifest.json           files and dataset metadata
   .swath-state.json       internal run identity
@@ -71,8 +63,8 @@ out/noaa-gestofs-sample/
 Read every part as one table. If the DuckDB CLI is installed:
 
 ```bash
-duckdb -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
-duckdb -c "SELECT key, size FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet') LIMIT 5"
+duckdb -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
+duckdb -c "SELECT key, size FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet') LIMIT 5"
 ```
 
 Or use DuckDB's
@@ -81,7 +73,7 @@ so the entire walkthrough still requires only Docker:
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
-  -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
+  -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
 ```
 
 The default dataset is not globally ordered: parallel workers finish independently. Add
@@ -97,40 +89,19 @@ the same directory:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-sample
+  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
 ```
 
-The public sample normally completes before you can interrupt it. Running the resume command
-against that completed directory is safe: swath reports that there is nothing to resume and
-exits successfully. On a longer interrupted listing, the same command retains finalized parts,
-discards an unfinished part, and continues after the last durable cursor.
+The same command retains finalized parts, discards an unfinished part, and continues after
+the last durable cursor. Running it against a completed directory is also safe: swath reports
+that there is nothing to resume and exits successfully.
 
 To replace a completed dataset deliberately, run a new `list` command with `--overwrite`.
 For mismatched or refused run directories, follow
 [The output directory is refused](faq.md#the-output-directory-is-refused) rather than
 editing the checkpoint.
 
-## 5. Run the full demo (optional)
-
-The README video removes the sample prefix and lists the entire NOAA bucket with 128
-concurrent listings:
-
-```bash
-mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/ \
-  --no-sign-request --region us-east-1 \
-  --concurrency 128 \
-  --format parquet -o /out/noaa-gestofs-pds
-```
-
-This is the exact listing command shown in the demo, wrapped in Docker. The recorded run
-listed 39,585,029 objects, made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and
-peaked around 1.7 GB RSS. It is a real large-bucket run, so read the
-[request-cost guidance](operating.md#request-cost) before reproducing it.
-
-## 6. List your bucket
+## 5. List your bucket
 
 For a private bucket, remove `--no-sign-request`. A container does not automatically
 inherit credentials from the host, so pass environment credentials explicitly. Replace

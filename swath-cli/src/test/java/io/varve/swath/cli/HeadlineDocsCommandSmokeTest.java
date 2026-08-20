@@ -15,39 +15,35 @@ import org.junit.jupiter.api.Test;
 class HeadlineDocsCommandSmokeTest {
 
     private static final String PUBLIC_DEMO_BUCKET = "s3://noaa-gestofs-pds/";
-    private static final String PUBLIC_DEMO_SLICE =
-            PUBLIC_DEMO_BUCKET + "stofs_2d_glo.20260803/00/";
 
     @Test
     void readmeQuickstartUsesAnExplicitResumableFormatAndConsistentLauncher() throws Exception {
         String readme = Files.readString(Path.of("..", "README.md"));
         assertThat(readme).contains("export PATH=\"$PWD/swath-cli/build/install/swath/bin:$PATH\"")
-                .contains("swath list " + PUBLIC_DEMO_SLICE)
+                .contains("swath list " + PUBLIC_DEMO_BUCKET)
                 .contains("--no-sign-request --region us-east-1")
-                .contains("--format parquet -o out/noaa-gestofs-sample")
-                .contains("swath resume out/noaa-gestofs-sample");
+                .contains("--concurrency 128")
+                .contains("--format parquet -o out/noaa-gestofs-pds")
+                .contains("swath resume out/noaa-gestofs-pds");
 
-        parse("list", PUBLIC_DEMO_SLICE, "--no-sign-request", "--region", "us-east-1",
-                "--format", "parquet", "-o", "out/noaa-gestofs-sample");
-        parse("resume", "out/noaa-gestofs-sample");
+        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
+                "--concurrency", "128", "--format", "parquet", "-o", "out/noaa-gestofs-pds");
+        parse("resume", "out/noaa-gestofs-pds");
     }
 
     @Test
     void gettingStartedCommandsParse() throws Exception {
         String gettingStarted = Files.readString(Path.of("..", "docs", "getting-started.md"));
-        assertThat(gettingStarted).contains(PUBLIC_DEMO_SLICE)
+        assertThat(gettingStarted).contains("exact listing command shown in the demo")
+                .contains("list " + PUBLIC_DEMO_BUCKET)
                 .contains("--no-sign-request --region us-east-1")
-                .contains("--format parquet -o /out/noaa-gestofs-sample")
-                .contains("resume /out/noaa-gestofs-sample")
+                .contains("--concurrency 128")
+                .contains("resume /out/noaa-gestofs-pds")
                 .contains("--format parquet -o /out/noaa-gestofs-pds");
 
-        parse("list", PUBLIC_DEMO_SLICE,
-                "--no-sign-request", "--region", "us-east-1");
-        parse("list", PUBLIC_DEMO_SLICE, "--no-sign-request", "--region", "us-east-1",
-                "--format", "parquet", "-o", "/out/noaa-gestofs-sample");
-        parse("resume", "/out/noaa-gestofs-sample");
         parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
                 "--concurrency", "128", "--format", "parquet", "-o", "/out/noaa-gestofs-pds");
+        parse("resume", "/out/noaa-gestofs-pds");
     }
 
     private static void parse(String... args) {

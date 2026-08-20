@@ -157,6 +157,6 @@ machinery.
 
 ## Result
 
-The completed first pass has 77,708 active product-documentation words, a 35.2% reduction
-from the 119,991-word baseline. All first-party Markdown is 97,629 words, down 29.9% from
+The completed first pass has 77,549 active product-documentation words, a 35.4% reduction
+from the 119,991-word baseline. All first-party Markdown is 97,470 words, down 30.0% from
 139,277. No prose was moved into `notes/` or an archive to reach either result.
