@@ -20,10 +20,10 @@ precomputed S3 Inventory.
 Use swath when a fresh S3 Inventory or S3 Metadata table is unavailable, stale, or
 controlled by somebody else, and a serial listing is too slow.
 
-**Start with the [visual field guide](https://swath.varve.io/field-guide/).** It explains
-why S3 listing is difficult to parallelize, then walks through swath's range model,
-safe splitting, work stealing, checkpoints, and the cases where swath is not the right
-tool.
+**Want to understand how swath works? Read the
+[visual field guide](https://swath.varve.io/field-guide/).** It explains why S3 listing
+is difficult to parallelize, then walks through swath's range model, safe splitting,
+work stealing, checkpoints, and the cases where swath is not the right tool.
 
 [![Swath demo: interrupt and resume a 39.7-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
 
