@@ -1,11 +1,16 @@
 # Troubleshooting bucket-shape pathologies with replay
 
+This is a contributor and performance-investigation workflow. It is not needed to install,
+use, or operate an ordinary swath listing.
+
 Use this loop when a listing collapses toward one worker, stalls at a repeatable region, or
 spends many probes without producing splits. The replay server fixes the keyspace and
 request-cost profile so an engine change can be evaluated without paying for repeated live
 bucket scans.
 
-Read the [replay-server reference](swath-replay-server.md) first.
+Use it after the JSON report and aggregate metrics have identified a repeatable
+key-distribution problem. The companion [replay-server reference](swath-replay-server.md)
+documents the development tool itself.
 
 ## 1. Capture the evidence
 

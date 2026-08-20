@@ -1,5 +1,8 @@
 # swath replay server
 
+This is a contributor tool. It is not part of the `swath` CLI and is not needed for a
+normal listing.
+
 `swath-replay-server` serves a Parquet listing through the subset of S3
 `ListObjectsV2` that swath uses. It makes real bucket shapes repeatable for client tests,
 engine debugging, conformance checks, and benchmarks without repeatedly listing S3.
@@ -38,7 +41,7 @@ swath list s3://digitalcorpora \
   --restart --concurrency 16
 ```
 
-A directory dataset stores Parquet files in `capture/data/`. Replay commands accept a
+A managed Parquet dataset stores its part files in `capture/data/`. Replay commands accept a
 single file or a directory whose immediate children are `*.parquet`; they do not recurse.
 Pass `capture/data`, not the dataset root.
 

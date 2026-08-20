@@ -1,10 +1,13 @@
-# Packaging & Docker
+# Packaging and release engineering
 
-How to build, package, ship, and run `swath`: the uber-jar, the `installDist`
-launcher layout, and the Docker image — all produced from one Gradle build.
-For the module/dependency graph behind these artifacts see
-[`build-and-modules.md`](internals/build-and-modules.md); for the CLI surface itself see
-[`usage.md`](usage.md).
+This is the contributor reference for building, packaging, testing, and publishing the
+self-contained jar, application archives, and Docker image. It is not the installation or
+container-usage guide. To run a release, use [Installation](install.md); for credentials,
+output mounts, and production object-store access, use
+[Operating swath](operating.md).
+
+For the module and dependency graph behind the artifacts, see
+[`build-and-modules.md`](internals/build-and-modules.md).
 
 ## 1. Overview
 
@@ -156,26 +159,16 @@ i.e. the image ships the exact same `swath.jar` described in §4, not a
 separately-packaged copy. Its legal bundle is available at
 `/opt/swath/LICENSE`, `/opt/swath/NOTICE`, and `/opt/swath/THIRD_PARTY_NOTICES.md`.
 
-### Run
+### Runtime contract
 
-```
-mkdir -p out && chmod 777 out
-docker run --rm -v "$PWD/out:/out" swath:dev \
-  list s3://my-bucket/prefix/ --region us-east-1 \
-  --format parquet -o /out/data
-```
+The image runs as numeric UID/GID `10001:10001`, with `/opt/swath` as its working
+directory and `java -jar /opt/swath/swath.jar` as its exec-form entrypoint. These are
+packaging constraints: changing them affects writable mounts, Kubernetes
+`runAsNonRoot`, signal delivery, and downstream images.
 
-Replace `s3://my-bucket/prefix/` with your target; add `--no-sign-request` to
-list a public / anonymous-read bucket (e.g. an AWS Open Data bucket) with no
-credentials. Authenticating to a private bucket is generic swath behavior (the
-AWS default credential chain — see [`usage.md`](usage.md)); the only
-container-specific part is *getting* those credentials into the container — pass
-them with `-e` or mount a credentials file. The container runs as a **non-root
-numeric UID (10001)**, chosen deliberately over a named user so the image
-build stays `RUN`-free (see below) and so Kubernetes can verify
-`runAsNonRoot: true` at admission without needing to resolve a username — any
-host directory mounted for output must be writable by that UID (`chmod 777`
-above, or `chown 10001:10001` the host directory).
+Do not duplicate end-user mount or credential commands here. The canonical examples are
+in [Getting started](getting-started.md) and
+[Credentials in Docker](operating.md#credentials-in-docker).
 
 ### Multi-arch
 
@@ -187,7 +180,7 @@ there is nothing to *execute* in the foreign-arch rootfs during the build —
 only pull, copy, and metadata operations, all of which work without
 emulating the target CPU.
 
-### Signals & config
+### Signals and JVM configuration
 
 `java` runs as the container's PID 1 in exec form (`ENTRYPOINT ["java", ...]`,
 not a shell wrapper), so `SIGTERM`/`SIGINT` reach the JVM — and swath's own
@@ -223,7 +216,7 @@ docker pull ghcr.io/varveio/swath@sha256:<digest>
 The release workflow prints the pushed manifest's digest to its run summary, so
 a consumer can copy the exact digest to pin against; each GitHub release also
 ships the signed, attested assets to verify against
-([install.md §Verifying a download](install.md#verifying-a-download)).
+([verify a release](install.md#verify-a-release)).
 
 ### Tags & versioning
 

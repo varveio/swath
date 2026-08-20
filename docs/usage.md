@@ -6,7 +6,6 @@ visible flag and its current default, use the CLI itself:
 ```bash
 swath list --help
 swath resume --help
-swath list --tune help
 ```
 
 For a first run, start with [Getting started](getting-started.md). Credentials, IAM,
@@ -35,19 +34,21 @@ history and delete-marker listing are not implemented yet.
 | Inspect rows in a terminal | `swath list s3://bucket/prefix` | No |
 | Pipe TSV | `swath list ... \| command` | No |
 | Write JSONL or TSV | `swath list ... --format jsonl -o rows.jsonl --checkpoint none` | No |
-| Keep a Parquet inventory | `swath list ... --format parquet -o out/` | Yes |
+| Keep a managed Parquet dataset | `swath list ... --format parquet -o out/` | Yes |
 | Keep globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
 
 `--format auto` is the default. It chooses an aligned table when stdout is a terminal
 and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, and
 `parquet`.
 
-Prefer a directory-shaped Parquet destination such as `-o out/`. It is the normal,
-resumable form and supports parallel writers. A known extension selects FILE kind. Text
-files are published atomically but are not resumable. A `.parquet` FILE-kind path is also
-non-resumable and currently creates a one-writer dataset directory at that path rather
-than one physical file; it therefore requires `--checkpoint none`. If you need one
-physical Parquet file, write a directory dataset and combine it downstream.
+Prefer `-o out/`. That directory is a managed Parquet dataset: it supports parallel
+writers, checkpointing, and resume. Text file destinations are published atomically but
+are not resumable.
+
+Do not use `-o inventory.parquet` when you expect one physical Parquet file. In the
+current release that FILE-kind path creates a one-writer, non-resumable dataset directory
+and requires `--checkpoint none`. Write a normal managed dataset and combine it
+downstream when a consumer requires one file.
 
 ### Parquet dataset layout
 
@@ -84,6 +85,14 @@ Read the parts as one dataset:
 duckdb -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
 ```
 
+Without a local DuckDB installation, run the same query with its
+[official container](https://duckdb.org/docs/current/operations_manual/duckdb_docker):
+
+```bash
+docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
+  -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
+```
+
 There is no required compaction step. Increase `--parquet-part-size` if you want fewer,
 larger parts.
 
@@ -106,7 +115,7 @@ request bill. Changing a filter changes the run identity and is refused during r
 
 ## Sorted output
 
-`--sort` produces a globally key-sorted Parquet directory dataset. The final parts are
+`--sort` produces a globally key-sorted managed Parquet dataset. The final parts are
 range-disjoint and named in key order: every key in an earlier part is lower than every
 key in a later part. Without `--sort`, each S3 page remains ordered but pages from
 independent workers may reach different parts in any order; neither a part nor the whole
@@ -140,8 +149,8 @@ see [Performance](performance.md#the-sorted-merge) and
 
 ## Checkpoint and resume
 
-The output directory is the run handle. With the default `--checkpoint auto`, a Parquet
-directory run stores its live checkpoint at `<output>/.swath/checkpoint.sqlite`:
+The output directory is the run handle. With the default `--checkpoint auto`, a managed
+Parquet dataset stores its live checkpoint at `<output>/.swath/checkpoint.sqlite`:
 
 ```bash
 swath list s3://my-bucket/ --format parquet -o out/
@@ -167,7 +176,7 @@ managed output directory, not an arbitrary SQLite path.
 
 | Sink | Interruption behavior |
 | --- | --- |
-| Parquet directory dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
+| Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
 | stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
 | FILE-kind text | One-shot and non-resumable; successful publication atomically replaces the destination. |
 | FILE-kind Parquet | One-writer, non-resumable dataset directory in the current release. |
@@ -213,7 +222,7 @@ The normative schema, including common-prefix and future delete-marker semantics
 | `143` | SIGTERM |
 
 Codes 74, 75, 124, 130, and 143 leave resumable work only when the run uses a managed
-Parquet directory. A deterministic failure may still recur when resumed; read the terminal
+Parquet dataset. A deterministic failure may still recur when resumed; read the terminal
 error and `_swath_summary.json` rather than classifying from the code alone.
 
 Code 1 is not always fatal. The sorted-output disk guards identify their resumable case in

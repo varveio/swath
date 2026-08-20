@@ -44,19 +44,18 @@ docker run --rm ghcr.io/varveio/swath:latest \
   --region us-east-1 --no-sign-request
 ```
 
-For a private bucket, remove `--no-sign-request` and provide credentials through the
-normal AWS environment, profile, container-role, or instance-role chain.
-
-To keep a resumable Parquet inventory:
+To save a resumable Parquet dataset:
 
 ```bash
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://my-bucket/prefix/ --format parquet -o /out
+  list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
+  --region us-east-1 --no-sign-request --format parquet -o /out
 ```
 
-Query the result directly—there is no conversion or compaction step:
+If the DuckDB CLI is installed, query the result directly—there is no conversion or
+compaction step:
 
 ```bash
 duckdb -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
@@ -69,8 +68,14 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest resume /out
 ```
 
-The [getting-started guide](docs/getting-started.md) walks through the same flow,
-including installation choices, credentials, expected files, and common failures.
+For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
+credentials into the container. Docker does not automatically inherit a host AWS profile;
+see [Credentials in Docker](docs/operating.md#credentials-in-docker) for environment,
+shared-profile, and workload-role paths.
+
+The [getting-started guide](docs/getting-started.md) walks through the same flow with
+expected files, a Docker-only DuckDB option, private credentials, resume behavior, and
+troubleshooting routes.
 
 Building from source requires JDK 25:
 
@@ -115,7 +120,7 @@ range, split, and resume contracts are documented under
 - Producing globally sorted Parquet when downstream readers require key order (opt-in;
   unsorted output is the faster default).
 
-swath reads listings only. It never fetches object bodies. Filters are applied after
+swath reads listings only. It never fetches object contents. Filters are applied after
 listing, so they reduce output size but not LIST requests.
 
 ## When not to use it
@@ -152,16 +157,12 @@ ordering this engine requires. See the [roadmap](ROADMAP.md) for planned work.
 - **Use and operate:** [common workflows](docs/usage.md),
   [credentials and cost](docs/operating.md), [configuration](docs/configuration.md),
   [performance](docs/performance.md), and [troubleshooting](docs/faq.md).
-- **Understand:** [how swath works](docs/internals/overview.md), then the
+- **Understand:** read the [visual field guide](https://swath.varve.io/field-guide/) first,
+  then continue to the repository's [internals overview](docs/internals/overview.md),
   [architecture](docs/internals/architecture.md), [algorithms](docs/internals/algorithms.md),
   and [correctness contracts](docs/internals/contracts.md).
 - **Contribute:** [contribution guide](CONTRIBUTING.md) and
   [testing guide](docs/ops/dev/TESTING.md).
-
-The repository also ships an unauthenticated, development-only
-[S3 listing replay server](docs/swath-replay-server.md). It serves a captured listing as
-`ListObjectsV2`, making expensive or pathological key distributions reproducible without
-contacting the original bucket.
 
 ## License
 

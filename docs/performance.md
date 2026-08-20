@@ -1,8 +1,11 @@
 # Performance
 
-This page explains how to diagnose and size a run, then records the project's current
-field evidence. The figures are observations from one machine and mostly one run per
-point—not a portable performance promise or a release-candidate benchmark.
+This is the operator guide for diagnosing and sizing a real run. It also records the
+project's current field evidence. The figures are observations from one machine and mostly
+one run per point—not a portable performance promise or a release-candidate benchmark.
+
+For a first listing, use [Getting started](getting-started.md). Return here after a
+representative run has produced `_swath_summary.json`.
 
 <a id="diagnosing-a-run"></a>
 
@@ -146,7 +149,7 @@ The runtime may lower it for segment count, heap, fan-in, or file descriptors. F
 two effective ranges uses the serial path. Set
 `-Dswath.sort.merge-parallelism=1` for an explicit serial comparison. See
 [configuration](configuration.md#sorted-output-jvm-properties) and
-[using sorted output](usage.md#parallel-range-merge).
+[using sorted output](usage.md#sorted-output).
 
 The final PR #99 campaign ran serial A → default → serial B at fixed `-Xmx12g` and
 `--concurrency 256`; serial values below are the bracket mean.

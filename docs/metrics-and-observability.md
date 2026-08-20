@@ -1,5 +1,9 @@
 # Metrics and observability
 
+This is the operator reference for a run that needs monitoring or diagnosis. A first
+listing needs no telemetry setup; use [Getting started](getting-started.md) and keep the
+default terminal progress display.
+
 swath exposes the same run through four progressively deeper surfaces:
 
 | Need | Use |
@@ -151,7 +155,8 @@ early so short runs are not silent.
 On an interactive terminal, or with `--progress`, swath redraws a human progress display.
 Otherwise the same tick becomes a structured INFO `progress` log record and requires
 `-v`. A tick is rendered once, never both ways. The final human summary is separate and
-is controlled by `--stats` / `--no-stats`; see [Using swath](usage.md#progress).
+is controlled by `--stats` / `--no-stats`; see
+[Using swath](usage.md#progress-and-reports).
 
 Useful markers include startup configuration, first request, first page, phase changes,
 and the final result. DEBUG and TRACE logs add engine evidence; they are intended for

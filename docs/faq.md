@@ -10,7 +10,8 @@ cannot resolve one.
 
 For a public bucket, add `--no-sign-request`. For a private bucket, verify the same
 profile, environment, web identity, container role, or instance role with the AWS CLI,
-then use `--profile` if needed. See [Credentials and region](operating.md#credentials-and-region).
+then use `--profile` if needed. A container does not inherit host credentials unless you
+pass or mount them; see [Credentials in Docker](operating.md#credentials-in-docker).
 
 ## Access denied
 
@@ -29,11 +30,12 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
 ```
 
 The output path must be inside the mounted directory. See
-[Docker and packaging](packaging-and-docker.md#5-docker-image).
+[the platform notes in Getting started](getting-started.md) and
+[Credentials in Docker](operating.md#credentials-in-docker).
 
 ## The run was interrupted
 
-If the output is a managed Parquet directory, resume by directory:
+If the output is a managed Parquet dataset, resume by its output directory:
 
 ```bash
 swath resume out/
@@ -70,7 +72,7 @@ because a new run cannot know its final object count before listing. Bypass it w
 `--concurrency` is a ceiling, not a fixed worker count. swath starts below it, increases
 after clean windows, and reduces the live target under S3 backpressure. A sparse or
 poorly divisible keyspace can also leave workers idle. Start with
-[Performance](performance.md#diagnosing-a-run) rather than raising the ceiling blindly.
+[Performance](performance.md#start-with-your-own-run) rather than raising the ceiling blindly.
 
 ## A `%` key fails on an S3-compatible endpoint
 

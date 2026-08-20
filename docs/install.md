@@ -6,6 +6,13 @@ for the current version.
 
 After installation, continue with [getting started](getting-started.md).
 
+| If you want to… | Choose | You need |
+| --- | --- | --- |
+| Try swath without installing Java | Docker | Docker with Linux-container support |
+| Run one downloadable file | Self-contained jar | JDK 25 |
+| Install a `swath` launcher and dependency directory | Application archive | JDK 25 |
+| Build or contribute to swath | Source build | JDK 25; Docker for the integration gate |
+
 ## Docker
 
 Docker includes the required Java runtime:
@@ -17,17 +24,13 @@ docker run --rm ghcr.io/varveio/swath:latest --version
 
 Use a version tag or, for reproducible automation, the immutable digest printed on the
 GitHub release. The image supports `linux/amd64` and `linux/arm64` and runs as non-root
-UID 10001. When writing to a host mount, either make it writable by that UID or run the
-container as your current user:
+UID 10001. The [getting-started guide](getting-started.md) shows writable output mounts
+for Linux, macOS, and Windows PowerShell.
 
-```bash
-mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest --version
-```
-
-See the [Docker reference](packaging-and-docker.md#5-docker-image) for credentials,
-signals, JVM options, local builds, and multi-architecture details.
+For private credentials and writable output mounts, see
+[Credentials in Docker](operating.md#credentials-in-docker). For image construction,
+multi-architecture publishing, and release internals, see
+[Packaging and release engineering](packaging-and-docker.md).
 
 ## Self-contained jar
 
@@ -64,8 +67,8 @@ swath --version
 
 `./gradlew build` is the integration gate, including LocalStack tests. For contributor
 test tiers and a Docker-free inner loop, see [Testing](ops/dev/TESTING.md). The
-[packaging reference](packaging-and-docker.md) documents the jar, launcher, and image
-builds in detail.
+[packaging and release reference](packaging-and-docker.md) documents how contributors
+build and publish the jar, launcher archives, and image.
 
 <a id="verifying-a-download"></a>
 

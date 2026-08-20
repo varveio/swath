@@ -1,5 +1,9 @@
 # Configuration and advanced controls
 
+This is an operator and experiment reference, not a prerequisite for a first listing.
+The defaults are intended for ordinary runs. For output, filtering, and resume choices,
+use [Common workflows](usage.md).
+
 The generated CLI help is the canonical list of visible flags and defaults:
 
 ```bash
@@ -9,8 +13,7 @@ swath list --tune help
 ```
 
 This page documents configuration sources that are not self-evident from help, plus the
-expert and diagnostic controls. For ordinary output and resume choices, see
-[Using swath](usage.md).
+expert and diagnostic controls.
 
 ## Precedence
 

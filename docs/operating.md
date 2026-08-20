@@ -1,6 +1,6 @@
 # Operating swath against object storage
 
-swath issues listing requests and writes local output. It never reads object bodies and
+swath issues listing requests and writes local output. It never reads object contents and
 does not call `HeadObject`, `GetObject`, `HeadBucket`, `GetBucketLocation`, or
 `ListBuckets`.
 
@@ -24,6 +24,42 @@ If neither `--region` nor the SDK chain resolves a region, swath exits 2 before 
 a checkpoint or sending a request. Prefer workload identities and compute roles over
 long-lived environment keys. See [configuration](configuration.md#environment-variables)
 for the recognized environment variables.
+
+## Credentials in Docker
+
+A container does not automatically inherit the host's environment variables or shared
+AWS files. Pass the credentials source deliberately.
+
+For environment credentials, forward the variables by name rather than placing secrets
+in the command line:
+
+```bash
+docker run --rm \
+  -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
+  ghcr.io/varveio/swath:latest \
+  list s3://my-bucket/prefix/ --region us-east-1
+```
+
+For a shared-files profile, mount the AWS directory read-only and point the SDK at its
+two files:
+
+```bash
+docker run --rm \
+  -v "$HOME/.aws:/aws:ro" \
+  -e AWS_SHARED_CREDENTIALS_FILE=/aws/credentials \
+  -e AWS_CONFIG_FILE=/aws/config \
+  ghcr.io/varveio/swath:latest \
+  list s3://my-bucket/prefix/ --profile production --region us-east-1
+```
+
+The shared-files example covers profiles whose credentials are available in those files.
+Profiles that depend on host-only credential processes, local SSO caches, or external files
+also need those dependencies inside the container. On ECS, EKS, or another managed runtime,
+prefer its task, pod, web-identity, or instance credential path instead of mounting a local
+profile.
+
+The [getting-started private-bucket example](getting-started.md#5-list-your-bucket) adds
+the writable output mount used by a managed Parquet dataset.
 
 ## Least-privilege IAM
 
@@ -123,7 +159,7 @@ per thousand objects means probes, retries, sparse pages, or interruption overhe
 1. Confirm that a fresh S3 Inventory or S3 Metadata table is not already available; it
    will be cheaper to query.
 2. Test a representative prefix and inspect request overhead, throughput, and output size.
-3. Use a Parquet directory so an interruption can resume.
+3. Use a managed Parquet dataset so an interruption can resume.
 4. For `--sort`, provision staging and final-output disk together; see
    [Performance](performance.md#the-sorted-merge).
 5. Retain `_swath_summary.json` with the result. It records the target and can contain key

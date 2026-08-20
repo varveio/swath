@@ -1,7 +1,10 @@
 # Internals overview
 
-This page explains the design problem and the choices that shape swath. Read
-[architecture](architecture.md) next for the code map and run lifecycle, then use
+For an accessible, visual explanation of the problem and algorithm, read the
+[visual field guide](https://swath.varve.io/field-guide/). This page is the technical
+bridge from that explanation to the repository's implementation.
+
+Read [architecture](architecture.md) next for the code map and run lifecycle, then use
 [contracts](contracts.md) and [algorithms](algorithms.md) when changing the engine.
 
 ## The problem
@@ -27,7 +30,7 @@ The shipped product is a Java 25 CLI for general-purpose S3 buckets. It supports
 - current objects, with schema support for delete markers and versions;
 - JSONL, TSV, table, and managed Parquet output;
 - filtering by key, size, modification time, and storage class;
-- checkpoint/resume for managed directory-dataset Parquet;
+- checkpoint/resume for managed Parquet datasets (the CLI's directory output);
 - opt-in globally sorted Parquet output;
 - OTLP metrics, JSON run reports, and decision traces.
 
