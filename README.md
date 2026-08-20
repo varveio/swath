@@ -36,12 +36,12 @@ or [see the visual field guide](https://swath.varve.io/field-guide/).*
 
 ## Try it
 
-This lists a small, anonymously readable prefix used by swath's release smoke test:
+This lists 11 objects from the same anonymously readable NOAA bucket shown in the demo:
 
 ```bash
 docker run --rm ghcr.io/varveio/swath:latest \
-  list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
-  --region us-east-1 --no-sign-request
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  --no-sign-request --region us-east-1
 ```
 
 To save a resumable Parquet dataset:
@@ -50,23 +50,30 @@ To save a resumable Parquet dataset:
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
-  --region us-east-1 --no-sign-request --format parquet -o /out
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  --no-sign-request --region us-east-1 \
+  --format parquet -o /out/noaa-gestofs-sample
 ```
 
 If the DuckDB CLI is installed, query the result directly—there is no conversion or
 compaction step:
 
 ```bash
-duckdb -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
+duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
 ```
 
 If the listing is interrupted, the output directory is the run handle:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out
+  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-sample
 ```
+
+The video runs the same Parquet command against the bucket root, adds
+`--concurrency 128`, and writes to `/out/noaa-gestofs-pds`. That is a
+39.7-million-object run, not a quickstart; the
+[getting-started guide](docs/getting-started.md#5-run-the-full-demo-optional) gives the
+exact command and its cost and resource context.
 
 For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
 credentials into the container. Docker does not automatically inherit a host AWS profile;
@@ -82,9 +89,10 @@ Building from source requires JDK 25:
 ```bash
 ./gradlew :swath-cli:installDist
 export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
-swath list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
-  --region us-east-1 --no-sign-request --format parquet -o out/
-swath resume out/
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  --no-sign-request --region us-east-1 \
+  --format parquet -o out/noaa-gestofs-sample
+swath resume out/noaa-gestofs-sample
 ```
 
 ## How it works

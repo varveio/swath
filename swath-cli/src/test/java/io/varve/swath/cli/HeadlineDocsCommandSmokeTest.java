@@ -14,35 +14,40 @@ import org.junit.jupiter.api.Test;
 /** Parses the launch commands readers meet first; execution would require a real S3 endpoint. */
 class HeadlineDocsCommandSmokeTest {
 
+    private static final String PUBLIC_DEMO_BUCKET = "s3://noaa-gestofs-pds/";
+    private static final String PUBLIC_DEMO_SLICE =
+            PUBLIC_DEMO_BUCKET + "stofs_2d_glo.20260803/00/";
+
     @Test
     void readmeQuickstartUsesAnExplicitResumableFormatAndConsistentLauncher() throws Exception {
         String readme = Files.readString(Path.of("..", "README.md"));
         assertThat(readme).contains("export PATH=\"$PWD/swath-cli/build/install/swath/bin:$PATH\"")
-                .contains("swath list s3://cmas-smoke-testcase/smoke_example_case/"
-                        + "2018gg_18j/inputs/htap/")
-                .contains("--region us-east-1 --no-sign-request --format parquet -o out/")
-                .contains("swath resume out/");
+                .contains("swath list " + PUBLIC_DEMO_SLICE)
+                .contains("--no-sign-request --region us-east-1")
+                .contains("--format parquet -o out/noaa-gestofs-sample")
+                .contains("swath resume out/noaa-gestofs-sample");
 
-        parse("list", "s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/",
-                "--region", "us-east-1", "--no-sign-request",
-                "--format", "parquet", "-o", "out/");
-        parse("resume", "out/");
+        parse("list", PUBLIC_DEMO_SLICE, "--no-sign-request", "--region", "us-east-1",
+                "--format", "parquet", "-o", "out/noaa-gestofs-sample");
+        parse("resume", "out/noaa-gestofs-sample");
     }
 
     @Test
     void gettingStartedCommandsParse() throws Exception {
         String gettingStarted = Files.readString(Path.of("..", "docs", "getting-started.md"));
-        String publicSmokeTarget =
-                "s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/";
-        assertThat(gettingStarted).contains(publicSmokeTarget)
-                .contains("--region us-east-1 --no-sign-request")
-                .contains("--format parquet -o /out")
-                .contains("resume /out");
+        assertThat(gettingStarted).contains(PUBLIC_DEMO_SLICE)
+                .contains("--no-sign-request --region us-east-1")
+                .contains("--format parquet -o /out/noaa-gestofs-sample")
+                .contains("resume /out/noaa-gestofs-sample")
+                .contains("--format parquet -o /out/noaa-gestofs-pds");
 
-        parse("list", publicSmokeTarget, "--region", "us-east-1", "--no-sign-request");
-        parse("list", publicSmokeTarget, "--region", "us-east-1", "--no-sign-request",
-                "--format", "parquet", "-o", "/out");
-        parse("resume", "/out");
+        parse("list", PUBLIC_DEMO_SLICE,
+                "--no-sign-request", "--region", "us-east-1");
+        parse("list", PUBLIC_DEMO_SLICE, "--no-sign-request", "--region", "us-east-1",
+                "--format", "parquet", "-o", "/out/noaa-gestofs-sample");
+        parse("resume", "/out/noaa-gestofs-sample");
+        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
+                "--concurrency", "128", "--format", "parquet", "-o", "/out/noaa-gestofs-pds");
     }
 
     private static void parse(String... args) {

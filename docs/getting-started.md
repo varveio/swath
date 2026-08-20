@@ -2,8 +2,8 @@
 
 This guide uses Docker to make a public listing, save a managed Parquet dataset, query it,
 and show how the same output directory resumes after an interruption. The example target
-is the small anonymous prefix used by swath's release smoke test; replace it with your own
-bucket after the public command works.
+is an 11-object slice of the same public NOAA bucket shown in the README demo; replace it
+with your own bucket after the public command works.
 
 **Shell note:** the commands use a Bash-compatible shell on Linux or macOS. On Windows
 PowerShell, create the directory with `New-Item -ItemType Directory -Force out`, replace
@@ -30,8 +30,8 @@ Run a one-shot listing to stdout:
 
 ```bash
 docker run --rm ghcr.io/varveio/swath:latest \
-  list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
-  --region us-east-1 --no-sign-request
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  --no-sign-request --region us-east-1
 ```
 
 Because Docker's stdout is not a terminal, the default `auto` format resolves to TSV.
@@ -51,14 +51,15 @@ user avoids root-owned output on Linux:
 mkdir -p out
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://cmas-smoke-testcase/smoke_example_case/2018gg_18j/inputs/htap/ \
-  --region us-east-1 --no-sign-request --format parquet -o /out
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20260803/00/ \
+  --no-sign-request --region us-east-1 \
+  --format parquet -o /out/noaa-gestofs-sample
 ```
 
-The host's `out/` directory is now a managed Parquet dataset:
+The host's `out/noaa-gestofs-sample/` directory is now a managed Parquet dataset:
 
 ```text
-out/
+out/noaa-gestofs-sample/
   data/                   Parquet part files
   manifest.json           files and dataset metadata
   .swath-state.json       internal run identity
@@ -70,8 +71,8 @@ out/
 Read every part as one table. If the DuckDB CLI is installed:
 
 ```bash
-duckdb -c "SELECT count(*) AS objects FROM read_parquet('out/data/*.parquet')"
-duckdb -c "SELECT key, size FROM read_parquet('out/data/*.parquet') LIMIT 5"
+duckdb -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
+duckdb -c "SELECT key, size FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet') LIMIT 5"
 ```
 
 Or use DuckDB's
@@ -80,7 +81,7 @@ so the entire walkthrough still requires only Docker:
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
-  -c "SELECT count(*) AS objects FROM read_parquet('out/data/*.parquet')"
+  -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-sample/data/*.parquet')"
 ```
 
 The default dataset is not globally ordered: parallel workers finish independently. Add
@@ -96,20 +97,40 @@ the same directory:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out
+  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-sample
 ```
 
-The public smoke prefix normally completes before you can interrupt it. Running the resume
-command against that completed `out/` directory is safe: swath reports that there is nothing
-to resume and exits successfully. On a longer interrupted listing, the same command retains
-finalized parts, discards an unfinished part, and continues after the last durable cursor.
+The public sample normally completes before you can interrupt it. Running the resume command
+against that completed directory is safe: swath reports that there is nothing to resume and
+exits successfully. On a longer interrupted listing, the same command retains finalized parts,
+discards an unfinished part, and continues after the last durable cursor.
 
 To replace a completed dataset deliberately, run a new `list` command with `--overwrite`.
 For mismatched or refused run directories, follow
 [The output directory is refused](faq.md#the-output-directory-is-refused) rather than
 editing the checkpoint.
 
-## 5. List your bucket
+## 5. Run the full demo (optional)
+
+The README video removes the sample prefix and lists the entire NOAA bucket with 128
+concurrent listings:
+
+```bash
+mkdir -p out
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/ \
+  --no-sign-request --region us-east-1 \
+  --concurrency 128 \
+  --format parquet -o /out/noaa-gestofs-pds
+```
+
+This is the exact listing command shown in the demo, wrapped in Docker. The recorded run
+listed 39,585,029 objects, made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and
+peaked around 1.7 GB RSS. It is a real large-bucket run, so read the
+[request-cost guidance](operating.md#request-cost) before reproducing it.
+
+## 6. List your bucket
 
 For a private bucket, remove `--no-sign-request`. A container does not automatically
 inherit credentials from the host, so pass environment credentials explicitly. Replace
