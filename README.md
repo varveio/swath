@@ -15,9 +15,9 @@ precomputed S3 Inventory.
 - **Resume instead of restarting.** Managed Parquet output checkpoints progress and
   resumes after Ctrl+C or a crash, while keeping active memory buffers bounded.
 - **Analyze without downloading objects.** swath reads metadata only. Stream a table,
-  TSV, or JSONL—with optional gzip or Zstandard compression to a file, stdout, or a
-  bounded parallel directory dataset—or query the Parquet result directly with tools
-  such as DuckDB.
+  TSV, or JSONL—with optional gzip or Zstandard compression—to stdout or a file; TSV
+  and JSONL can also publish a bounded parallel directory dataset. Or query the Parquet
+  result directly with tools such as DuckDB.
 
 Use swath when a fresh S3 Inventory or S3 Metadata table is unavailable, stale, or
 controlled by somebody else, and a serial listing is too slow.

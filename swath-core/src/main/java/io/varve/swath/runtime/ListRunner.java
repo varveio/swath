@@ -458,7 +458,7 @@ public final class ListRunner {
                 new EngineContext(runId, listing.prefix(), ListingMode.OBJECTS,
                         ctx.metrics(), toggles, trace, retryConfig),
                 fetcher, store, workerCount, listing.maxKeys(), seeds, listing.filters());
-        TextWriterPool pool = new TextWriterPool(spec.writer());
+        TextWriterPool pool = new TextWriterPool(spec.writer().withMetrics(ctx.metrics()));
         DatasetOutputStage stage = new DatasetOutputStage(pool);
         ctx.metrics().recordStealReason("OUTPUT", "partitioned_text_dataset");
         Function<Duration, RunSummary> summary = elapsed -> ctx.metrics().summary(

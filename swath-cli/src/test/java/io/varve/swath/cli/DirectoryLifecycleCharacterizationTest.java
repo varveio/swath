@@ -18,6 +18,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.testkit.MockPageFetcher;
 import java.nio.charset.StandardCharsets;
@@ -37,8 +38,8 @@ import org.junit.jupiter.api.io.TempDir;
  * refuse, never write; damaged/foreign manifest -> refuse with a diagnostic. The unfinished/completed
  * refusals are the checkpoint-status gate in {@link
  * io.varve.swath.checkpoint.SqliteCheckpointStore#openRun}; the foreign/damaged refusals are
- * {@code ListCommand}'s pre-run dataset-dir guard; and {@link DatasetDirGuard#clearDatasetForFreshRun} is
- * now manifest-bounded — {@code --restart} deletes ONLY swath-owned part files, never unowned ones.
+ * {@code ListCommand}'s pre-run dataset-dir guard; and {@link DatasetDirGuard#prepareDatasetForFreshRun} is
+ * now ownership-bounded — {@code --restart} deletes ONLY swath-owned part files, never unowned ones.
  *
  * <p>No assertion here reaches past {@code cmd.call()}'s return value / thrown exception and the
  * filesystem/checkpoint-DB state left behind — never an internal method.
@@ -85,7 +86,7 @@ final class DirectoryLifecycleCharacterizationTest {
      * An absent {@code -o} dir is created and the
      * run proceeds to completion, populating the standard marker set + {@code data/}.
      *
-     * <p>Mutation: temporarily made {@link DatasetDirGuard#clearDatasetForFreshRun} throw
+     * <p>Mutation: temporarily made {@link DatasetDirGuard#prepareDatasetForFreshRun} throw
      * unconditionally -> {@code cmd.call()} threw instead of returning {@code SUCCESS}; reverted.
      */
     @Test
@@ -191,13 +192,15 @@ final class DirectoryLifecycleCharacterizationTest {
             store.insertNode(NodeSpec.rootRange(run.id()));
             // No commitPage, no markRunFinished -- mid-flight when the process died.
         }
-        // ...and on disk only a partial part under data/: none of the finalize/completion markers.
+        // ...and on disk the early ownership identity plus a partial part under data/: none of the
+        // finalize/completion markers.
         DatasetLayout layout = DatasetLayout.of(outputDir);
         Files.createDirectories(layout.dataDir());
+        Manifest.writeState(outputDir, hash, priorRunId);
         Path partial = layout.dataDir().resolve("part-w0-00000.parquet");
         Files.writeString(partial, "a partial part the process was mid-write on when it was killed");
         assertThat(layout.manifest()).doesNotExist();
-        assertThat(layout.state()).doesNotExist();
+        assertThat(layout.state()).exists();
 
         // A plain fresh run recognizes its OWN crashed directory and steers to resume/--restart,
         // rather than the foreign "not empty" refusal.
@@ -222,18 +225,16 @@ final class DirectoryLifecycleCharacterizationTest {
 
     /**
      * The {@code --sort} counterpart of the crash-before-finalize recovery: a hard crash before the
-     * merge leaves the {@code -o} dir holding a {@code _staging/} directory with segment files and no
-     * {@code manifest.json}/{@code .swath-state.json}, plus a RUNNING checkpoint row. The dir is
-     * swath's OWN — {@code _staging/} is a swath-owned sidecar the sorter alone writes — so a plain
+     * merge leaves the {@code -o} dir holding the early {@code .swath-state.json} ownership marker
+     * and a {@code _staging/} directory with segment files, plus a RUNNING checkpoint row. The dir is
+     * swath's OWN — its state marker predates the first segment — so a plain
      * {@code swath list --sort} must recognize it and fall through to the checkpoint-status gate
      * (refuse the unfinished run, steer to {@code swath resume} / {@code --restart}), NOT the foreign
      * "not empty" refusal. And {@code --restart} must run fresh, leaving no stale segment from the
      * discarded run: a fresh sorted run wipes the abandoned staging before listing begins.
      *
-     * <p>Mutation-verified against a guard that does not recognize {@code _staging/}: it classified this
-     * dir as foreign, so the plain-list case got the "not empty" refusal (not the "unfinished" steer).
-     * The assertion below distinguishes the two messages, so it goes red without the {@code _staging}
-     * recognition.
+     * <p>Mutation-verified by omitting the early state marker: the guard classifies the directory as
+     * foreign, so the plain-list case gets the "not empty" refusal instead of the "unfinished" steer.
      */
     @Test
     void crashedSortRunStagingDirSteersToResumeAndRestartRunsClean(@TempDir Path root) throws Exception {
@@ -248,13 +249,16 @@ final class DirectoryLifecycleCharacterizationTest {
             priorRunId = run.id();
             store.insertNode(NodeSpec.rootRange(run.id()));
         }
-        // On disk, only the sort staging dir with a segment: no manifest, no state, no data/ parts.
+        // On disk, the early ownership identity and sort staging dir with a segment: no manifest or
+        // data/ parts.
+        Files.createDirectories(outputDir);
         DatasetLayout layout = DatasetLayout.of(outputDir);
+        Manifest.writeState(outputDir, hash, priorRunId);
         Path stagingDir = Files.createDirectories(outputDir.resolve(ListCommand.SORT_STAGING_DIR));
         Path staleSegment = stagingDir.resolve("seg-" + priorRunId + "-0.pageseg");
         Files.writeString(staleSegment, "a sort segment the crashed run had staged before the merge");
         assertThat(layout.manifest()).doesNotExist();
-        assertThat(layout.state()).doesNotExist();
+        assertThat(layout.state()).exists();
 
         // A plain fresh --sort run recognizes its OWN crashed staging dir and steers to
         // resume/--restart, rather than the foreign "not empty" refusal.
@@ -361,7 +365,8 @@ final class DirectoryLifecycleCharacterizationTest {
         Files.createDirectories(layout.dataDir());
         Files.writeString(layout.state(), "{\"args_hash\":\"" + hash + "\",\"run_id\":" + priorRunId + "}");
         Files.writeString(layout.success(), "");
-        Files.writeString(layout.manifest(), "{\"sourceBucket\":\"" + BUCKET + "\",\"files\":[]}");
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+                List.of(), false, null);
         Path priorPart = layout.dataDir().resolve("part-w0-00000.parquet");
         Files.writeString(priorPart, "the completed prior run's real output");
 
@@ -459,14 +464,14 @@ final class DirectoryLifecycleCharacterizationTest {
 
     /**
      * The precise {@code --restart} blast-radius, now BOUNDED
-     * ({@code DatasetDirGuard#clearDatasetForFreshRun} is manifest-bounded): plant a dir holding BOTH a
+     * ({@code DatasetDirGuard#prepareDatasetForFreshRun} is ownership-bounded): plant a dir holding BOTH a
      * real swath-owned footprint (matching checkpoint identity, markers, a real {@code
      * part-*.parquet}) AND an unowned file at two locations (root and inside {@code data/}), run
      * {@code --restart}, and assert exactly what survives. The swath-owned part is discarded; the
      * unowned files — inside {@code data/} AND at the root — SURVIVE. The data/ survival is the
      * single most important assertion: it is the data-loss hole this guard closes.
      *
-     * <p>Mutation-verified: reverting {@code clearDatasetForFreshRun} to an unconditional {@code
+     * <p>Mutation-verified: reverting {@code prepareDatasetForFreshRun} to an unconditional {@code
      * data/} sweep makes the "{@code dataJunk} survives" assertion go red (the unowned file is
      * destroyed again).
      */
@@ -488,7 +493,8 @@ final class DirectoryLifecycleCharacterizationTest {
         Files.createDirectories(layout.dataDir());
         Files.writeString(layout.state(), "{\"args_hash\":\"" + hash + "\",\"run_id\":" + priorRunId + "}");
         Files.writeString(layout.success(), "");
-        Files.writeString(layout.manifest(), "{\"sourceBucket\":\"" + BUCKET + "\",\"files\":[]}");
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+                List.of(), false, null);
         Path ownedPart = layout.dataDir().resolve("part-w0-00000.parquet");
         Files.writeString(ownedPart, "swath-owned part from the run --restart is discarding");
         Path rootJunk = outputDir.resolve("notes.txt");

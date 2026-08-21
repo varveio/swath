@@ -9,6 +9,7 @@ High-performance object-store lister.
   -V, --version      Print version information and exit.
 Commands:
   list    List a bucket or prefix.
-  resume  Resume a run by its output directory: swath resume <dir>.
+  resume  Resume a managed Parquet run by its output directory: swath resume
+            <dir>.
   help    Display help information about the specified command.
 Built by Varve: https://varve.io

@@ -38,18 +38,19 @@ import picocli.CommandLine.Spec;
  * output ({@code <dir>/.swath/checkpoint.sqlite}): the output directory is the whole run handle. It
  * reads the run's listing identity (scheme, bucket, prefix, endpoint, format) from the checkpoint DB
  * and re-drives {@link ListCommand} in resume mode, continuing each non-COMPLETED node from its
- * cursor (text) / durable_cursor (Parquet). A {@code <dir>} whose dataset is already complete (its
+ * Parquet {@code durable_cursor}. A {@code <dir>} whose dataset is already complete (its
  * checkpoint was deleted on completion) reports "already complete" and exits 0. Credentials and
  * region resolve from the environment, exactly as a fresh {@code list} would — the one exception is
  * {@code --bearer-token-command}, which is never stored in a checkpoint and so must be re-passed
- * here. A directory-dataset output is the only resumable regime.
+ * here. A managed Parquet directory is the only resumable output regime; partitioned TSV/JSONL
+ * datasets require {@code --checkpoint none} and start fresh.
  */
 @Command(name = "resume", mixinStandardHelpOptions = true,
-        description = "Resume a run by its output directory: swath resume <dir>.")
+        description = "Resume a managed Parquet run by its output directory: swath resume <dir>.")
 public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Carrier {
 
     @Parameters(index = "0", arity = "0..1", paramLabel = "<dir>",
-            description = "The directory-dataset run handle to resume "
+            description = "The managed Parquet run handle to resume "
                     + "(opens <dir>/.swath/checkpoint.sqlite).")
     Path directory;
 

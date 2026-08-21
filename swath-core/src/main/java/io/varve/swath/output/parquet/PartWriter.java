@@ -7,10 +7,9 @@ package io.varve.swath.output.parquet;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.dataset.DatasetPartWriter;
+import io.varve.swath.output.dataset.DurableFiles;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetFileWriter;
@@ -79,10 +78,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     @Override
     public void close() throws IOException {
         writer.close();
-        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.WRITE)) {
-            ch.force(true);
-        }
-        Fsync.directory(path.getParent());
+        DurableFiles.fileAndParent(path);
     }
 
     /**
