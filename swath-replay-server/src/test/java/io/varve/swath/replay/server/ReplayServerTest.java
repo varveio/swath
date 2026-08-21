@@ -19,11 +19,14 @@ import io.varve.swath.sort.RowGroupOrderException;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -185,6 +188,47 @@ class ReplayServerTest {
     }
 
     @Test
+    void prefetchResultAdmitsCacheHitsAheadOfSaturatedColdReads() throws Exception {
+        int connections = 2;
+        ColdBacklogFixture fixture = new ColdBacklogFixture(connections, 4);
+        ReplayMetrics metrics = new ReplayMetrics();
+        ReplayServingFactory.Result result = new ReplayServingFactory.Result(
+                fixture, ServingMode.SORTED, metrics, connections, 0);
+
+        try (ReplayServer server = new ReplayServer(
+                "127.0.0.1", 0, "bucket", result, (request, page) -> Duration.ZERO, 8)) {
+            server.start();
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                try {
+                    List<java.util.concurrent.Future<HttpResponse<String>>> cold = IntStream.range(0, 4)
+                            .mapToObj(i -> executor.submit(() -> HttpProbe.response(
+                                    server, "/bucket?list-type=2&prefix=cold-" + i)))
+                            .toList();
+
+                    assertThat(fixture.awaitBacklog())
+                            .as("all cold requests reached the fixture: two active and two backing-pool waiters")
+                            .isTrue();
+
+                    var cached = executor.submit(() -> HttpProbe.response(
+                            server, "/bucket?list-type=2&prefix=cached"));
+                    assertThat(cached.get(5, TimeUnit.SECONDS).statusCode())
+                            .as("the handler uses requestAdmissionLimit=0, not parquetConnections=2")
+                            .isEqualTo(200);
+                    assertThat(cold).allMatch(future -> !future.isDone());
+
+                    fixture.releaseColdReads();
+                    for (var response : cold) {
+                        assertThat(response.get(5, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+                    }
+                } finally {
+                    // Must run before executor.close() waits for the deliberately blocked requests.
+                    fixture.releaseColdReads();
+                }
+            }
+        }
+    }
+
+    @Test
     void closeIsIdempotentAndSurfacesFixtureCloseFailureOnlyOnce() throws Exception {
         AtomicInteger fixtureCloseCalls = new AtomicInteger();
         AutoCloseable failingOwnedFixture = () -> {
@@ -209,5 +253,53 @@ class ReplayServerTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static final class ColdBacklogFixture implements ListingFixture {
+        private final Semaphore backingReaders;
+        private final CountDownLatch enteredCold;
+        private final CountDownLatch activeReaders;
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        private ColdBacklogFixture(int readers, int coldRequests) {
+            backingReaders = new Semaphore(readers, true);
+            enteredCold = new CountDownLatch(coldRequests);
+            activeReaders = new CountDownLatch(readers);
+        }
+
+        @Override
+        public S3ListResult list(S3ListRequest request) {
+            if (new String(request.prefix(), StandardCharsets.UTF_8).equals("cached")) {
+                return empty(request);
+            }
+            enteredCold.countDown();
+            boolean acquired = false;
+            try {
+                backingReaders.acquire();
+                acquired = true;
+                activeReaders.countDown();
+                release.await();
+                return empty(request);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted cold replay read", e);
+            } finally {
+                if (acquired) {
+                    backingReaders.release();
+                }
+            }
+        }
+
+        private boolean awaitBacklog() throws InterruptedException {
+            return enteredCold.await(5, TimeUnit.SECONDS) && activeReaders.await(5, TimeUnit.SECONDS);
+        }
+
+        private void releaseColdReads() {
+            release.countDown();
+        }
+
+        private static S3ListResult empty(S3ListRequest request) {
+            return new S3ListResult(request, List.of(), false, null);
+        }
     }
 }

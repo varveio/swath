@@ -47,12 +47,14 @@ public final class ReplayServingFactory {
 
     /** The resolved fixture plus the concrete path chosen and the metrics that back it. */
     public record Result(ListingFixture fixture, ServingMode resolvedMode, ReplayMetrics metrics,
-                         int maxConcurrentReads) {
+                         int parquetConnections, int requestAdmissionLimit) {
     }
 
     /**
      * Opens {@code fixturePath} under the requested {@code mode}. {@code parquetConnections <= 0}
-     * uses the chosen store's own default (also the request-concurrency bound).
+     * uses the chosen store's own default. It is also the outer request-admission bound for DuckDB
+     * and bare sorted serving; prefetch-enabled sorted serving admits requests to the cache first and
+     * applies the bound only inside the backing reader pools.
      *
      * @throws IllegalArgumentException in {@code sorted} mode when the fixture is not sorted-eligible
      */
@@ -83,7 +85,7 @@ public final class ReplayServingFactory {
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
         DuckDbListingStore store = new DuckDbListingStore(fixturePath, metrics, connections);
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.DUCKDB, metrics, connections);
+        return new Result(pager, ServingMode.DUCKDB, metrics, connections, connections);
     }
 
     private static Result sorted(List<Path> files, List<IndexEntry> index, int parquetConnections,
@@ -93,10 +95,7 @@ public final class ReplayServingFactory {
         WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
         ListingStore store;
         if (prefetch.enabled()) {
-            // Suppress the delegate's own page.read.latency: the wrapper owns the outer per-page timer
-            // (a hit costs sub-ms, a miss pays a window fill measured separately by prefetch.window.fill)
-            // so the corridor metric stays the honest amortized per-page cost.
-            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
+            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections);
             store = new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
             log.info("replay_serving sorted prefetch ENABLED (window_rows={} max_windows={}) for {}",
                     prefetch.windowRows(), prefetch.maxWindows(), files);
@@ -105,7 +104,12 @@ public final class ReplayServingFactory {
             log.info("replay_serving sorted prefetch DISABLED (bare store) for {}", files);
         }
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.SORTED, metrics, connections);
+        // SortedParquetStore already bounds cold fills with its connection pool. When prefetch is
+        // enabled, an outer fair semaphore would queue requests before WindowedListingStore can
+        // recognize continuations or serve hits, allowing breadth-first cold traffic to churn the
+        // bounded cache. Let every request reach the cache; only backing reads consume connections.
+        int requestAdmissionLimit = prefetch.enabled() ? 0 : connections;
+        return new Result(pager, ServingMode.SORTED, metrics, connections, requestAdmissionLimit);
     }
 
     private static List<Path> resolveFiles(Path fixturePath) {

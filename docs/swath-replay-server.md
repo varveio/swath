@@ -84,6 +84,13 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
 
+Request admission happens at this cache: hits bypass Parquet permits, continuation anchors
+are claimed before a request can wait for a backing read, and the sorted store's connection
+pool remains the sole bound on concurrent Parquet decoding. This avoids cold breadth-first
+waves without weakening the backing-read bound. The cache-path engagement is visible through
+the prefetch hit/miss and anchor meters below; acquired backing readers remain visible through
+`parquet.queries.in_flight` and `.peak`.
+
 Sorted mode reads Parquet's page index directly and stops once it has the requested rows.
 Final sorted files therefore default to 1,024 rows per data page
 (`swath.sort.final-page-rows`); a page is the smallest unit a bounded read can decode.
@@ -101,7 +108,10 @@ connector queueing is not mistaken for backend latency.
 Size this for concurrent decode work, not total requests: readers are returned before
 injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
 very large pools can waste file descriptors and heap. Sorted mode opens both a row-group
-and range-reader pool per file: approximately `2 × connections × files` readers.
+and range-reader pool per file: approximately `2 × connections × files` open readers. Those
+pools are independent. An ordinary range fill uses only the range pool; a native `delimiter=/`
+skip-scan holds one row-group reader while it may briefly borrow a range reader to materialize
+a bare object.
 
 ## Reading a running server's meters (`--metrics-port`)
 
@@ -263,7 +273,10 @@ swath-replay-server bench \
 reports startup, client request latency, server list/read latency, page/key counts, and
 throughput. Multiple modes walk the same fixture and report ratios. Keep startup time
 separate from walk time, and client round-trip latency separate from the store-level
-`page.read.latency` acceptance signal.
+`page.read.latency` backing-decode signal. In sorted mode that timer counts acquired reader
+leases, not HTTP pages: cache hits and routing-index-only delimiter hops add no sample, while a
+delimiter request adds a sample only when it needs a range read to materialize a bare object; the
+row-group cursor work remains in `parquet.query.latency`.
 
 ## Metrics and tuning
 
@@ -275,10 +288,12 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens` | Rollup vs walk and skip-scan I/O. |
-| `page.read.latency`, `fixture.list.latency` | Store read and complete pager operation. |
+| `page.read.latency`, `fixture.list.latency` | Post-borrow range-decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent row-group and range pools and a conservative aggregate bound of `2 × connections × files`. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
+| `prefetch.windows.live`, `prefetch.anchors.live`, `prefetch.anchor{event}` | Live cache/anchor occupancy and anchor registration, claim, or eviction-before-claim churn. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are
 `no_stamp`, `unsupported_mode`, `unknown_format_version`, `incomplete_multifile`,

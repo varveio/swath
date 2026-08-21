@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,8 +60,11 @@ public final class ReplayMetrics {
     private final Counter prefetchWindowHit;
     private final DistributionSummary prefetchFillRows;
     private final Timer prefetchWindowFill;
+    private final Map<String, Counter> prefetchAnchorEvents;
+    private final Counter prefetchWindowEvictions;
     private final Counter delimiterSkipScanRowGroupOpens;
     private final AtomicLong parquetQueriesInFlight = new AtomicLong();
+    private final AtomicLong parquetQueriesPeak = new AtomicLong();
     private final long startedNanos = System.nanoTime();
 
     public ReplayMetrics() {
@@ -105,10 +109,20 @@ public final class ReplayMetrics {
         prefetchFillRows = DistributionSummary.builder("swath.replay.prefetch.fill.rows").register(registry);
         prefetchWindowFill = Timer.builder("swath.replay.prefetch.window.fill")
                 .publishPercentiles(0.5, 0.99).register(registry);
+        prefetchAnchorEvents = Map.of(
+                "registered", Counter.builder("swath.replay.prefetch.anchor")
+                        .tag("event", "registered").register(registry),
+                "claimed", Counter.builder("swath.replay.prefetch.anchor")
+                        .tag("event", "claimed").register(registry),
+                "evicted_before_claim", Counter.builder("swath.replay.prefetch.anchor")
+                        .tag("event", "evicted_before_claim").register(registry));
+        prefetchWindowEvictions = Counter.builder("swath.replay.prefetch.window.eviction").register(registry);
         delimiterSkipScanRowGroupOpens = Counter.builder("swath.replay.delimiter.skipscan.row_group_opens")
                 .register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
+                .register(registry);
+        Gauge.builder("swath.replay.parquet.queries.peak", parquetQueriesPeak, AtomicLong::get)
                 .register(registry);
     }
 
@@ -148,13 +162,17 @@ public final class ReplayMetrics {
         return startTimer();
     }
 
-    /** Records one store-level range read (see {@link #startPageReadTimer()}). */
+    /** Records one store-level backing read (see {@link #startPageReadTimer()}). */
     public void recordPageRead(Timer.Sample sample) {
         sample.stop(pageReadLatency);
     }
 
+    /** Records a backing-reader lease whose duration was measured after pool acquisition. */
+    public void recordPageRead(long elapsedNanos) {
+        pageReadLatency.record(elapsedNanos, TimeUnit.NANOSECONDS);
+    }
+
     public void recordParquetQuery(Timer.Sample sample, int rows, boolean success) {
-        parquetQueriesInFlight.decrementAndGet();
         parquetQueryRows.record(rows);
         if (!success) {
             parquetQueryErrors.increment();
@@ -163,8 +181,18 @@ public final class ReplayMetrics {
     }
 
     public Timer.Sample startParquetQueryTimer() {
-        parquetQueriesInFlight.incrementAndGet();
         return startTimer();
+    }
+
+    /** Records acquisition of a real DuckDB connection or Parquet reader, excluding pool wait. */
+    public void parquetReaderAcquired() {
+        long inFlight = parquetQueriesInFlight.incrementAndGet();
+        parquetQueriesPeak.accumulateAndGet(inFlight, Math::max);
+    }
+
+    /** Records return of a real DuckDB connection or Parquet reader. */
+    public void parquetReaderReleased() {
+        parquetQueriesInFlight.decrementAndGet();
     }
 
     /** Records one sequential-window prefetch cache hit (served from a buffered window, no delegate read). */
@@ -183,6 +211,28 @@ public final class ReplayMetrics {
     public void recordPrefetchMiss(String reason) {
         Counter.builder("swath.replay.prefetch.window.miss")
                 .tag("reason", reason).register(registry).increment();
+    }
+
+    /** Registers live bounded-cache cardinalities after the prefetch store is constructed. */
+    public void registerPrefetchCacheGauges(IntSupplier windows, IntSupplier anchors) {
+        Gauge.builder("swath.replay.prefetch.windows.live", windows, IntSupplier::getAsInt)
+                .register(registry);
+        Gauge.builder("swath.replay.prefetch.anchors.live", anchors, IntSupplier::getAsInt)
+                .register(registry);
+    }
+
+    /** Records one continuation-anchor lifecycle event. */
+    public void recordPrefetchAnchor(String event) {
+        Counter counter = prefetchAnchorEvents.get(event);
+        if (counter == null) {
+            throw new IllegalArgumentException("unknown prefetch anchor event: " + event);
+        }
+        counter.increment();
+    }
+
+    /** Records one LRU window eviction. */
+    public void recordPrefetchWindowEviction() {
+        prefetchWindowEvictions.increment();
     }
 
     /**

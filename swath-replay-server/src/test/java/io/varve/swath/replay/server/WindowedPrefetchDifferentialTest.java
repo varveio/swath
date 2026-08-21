@@ -37,6 +37,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -132,6 +139,58 @@ class WindowedPrefetchDifferentialTest {
             }
         } finally {
             restorePrefetchProps(saved);
+        }
+    }
+
+    @Test
+    void cachedContinuationBypassesDeterministicallySaturatedColdBacklog() throws Exception {
+        ReplayMetrics metrics = new ReplayMetrics();
+        BlockingBackingStore backing = new BlockingBackingStore(500, 2, metrics);
+        WindowedListingStore windowed = new WindowedListingStore(backing, metrics, 50, 8);
+
+        // Establish a reusable continuation window before arming the backing-reader blockade:
+        // cold 10, then an anchored 40-row fill, leaving keys 20..49 cached.
+        windowed.rows(null, true, null, 10, Projection.KEYS_ONLY);
+        windowed.rows(key("key-009"), false, null, 10, Projection.KEYS_ONLY);
+        long claimedBeforeBacklog = counter(metrics, "swath.replay.prefetch.anchor", "event", "claimed");
+        backing.blockReads();
+
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<List<ListedObject>>> cold = new ArrayList<>();
+            for (int start : new int[]{100, 200, 300, 400}) {
+                cold.add(executor.submit(() -> windowed.rows(
+                        key(String.format("key-%03d", start)), false, null, 5, Projection.KEYS_ONLY)));
+            }
+
+            assertThat(backing.awaitSaturatedBacklog())
+                    .as("two reads active and two older cold reads queued behind the backing pool")
+                    .isTrue();
+
+            Future<List<ListedObject>> continuation = executor.submit(() ->
+                    windowed.rows(key("key-019"), false, null, 10, Projection.KEYS_ONLY));
+            assertThat(continuation.get(5, TimeUnit.SECONDS))
+                    .extracting(row -> new String(row.key(), StandardCharsets.UTF_8))
+                    .containsExactly("key-020", "key-021", "key-022", "key-023", "key-024",
+                            "key-025", "key-026", "key-027", "key-028", "key-029");
+
+            assertThat(backing.queuedReads())
+                    .as("the continuation completed while older cold work was still queued")
+                    .isEqualTo(2);
+            assertThat(cold).allMatch(future -> !future.isDone());
+            assertThat(counter(metrics, "swath.replay.prefetch.window.hit", null, null)).isEqualTo(1L);
+            assertThat(counter(metrics, "swath.replay.prefetch.anchor", "event", "claimed"))
+                    .isEqualTo(claimedBeforeBacklog);
+            assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
+                    .as("cache-first admission preserves the two-reader backing bound")
+                    .isEqualTo(2.0);
+            assertThat(backing.peakActiveReads()).isEqualTo(2);
+
+            backing.releaseReads();
+            for (Future<List<ListedObject>> future : cold) {
+                assertThat(future.get(5, TimeUnit.SECONDS)).hasSize(5);
+            }
+        } finally {
+            backing.releaseReads();
         }
     }
 
@@ -498,6 +557,119 @@ class WindowedPrefetchDifferentialTest {
 
     private static String n(String v) {
         return v == null ? "-" : v;
+    }
+
+    private static long counter(ReplayMetrics metrics, String name, String tagName, String tagValue) {
+        var search = metrics.registry().find(name);
+        return Math.round(tagName == null ? search.counter().count() : search.tag(tagName, tagValue).counter().count());
+    }
+
+    /**
+     * A deterministic stand-in for the two-slot sorted backing pool. Calls enter in FIFO order;
+     * once armed, two own slots and two older calls park at the semaphore until the test releases
+     * them. Metrics are bumped only after acquisition, matching the real reader callbacks.
+     */
+    private static final class BlockingBackingStore implements ListingStore {
+        private final io.varve.swath.replay.testkit.FakeListingStore rows;
+        private final Semaphore permits;
+        private final ReplayMetrics metrics;
+        private final CountDownLatch saturatedBacklog = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicBoolean blocking = new AtomicBoolean();
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger peak = new AtomicInteger();
+        private final AtomicInteger queued = new AtomicInteger();
+
+        BlockingBackingStore(int rowCount, int readers, ReplayMetrics metrics) {
+            List<ListedObject> all = new ArrayList<>(rowCount);
+            for (int i = 0; i < rowCount; i++) {
+                all.add(new ListedObject(String.format("key-%03d", i).getBytes(StandardCharsets.UTF_8),
+                        i, i, "etag", "STANDARD", null, null, null, null));
+            }
+            this.rows = new io.varve.swath.replay.testkit.FakeListingStore(all);
+            this.permits = new Semaphore(readers, true);
+            this.metrics = metrics;
+        }
+
+        void blockReads() {
+            blocking.set(true);
+        }
+
+        boolean awaitSaturatedBacklog() throws InterruptedException {
+            return saturatedBacklog.await(5, TimeUnit.SECONDS);
+        }
+
+        int queuedReads() {
+            return queued.get();
+        }
+
+        int peakActiveReads() {
+            return peak.get();
+        }
+
+        void releaseReads() {
+            release.countDown();
+        }
+
+        @Override
+        public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
+                                       Projection projection) {
+            boolean acquired = false;
+            boolean countedQueued = false;
+            if (blocking.get()) {
+                acquired = permits.tryAcquire();
+                if (!acquired) {
+                    countedQueued = true;
+                    if (queued.incrementAndGet() == 2 && active.get() == 2) {
+                        saturatedBacklog.countDown();
+                    }
+                }
+            }
+            if (!acquired) {
+                acquire();
+            }
+            if (countedQueued) {
+                queued.decrementAndGet();
+            }
+            metrics.parquetReaderAcquired();
+            int now = active.incrementAndGet();
+            peak.accumulateAndGet(now, Math::max);
+            try {
+                if (blocking.get()) {
+                    if (now == 2 && queued.get() >= 2) {
+                        saturatedBacklog.countDown();
+                    }
+                    awaitRelease();
+                }
+                return rows.rows(from, fromInclusive, toExclusive, limit, projection);
+            } finally {
+                active.decrementAndGet();
+                metrics.parquetReaderReleased();
+                permits.release();
+            }
+        }
+
+        private void acquire() {
+            try {
+                permits.acquire();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted waiting for fake backing reader", e);
+            }
+        }
+
+        private void awaitRelease() {
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted in fake backing read", e);
+            }
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     // ---------------------------------------------------------------------------------- small utils

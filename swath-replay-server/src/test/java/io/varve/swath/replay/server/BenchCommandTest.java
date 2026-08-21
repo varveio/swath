@@ -70,11 +70,13 @@ class BenchCommandTest {
             assertThat(m.clientMsPerPageAvg()).isGreaterThanOrEqualTo(0.0);
             assertThat(m.clientMsPerPageP50()).isGreaterThanOrEqualTo(0.0);
             assertThat(m.clientMsPerPageP99()).isGreaterThanOrEqualTo(m.clientMsPerPageP50());
-            // One store-level page.read per HTTP page for a flat, non-delimited listing.
-            assertThat(m.serverPageRead().count()).isEqualTo(m.pages());
             assertThat(m.serverFixtureList().count()).isEqualTo(m.pages());
             assertThat(m.serverPageRead().avgMs()).isGreaterThanOrEqualTo(0.0);
         }
+        assertThat(duckdb.serverPageRead().count()).isEqualTo(duckdb.pages());
+        assertThat(sorted.serverPageRead().count())
+                .as("sorted page.read counts backing reader leases, not cache hits")
+                .isBetween(1L, (long) sorted.pages());
 
         assertThat(report.ratios()).hasSize(1);
         TokenWalkBenchmark.RatioEntry ratio = report.ratios().get(0);

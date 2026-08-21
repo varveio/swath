@@ -5,7 +5,6 @@
  */
 package io.varve.swath.replay.store;
 
-import io.micrometer.core.instrument.Timer;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.server.ReplayMetrics;
@@ -112,16 +111,25 @@ public final class WindowedListingStore implements ListingStore {
         this.windows = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<WindowKey, Window> eldest) {
-                return size() > maxWindows;
+                boolean evict = size() > maxWindows;
+                if (evict) {
+                    metrics.recordPrefetchWindowEviction();
+                }
+                return evict;
             }
         };
         int maxAnchors = maxWindows * ANCHORS_PER_WINDOW;
         this.continuationAnchors = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<ByteKey, Integer> eldest) {
-                return size() > maxAnchors;
+                boolean evict = size() > maxAnchors;
+                if (evict) {
+                    metrics.recordPrefetchAnchor("evicted_before_claim");
+                }
+                return evict;
             }
         };
+        metrics.registerPrefetchCacheGauges(this::liveWindows, this::liveAnchors);
     }
 
     /** Prefetch configuration resolved from {@code swath.replay.prefetch.*} system properties. */
@@ -148,12 +156,7 @@ public final class WindowedListingStore implements ListingStore {
     @Override
     public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                    Projection projection) {
-        var pageSample = metrics.startPageReadTimer();
-        try {
-            return serve(from, fromInclusive, toExclusive, limit, projection);
-        } finally {
-            metrics.recordPageRead(pageSample);
-        }
+        return serve(from, fromInclusive, toExclusive, limit, projection);
     }
 
     private List<ListedObject> serve(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
@@ -256,6 +259,9 @@ public final class WindowedListingStore implements ListingStore {
         synchronized (lock) {
             anchored = from == null ? null : continuationAnchors.remove(from);
         }
+        if (anchored != null) {
+            metrics.recordPrefetchAnchor("claimed");
+        }
         return anchored == null
                 ? new FillDecision(limit, false)
                 : new FillDecision(Math.max(limit, anchored), true);
@@ -272,12 +278,25 @@ public final class WindowedListingStore implements ListingStore {
     private void registerAnchors(List<ListedObject> page, int nextFill) {
         for (int i = Math.max(0, page.size() - 2); i < page.size(); i++) {
             continuationAnchors.put(ByteKey.copyOf(page.get(i).key()), nextFill);
+            metrics.recordPrefetchAnchor("registered");
+        }
+    }
+
+    private int liveWindows() {
+        synchronized (lock) {
+            return windows.size();
+        }
+    }
+
+    private int liveAnchors() {
+        synchronized (lock) {
+            return continuationAnchors.size();
         }
     }
 
     private List<ListedObject> fill(ByteKey from, boolean fromInclusive, ByteKey toExclusive, Projection projection,
                                     int requested) {
-        Timer.Sample fillSample = metrics.startPrefetchFillTimer();
+        var fillSample = metrics.startPrefetchFillTimer();
         try {
             return delegate.rows(from, fromInclusive, toExclusive, requested, projection);
         } finally {
