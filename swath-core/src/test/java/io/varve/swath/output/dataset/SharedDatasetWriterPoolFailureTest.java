@@ -13,7 +13,6 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.testkit.PageBatches;
 import java.io.IOException;
-import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -56,17 +55,38 @@ class SharedDatasetWriterPoolFailureTest {
     }
 
     @Test
-    void interruptedLaneCloseStillDiscardsItsOpenPart(@TempDir Path directory) throws Exception {
-        Fixture fixture = fixture(directory, Mode.OPEN_THEN_WAIT, new CountDownLatch(0));
+    void interruptedClosePreservesDiscardFailureAndDeletesItsOpenPart(@TempDir Path directory)
+            throws Exception {
+        Fixture fixture = fixture(directory, Mode.OPEN_THEN_DISCARD_FAIL, new CountDownLatch(0));
         SharedDatasetWriterPool pool = fixture.pool();
         pool.submit(PageBatches.batch(0, 0, 0, 1));
         fixture.format().writerEntered.await();
 
-        pool.interruptLanesForTest();
-        assertThatThrownBy(pool::close)
-                .hasMessageContaining("writer failed")
-                .satisfies(failure -> assertThat(failure.getCause())
-                        .isInstanceOfAny(InterruptedException.class, ClosedByInterruptException.class));
+        AtomicReference<Throwable> result = new AtomicReference<>();
+        AtomicBoolean restoredInterrupt = new AtomicBoolean();
+        Thread closer = Thread.ofPlatform().start(() -> {
+            Thread.currentThread().interrupt();
+            try {
+                pool.close();
+                result.set(new AssertionError("interrupted close unexpectedly completed"));
+            } catch (Throwable failure) {
+                result.set(failure);
+                restoredInterrupt.set(Thread.currentThread().isInterrupted());
+            }
+        });
+        closer.join();
+
+        Throwable closeFailure = result.get();
+        assertThat(closeFailure)
+                .hasMessageContaining("interrupted closing")
+                .hasRootCauseInstanceOf(InterruptedException.class);
+        assertThat(closeFailure.getSuppressed()).anySatisfy(laneFailure -> {
+            assertThat(laneFailure).isInstanceOf(InterruptedException.class);
+            assertThat(laneFailure.getSuppressed())
+                    .extracting(Throwable::getMessage)
+                    .contains("discard failed");
+        });
+        assertThat(restoredInterrupt.get()).isTrue();
         assertUnpublishedAndEmpty(directory);
     }
 
@@ -185,7 +205,8 @@ class SharedDatasetWriterPoolFailureTest {
     }
 
     private enum Mode {
-        WRITE_FAIL, WRITE_AND_DISCARD_FAIL, FINALIZE_FAIL, BLOCK_FIRST_WRITE, OPEN_THEN_WAIT
+        WRITE_FAIL, WRITE_AND_DISCARD_FAIL, FINALIZE_FAIL, BLOCK_FIRST_WRITE,
+        OPEN_THEN_DISCARD_FAIL
     }
 
     private record Fixture(SharedDatasetWriterPool pool, BlockingFormat format) {
@@ -225,7 +246,7 @@ class SharedDatasetWriterPoolFailureTest {
                         awaitRelease();
                     }
                     rows++;
-                    if (mode == Mode.OPEN_THEN_WAIT) {
+                    if (mode == Mode.OPEN_THEN_DISCARD_FAIL) {
                         writerEntered.countDown();
                     }
                 }
@@ -237,7 +258,8 @@ class SharedDatasetWriterPoolFailureTest {
                 }
 
                 @Override public void discard() throws IOException {
-                    if (mode == Mode.WRITE_AND_DISCARD_FAIL) {
+                    if (mode == Mode.WRITE_AND_DISCARD_FAIL
+                            || mode == Mode.OPEN_THEN_DISCARD_FAIL) {
                         throw new IOException("discard failed");
                     }
                 }
