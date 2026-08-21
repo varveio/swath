@@ -191,7 +191,7 @@ public final class ReplayServer implements AutoCloseable {
         try {
             server.stop();
         } catch (Exception e) {
-            failure = new IllegalStateException("failed to stop S3 listing replay server", e);
+            failure = new IllegalStateException("failed to stop swath-replay", e);
         }
         if (ownedFixture != null) {
             try {

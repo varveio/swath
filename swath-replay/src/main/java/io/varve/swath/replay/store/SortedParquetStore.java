@@ -115,7 +115,7 @@ public final class SortedParquetStore implements ListingStore {
         if (connectionCount < 1) {
             throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
         }
-        this.rangeReaders = openRangeReaders(files, connectionCount,
+        Map<Path, SortedRangeReader> openedRangeReaders = openRangeReaders(files, connectionCount,
                 metrics::parquetReaderAcquired, elapsedNanos -> {
                     try {
                         metrics.recordPageRead(elapsedNanos);
@@ -123,9 +123,15 @@ public final class SortedParquetStore implements ListingStore {
                         metrics.parquetReaderReleased();
                     }
                 });
-        this.groupReaders = openGroupReaders(files, connectionCount);
-        this.ownedGroupReaders = groupReaders.values().stream()
-                .flatMap(java.util.Collection::stream).toList();
+        try {
+            this.groupReaders = openGroupReaders(files, connectionCount);
+            this.rangeReaders = openedRangeReaders;
+            this.ownedGroupReaders = groupReaders.values().stream()
+                    .flatMap(java.util.Collection::stream).toList();
+        } catch (RuntimeException e) {
+            openedRangeReaders.values().forEach(SortedParquetStore::closeQuietly);
+            throw e;
+        }
     }
 
     /**
@@ -218,12 +224,13 @@ public final class SortedParquetStore implements ListingStore {
         try {
             for (Path file : files) {
                 BlockingQueue<SortedRowGroupReader> pool = new ArrayBlockingQueue<>(Math.max(1, poolSize));
+                readers.put(file.toAbsolutePath(), pool);
                 for (int i = 0; i < Math.max(1, poolSize); i++) {
                     pool.add(new SortedRowGroupReader(file));
                 }
-                readers.put(file.toAbsolutePath(), pool);
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            readers.values().forEach(pool -> pool.forEach(SortedParquetStore::closeQuietly));
             throw new IllegalStateException("failed to open a sorted Parquet row-group reader", e);
         }
         return Map.copyOf(readers);
@@ -271,7 +278,8 @@ public final class SortedParquetStore implements ListingStore {
                 readers.put(file.toAbsolutePath(),
                         new SortedRangeReader(file, poolSize, readerAcquired, readerReleased));
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            readers.values().forEach(SortedParquetStore::closeQuietly);
             throw new IllegalStateException("failed to open a sorted Parquet range reader", e);
         }
         return Map.copyOf(readers);
@@ -412,6 +420,7 @@ public final class SortedParquetStore implements ListingStore {
                     byte[] wholeGroupPrefix = commonPrefixAfter(groupFirstKey, prefix);
                     if (wholeGroupPrefix != null && Arrays.equals(wholeGroupPrefix,
                             commonPrefixAfter(index.get(rg + 1).firstKey().toByteArray(), prefix))) {
+                        metrics.recordDelimiterSkipScanWholeGroupShortcut();
                         if (fromBytes == null || ByteKeys.compareUnsigned(wholeGroupPrefix, fromBytes) > 0) {
                             out.add(new DelimitedEntry(wholeGroupPrefix, null));
                         }

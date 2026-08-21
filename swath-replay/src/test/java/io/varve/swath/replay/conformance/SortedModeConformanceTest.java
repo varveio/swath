@@ -29,8 +29,8 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The in-JVM HAR conformance comparator re-run against a <b>stamped sorted fixture</b>. The
  * expected XML is produced by the DuckDB role-1 oracle over the unsorted capture; the comparator
- * then serves the SAME logical objects from the sorted role-2 fixture (via {@code --serving-mode
- * auto} → sorted) and must match byte-for-byte through the real HTTP surface. The HAR/Docker smoke
+ * then serves the SAME logical objects from the sorted role-2 fixture and must match byte-for-byte
+ * through the real HTTP surface. The HAR/Docker smoke
  * test against a real bucket is a separate check, not exercised here.
  */
 class SortedModeConformanceTest {
@@ -51,8 +51,7 @@ class SortedModeConformanceTest {
         Path sortedFixture = Files.createDirectories(dir.resolve("sorted"));
         new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, sortedFixture);
 
-        // Guard: auto must genuinely resolve this fixture to the SORTED path (not silently fall back),
-        // so the conformance run below actually exercises role 2.
+        // Guard the fixture eligibility independently from the comparison request path below.
         try (ReplayServer sortedServer = new ReplayServer(
                 "127.0.0.1", 0, "bucket", sortedFixture, 0, ServingMode.SORTED)) {
             sortedServer.start();
@@ -60,7 +59,7 @@ class SortedModeConformanceTest {
         }
 
         // Expected XML = the DuckDB oracle over the UNSORTED capture; HAR it, then compare the sorted
-        // fixture against it through the comparator (which serves it via auto → sorted).
+        // fixture against it through the comparator's explicitly selected sorted serving path.
         List<String> harEntries = new ArrayList<>();
         try (ReplayServer oracle = new ReplayServer(
                 "127.0.0.1", 0, "bucket", capture, 0, ServingMode.DUCKDB)) {
@@ -76,7 +75,7 @@ class SortedModeConformanceTest {
 
         var summary = ReplayConformanceComparator.compare(new ReplayConformanceComparator.Options(
                 har, sortedFixture, "bucket", "127.0.0.1", dir.resolve("mismatch"), 0, 0,
-                Duration.ofSeconds(20), 4, 2));
+                Duration.ofSeconds(20), 4, 2, ServingMode.SORTED));
 
         assertThat(summary.compared()).isEqualTo(QUERIES.size());
         assertThat(summary.failures()).isEmpty();

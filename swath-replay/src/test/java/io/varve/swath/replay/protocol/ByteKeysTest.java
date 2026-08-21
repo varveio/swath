@@ -15,7 +15,7 @@ class ByteKeysTest {
     @Test
     void percentEncodeUsesObservedS3ListObjectsUrlEncoding() {
         assertThat(ByteKeys.percentEncode(bytes("a/has space+tilde~.txt")))
-                .isEqualTo("a/has+space%2Btilde%7E.txt");
+                .isEqualTo("a/has%20space%2Btilde%7E.txt");
         assertThat(ByteKeys.percentEncode(bytes("test_file(3).png")))
                 .isEqualTo("test_file%283%29.png");
     }

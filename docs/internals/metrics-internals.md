@@ -1079,7 +1079,7 @@ https://ui.perfetto.dev) is the still-planned V2; no such script ships today.
 
 ---
 
-## 8. Replay-server meters (`swath.replay.*`, module-local)
+## 8. Replay meters (`swath.replay.*`, module-local)
 
 The `swath-replay` module is a separate Gradle module from `swath-core`, where
 `WorkStealingScan`/`RunMetrics` run — its meters share the same Micrometer idiom (§1) but are

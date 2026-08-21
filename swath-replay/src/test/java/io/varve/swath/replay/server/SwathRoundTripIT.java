@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -174,16 +175,23 @@ class SwathRoundTripIT {
     @Test
     void sortedModeServesIdenticallyToDuckDbThroughTheRealSdk(@TempDir Path dir) throws Exception {
         Path capture = Files.createDirectories(dir.resolve("capture"));
+        List<String> expectedKeys = new ArrayList<>();
         try (var writer = ParquetFixtures.open(capture.resolve("part-0.parquet"))) {
             // Unsorted arrival order across several delimiter'd prefixes — the sort must recover order.
             for (int d = 0; d < 4; d++) {
                 for (int i = 0; i < 15; i++) {
-                    writer.write(object(String.format("dir%d/obj-%03d.txt", d, i), 10L + i));
+                    String key = String.format("dir%d/obj-%03d.txt", d, i);
+                    expectedKeys.add(key);
+                    writer.write(object(key, 10L + i));
                 }
             }
+            expectedKeys.add("root-b");
             writer.write(object("root-b", 1));
+            expectedKeys.add("root-a");
             writer.write(object("root-a", 2));
         }
+        expectedKeys.sort((left, right) -> Arrays.compareUnsigned(
+                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8)));
 
         Path sorted = Files.createDirectories(dir.resolve("sorted"));
         new CaptureSorter(SortConfig.fromSystemProperties()).sort(capture, sorted);
@@ -193,9 +201,9 @@ class SwathRoundTripIT {
         List<String> sortedKeys = walkViaSdk(sorted, ServingMode.SORTED, ServingMode.SORTED, 7);
         List<String> duckKeys = walkViaSdk(sorted, ServingMode.DUCKDB, ServingMode.DUCKDB, 7);
 
+        assertThat(sortedKeys).containsExactlyElementsOf(expectedKeys);
+        assertThat(duckKeys).containsExactlyElementsOf(expectedKeys);
         assertThat(sortedKeys).isEqualTo(duckKeys);
-        assertThat(sortedKeys).hasSize(62).isSorted();
-        assertThat(sortedKeys).startsWith("dir0/obj-000.txt").endsWith("root-b");
     }
 
     private static List<String> walkViaSdk(Path fixture, ServingMode mode, ServingMode expected, int maxKeys)

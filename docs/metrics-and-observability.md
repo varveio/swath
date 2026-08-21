@@ -207,7 +207,7 @@ Use a trace when aggregate counters show *that* a path engaged but you need to k
 or *why*. The format and event guarantees are specified in
 [metrics internals](internals/metrics-internals.md#7-run-trace-format).
 
-## 8. Replay-server meters
+## 8. Replay meters
 
 `swath-replay` has its own request, fixture, and fault-injection meters. They are
 documented beside its configuration in the

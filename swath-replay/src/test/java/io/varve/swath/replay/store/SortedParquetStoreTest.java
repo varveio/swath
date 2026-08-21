@@ -378,7 +378,7 @@ class SortedParquetStoreTest {
     void delimitedRollupAnswersAnOpenUpperBoundAndDeclinesOnlyNonSlashDelimiters(@TempDir Path dir)
             throws IOException {
         List<String> keys = List.of("a/1.txt", "b/1.txt");
-        Fixture fixture = writeSorted(dir, manySmallGroups(), "a/1.txt", "b/1.txt");
+        Fixture fixture = writeSorted(dir, manySmallGroups(), keys);
 
         try (SortedParquetStore store = store(fixture)) {
             List<ListingStore.DelimitedEntry> rootRollup =
@@ -422,11 +422,16 @@ class SortedParquetStoreTest {
 
             double rowGroupOpens = metrics.registry()
                     .find("swath.replay.delimiter.skipscan.row_group_opens").counter().count();
+            double wholeGroupShortcuts = metrics.registry()
+                    .find("swath.replay.delimiter.skipscan.whole_group_shortcuts").counter().count();
             assertThat(rowGroupOpens)
                     .as("row-group opens must scale with prefixes (%d), not with keys (%d)",
                             prefixCount, keys.size())
                     .isLessThan(prefixCount * 4.0)
                     .isLessThan(keys.size() / 10.0);
+            assertThat(wholeGroupShortcuts)
+                    .as("the routing-index-only whole-group path must be observable when it engages")
+                    .isPositive();
         }
     }
 
@@ -617,7 +622,7 @@ class SortedParquetStoreTest {
      * that immunity. The truncation above remains real for {@code -Dswath.replay.sorted.range-reads=duckdb}.
      */
     @Test
-    void redCase_mixedRowTypeIndexUndercountsRowsAndSilentlyTruncates(@TempDir Path dir) throws IOException {
+    void redCase_pageIndexReaderIsImmuneToAMixedRowTypeIndexMiscount(@TempDir Path dir) throws IOException {
         Path file = dir.resolve("mixed.parquet");
         try (var writer = ParquetFixtures.open(file)) {
             writer.write(object("a0"));

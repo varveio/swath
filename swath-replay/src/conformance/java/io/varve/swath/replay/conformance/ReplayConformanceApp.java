@@ -5,6 +5,7 @@
  */
 package io.varve.swath.replay.conformance;
 
+import io.varve.swath.replay.server.ServingMode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.Callable;
@@ -64,7 +65,7 @@ public final class ReplayConformanceApp implements Callable<Integer> {
     public Integer call() throws Exception {
         var options = new ReplayConformanceComparator.Options(
                 har, fixture, bucket, host, mismatchDir, maxEntries, sampleEntries, Duration.ofSeconds(timeoutSeconds),
-                parallelism, replayParquetConnections);
+                parallelism, replayParquetConnections, ServingMode.DUCKDB);
         var summary = ReplayConformanceComparator.compare(options);
         System.out.print(summary.report());
         return summary.exitCode();

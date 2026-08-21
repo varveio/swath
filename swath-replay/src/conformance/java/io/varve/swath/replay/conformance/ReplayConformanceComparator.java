@@ -58,10 +58,7 @@ public final class ReplayConformanceComparator {
         String replayMetrics;
         try (ReplayServer server = new ReplayServer(
                 options.host(), 0, options.bucket(), options.fixture(), options.replayParquetConnections(),
-                // Explicitly DUCKDB, not a mode that picks: conformance serves raw HAR captures, which
-                // are the fixtures sorted serving cannot take, and the choice must be stated rather
-                // than arrived at by a fallback that a future eligibility change could silently move.
-                ServingMode.DUCKDB)) {
+                options.servingMode())) {
             server.start();
             HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(options.timeout())
@@ -262,11 +259,12 @@ public final class ReplayConformanceComparator {
 
     public record Options(Path har, Path fixture, String bucket, String host, Path mismatchDir,
                           int maxEntries, int sampleEntries, Duration timeout, int parallelism,
-                          int replayParquetConnections) {
+                          int replayParquetConnections, ServingMode servingMode) {
         public Options {
             parallelism = parallelism > 0 ? parallelism : defaultParallelism();
             replayParquetConnections = replayParquetConnections > 0
                     ? replayParquetConnections : defaultParallelism();
+            servingMode = servingMode == null ? ServingMode.DUCKDB : servingMode;
         }
     }
 

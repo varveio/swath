@@ -37,7 +37,7 @@ class S3XmlTest {
         assertThat(xml.indexOf("<MaxKeys>")).isLessThan(xml.indexOf("<Delimiter>"));
         assertThat(xml.indexOf("<Delimiter>")).isLessThan(xml.indexOf("<EncodingType>"));
         assertThat(xml).contains("<IsTruncated>true</IsTruncated>");
-        assertThat(xml).contains("<Key>a/has+space.txt</Key>");
+        assertThat(xml).contains("<Key>a/has%20space.txt</Key>");
         assertThat(xml).contains("<ETag>&quot;abc&amp;def&quot;</ETag>");
         assertThat(xml).contains("<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>");
         assertThat(xml).contains("<ChecksumType>FULL_OBJECT</ChecksumType>");

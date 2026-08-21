@@ -192,6 +192,7 @@ val verifyNoParquetOrHadoopOnCompileClasspath by tasks.registering {
 
 tasks.named("check") {
     dependsOn(verifyNoParquetOrHadoopOnCompileClasspath)
+    dependsOn(rootProject.tasks.named("verifyReplayThirdPartyNotices"))
 }
 
 // Overrides the swath.java-conventions default (10 min) — the replay module's suite is

@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.replay.server.ReplayServer;
+import io.varve.swath.replay.server.ServingMode;
 import io.varve.swath.replay.testkit.HttpProbe;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
@@ -37,7 +38,8 @@ class ReplayConformanceComparatorTest {
                 StandardCharsets.UTF_8);
 
         var summary = ReplayConformanceComparator.compare(new ReplayConformanceComparator.Options(
-                har, parquet, "bucket", "127.0.0.1", dir.resolve("mismatch"), 0, 0, Duration.ofSeconds(10), 4, 2));
+                har, parquet, "bucket", "127.0.0.1", dir.resolve("mismatch"), 0, 0, Duration.ofSeconds(10), 4, 2,
+                ServingMode.DUCKDB));
 
         assertThat(summary.exitCode()).isZero();
         assertThat(summary.compared()).isEqualTo(1);
@@ -58,7 +60,8 @@ class ReplayConformanceComparatorTest {
 
         Path mismatch = dir.resolve("mismatch");
         var summary = ReplayConformanceComparator.compare(new ReplayConformanceComparator.Options(
-                har, parquet, "bucket", "127.0.0.1", mismatch, 0, 0, Duration.ofSeconds(10), 2, 2));
+                har, parquet, "bucket", "127.0.0.1", mismatch, 0, 0, Duration.ofSeconds(10), 2, 2,
+                ServingMode.DUCKDB));
 
         assertThat(summary.exitCode()).isEqualTo(1);
         assertThat(summary.failures()).hasSize(1);
@@ -80,7 +83,7 @@ class ReplayConformanceComparatorTest {
 
         var summary = ReplayConformanceComparator.compare(new ReplayConformanceComparator.Options(
                 har, parquet, "bucket", "127.0.0.1", dir.resolve("mismatch"), 0, 2,
-                Duration.ofSeconds(10), 2, 2));
+                Duration.ofSeconds(10), 2, 2, ServingMode.DUCKDB));
 
         assertThat(summary.exitCode()).isZero();
         assertThat(summary.eligible()).isEqualTo(3);

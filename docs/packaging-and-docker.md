@@ -108,7 +108,7 @@ for distribution without a JDK-execute step.
 
 ### Replay toolkit (`bin/swath-replay`)
 
-```
+```bash
 ./gradlew :swath-replay:installDist
 swath-replay/build/install/swath-replay/bin/swath-replay --help
 ```
@@ -145,7 +145,7 @@ docker build -t swath:dev .
 
 `Dockerfile.replay` builds the replay toolkit independently:
 
-```
+```bash
 docker build -f Dockerfile.replay -t swath-replay:dev .
 ```
 
@@ -237,7 +237,7 @@ account.
 Prefer pinning by **digest** over a mutable tag — the digest is the only
 immutable reference:
 
-```
+```bash
 docker pull ghcr.io/varveio/swath@sha256:<digest>
 docker pull ghcr.io/varveio/swath-replay@sha256:<digest>
 ```

@@ -102,8 +102,6 @@ public final class ByteKeys {
             if ((v >= 'A' && v <= 'Z') || (v >= 'a' && v <= 'z') || (v >= '0' && v <= '9')
                     || v == '-' || v == '_' || v == '.' || v == '/') {
                 out.append((char) v);
-            } else if (v == ' ') {
-                out.append('+');
             } else {
                 out.append('%').append(HEX[v >>> 4]).append(HEX[v & 0x0f]);
             }
@@ -136,8 +134,8 @@ public final class ByteKeys {
         }
         byte[] out = new byte[hex.length() / 2];
         for (int i = 0; i < out.length; i++) {
-            int hi = hexVal((byte) hex.charAt(i * 2));
-            int lo = hexVal((byte) hex.charAt(i * 2 + 1));
+            int hi = hexVal(hex.charAt(i * 2));
+            int lo = hexVal(hex.charAt(i * 2 + 1));
             if (hi < 0 || lo < 0) {
                 throw new IllegalArgumentException("invalid hex");
             }
@@ -146,7 +144,7 @@ public final class ByteKeys {
         return out;
     }
 
-    private static int hexVal(byte b) {
+    private static int hexVal(int b) {
         if (b >= '0' && b <= '9') {
             return b - '0';
         }

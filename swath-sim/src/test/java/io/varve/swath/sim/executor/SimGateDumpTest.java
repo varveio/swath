@@ -23,7 +23,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * The opt-in gate dump: what a run's two gate chains actually read, as two TSVs to diff against a
- * replay-server trace of the same listing.
+ * replay trace of the same listing.
  *
  * <p>The load-bearing claim is <b>completeness</b> — a dump with rows missing would read as a gate
  * that never fired, which is exactly the finding the artifact exists to support or refute — so the

@@ -21,8 +21,10 @@ human side of it.
 
 ## Container tags
 
-- **Releases** publish `ghcr.io/varveio/swath:X.Y.Z` and
-  `ghcr.io/varveio/swath-replay:X.Y.Z`, plus `:latest` for each package.
+- **Stable releases** publish `ghcr.io/varveio/swath:X.Y.Z` and
+  `ghcr.io/varveio/swath-replay:X.Y.Z`, plus rolling `:X.Y`, `:X` (for major versions
+  at least 1), and `:latest` tags for each package. Release candidates publish only
+  their exact `:X.Y.Z-rc.N` version tag.
 - **Merges to `main`** publish the immutable `sha-<gitsha>` tag plus the mutable `main`
   pointer.
 - **Manual dispatch** (any branch) publishes `sha-<gitsha>` **only** — the branch-name tag

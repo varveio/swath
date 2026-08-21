@@ -30,9 +30,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * RES-IDX-1 (critical case): the {@code sort-fixture} atomicity / crash-fallback contract. It guards the
  * serving side against a <b>partially-built</b> sorted fixture — the invariant that a final
- * stamped file never appears before the sort is complete, and that {@code --serving-mode auto}
- * declines a directory that only carries a crash leftover (a {@code *.tmp}), falling back to
- * DuckDB and recording the metric, then serves sorted once a real build completes.
+ * stamped file never appears before the sort is complete, that explicit sorted serving refuses a
+ * directory carrying only a crash leftover ({@code *.tmp}), and that a real build then serves in
+ * sorted mode. The same incomplete directory remains usable when DuckDB is selected explicitly.
  */
 class ResIdxCrashFallbackTest {
 
@@ -40,8 +40,8 @@ class ResIdxCrashFallbackTest {
      * The atomicity contract itself: a sort that aborts mid-transform (here a genuine abort — the
      * §0.5 duplicate-key fail-fast) leaves <b>no</b> final {@code part-*.parquet}; only a
      * {@code *.tmp} and/or partial staging may remain. A subsequent clean sort into the same output
-     * directory then publishes a complete stamped file. This is exactly why {@code auto} can trust
-     * "a final file exists" to mean "the sort finished".
+     * directory then publishes a complete stamped file. This is why sorted serving can trust "a
+     * final file exists" to mean "the sort finished".
      */
     @Test
     void anAbortedSortLeavesNoFinalFileAndACleanReRunPublishesOne(@TempDir Path dir) throws IOException {
@@ -64,10 +64,9 @@ class ResIdxCrashFallbackTest {
     }
 
     /**
-     * A directory carrying a crash-leftover {@code *.tmp} but no completed stamped file is served via
-     * DuckDB by {@code auto}, with the {@code serving.fallback\{reason=no_stamp\}} metric recorded —
-     * the crash tmp is never mistaken for a servable sorted file (it isn't a {@code *.parquet}). A
-     * properly-built sorted fixture then resolves to the sorted path with no fallback.
+     * A directory carrying a crash-leftover {@code *.tmp} but no completed stamped file is refused by
+     * explicit sorted mode and remains servable through explicit DuckDB mode; the crash tmp is never
+     * mistaken for a sorted fixture. A properly-built fixture then serves through the sorted path.
      */
     @Test
     void sortedModeRefusesACrashTmpDirectoryThenServesSortedAfterARealBuild(@TempDir Path dir)

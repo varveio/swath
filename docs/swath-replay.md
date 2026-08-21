@@ -40,8 +40,9 @@ Fixtures are never baked into the published image: mount a file or directory rea
 its container path to `--fixture`:
 
 ```bash
+FIXTURE_DIR=/absolute/path/to/sorted
 docker run --rm -p 127.0.0.1:19090:19090 \
-  -v "$RUN_DIR/sorted:/fixtures:ro" \
+  -v "$FIXTURE_DIR:/fixtures:ro" \
   ghcr.io/varveio/swath-replay:<version> serve \
   --fixture /fixtures --bucket digitalcorpora \
   --host 0.0.0.0 --port 19090 --serving-mode sorted
@@ -314,7 +315,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}` | Legacy-fixture sort work and engagement. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
-| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens` | Rollup vs walk and skip-scan I/O. |
+| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts` | Rollup vs walk, skip-scan I/O, and routing-index-only whole-group engagements. |
 | `page.read.latency`, `fixture.list.latency` | Post-borrow range-decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
 | `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent row-group and range pools and a conservative aggregate bound of `2 × connections × files`. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |

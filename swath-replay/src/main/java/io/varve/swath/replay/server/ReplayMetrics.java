@@ -63,6 +63,7 @@ public final class ReplayMetrics {
     private final Map<String, Counter> prefetchAnchorEvents;
     private final Counter prefetchWindowEvictions;
     private final Counter delimiterSkipScanRowGroupOpens;
+    private final Counter delimiterSkipScanWholeGroupShortcuts;
     private final AtomicLong parquetQueriesInFlight = new AtomicLong();
     private final AtomicLong parquetQueriesPeak = new AtomicLong();
     private final long startedNanos = System.nanoTime();
@@ -119,6 +120,8 @@ public final class ReplayMetrics {
         prefetchWindowEvictions = Counter.builder("swath.replay.prefetch.window.eviction").register(registry);
         delimiterSkipScanRowGroupOpens = Counter.builder("swath.replay.delimiter.skipscan.row_group_opens")
                 .register(registry);
+        delimiterSkipScanWholeGroupShortcuts = Counter.builder(
+                "swath.replay.delimiter.skipscan.whole_group_shortcuts").register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
                 .register(registry);
@@ -308,6 +311,11 @@ public final class ReplayMetrics {
      */
     public void recordDelimiterSkipScanRowGroupOpen() {
         delimiterSkipScanRowGroupOpens.increment();
+    }
+
+    /** Records a row group proven to contain one common prefix from routing-index bounds alone. */
+    public void recordDelimiterSkipScanWholeGroupShortcut() {
+        delimiterSkipScanWholeGroupShortcuts.increment();
     }
 
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */
