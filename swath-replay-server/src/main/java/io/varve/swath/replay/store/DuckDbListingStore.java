@@ -120,6 +120,7 @@ public final class DuckDbListingStore implements ListingStore {
     private List<ListedObject> query(Connection connection, ByteKey from, boolean fromInclusive,
                                      ByteKey toExclusive, int limit) {
         Query query = buildQuery(from, fromInclusive, toExclusive);
+        metrics.parquetReaderAcquired();
         var sample = metrics.startParquetQueryTimer();
         int rows = 0;
         boolean success = false;
@@ -142,6 +143,7 @@ public final class DuckDbListingStore implements ListingStore {
             throw new IllegalStateException("failed to query replay store", e);
         } finally {
             metrics.recordParquetQuery(sample, rows, success);
+            metrics.parquetReaderReleased();
         }
     }
 

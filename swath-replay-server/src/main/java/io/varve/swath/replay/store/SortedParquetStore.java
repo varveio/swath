@@ -131,7 +131,8 @@ public final class SortedParquetStore implements ListingStore {
         if (connectionCount < 1) {
             throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
         }
-        this.rangeReaders = openRangeReaders(files, connectionCount);
+        this.rangeReaders = openRangeReaders(files, connectionCount,
+                metrics::parquetReaderAcquired, metrics::parquetReaderReleased);
         this.groupReaders = openGroupReaders(files, connectionCount);
         this.ownedGroupReaders = groupReaders.values().stream()
                 .flatMap(java.util.Collection::stream).toList();
@@ -277,13 +278,15 @@ public final class SortedParquetStore implements ListingStore {
         }
     }
 
-    private static Map<Path, SortedRangeReader> openRangeReaders(List<Path> files, int poolSize) {
+    private static Map<Path, SortedRangeReader> openRangeReaders(
+            List<Path> files, int poolSize, Runnable readerAcquired, Runnable readerReleased) {
         Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
         try {
             for (Path file : files) {
                 // Same width as the DuckDB pool it replaces: one reader per concurrent request the
                 // store is sized for, since a Parquet reader carries per-read state.
-                readers.put(file.toAbsolutePath(), new SortedRangeReader(file, poolSize));
+                readers.put(file.toAbsolutePath(),
+                        new SortedRangeReader(file, poolSize, readerAcquired, readerReleased));
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to open a sorted Parquet range reader", e);
@@ -457,9 +460,11 @@ public final class SortedParquetStore implements ListingStore {
                         Path doneFile = openFile;
                         reader = null;
                         openFile = null;
+                        metrics.parquetReaderReleased();
                         pool(doneFile).add(done);
                     }
                     reader = borrowGroupReader(entry.file());
+                    metrics.parquetReaderAcquired();
                     openFile = entry.file();
                     cachedBlockIndex = -1;
                 }
@@ -518,6 +523,7 @@ public final class SortedParquetStore implements ListingStore {
                 keyCursor.close();
             }
             if (reader != null) {
+                metrics.parquetReaderReleased();
                 pool(openFile).add(reader);
             }
         }

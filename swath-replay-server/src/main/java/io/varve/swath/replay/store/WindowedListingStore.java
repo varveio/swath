@@ -112,16 +112,25 @@ public final class WindowedListingStore implements ListingStore {
         this.windows = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<WindowKey, Window> eldest) {
-                return size() > maxWindows;
+                boolean evict = size() > maxWindows;
+                if (evict) {
+                    metrics.recordPrefetchWindowEviction();
+                }
+                return evict;
             }
         };
         int maxAnchors = maxWindows * ANCHORS_PER_WINDOW;
         this.continuationAnchors = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<ByteKey, Integer> eldest) {
-                return size() > maxAnchors;
+                boolean evict = size() > maxAnchors;
+                if (evict) {
+                    metrics.recordPrefetchAnchor("evicted_before_claim");
+                }
+                return evict;
             }
         };
+        metrics.registerPrefetchCacheGauges(this::liveWindows, this::liveAnchors);
     }
 
     /** Prefetch configuration resolved from {@code swath.replay.prefetch.*} system properties. */
@@ -256,6 +265,9 @@ public final class WindowedListingStore implements ListingStore {
         synchronized (lock) {
             anchored = from == null ? null : continuationAnchors.remove(from);
         }
+        if (anchored != null) {
+            metrics.recordPrefetchAnchor("claimed");
+        }
         return anchored == null
                 ? new FillDecision(limit, false)
                 : new FillDecision(Math.max(limit, anchored), true);
@@ -272,6 +284,19 @@ public final class WindowedListingStore implements ListingStore {
     private void registerAnchors(List<ListedObject> page, int nextFill) {
         for (int i = Math.max(0, page.size() - 2); i < page.size(); i++) {
             continuationAnchors.put(ByteKey.copyOf(page.get(i).key()), nextFill);
+            metrics.recordPrefetchAnchor("registered");
+        }
+    }
+
+    private int liveWindows() {
+        synchronized (lock) {
+            return windows.size();
+        }
+    }
+
+    private int liveAnchors() {
+        synchronized (lock) {
+            return continuationAnchors.size();
         }
     }
 

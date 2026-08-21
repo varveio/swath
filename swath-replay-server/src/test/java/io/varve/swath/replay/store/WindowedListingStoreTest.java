@@ -320,6 +320,12 @@ class WindowedListingStoreTest {
         assertThat(missCounter(metrics, "continuation")).isEqualTo(1.0);
         assertThat(counter(metrics, "swath.replay.prefetch.window.hit")).isEqualTo(2.0);
         assertThat(metrics.registry().find("swath.replay.prefetch.window.fill").timer().count()).isEqualTo(2L);
+        assertThat(metrics.registry().find("swath.replay.prefetch.anchor")
+                .tag("event", "claimed").counter().count()).isEqualTo(1.0);
+        assertThat(metrics.registry().find("swath.replay.prefetch.windows.live").gauge().value())
+                .isEqualTo(1.0);
+        assertThat(metrics.registry().find("swath.replay.prefetch.anchors.live").gauge().value())
+                .isGreaterThan(0.0);
         // The outer per-page corridor timer fires once per rows() call (hit or miss).
         assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count()).isEqualTo(4L);
     }

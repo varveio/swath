@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -90,9 +91,18 @@ public final class SortedRangeReader implements AutoCloseable {
     private final MessageType schemaWithoutOwner;
     private final MessageColumnIO columnIoWithOwner;
     private final MessageColumnIO columnIoWithoutOwner;
+    private final Runnable readerAcquired;
+    private final Runnable readerReleased;
 
     public SortedRangeReader(Path file, int poolSize) throws IOException {
+        this(file, poolSize, () -> { }, () -> { });
+    }
+
+    public SortedRangeReader(
+            Path file, int poolSize, Runnable readerAcquired, Runnable readerReleased) throws IOException {
         int size = Math.max(1, poolSize);
+        this.readerAcquired = Objects.requireNonNull(readerAcquired, "readerAcquired");
+        this.readerReleased = Objects.requireNonNull(readerReleased, "readerReleased");
         this.owned = new ArrayList<>(size);
         this.readers = new ArrayBlockingQueue<>(size);
         try {
@@ -142,6 +152,7 @@ public final class SortedRangeReader implements AutoCloseable {
         FilterCompat.Filter filter = FilterCompat.get(predicate(from, fromInclusive, toExclusive));
         List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
         ParquetFileReader reader = borrow();
+        readerAcquired.run();
         try {
             reader.setRequestedSchema(schema);
             for (int block = Math.max(0, startRowGroup); block < blocks.size() && out.size() < limit; block++) {
@@ -166,6 +177,7 @@ public final class SortedRangeReader implements AutoCloseable {
                 }
             }
         } finally {
+            readerReleased.run();
             readers.add(reader);
         }
         return out;

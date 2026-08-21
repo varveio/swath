@@ -53,6 +53,10 @@ class ReplayServingFactoryTest {
         ReplayServingFactory.Result result = ReplayServingFactory.open(sorted, ServingMode.SORTED, 1);
         try {
             assertThat(result.resolvedMode()).isEqualTo(ServingMode.SORTED);
+            assertThat(result.parquetConnections()).isEqualTo(1);
+            assertThat(result.requestAdmissionLimit())
+                    .as("prefetch lookup and hits must run before backing-read admission")
+                    .isZero();
             result.fixture().list(new S3ListRequest("bucket", null, null, null, null, 1000, true, false));
             assertThat(result.metrics().registry().find("swath.replay.serving.path")
                     .tag("mode", "sorted").counter().count()).isEqualTo(1.0);
@@ -73,6 +77,7 @@ class ReplayServingFactoryTest {
         ReplayServingFactory.Result result = ReplayServingFactory.open(plain, ServingMode.DUCKDB, 1);
         try {
             assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
+            assertThat(result.requestAdmissionLimit()).isEqualTo(1);
             assertThat(keys(result.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false))))
                     .containsExactly("a", "b", "c");

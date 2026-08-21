@@ -47,7 +47,7 @@ public final class ReplayServingFactory {
 
     /** The resolved fixture plus the concrete path chosen and the metrics that back it. */
     public record Result(ListingFixture fixture, ServingMode resolvedMode, ReplayMetrics metrics,
-                         int maxConcurrentReads) {
+                         int parquetConnections, int requestAdmissionLimit) {
     }
 
     /**
@@ -83,7 +83,7 @@ public final class ReplayServingFactory {
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_DUCKDB);
         DuckDbListingStore store = new DuckDbListingStore(fixturePath, metrics, connections);
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.DUCKDB, metrics, connections);
+        return new Result(pager, ServingMode.DUCKDB, metrics, connections, connections);
     }
 
     private static Result sorted(List<Path> files, List<IndexEntry> index, int parquetConnections,
@@ -105,7 +105,12 @@ public final class ReplayServingFactory {
             log.info("replay_serving sorted prefetch DISABLED (bare store) for {}", files);
         }
         ListObjectsV2Pager pager = new ListObjectsV2Pager(store, metrics);
-        return new Result(pager, ServingMode.SORTED, metrics, connections);
+        // SortedParquetStore already bounds cold fills with its connection pool. When prefetch is
+        // enabled, an outer fair semaphore would queue requests before WindowedListingStore can
+        // recognize continuations or serve hits, allowing breadth-first cold traffic to churn the
+        // bounded cache. Let every request reach the cache; only backing reads consume connections.
+        int requestAdmissionLimit = prefetch.enabled() ? 0 : connections;
+        return new Result(pager, ServingMode.SORTED, metrics, connections, requestAdmissionLimit);
     }
 
     private static List<Path> resolveFiles(Path fixturePath) {

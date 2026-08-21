@@ -84,6 +84,11 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
 
+Request admission happens at this cache: hits bypass Parquet permits, continuation anchors
+are claimed before a request can wait for a backing read, and the sorted store's connection
+pool remains the sole bound on concurrent Parquet decoding. This avoids cold breadth-first
+waves without weakening the backing-read bound.
+
 Sorted mode reads Parquet's page index directly and stops once it has the requested rows.
 Final sorted files therefore default to 1,024 rows per data page
 (`swath.sort.final-page-rows`); a page is the smallest unit a bounded read can decode.
@@ -279,6 +284,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
+| `prefetch.windows.live`, `prefetch.anchors.live`, `prefetch.anchor{result}` | Live cache/anchor occupancy and anchor registration, claim, or eviction-before-claim churn. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are
 `no_stamp`, `unsupported_mode`, `unknown_format_version`, `incomplete_multifile`,

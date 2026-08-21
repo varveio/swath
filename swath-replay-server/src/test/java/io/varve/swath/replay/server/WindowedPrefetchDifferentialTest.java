@@ -37,6 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeSet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -129,6 +131,56 @@ class WindowedPrefetchDifferentialTest {
                                 .isEqualTo(walk(bare, client, scenario));
                     }
                 }
+            }
+        } finally {
+            restorePrefetchProps(saved);
+        }
+    }
+
+    @Test
+    void continuationsBypassAColdBacklogLargerThanAnchorCapacity(@TempDir Path dir) throws Exception {
+        int walkers = 24;
+        int keysPerWalker = 100;
+        List<byte[]> keys = new ArrayList<>();
+        for (int walker = 0; walker < walkers; walker++) {
+            for (int key = 0; key < keysPerWalker; key++) {
+                keys.add(utf8(String.format("w%02d/%04d", walker, key)));
+            }
+        }
+        Path fixture = writeSortedFixture(dir, keys);
+
+        Map<String, String> saved = savePrefetchProps();
+        try {
+            System.setProperty(ENABLED, "true");
+            System.setProperty(WINDOW_ROWS, "50");
+            System.setProperty(MAX_WINDOWS, "4");   // 16 anchors: deliberately below 24 cold walkers
+            try (ReplayServer server = new ReplayServer(
+                    "127.0.0.1", 0, "bucket", fixture, 2, ServingMode.SORTED, 128)) {
+                restorePrefetchProps(saved);
+                server.start();
+                HttpClient client = HttpClient.newHttpClient();
+                try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                    List<Future<List<String>>> walks = new ArrayList<>();
+                    for (int walker = 0; walker < walkers; walker++) {
+                        Scenario scenario = new Scenario(String.format("w%02d/", walker), null, null, 10, false);
+                        walks.add(executor.submit(() -> walk(server, client, scenario)));
+                    }
+                    for (Future<List<String>> walk : walks) {
+                        assertThat(walk.get()).hasSize(10);
+                    }
+                }
+
+                ReplayMetrics metrics = server.metrics();
+                assertThat(metrics.registry().find("swath.replay.prefetch.window.hit").counter().count())
+                        .as("continuations must make progress from cached windows despite the cold wave")
+                        .isGreaterThan(0.0);
+                assertThat(metrics.registry().find("swath.replay.prefetch.anchor")
+                        .tag("event", "claimed").counter().count())
+                        .as("continuations claim anchors before waiting for a backing read")
+                        .isGreaterThan(0.0);
+                assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
+                        .as("cache-first admission must preserve the two-readers-per-file bound")
+                        .isBetween(1.0, 2.0 * SortedFixtures.resolveFiles(fixture).size());
             }
         } finally {
             restorePrefetchProps(saved);
