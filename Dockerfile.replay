@@ -27,9 +27,6 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-replay:
 FROM eclipse-temurin:25-jre-noble@sha256:2f1da100788559b397bcf48c736169ea5b070bde84e55f203bbee8e83d87a175 AS runtime
 
 COPY --from=build --chown=10001:10001 /src/swath-replay/build/install/swath-replay /opt/swath-replay
-COPY --from=build --chown=10001:10001 /src/LICENSE /opt/swath-replay/LICENSE
-COPY --from=build --chown=10001:10001 /src/NOTICE /opt/swath-replay/NOTICE
-COPY --from=build --chown=10001:10001 /src/THIRD_PARTY_NOTICES.md /opt/swath-replay/THIRD_PARTY_NOTICES.md
 
 USER 10001:10001
 WORKDIR /opt/swath-replay

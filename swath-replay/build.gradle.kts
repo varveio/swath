@@ -72,10 +72,38 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
+val replayRuntimeArtifacts = rootProject.layout.buildDirectory.file(
+        "generated/legal/replay-runtime-artifacts.txt")
+
+val writeReplayRuntimeArtifactCoordinates by tasks.registering {
+    group = "reporting"
+    description = "Writes the exact external artifacts packaged in the replay distribution."
+    val runtimeClasspath = configurations.named("runtimeClasspath")
+    inputs.files(runtimeClasspath)
+    outputs.file(replayRuntimeArtifacts)
+    doLast {
+        val output = replayRuntimeArtifacts.get().asFile
+        output.parentFile.mkdirs()
+        val artifacts = runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+                .map {
+                    "${it.moduleVersion.id.group}:${it.name}:${it.moduleVersion.id.version}\t${it.file.name}"
+                }
+                .distinct()
+                .sorted()
+        output.writeText(artifacts.joinToString("\n", postfix = "\n"))
+    }
+}
+
 application {
     mainClass = "io.varve.swath.replay.server.ReplayServerApp"
     applicationName = "swath-replay"
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
+
+val replayLegalFiles = listOf(
+        rootProject.file("LICENSE"),
+        rootProject.file("NOTICE"),
+        project.file("THIRD_PARTY_NOTICES.md"))
 
 val conformanceScriptsDir = layout.buildDirectory.dir("generated/scripts/replayConformance")
 
@@ -87,6 +115,7 @@ val conformanceJar by tasks.registering(Jar::class) {
 val conformanceStartScripts by tasks.registering(CreateStartScripts::class) {
     applicationName = "swath-replay-conformance"
     mainClass.set("io.varve.swath.replay.conformance.ReplayConformanceApp")
+    defaultJvmOpts = listOf("--enable-native-access=ALL-UNNAMED")
     outputDir = conformanceScriptsDir.get().asFile
     classpath = files(
             conformanceJar,
@@ -98,6 +127,7 @@ val conformanceStartScripts by tasks.registering(CreateStartScripts::class) {
 distributions {
     main {
         contents {
+            from(replayLegalFiles)
             into("lib") {
                 from(conformanceJar)
                 from(configurations.named(conformanceSourceSet.runtimeClasspathConfigurationName))
@@ -112,16 +142,12 @@ distributions {
     }
 }
 
-tasks.named("installDist") {
-    dependsOn(conformanceStartScripts)
-}
-
-tasks.named("distZip") {
-    dependsOn(conformanceStartScripts)
-}
-
-tasks.named("distTar") {
-    dependsOn(conformanceStartScripts)
+listOf("installDist", "distZip", "distTar").forEach { taskName ->
+    tasks.named(taskName) {
+        dependsOn(conformanceStartScripts)
+        dependsOn(rootProject.tasks.named("verifyReplayThirdPartyNotices"))
+        mustRunAfter(rootProject.tasks.named("generateReplayThirdPartyNotices"))
+    }
 }
 
 // Mechanically enforce the compile-classpath boundary: no io.varve.swath.replay source may import

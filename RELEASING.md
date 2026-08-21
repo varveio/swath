@@ -31,6 +31,10 @@ human side of it.
 - `:latest` and every semver tag are owned solely by releases; no development build can
   regress them. To pin an exact build, use the immutable digest:
   `ghcr.io/varveio/swath@sha256:…`.
+- GHCR creates a newly published package as private. After the first
+  `ghcr.io/varveio/swath-replay` publish, set that package's visibility to **public** and
+  connect it to this repository before advertising or cutting its first release. Confirm both
+  packages are anonymously pullable as part of the release checklist.
 
 ## Release candidates
 

@@ -13,6 +13,9 @@ required=(
   src/swath-cli/build/libs/swath.jar
   src/swath-replay/build/install/swath-replay/bin/swath-replay
   src/swath-replay/build/install/swath-replay/bin/swath-replay-conformance
+  src/swath-replay/build/install/swath-replay/LICENSE
+  src/swath-replay/build/install/swath-replay/NOTICE
+  src/swath-replay/build/install/swath-replay/THIRD_PARTY_NOTICES.md
   src/LICENSE
   src/NOTICE
   src/THIRD_PARTY_NOTICES.md
@@ -40,6 +43,18 @@ for legal in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
     exit 1
   }
 done
+
+for legal in LICENSE NOTICE; do
+  cmp -s "$payload/src/swath-replay/build/install/swath-replay/$legal" "$legal" || {
+    echo "replay promotion legal file differs from checkout: $legal" >&2
+    exit 1
+  }
+done
+cmp -s "$payload/src/swath-replay/build/install/swath-replay/THIRD_PARTY_NOTICES.md" \
+  swath-replay/THIRD_PARTY_NOTICES.md || {
+  echo "replay promotion legal file differs from checkout: THIRD_PARTY_NOTICES.md" >&2
+  exit 1
+}
 
 if [[ -n "$reference_jar" ]]; then
   test -f "$reference_jar" || { echo "reference jar does not exist: $reference_jar" >&2; exit 1; }

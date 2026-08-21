@@ -114,7 +114,9 @@ swath-replay/build/install/swath-replay/bin/swath-replay --help
 ```
 
 The replay distribution carries `swath-replay` and `swath-replay-conformance`. It is a separate developer toolkit, not
-part of the `swath` CLI distribution. See the [replay toolkit guide](swath-replay.md).
+part of the `swath` CLI distribution. Its legal bundle includes a replay-specific
+`THIRD_PARTY_NOTICES.md` generated from that distribution's runtime graph. See the
+[replay toolkit guide](swath-replay.md).
 
 ### Dependency slimming
 
@@ -267,7 +269,8 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
 builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
 no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
-**`docker-publish`** builds, smokes, and pushes both dev images to GHCR. Tagged publication belongs
+**`docker-publish`** additionally serves the CLI smoke's real Parquet capture through the replay
+image's DuckDB and Jetty paths before pushing both dev images to GHCR. Tagged publication belongs
 to `.github/workflows/release.yml`, behind the protected `public-release`
 environment.
 

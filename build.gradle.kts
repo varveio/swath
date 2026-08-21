@@ -143,3 +143,55 @@ val verifyThirdPartyNotices by tasks.registering {
         }
     }
 }
+
+val replayLicenseReportDir = project(":swath-replay").layout.buildDirectory.dir("reports/licenses")
+val replayThirdPartyNotices = layout.projectDirectory.file("swath-replay/THIRD_PARTY_NOTICES.md")
+val replayRuntimeArtifacts = layout.buildDirectory.file("generated/legal/replay-runtime-artifacts.txt")
+
+val generateReplayThirdPartyNotices by tasks.registering(Exec::class) {
+    group = "reporting"
+    description = "Generates swath-replay/THIRD_PARTY_NOTICES.md from the replay runtime graph."
+    dependsOn(":swath-replay:generateLicenseReport", ":swath-replay:writeReplayRuntimeArtifactCoordinates")
+    inputs.file(replayLicenseReportDir.map { it.file("licenses.json") })
+    inputs.dir(replayLicenseReportDir)
+    inputs.file(replayRuntimeArtifacts)
+    inputs.file(layout.projectDirectory.file("scripts/legal/render-third-party-notices.py"))
+    outputs.file(replayThirdPartyNotices)
+    commandLine("python3", "scripts/legal/render-third-party-notices.py", "--licenses-json",
+        replayLicenseReportDir.get().file("licenses.json").asFile,
+        "--runtime-artifacts", replayRuntimeArtifacts.get().asFile,
+        "--report-dir", replayLicenseReportDir.get().asFile,
+        "--output", replayThirdPartyNotices.asFile,
+        "--distribution", "replay")
+}
+
+val verifyReplayThirdPartyNotices by tasks.registering {
+    group = "verification"
+    description = "Fails when swath-replay/THIRD_PARTY_NOTICES.md differs from the replay runtime graph."
+    dependsOn(":swath-replay:generateLicenseReport", ":swath-replay:writeReplayRuntimeArtifactCoordinates")
+    mustRunAfter(generateReplayThirdPartyNotices)
+    val generated = layout.buildDirectory.file("generated/legal/SWATH_REPLAY_THIRD_PARTY_NOTICES.md")
+    inputs.file(replayLicenseReportDir.map { it.file("licenses.json") })
+    inputs.dir(replayLicenseReportDir)
+    inputs.file(replayRuntimeArtifacts)
+    inputs.file(replayThirdPartyNotices)
+    inputs.file(layout.projectDirectory.file("scripts/legal/render-third-party-notices.py"))
+    outputs.file(generated)
+    doLast {
+        val output = generated.get().asFile
+        output.parentFile.mkdirs()
+        providers.exec {
+            commandLine("python3", "scripts/legal/render-third-party-notices.py", "--licenses-json",
+                replayLicenseReportDir.get().file("licenses.json").asFile,
+                "--runtime-artifacts", replayRuntimeArtifacts.get().asFile,
+                "--report-dir", replayLicenseReportDir.get().asFile,
+                "--output", output,
+                "--distribution", "replay")
+        }.result.get().assertNormalExitValue()
+        if (!output.readBytes().contentEquals(replayThirdPartyNotices.asFile.readBytes())) {
+            throw GradleException(
+                "swath-replay/THIRD_PARTY_NOTICES.md is stale; run ./gradlew generateReplayThirdPartyNotices",
+            )
+        }
+    }
+}

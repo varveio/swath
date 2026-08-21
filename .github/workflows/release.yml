@@ -148,8 +148,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: swath-container-payload
-          path: promote
+          path: promote.tar
           if-no-files-found: error
+          retention-days: 1
 
       - name: Upload test reports
         if: always()
@@ -278,7 +279,10 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: swath-container-payload
-          path: promote
+          path: promotion-download
+
+      - name: Restore container-promotion payload
+        run: ./scripts/ci/unpack-container-promotion.sh promotion-download/promote.tar promote
 
       - name: Verify promoted artifacts
         env:
@@ -388,8 +392,11 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
           SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
 
-      - name: Smoke — replay toolkit launcher against the pushed digest
-        run: docker run --rm "ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}" --help
+      - name: Smoke — replay serves the captured Parquet through DuckDB and Jetty
+        run: >-
+          ./scripts/ci/smoke-replay-container.sh
+          "ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}"
+          releasesmoke/data/data
         env:
           REPLAY_DIGEST: ${{ steps.replay-image.outputs.digest }}
 

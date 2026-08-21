@@ -42,7 +42,7 @@ class ReplayConformanceComparatorTest {
         assertThat(summary.exitCode()).isZero();
         assertThat(summary.compared()).isEqualTo(1);
         assertThat(summary.failures()).isEmpty();
-        assertThat(summary.report()).contains("replay_server_metrics").contains("parquet_queries=");
+        assertThat(summary.report()).contains("swath_replay_metrics").contains("parquet_queries=");
     }
 
     @Test

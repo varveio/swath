@@ -77,7 +77,7 @@ public final class ReplayServerApp implements Callable<Integer> {
             try (MetricsEndpoint metrics = options.metricsPort < 0 ? null
                     : MetricsEndpoint.start(options.host, options.metricsPort, server.metrics().registry(),
                             server.resolvedServingMode().toString(), startedNanos)) {
-                System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
+                System.err.printf("swath_replay endpoint=http://%s:%d bucket=%s fixture=%s "
                                 + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
                                 + "metrics_endpoint=%s max_concurrent_requests=%d%n",
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),

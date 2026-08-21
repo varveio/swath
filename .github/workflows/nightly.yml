@@ -67,7 +67,7 @@ jobs:
         run: ./gradlew test -PonlyPerf --no-daemon --stacktrace
 
       # TODO: add a gated real-AWS public-bucket differential
-      # (`aws s3api --no-sign-request` vs swath) once the replay-server migration lands — the
+      # (`aws s3api --no-sign-request` vs swath) once the public-bucket harness lands — the
       # independent-implementation wire-fidelity anchor that supersedes LocalStack.
 
       - name: Upload test reports

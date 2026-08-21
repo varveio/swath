@@ -355,7 +355,7 @@ public final class ReplayMetrics {
         if (s.httpRequests() == 0 && s.parquetQueries() == 0) {
             return "";
         }
-        return ("replay_server_metrics wall_ms=%d http_requests=%d http_request_ms_sum=%s http_request_ms_avg=%s "
+        return ("swath_replay_metrics wall_ms=%d http_requests=%d http_request_ms_sum=%s http_request_ms_avg=%s "
                 + "http_request_ms_max=%s fixture_lists=%d fixture_list_ms_sum=%s fixture_list_ms_avg=%s "
                 + "fixture_list_ms_max=%s parquet_queries=%d parquet_query_ms_sum=%s "
                 + "parquet_query_ms_avg=%s parquet_query_ms_max=%s parquet_rows=%d parquet_rows_per_query_avg=%s "

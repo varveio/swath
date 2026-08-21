@@ -26,9 +26,9 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
                  │  swath-core │  the internal core implementation (engine, runtime, output,
                  └──▲───────▲──┘  sort, checkpoint, filter, pipeline, observability, store seams)
              api │         │ impl
-        ┌─────────┴──┐   ┌──┴──────────────────┐
-        │  swath-s3  │   │ swath-replay │  separately distributed replay toolkit
-        └─────▲──────┘   └──────────▲──────────┘
+        ┌─────────┴──┐   ┌──┴─────────────┐
+        │  swath-s3  │   │  swath-replay  │  separately distributed replay toolkit
+        └─────▲──────┘   └────────▲───────┘
        impl │  │ impl               │ api
         ┌────┴──┴────┐        ┌─────┴─────┐
         │  swath-cli │        │ swath-sim │  store + kernel + synthetic driver + policy executor
