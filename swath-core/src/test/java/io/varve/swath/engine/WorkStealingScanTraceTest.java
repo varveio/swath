@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.checkpoint.Node;
+import io.varve.swath.checkpoint.NodeKind;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.checkpoint.RunKey;
 import io.varve.swath.checkpoint.RunMeta;
@@ -76,7 +77,11 @@ final class WorkStealingScanTraceTest {
 
         try (SqliteCheckpointStore store = SqliteCheckpointStore.open(dir.resolve("ckpt.sqlite"))) {
             RunMeta run = store.openRun(key("trace-hash"), false, false);
-            store.insertNode(NodeSpec.rootRange(run.id()));
+            // Keep the seed bounded so every non-final page necessarily evaluates the owner-split
+            // gate. With an open-frontier seed, a fast thief can perform every split before an owner
+            // sees a bounded non-final page, making owner_split_decision depend on thread scheduling.
+            store.insertNode(new NodeSpec(
+                    run.id(), null, NodeKind.RANGE, null, b("data/02000"), null, null));
             List<Node> seeds = store.loadResumable(run.id(), false);
 
             TraceSink trace = TraceSink.jsonl(traceFile);
