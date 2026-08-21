@@ -80,6 +80,6 @@ class SortedManifestMetadataHandoffTest {
                 .hasMessage("empty parts must have no bounds");
         assertThatThrownBy(() -> new FinalPartMetadata(1, 1, "md5", null, null, 0, 0, 0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("empty parts must have no bounds");
+                .hasMessage("non-empty parts must have bounds");
     }
 }

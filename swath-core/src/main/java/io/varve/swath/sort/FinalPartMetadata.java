@@ -32,8 +32,11 @@ public record FinalPartMetadata(long rows, long bytes, String md5, String minKey
         if ((minKey == null) != (maxKey == null)) {
             throw new IllegalArgumentException("minKey/maxKey must both be null or both be present");
         }
-        if ((rows == 0) != (minKey == null)) {
+        if (rows == 0 && minKey != null) {
             throw new IllegalArgumentException("empty parts must have no bounds");
+        }
+        if (rows > 0 && minKey == null) {
+            throw new IllegalArgumentException("non-empty parts must have bounds");
         }
     }
 }
