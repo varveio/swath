@@ -11,11 +11,11 @@ zstdjni = "1.5.6-9"
 # parquet-hadoop/hadoop-mapreduce-client-core (currently the same 2.0.2) — see swath-core's
 # PageCodec#LZ4, which references io.airlift.compress.lz4 classes directly.
 aircompressor = "2.0.2"
-junit = "5.11.4"
-assertj = "3.27.3"
-jqwik = "1.9.2"
+junit = "6.1.2"
+assertj = "3.27.7"
+jqwik = "1.10.1"
 awaitility = "4.2.2"
-testcontainers = "1.20.6"
+testcontainers = "2.0.5"
 sqlitejdbc = "3.47.1.0"
 jetty = "12.1.10"
 duckdbjdbc = "1.5.4.0"
@@ -66,8 +66,8 @@ bucket4j-core = { module = "com.bucket4j:bucket4j-core", version.ref = "bucket4j
 commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonscodec" }
 
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
-testcontainers-junit = { module = "org.testcontainers:junit-jupiter" }
-testcontainers-localstack = { module = "org.testcontainers:localstack" }
+testcontainers-junit = { module = "org.testcontainers:testcontainers-junit-jupiter" }
+testcontainers-localstack = { module = "org.testcontainers:testcontainers-localstack" }
 
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
