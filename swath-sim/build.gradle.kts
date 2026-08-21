@@ -24,7 +24,7 @@ dependencies {
     // ArenaListingStore implements ListingStore and returns ListedObject, SimStoreFactory.Result
     // carries a ListingStore and a ReplayMetrics -- so per the api-vs-implementation rule in
     // docs/internals/build-and-modules.md a consumer needs them on its compile classpath.
-    api(project(":swath-replay-server"))
+    api(project(":swath-replay"))
     // ReplayMetrics/SimStoreMetrics are Micrometer-backed and this module registers its own
     // meters on the shared registry, so Micrometer is a direct compile-time need, not a
     // transitive convenience.
@@ -33,13 +33,13 @@ dependencies {
     // The streaming tier decodes a sorted fixture's row groups through swath-core's
     // io.varve.swath.sort.SortedRowGroupReader. `implementation`, not `api`: that reader traffics only
     // in byte[]/long/String, so no io.varve.swath.sim type exposes it and, exactly as for
-    // swath-replay-server, swath-core's own parquet-hadoop/hadoop deps stay off this module's compile
+    // swath-replay, swath-core's own parquet-hadoop/hadoop deps stay off this module's compile
     // classpath -- no io.varve.swath.sim source may import an org.apache.parquet type.
     implementation(project(":swath-core"))
 
     // Fixture authoring in tests: swath-core's Parquet part writer + canonical schema, driven
     // through the replay module's shared testkit builders (ObjectEntries/ParquetFixtures).
-    testImplementation(testFixtures(project(":swath-replay-server")))
+    testImplementation(testFixtures(project(":swath-replay")))
     // SortConfigs (manySmallRowGroups(), etc.), the production CaptureSorter's test-side config
     // presets — the windowed tier's differential fixtures need a real sorted, multi-row-group
     // output, built the same way SortedParquetStoreTest builds its own.

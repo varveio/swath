@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
  * reads {@code IsTruncated}. Both were written against S3's protocol, so a simulator that answers
  * those two questions even slightly differently mismodels the engine rather than the workload — and
  * the difference is invisible in a run's output, which is exactly why it needs pinning. The pager is
- * the module's fidelity authority (every replay-server store is differentialled through it), so
+ * the module's fidelity authority (every replay store is differentialled through it), so
  * "agrees with the pager over the same rows" is the sharpest statement of correctness available
  * without a live bucket.
  *

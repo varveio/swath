@@ -26,9 +26,9 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
                  │  swath-core │  the internal core implementation (engine, runtime, output,
                  └──▲───────▲──┘  sort, checkpoint, filter, pipeline, observability, store seams)
              api │         │ impl
-        ┌─────────┴──┐   ┌──┴──────────────────┐
-        │  swath-s3  │   │ swath-replay-server │  dev/test replay server (non-published)
-        └─────▲──────┘   └──────────▲──────────┘
+        ┌─────────┴──┐   ┌──┴─────────────┐
+        │  swath-s3  │   │  swath-replay  │  separately distributed replay toolkit
+        └─────▲──────┘   └────────▲───────┘
        impl │  │ impl               │ api
         ┌────┴──┴────┐        ┌─────┴─────┐
         │  swath-cli │        │ swath-sim │  store + kernel + synthetic driver + policy executor
@@ -36,7 +36,7 @@ convention at this module count (cf. Kafka, Netty, JUnit 5, Spring Framework).
 ```
 
 For readability the diagram routes `swath-sim` through its `api` dependency on
-`swath-replay-server`; the module also has the direct `implementation` dependency on `swath-core`
+`swath-replay`; the module also has the direct `implementation` dependency on `swath-core`
 shown in the table below.
 
 All edges point one way (no cross-module cycles). The `engine`↔`runtime` package cycle is
@@ -50,19 +50,22 @@ All edges point one way (no cross-module cycles). The `engine`↔`runtime` packa
 | **`swath-core`** | `java-library` | The internal core implementation: `engine`, `runtime`, `output` (incl. `output.parquet`), `sort`, `checkpoint`, `filter`, `pipeline`, `observability`, `error`, `concurrent`, and the **store abstraction** (`store/*` except `store/s3`). **No AWS SDK, no picocli.** testFixtures: `testkit` (MockPageFetcher, Keyspaces, EngineHarness…). Owns the JMH bench source set. | `api` → swath-model | internal; not published or supported |
 | **`swath-s3`** | `java-library` | The S3 backend: `io.varve.swath.store.s3` (`S3PageFetcher`, `S3ClientFactory`, `S3Config`) + the AWS SDK. testFixtures: `LocalStackSupport`. Future `swath-gcs`/`swath-azure` sit beside it. | `api` → swath-core | internal; not published or supported |
 | **`swath-cli`** | `application` | The `swath` binary: the `io.varve.swath.cli` package (`App`, `ListCommand`, `ResumeCommand`, …). `mainClass = io.varve.swath.cli.App`, `applicationName = swath`. | `impl` → swath-core, swath-s3 | binary/dist |
-| **`swath-replay-server`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | ❌ (dev/test tool) |
-| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — fixture-backed implementations of the replay module's `ListingStore` seam), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, scheduler, seeded draw streams), the **models** (`sim.model` — latency, client cost, engine budgets), a synthetic load **driver** (`sim.driver`), and the real-policy **executor** (`sim.executor` — seed, owner-split, thief, pacing, and the simulator's AIMD port). The driver exercises store/kernel arithmetic without split/steal policy; the executor runs those policies against the modelled store in virtual time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay-server; `impl` → swath-core | ❌ (dev/analysis tool) |
+| **`swath-replay`** | `application` | The listing replay server + `sort-fixture` + conformance harness (`io.varve.swath.replay`). Serves swath Parquet fixtures as a fake S3 `ListObjectsV2` endpoint. testFixtures: `testkit` (`ObjectEntries`, `ParquetFixtures`, `FakeListingStore`). | `impl` → swath-core | separate dev-tool distribution and container image |
+| **`swath-sim`** | `java-library` | The policy simulator (`io.varve.swath.sim`): the ground-truth **store** (`sim.store` — fixture-backed implementations of the replay module's `ListingStore` seam), the discrete-event **kernel** (`sim.kernel` — virtual clock, event queue, scheduler, seeded draw streams), the **models** (`sim.model` — latency, client cost, engine budgets), a synthetic load **driver** (`sim.driver`), and the real-policy **executor** (`sim.executor` — seed, owner-split, thief, pacing, and the simulator's AIMD port). The driver exercises store/kernel arithmetic without split/steal policy; the executor runs those policies against the modelled store in virtual time. See [`swath-sim/README.md`](../../swath-sim/README.md). | `api` → swath-replay; `impl` → swath-core | ❌ (dev/analysis tool) |
 
-Only `swath-cli` ships. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
+Only `swath-cli` ships in the main `swath` artifacts. The uber-jar is `:swath-cli:shadowJar` over swath-cli's own
 `runtimeClasspath`, and the Docker image copies exactly that jar, so a module reaches a shipped
-artifact **iff `swath-cli` depends on it**. `swath-replay-server` and `swath-sim` are not on that
-path (and `swath-sim` is a `java-library`, so it has no dist of its own either).
+artifact **iff `swath-cli` depends on it**. `swath-replay` is published separately as its
+own install distribution and container image; `swath-sim` is not on either runtime path (and
+is a `java-library`, so it has no dist of its own).
 
 v0.1 is CLI-only. No Java module is published to Maven Central and no Java
 package, class, interface, SPI, source shape, or binary ABI is a supported API.
 The `java-library` plugin and Gradle `api` edges below describe only this
 repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
-`swath-replay-server` and `swath-sim` are non-release developer tools.
+`swath-replay` is a separately packaged release artifact on the repository's shared version
+and release cadence, with a deliberately unstable developer-tool surface; `swath-sim` remains
+a non-release developer tool.
 
 ## Dependency rules
 
@@ -83,19 +86,19 @@ repository's compile-classpath structure. `swath-cli` ships as a binary/dist;
   - `swath-s3 → swath-core` is **`api`** (`S3PageFetcher`'s Java-visible surface exposes core types), and
     the **AWS SDK itself is `api` on `swath-s3`** because `swath-cli`'s `ListCommand` wires
     `S3Client`/credentials/`Region` directly while depending on `swath-s3` only via `implementation`.
-  - `swath-cli → {swath-core, swath-s3}` and `swath-replay-server → swath-core` are
+  - `swath-cli → {swath-core, swath-s3}` and `swath-replay → swath-core` are
     **`implementation`** (apps expose nothing).
-  - **`swath-sim → swath-replay-server` is `api`** — unlike the two apps above, `swath-sim` is a
+  - **`swath-sim → swath-replay` is `api`** — unlike the two apps above, `swath-sim` is a
     library whose Java-visible surface exposes the upstream module's types (`ArenaListingStore`
     implements `ListingStore` and returns `ListedObject`; `SimStoreFactory.Result` carries a
     `ListingStore` and a `ReplayMetrics`), so a consumer needs them on its compile classpath.
     This edge is deliberate and stays as-is: the `ListingStore`/`ListObjectsV2Pager` seam the
-    simulator reuses lives in `swath-replay-server` today, and extracting it into a shared module
+    simulator reuses lives in `swath-replay` today, and extracting it into a shared module
     is a separate refactor (see the roadmap below), not a precondition for depending on it.
-- **§0.7 compile-classpath purity** — `swath-replay-server`'s *main* code must not import any
+- **§0.7 compile-classpath purity** — `swath-replay`'s *main* code must not import any
   `org.apache.parquet`/`org.apache.hadoop` type; parquet reaches it only *transitively at runtime*
   via `implementation(project(":swath-core"))`. Enforced by the module's
-  `verifyNoParquetOrHadoopOnCompileClasspath` task, wired into `:swath-replay-server:check`.
+  `verifyNoParquetOrHadoopOnCompileClasspath` task, wired into `:swath-replay:check`.
   **`swath-sim` holds the same line by the same mechanism** — its streaming tier drives
   `io.varve.swath.sort.SortedRowGroupReader`, which traffics only in `byte[]`/`long`/`String`, over
   an `implementation(project(":swath-core"))` edge — but relies on that edge's scope alone; it has
@@ -167,11 +170,11 @@ stdlib Python) scans every module's main source that formerly lived under root
   considered for polyglot future-proofing and rejected: a cross-language reimplementation would be a
   separate repo (gRPC/OpenTelemetry precedent), and `java/` would move the Gradle root off repo-root
   for a hypothetical. It's a cheap `git mv` later if ever genuinely needed.
-- **This module split** separates the *apps and tools* (cli, replay-server, sim) and the *S3 backend* from the
+- **This module split** separates the *apps and tools* (cli, replay, sim) and the *S3 backend* from the
   internal reusable code (core + model), which is what the build/Docker pipeline needs and what enables the
   embeddable-library + `swath-server`/`swath-gcs` futures. Module names are keyed by function:
   `-core` (library), `-model` (foundation), `-s3`/`-gcs` (backend drivers), `-cli` (one-shot tool),
-  `-server`/`-replay-server` (long-running services).
+  `-server` (long-running services) and `-replay` (the replay toolkit).
 
 ## Roadmap: further decomposition (deferred)
 
@@ -180,6 +183,6 @@ and `swath-sort` (the external merge sort, reusable standalone) out of `swath-co
 effort**, not yet done. It is blocked on a real refactor: `output.parquet`'s streaming
 `ParquetOutputStage`/`ParquetWriterPool` (which import `runtime`/`pipeline`) must be separated from
 the pure writer first, or `runtime → sort → output.parquet → runtime` becomes a module cycle. When
-done, `swath-replay-server` repoints to `swath-sort` (it compiles against only the sort types today)
+done, `swath-replay` repoints to `swath-sort` (it compiles against only the sort types today)
 and stops dragging the engine at runtime. New store backends (`swath-gcs`, `swath-azure`) and a REST
 `swath-server` slot in as `→ swath-core` (+ backend) without disturbing the graph.

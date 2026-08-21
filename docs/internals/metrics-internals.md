@@ -3,7 +3,7 @@
 > **You don't need this to use swath.** This is the deep, contributor-tier companion to
 > [`docs/metrics-and-observability.md`](../metrics-and-observability.md) — the JSON run-summary
 > **forensics fields**, the **instrumentation-discipline** essay and **steal-reason counter
-> registry**, the **run-trace format** spec, and the **replay-server meters**. The user-facing
+> registry**, the **run-trace format** spec, and the **replay meters**. The user-facing
 > meter glossary, `list_run_summary` line, `-v` progress line, exit codes, and the core JSON
 > summary shape all live in that file.
 
@@ -1079,15 +1079,15 @@ https://ui.perfetto.dev) is the still-planned V2; no such script ships today.
 
 ---
 
-## 8. Replay-server meters (`swath.replay.*`, module-local)
+## 8. Replay meters (`swath.replay.*`, module-local)
 
-The `swath-replay-server` module is a separate Gradle module from `swath-core`, where
+The `swath-replay` module is a separate Gradle module from `swath-core`, where
 `WorkStealingScan`/`RunMetrics` run — its meters share the same Micrometer idiom (§1) but are
 **outside the §5a drift guard**: `check-instrumentation-drift.py` only parses
 `swath-model`/`swath-core`/`swath-s3`/`swath-cli`'s `src/main/java` (the modules that replaced the
 old root `src/`), so this section (not a `SORT.*`-table row) is where they're documented, updated
 in the same commit as whichever unit adds a meter. Full usage/tuning walkthroughs live in
-`docs/swath-replay-server.md`; this is the meter reference.
+`docs/swath-replay.md`; this is the meter reference.
 
 `ReplayMetrics` (`io.varve.swath.replay.server`) — HTTP/fixture/DuckDB-query tiers:
 

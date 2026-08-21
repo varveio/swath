@@ -8,7 +8,7 @@ a documented framing so future work recognizes what it's actually building towar
 
 ## The reframe
 
-`s3-listing-replay-server` was built to replay captured listings byte-identically for
+`swath-replay` was built to replay captured listings byte-identically for
 swath testing. But its serving core — **globally sorted, stamped Parquet + a derived
 sparse routing index + bounded range reads + windowed prefetch** — is not replay-specific.
 It is a general answer to: *"serve any S3-listing-shaped query over a large key-sorted

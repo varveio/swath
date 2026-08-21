@@ -60,11 +60,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d  # v4
 
-      # The shadowJar is built here (not just in the Docker image) so the EXACT uber-jar
-      # that passed this job's tests is what docker-publish ships — "test what you built".
-      # See the jar upload below + docker-publish's build-context promotion.
-      - name: Build + fast tests (no integration) + uber-jar
-        run: ./gradlew build -PnoIntegration :swath-cli:shadowJar --no-daemon --stacktrace
+      # The CLI jar and replay installDist are built here so docker-publish ships the EXACT
+      # artifacts that passed this job's tests — "test what you built".
+      - name: Build + fast tests (no integration) + container artifacts
+        run: ./gradlew build -PnoIntegration :swath-cli:shadowJar :swath-replay:installDist --no-daemon --stacktrace
 
       # Dependency-license gate: fails if any distributed (runtimeClasspath) dependency
       # carries a license not on config/license/allowed-licenses.json — e.g. a new
@@ -87,7 +86,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: swath-container-payload
-          path: promote
+          path: promote.tar
           if-no-files-found: error
           retention-days: 1
 
@@ -220,6 +219,16 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: Dockerfile
+            image: swath:ci
+            cache_scope: swath
+          - dockerfile: Dockerfile.replay
+            image: swath-replay:ci
+            cache_scope: swath-replay
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
 
@@ -230,23 +239,25 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: false
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
           # ignore-error: a fork PR can't write the base repo's Actions cache
           # (read-only token) — degrade to a warning instead of failing the build.
-          cache-to: type=gha,mode=max,ignore-error=true
+          cache-to: type=gha,scope=${{ matrix.cache_scope }},mode=max,ignore-error=true
 
       - name: Build image (builder-native arch) + load for smoke
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           load: true
-          tags: swath:ci
-          cache-from: type=gha
+          tags: ${{ matrix.image }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
 
-      - name: Smoke — image runs and entrypoint passes args to swath
-        run: docker run --rm swath:ci --help
+      - name: Smoke — image runs and entrypoint passes arguments
+        run: docker run --rm "${{ matrix.image }}" --help
 
   # Dev-image GHCR publish + deep runtime smoke. Runs on every `main` merge and on
   # manual dispatch from any branch. Tagged releases publish through release.yml
@@ -300,10 +311,10 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: swath-container-payload
-          path: promote
+          path: promotion-download
 
-      - name: Verify container-promotion payload
-        run: ./scripts/ci/verify-container-promotion.sh promote
+      - name: Restore and verify container-promotion payload
+        run: ./scripts/ci/unpack-container-promotion.sh promotion-download/promote.tar promote
 
       # Smoke BEFORE push: build the builder-native-arch image, run the deep runtime smoke,
       # and only push if it passes — so a shading/exclude/runtime regression can
@@ -316,8 +327,23 @@ jobs:
             build=promote
           load: true
           tags: swath:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=swath
+          cache-to: type=gha,scope=swath,mode=max
+
+      - name: Build replay image (builder-native arch) + load for smoke
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: Dockerfile.replay
+          build-contexts: |
+            build=promote
+          load: true
+          tags: swath-replay:ci
+          cache-from: type=gha,scope=swath-replay
+          cache-to: type=gha,scope=swath-replay,mode=max
+
+      - name: Smoke — replay toolkit launcher and runtime classpath
+        run: docker run --rm swath-replay:ci --help
 
       - name: Install DuckDB CLI
         run: |
@@ -334,6 +360,9 @@ jobs:
         run: ./scripts/ci/smoke-container.sh swath:ci dockersmoke
         env:
           SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
+
+      - name: Smoke — replay serves the captured Parquet through DuckDB and Jetty
+        run: ./scripts/ci/smoke-replay-container.sh swath-replay:ci dockersmoke/data/data
 
       # Only now — after the smoke passed — log in and push the multi-arch
       # manifest to this repository's GHCR namespace.
@@ -374,6 +403,17 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
 
+      - name: Replay image metadata (tags + labels + annotations)
+        id: replay-meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index,manifest
+        with:
+          images: ghcr.io/${{ github.repository }}-replay
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
+
       # Provenance note: the deep smoke above ran the `--load`ed builder-native amd64 image;
       # this step rebuilds the multi-arch manifest from the SAME build cache in the
       # SAME job seconds later, so the pushed amd64 is effectively the smoked amd64.
@@ -408,16 +448,33 @@ jobs:
           # supply-chain attestation, NOT a broken arch — it references the real
           # amd64/arm64 images and is ignored by `docker pull`/`run`. Set
           # `provenance: false` here to drop it.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=swath
+          cache-to: type=gha,scope=swath,mode=max
+
+      - name: Build + push multi-arch replay image to GHCR
+        id: replay-build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: Dockerfile.replay
+          build-contexts: |
+            build=promote
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.replay-meta.outputs.tags }}
+          labels: ${{ steps.replay-meta.outputs.labels }}
+          annotations: ${{ steps.replay-meta.outputs.annotations }}
+          cache-from: type=gha,scope=swath-replay
+          cache-to: type=gha,scope=swath-replay,mode=max
 
       # Surface the pushed manifest's digest so consumers can pin
       # `ghcr.io/…@sha256:…` without relying on a mutable tag.
       - name: Report pushed image digest
         run: |
           {
-            echo "### swath image pushed to GHCR"
+            echo "### swath images pushed to GHCR"
             echo '```'
             echo "ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+            echo "ghcr.io/${{ github.repository }}-replay@${{ steps.replay-build.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

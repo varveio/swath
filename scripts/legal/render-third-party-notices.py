@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the CLI runtime legal bundle from jk1's resolved-runtime report."""
+"""Render a shipped runtime's legal bundle from jk1's resolved-runtime report."""
 
 import argparse
 import json
@@ -91,6 +91,7 @@ def main():
     parser.add_argument("--runtime-artifacts", type=Path, required=True)
     parser.add_argument("--report-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--distribution", choices=("cli", "replay"), default="cli")
     args = parser.parse_args()
 
     dependencies = json.loads(args.licenses_json.read_text(encoding="utf-8"))["dependencies"]
@@ -116,18 +117,38 @@ def main():
         if f"{dependency['moduleName']}:{dependency['moduleVersion']}" in runtime_coordinates
     ]
     dependencies.sort(key=lambda dependency: (dependency["moduleName"], dependency["moduleVersion"]))
+    if args.distribution == "cli":
+        ownership = [
+            "This file is generated from the resolved `:swath-cli` `runtimeClasspath`, the exact",
+            "dependency closure shaded into `swath.jar`. Do not edit it by hand.",
+        ]
+        command = "./gradlew generateThirdPartyNotices verifyThirdPartyNotices"
+        packaging = [
+            "The shaded jar separately retains merged `META-INF/LICENSE*` and `META-INF/NOTICE*`",
+            "resources.",
+        ]
+    else:
+        ownership = [
+            "This file is generated from the resolved `:swath-replay` main and conformance runtime",
+            "classpaths, the exact dependency closure packaged in the replay application distribution.",
+            "Do not edit it by hand.",
+        ]
+        command = "./gradlew generateReplayThirdPartyNotices verifyReplayThirdPartyNotices"
+        packaging = [
+            "The replay distribution separately retains each dependency jar's embedded legal",
+            "resources.",
+        ]
+
     lines = [
         "# Third-Party Notices", "",
-        "This file is generated from the resolved `:swath-cli` `runtimeClasspath`, the exact",
-        "dependency closure shaded into `swath.jar`. Do not edit it by hand.", "",
+        *ownership, "",
         "Regenerate and verify it with:", "",
-        "    ./gradlew generateThirdPartyNotices verifyThirdPartyNotices", "",
+        f"    {command}", "",
         "The inventory is derived from the dependency-license-report JSON. Embedded upstream",
         "notices are copied from matching `META-INF/NOTICE*` resources; the pinned Zstandard",
         "wrapper and native-library terms are rendered explicitly because zstd-jni's binary jar",
         "does not carry those source-tree license files.",
-        "The shaded jar separately retains merged `META-INF/LICENSE*` and `META-INF/NOTICE*`",
-        "resources.", "", "## Runtime dependency inventory", "",
+        *packaging, "", "## Runtime dependency inventory", "",
     ]
     for dependency in dependencies:
         licenses = "; ".join(

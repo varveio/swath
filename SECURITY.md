@@ -44,10 +44,10 @@ trust helps scope what counts as a vulnerability.
   swath inspects it. Reports that defeat the bounds above (a response shape that
   makes swath hang, loop unbounded, or accept a page past the entry bound) are in
   scope.
-- **The replay server has no authentication.** `swath-replay-server` is a
+- **The replay server has no authentication.** `swath-replay` is a
   dev/test tool. Bind it to localhost only; never expose it on an untrusted
-  network. It is not a published artifact and is out of scope as a production
-  service, but reports of it reading outside its intended fixture directory are in
+  network. Its separately published image is not supported as a production service,
+  but reports of it reading outside its intended fixture directory are in
   scope.
 - **Credentials are never taken inline and never persisted.** Credentials resolve
   through the standard AWS SDK provider chain. S3 and OTLP endpoint URIs reject

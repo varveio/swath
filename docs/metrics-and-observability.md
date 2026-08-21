@@ -11,7 +11,7 @@ swath exposes the same run through four progressively deeper surfaces:
 | Watch a terminal run | the progress display, or `-v` structured progress logs |
 | Compare completed runs | `_swath_summary.json` or `--report PATH` |
 | Feed dashboards and alerts | OTLP metrics via `--metrics-endpoint` |
-| Reproduce an engine decision | `--trace PATH`, then `swath-replay-server` |
+| Reproduce an engine decision | `--trace PATH`, then `swath-replay` |
 
 Logs always go to stderr; listing data can therefore stream safely on stdout. Use `-v`,
 `-vv`, or `-vvv` for INFO, DEBUG, or TRACE logs. `-q` selects ERROR and `-qq` disables
@@ -207,9 +207,9 @@ Use a trace when aggregate counters show *that* a path engaged but you need to k
 or *why*. The format and event guarantees are specified in
 [metrics internals](internals/metrics-internals.md#7-run-trace-format).
 
-## 8. Replay-server meters
+## 8. Replay meters
 
-`swath-replay-server` has its own request, fixture, and fault-injection meters. They are
+`swath-replay` has its own request, fixture, and fault-injection meters. They are
 documented beside its configuration in the
-[replay-server guide](swath-replay-server.md#metrics-and-tuning), because their meaning belongs to
+[replay toolkit guide](swath-replay.md#metrics-and-tuning), because their meaning belongs to
 the test server rather than a production listing run.

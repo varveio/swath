@@ -39,7 +39,7 @@ import org.apache.parquet.schema.MessageType;
  * one file, at index N, carrying {@link #FILE_FINAL_KEY} — rather than trusting a sidecar; a
  * truncated prefix left by a mid-roll crash fails that check and falls back to role-1 serving. Full
  * schema and the reader-side completeness check: {@code docs/internals/contracts.md} §6 and
- * {@code docs/swath-replay-server.md} ("Footer sortedness stamp").
+ * {@code docs/swath-replay.md} ("Footer sortedness stamp").
  *
  * <p>Only <b>final</b> output files are stamped by this writer; staging segments
  * ({@link SegmentParquetSink}) are written by a separate, unstamped path — a segment is

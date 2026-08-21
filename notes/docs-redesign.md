@@ -77,7 +77,7 @@ not carry a second detailed table or explanation.
 | `docs/packaging-and-docker.md` | Keep as release-maintainer and container reference; remove install tutorial duplication. |
 | `docs/metrics-and-observability.md` | Keep; rewrite around operator questions and concise field semantics. |
 | `docs/replay-troubleshooting.md` | Keep but shorten to the reproduction workflow; link to replay reference for flags. |
-| `docs/swath-replay-server.md` | Keep as the replay-server reference; remove repeated rationale and tuning narrative. |
+| `docs/swath-replay.md` | Keep as the replay toolkit reference; remove repeated rationale and tuning narrative. |
 | `docs/internals/overview.md` | Rewrite as the accessible technical bridge and routing page. |
 | `docs/internals/architecture.md` | Keep and consolidate to the component map and run flow. |
 | `docs/internals/algorithms.md` | Keep and consolidate current normative mechanisms; remove rollout/review chronology. |

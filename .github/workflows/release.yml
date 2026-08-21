@@ -92,6 +92,7 @@ jobs:
         run: |
           ./gradlew verifyReleaseVersion build -PnoIntegration \
             :swath-cli:shadowJar :swath-cli:distZip :swath-cli:distTar \
+            :swath-replay:installDist \
             -PreleaseTag="${GITHUB_REF_NAME}" --no-daemon --stacktrace
 
       - name: License compliance gate (allow-list)
@@ -147,8 +148,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: swath-container-payload
-          path: promote
+          path: promote.tar
           if-no-files-found: error
+          retention-days: 1
 
       - name: Upload test reports
         if: always()
@@ -277,7 +279,10 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: swath-container-payload
-          path: promote
+          path: promotion-download
+
+      - name: Restore container-promotion payload
+        run: ./scripts/ci/unpack-container-promotion.sh promotion-download/promote.tar promote
 
       - name: Verify promoted artifacts
         env:
@@ -310,6 +315,7 @@ jobs:
           if [[ "$VERSION" == *-rc.* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
             echo "tags=ghcr.io/${GITHUB_REPOSITORY}:${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "replay_tags=ghcr.io/${GITHUB_REPOSITORY}-replay:${VERSION}" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
             # Rolling X.Y alongside the immutable X.Y.Z.
@@ -321,6 +327,11 @@ jobs:
               tags="$tags ghcr.io/${GITHUB_REPOSITORY}:${VERSION%%.*}"
             fi
             echo "tags=$tags" >> "$GITHUB_OUTPUT"
+            replay_tags="ghcr.io/${GITHUB_REPOSITORY}-replay:${VERSION} ghcr.io/${GITHUB_REPOSITORY}-replay:${VERSION%.*} ghcr.io/${GITHUB_REPOSITORY}-replay:latest"
+            if [[ "${VERSION%%.*}" != 0 ]]; then
+              replay_tags="$replay_tags ghcr.io/${GITHUB_REPOSITORY}-replay:${VERSION%%.*}"
+            fi
+            echo "replay_tags=$replay_tags" >> "$GITHUB_OUTPUT"
           fi
 
       # Push by DIGEST, with no tags attached yet. The tags are applied further down,
@@ -340,6 +351,23 @@ jobs:
             org.opencontainers.image.version=${{ needs.fast-tests.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+
+      - id: replay-image
+        name: Build and push the replay image by digest (untagged)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: Dockerfile.replay
+          build-contexts: build=promote
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/${{ github.repository }}-replay,push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.version=${{ needs.fast-tests.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=swath listing replay toolkit
           sbom: true
           provenance: mode=max
 
@@ -364,18 +392,32 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
           SWATH_SMOKE_BUCKET: ${{ vars.SWATH_SMOKE_BUCKET }}
 
+      - name: Smoke — replay serves the captured Parquet through DuckDB and Jetty
+        run: >-
+          ./scripts/ci/smoke-replay-container.sh
+          "ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}"
+          releasesmoke/data/data
+        env:
+          REPLAY_DIGEST: ${{ steps.replay-image.outputs.digest }}
+
       # Only now do the tags exist. imagetools create copies no bytes: it points new
       # tags at the digest that was just smoked.
       - name: Apply release tags to the smoked digest
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
+          REPLAY_DIGEST: ${{ steps.replay-image.outputs.digest }}
           TAGS: ${{ steps.kind.outputs.tags }}
+          REPLAY_TAGS: ${{ steps.kind.outputs.replay_tags }}
         run: |
           set -euo pipefail
           ARGS=()
           for tag in $TAGS; do ARGS+=(--tag "$tag"); done
           docker buildx imagetools create "${ARGS[@]}" "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
           docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}:${{ needs.fast-tests.outputs.version }}"
+          REPLAY_ARGS=()
+          for tag in $REPLAY_TAGS; do REPLAY_ARGS+=(--tag "$tag"); done
+          docker buildx imagetools create "${REPLAY_ARGS[@]}" "ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}"
+          docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}-replay:${{ needs.fast-tests.outputs.version }}"
 
       - name: Install cosign
         # sigstore/cosign-installer@v3
@@ -399,6 +441,7 @@ jobs:
             cosign sign-blob --yes --bundle "${asset}.sigstore.json" "$asset"
           done
           cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
+          cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY}-replay@${{ steps.replay-image.outputs.digest }}"
           ./scripts/ci/release-assets.sh verify-signed "$VERSION" release-assets
 
       # Attestations answer a different question from the signatures above: not "are
@@ -421,6 +464,14 @@ jobs:
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      # actions/attest-build-provenance@v4
+      - name: Attest build provenance for the replay image
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-name: ghcr.io/${{ github.repository }}-replay
+          subject-digest: ${{ steps.replay-image.outputs.digest }}
           push-to-registry: true
 
       # actions/attest-sbom@v4
@@ -459,6 +510,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ steps.image.outputs.digest }}
+          REPLAY_DIGEST: ${{ steps.replay-image.outputs.digest }}
           IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
           VERSION: ${{ needs.fast-tests.outputs.version }}
         run: |
@@ -489,13 +541,29 @@ jobs:
             --certificate-identity "$IDENTITY" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" > /dev/null
+          cosign verify \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}" > /dev/null
           echo "::endgroup::"
 
           echo "::group::gh attestation verify"
           gh attestation verify "oci://ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}" \
             --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "oci://ghcr.io/${GITHUB_REPOSITORY}-replay@${REPLAY_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY"
           gh attestation verify release-verify/SHA256SUMS --repo "$GITHUB_REPOSITORY"
           echo "::endgroup::"
+
+      - name: Report published image digests
+        run: |
+          {
+            echo "### Release images"
+            echo '```'
+            echo "ghcr.io/${GITHUB_REPOSITORY}@${{ steps.image.outputs.digest }}"
+            echo "ghcr.io/${GITHUB_REPOSITORY}-replay@${{ steps.replay-image.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the release
         env:

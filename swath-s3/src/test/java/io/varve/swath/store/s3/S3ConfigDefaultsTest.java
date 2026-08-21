@@ -47,7 +47,7 @@ class S3ConfigDefaultsTest {
 
     /**
      * The 9-arg constructor is the compatibility overload every pre-existing call site (tests,
-     * {@code LocalStackSupport}, the replay-server ITs) still uses unmodified — it must default
+     * {@code LocalStackSupport}, the replay ITs) still uses unmodified — it must default
      * {@code bearerTokenSupplier} to {@code null} (normal SigV4/{@code credentials} signing), not
      * silently require every caller to be updated for an unrelated GCS-only feature.
      */

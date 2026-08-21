@@ -4,4 +4,4 @@ pluginManagement {
 
 rootProject.name = "swath"
 
-include(":swath-model", ":swath-core", ":swath-s3", ":swath-cli", ":swath-replay-server", ":swath-sim")
+include(":swath-model", ":swath-core", ":swath-s3", ":swath-cli", ":swath-replay", ":swath-sim")

@@ -9,7 +9,7 @@ request-cost profile so an engine change can be evaluated without paying for rep
 bucket scans.
 
 Use it after the JSON report and aggregate metrics have identified a repeatable
-key-distribution problem. The companion [replay-server reference](swath-replay-server.md)
+key-distribution problem. The companion [replay toolkit reference](swath-replay.md)
 documents the development tool itself.
 
 ## 1. Capture the evidence
@@ -29,7 +29,7 @@ healthy head changes that percentage while preserving a serial tail.
 ## 2. Prepare the smallest faithful fixture
 
 Sorted swath output is ready to serve. Convert a legacy capture with
-[`sort-fixture`](swath-replay-server.md#sort-a-legacy-capture-sort-fixture).
+[`sort-fixture`](swath-replay.md#sort-a-legacy-capture-sort-fixture).
 
 For a long run, use `slow_ranges[].lo`/`.hi` to retain only the affected prefixes, then
 sort the subset again. A simple ASCII-prefix cut can use DuckDB:
@@ -42,7 +42,7 @@ duckdb -c "copy (
   order by key
 ) to '<cut-src>/part-00000.parquet' (format parquet, compression zstd);"
 
-swath-replay-server sort-fixture \
+swath-replay sort-fixture \
   --capture <cut-src> --output <cut-fixture>
 ```
 
@@ -63,7 +63,7 @@ structure slope ≈ (structure mean - worker mean) / mean prefixes per probe
 Serve the fixture with those values:
 
 ```bash
-swath-replay-server serve \
+swath-replay serve \
   --fixture <cut-fixture> --bucket <bucket> \
   --host 127.0.0.1 --port 19090 --serving-mode sorted \
   --inject-latency 'worker_page=223ms,pivot_probe=121ms,structure_probe=223ms+55ms/cp' \

@@ -1,7 +1,7 @@
 # swath-sim
 
 `swath-sim` runs swath's **real listing policies against a modelled store in virtual time**;
-its sibling [`swath-replay-server`](../swath-replay-server) does the opposite — it runs the
+its sibling [`swath-replay`](../swath-replay) does the opposite — it runs the
 **real engine against a fake S3 endpoint in real time**. Neither is a shipped artifact: both
 are development/analysis tools that live in this repository only.
 
@@ -58,7 +58,7 @@ own tests pin closed-form answers in the mode where the arithmetic is exact.
 
 ### Two instruments, not two attempts at one
 
-|  | `swath-replay-server` | `swath-sim` |
+|  | `swath-replay` | `swath-sim` |
 |---|---|---|
 | Runs | the real engine, over HTTP | the real decision logic, in-process |
 | Store | a fake S3 endpoint serving a captured fixture | a modelled store serving the same fixture |
@@ -78,8 +78,8 @@ server already owns and reuses both verbatim:
 
 | Layer | Owns | Lives in |
 |---|---|---|
-| `ListObjectsV2Pager` | *All* S3 `ListObjectsV2` semantics — max-keys accounting, truncation, delimiter rollup, common-prefix resume, prefix/`start-after` interplay, continuation tokens. | `swath-replay-server` |
-| `ListingStore` | Ordered **range reads** only: the first `limit` rows in `[from, toExclusive)`, ascending unsigned key order. Plus the one optional `delimitedRollup` fast path. | `swath-replay-server` |
+| `ListObjectsV2Pager` | *All* S3 `ListObjectsV2` semantics — max-keys accounting, truncation, delimiter rollup, common-prefix resume, prefix/`start-after` interplay, continuation tokens. | `swath-replay` |
+| `ListingStore` | Ordered **range reads** only: the first `limit` rows in `[from, toExclusive)`, ascending unsigned key order. Plus the one optional `delimitedRollup` fast path. | `swath-replay` |
 
 A simulator backend is therefore *only* a `ListingStore`. If a change here starts re-deriving
 when a page is truncated or where a continuation token resumes, it is in the wrong layer.
@@ -134,7 +134,7 @@ read the *why* mechanically: the failure is an `io.varve.swath.sort.RowGroupOrde
 `swath.sim.store.streaming.segment.refused{reason}` **before** it rethrows, so the exclusion survives
 into the metrics of a run that ended in an exception. Nothing downstream has to match a message. (The
 replay server raises the same typed failure from its own skip-scan and counts it as
-`swath.replay.serving.refused{reason}`; see `docs/swath-replay-server.md`.)
+`swath.replay.serving.refused{reason}`; see `docs/swath-replay.md`.)
 
 **What `WINDOWED`'s unguarded range reads actually do is lose keys, silently.** They are routed off
 the derived index, which describes an order the file does not have, so on a multi-file fixture the
