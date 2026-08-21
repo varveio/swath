@@ -67,6 +67,11 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."""
 
 
+def markdown_indented_block(text):
+    """Render literal notice text using the document's indented-code-block style."""
+    return "\n".join(f"    {line}" if line else "" for line in text.splitlines())
+
+
 def embedded_legal_files(report_dir: Path, runtime_artifact_files: set[str]):
     for artifact_dir in sorted(
         path for path in report_dir.iterdir()
@@ -140,10 +145,10 @@ def main():
             f"The `{zstd_jni}` runtime contains both the zstd-jni wrapper and bundled native",
             "Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD",
             "3-Clause terms are reproduced separately below.", "",
-            "### zstd-jni wrapper — BSD 2-Clause", "", "```text",
-            ZSTD_JNI_WRAPPER_LICENSE, "```", "",
-            "### Native Zstandard library — BSD 3-Clause", "", "```text",
-            ZSTANDARD_NATIVE_BSD_LICENSE, "```",
+            "### zstd-jni wrapper — BSD 2-Clause", "",
+            markdown_indented_block(ZSTD_JNI_WRAPPER_LICENSE), "",
+            "### Native Zstandard library — BSD 3-Clause", "",
+            markdown_indented_block(ZSTANDARD_NATIVE_BSD_LICENSE),
         ])
     lines.extend(["", "## Embedded upstream notice resources", ""])
     for artifact, files in embedded_legal_files(args.report_dir, runtime_artifact_files):
@@ -152,7 +157,7 @@ def main():
             relative = resource.relative_to(args.report_dir / artifact)
             text = "\n".join(line.rstrip() for line in resource.read_text(
                 encoding="utf-8", errors="replace").splitlines()).rstrip()
-            lines.extend([f"#### {relative}", "", "```text", text, "```", ""])
+            lines.extend([f"#### {relative}", "", markdown_indented_block(text), ""])
     args.output.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 

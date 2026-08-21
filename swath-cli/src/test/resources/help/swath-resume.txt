@@ -3,8 +3,8 @@ Usage: swath resume [-hVqv] [--[no-]progress] [--[no-]stats]
                     [--bearer-token-refresh-interval=DURATION] [--color=MODE]
                     [--tune=KEY=VALUE]... [<dir>]
 Resume a managed Parquet run by its output directory: swath resume <dir>.
-      [<dir>]            The managed Parquet run handle to resume (opens <dir>/.
-                           swath/checkpoint.sqlite).
+      [<dir>]            Managed Parquet output directory; its checkpoint is in
+                           .swath/.
       --bearer-token-command=CMD
                          Shell command whose stdout is a fresh OAuth bearer
                            token (e.g. 'gcloud auth print-access-token' for

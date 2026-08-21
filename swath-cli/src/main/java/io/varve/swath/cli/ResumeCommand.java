@@ -50,8 +50,7 @@ import picocli.CommandLine.Spec;
 public final class ResumeCommand implements Callable<Integer>, GlobalOptions.Carrier {
 
     @Parameters(index = "0", arity = "0..1", paramLabel = "<dir>",
-            description = "The managed Parquet run handle to resume "
-                    + "(opens <dir>/.swath/checkpoint.sqlite).")
+            description = "Managed Parquet output directory; its checkpoint is in .swath/.")
     Path directory;
 
     final TuneOptions tune = new TuneOptions();
