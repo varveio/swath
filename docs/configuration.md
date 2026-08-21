@@ -141,6 +141,7 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller merges serial. |
 | `swath.sort.final-file-bytes` | `1 GiB` | Roll threshold for final sorted parts. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
+| `swath.sort.final-page-rows` | `1024` | Maximum rows per final-file data page; the within-row-group seek granularity. |
 | `swath.sort.segment-row-group-bytes` | `1 MiB` | Legacy columnar-staging path only. |
 | `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |
 

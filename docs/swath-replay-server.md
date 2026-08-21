@@ -68,14 +68,13 @@ swath-replay-server serve \
   --fixture "$RUN_DIR/sorted" \
   --bucket digitalcorpora \
   --host 127.0.0.1 --port 19090 \
-  --serving-mode auto
+  --serving-mode sorted
 ```
 
 `--serving-mode` selects the fixture path:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Use direct sorted serving only if every file has a recognized object-mode sortedness stamp, complete multi-file indexes, pure object rows, and a sane ascending row-group index. Otherwise log the reason and use DuckDB. |
 | `sorted` | Require that direct path and fail startup if eligibility cannot be proved. Use this for a focused test. |
 | `duckdb` | Materialize and index the fixture in temporary DuckDB storage. This is the independent oracle and legacy fallback. |
 
@@ -84,6 +83,90 @@ reads. A bounded sequential-window cache is enabled by default. Its system prope
 `swath.replay.prefetch.enabled` (`true`), `swath.replay.prefetch.window-rows` (`12500`),
 and `swath.replay.prefetch.max-windows` (`96`). Size the window at least as large as one
 row group's row count or repeated fills will decode the same group.
+
+Sorted mode reads Parquet's page index directly and stops once it has the requested rows.
+Final sorted files therefore default to 1,024 rows per data page
+(`swath.sort.final-page-rows`); a page is the smallest unit a bounded read can decode.
+Older fixtures remain correct and can be re-sorted to adopt the smaller seek geometry.
+
+## Serving concurrency (`--max-concurrent-requests`)
+
+Injected latency blocks a serving thread, so the request ceiling is explicit rather than
+Jetty's implicit 200-thread default. It defaults to 512 and is reported as
+`max_concurrent_requests=` at startup. Set it at or above the widest client fan-out so
+connector queueing is not mistaken for backend latency.
+
+`--parquet-connections 0` uses the selected store's own reader default:
+`max(8, min(32, 2 × cores))` for sorted serving and `min(4, cores)` for DuckDB.
+Size this for concurrent decode work, not total requests: readers are returned before
+injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
+very large pools can waste file descriptors and heap. Sorted mode opens both a row-group
+and range-reader pool per file: approximately `2 × connections × files` readers.
+
+## Reading a running server's meters (`--metrics-port`)
+
+`serve` keeps every meter in the table under "Metrics And Tuning" below, but a
+long-running server has no `bench` report to print them into. `--metrics-port`
+exposes them over HTTP for as long as the server runs:
+
+```bash
+swath-replay-server serve ... --metrics-port 19192
+
+curl -s http://127.0.0.1:19192/metrics | jq .
+```
+
+Three paths and nothing else: `GET /metrics` returns the whole registry as JSON,
+`GET /runtime-attestation` returns the resource limits visible inside this
+server process, and `GET /healthz` returns `ok` once the server is listening —
+which is also the readiness signal to poll before starting a client, since a
+large fixture's index derive is not instant. A negative port (the default)
+disables the endpoint; `0` binds a free port and reports it in the startup line,
+which carries `metrics_endpoint=` whenever the endpoint is on.
+
+The attestation uses `schema_version: runtime-attestation-v1`. Its `cgroup_v2`
+object names the resolved directory and records `cpuset.cpus.effective`,
+`memory.max`, and `memory.swap.max`; `proc_self_status` independently records
+`Cpus_allowed_list`. Each observation is a `{value, error}` pair. Finite memory
+and swap limits are byte counts, the kernel's unlimited value remains the
+literal `max`, and an absent, unreadable, or empty source — or an invalid memory
+or swap limit — stays an explicit error instead of becoming a requested or
+inferred limit. CPU-list grammar, agreement between the two CPU observations,
+and agreement with the declared allocation are downstream verifier checks, not
+claims made by this producer. This is runtime evidence for a controller to
+compare with its declared allocation, not an allocation request of its own.
+
+The payload is `{schema_version, serving_mode, uptime_ms, sampled_at_epoch_ms,
+meters[]}`. Each meter carries its `name`, `type` (`timer`, `counter`,
+`distribution`, `gauge`), and `tags`; a timer adds `count`, `sum_ms`, `mean_ms`,
+`max_ms`, `p50_ms`, `p99_ms` — the same values `bench` reports, read the same
+way, so a scrape and a bench report of the same run agree. Meters are emitted in
+a stable order so two scrapes diff cleanly, and `uptime_ms` lets a reader bound
+an interval without trusting its own clock against the server's.
+
+Read server headroom from `swath.replay.request.latency{shape}` per request shape,
+against the injected profile for that same shape. A pooled average would hide the
+important case because clients issue different mixtures of differently priced requests.
+
+**It is a second port on purpose.** A metrics or runtime-attestation scrape never
+enters the serving path: it takes no read permit, receives no injected latency,
+and increments no listing request counter, so polling cannot perturb what it
+measures — and it still answers while every serving thread is parked in an
+injected sleep, which is exactly when an answer is most wanted. Its thread pool
+is deliberately tiny (4), because taxing
+the box to answer a diagnostic would tax the measurement the diagnostic exists
+to validate.
+
+**Poll it; do not wait for shutdown.** There is no dump-on-exit, by design: a
+server run as a sidecar is typically *killed* when the process it serves exits,
+rather than asked to stop, so anything written on shutdown is written by a code
+path that may never run. Scrape before a measured
+window opens, poll through it, and scrape again at the end — the series is what
+shows whether the server stayed out of the way, which a single aggregate at the
+end cannot.
+
+Set the `swath.replay.slow-request-log-ms` system property to log the request shape,
+range parameters, result size, and server cost for requests exceeding the threshold.
+Negative or unset disables this diagnostic.
 
 `delimiter=/` uses a native skip-scan that advances past each returned common prefix and
 stops at `max-keys`; other delimiter shapes use the ordinary range walk. If a stepped row
@@ -110,6 +193,15 @@ A delimiter request is a `structure_probe`; a delimiter-free `max-keys<=1` reque
 returned common prefix, which a network proxy cannot infer. Jitter is derived from request
 bytes, so the same request gets the same delay. `prod-commoncrawl` is a built-in reference
 profile. Injection is off by default.
+
+### The delay is a deadline, not a surcharge
+
+Injected latency is the request's total target time. After serving the page, the server
+waits only for the remainder, so the client observes `max(server_cost, profile)`, not
+`server_cost + profile`. Requests that exceed their profile increment
+`swath.replay.inject.overrun{shape}` and record the excess in
+`swath.replay.inject.overrun.ms{shape}`; a run with material overruns measured the replay
+server rather than the intended profile.
 
 ### Compressed time (`--latency-scale`)
 
@@ -184,6 +276,8 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens` | Rollup vs walk and skip-scan I/O. |
 | `page.read.latency`, `fixture.list.latency` | Store read and complete pager operation. |
+| `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
+| `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
 
 Names above omit the common `swath.replay.` prefix for compactness. Fallback reasons are

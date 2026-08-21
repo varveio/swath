@@ -119,8 +119,9 @@ public final class SortedFixtures {
 
     /**
      * The outcome of {@link #loadIndex}: either the full in-memory routing index, or a typed
-     * eligibility failure the caller ({@code --serving-mode auto}) can fall back on rather than
-     * serve a file that isn't safely servable sorted as if it were.
+     * eligibility failure the caller can act on rather than serve a file that isn't safely servable
+     * sorted as if it were. The replay server turns that failure into a refusal to start; {@code
+     * swath-sim}, which forces a tier rather than choosing one, uses it to decline a backend.
      */
     public sealed interface IndexLoadResult {
 

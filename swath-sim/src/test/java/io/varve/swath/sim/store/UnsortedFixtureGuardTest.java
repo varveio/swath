@@ -207,16 +207,25 @@ class UnsortedFixtureGuardTest {
 
     /**
      * The windowed tier's <b>masked</b> half, pinned rather than described — and it is worse than the
-     * "short page" it is easy to assume. Its plain range reads are routed off the derived index, which
-     * describes an order the file does not have: the plan for a range starting mid-keyspace leaves out
-     * the file an in-range key physically sits in, so the key is never read at all. Nothing is short
-     * and nothing is out of order; the client walks to a clean, un-truncated end of listing and is
-     * simply missing a key.
+     * "short page" it is easy to assume. Its plain range reads trust the derived index, which
+     * describes an order the file does not have: rows come back in the order they physically sit in,
+     * and a key that sorts below the cursor but sits above it on disk is never returned at all.
+     * Nothing is short and nothing is refused; the client walks to a clean, un-truncated end of
+     * listing and is simply missing a key.
      *
-     * <p>A walk from the very beginning happens to find {@code z/9}, because its plan spans every file
-     * anyway — which is the trap: the loss is not visible in the whole-listing read that a smoke test
-     * would do. It is visible the moment a cursor <em>starts</em> above the misplaced key's own file,
-     * i.e. on every steal and every split the simulator performs.
+     * <p>The fixture's first file holds {@code a/1, aa/9, a/2, z/9} in that physical order. A whole
+     * listing walk returns {@code a/1, aa/9, z/9} from it — {@code a/2} is passed over, because by the
+     * time the pager asks for "the next key after {@code aa/9}" the reader has already stepped past
+     * where {@code a/2} lies — and then the second file's keys, so {@code z/9} is emitted before
+     * {@code b/1} it should sort after.
+     *
+     * <p><b>This assertion changed when the store stopped answering range reads with a SQL query.</b>
+     * That query carried an {@code ORDER BY key}, which re-sorted each page and hid the disorder
+     * behind it: the walk came back fully sorted and complete, and the loss only showed up on a
+     * resumed cursor. The page-index reader has no sort to hide behind, so the same fixture now loses
+     * a key on the very first page. Neither answer is right — a fixture that lies about its order gets
+     * a wrong listing either way — but the new one is wrong <em>visibly</em>, which is the better
+     * failure of the two.
      *
      * <p>This test asserts the wrong answer on purpose. It is the reason the sim's own tier
      * ({@code STREAMING}) reads in physical order and refuses, and part of the reason the windowed
@@ -229,7 +238,9 @@ class UnsortedFixtureGuardTest {
 
         SimStoreFactory.Result whole = SimStoreFactory.open(fixture, SimStoreBackend.WINDOWED);
         try (ListingStore store = whole.store()) {
-            assertThat(walk(store, null)).containsExactly("a/1", "a/2", "aa/9", "b/1", "b/2", "z/9");
+            assertThat(walk(store, null))
+                    .as("a/2 sits physically after aa/9, so a cursor past aa/9 never comes back for it")
+                    .containsExactly("a/1", "aa/9", "z/9", "b/1", "b/2");
         }
 
         // The same fixture, read by a cursor that starts where a steal or a split would put it.

@@ -16,6 +16,8 @@ import io.varve.swath.replay.protocol.ByteKeys;
 import io.varve.swath.replay.protocol.S3ListRequest;
 import io.varve.swath.replay.protocol.S3ListResult;
 import io.varve.swath.replay.protocol.S3ResultEntry;
+import io.varve.swath.replay.store.DuckDbListingStore;
+import io.varve.swath.replay.store.SortedParquetStore;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
@@ -32,24 +34,28 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@code --serving-mode} resolution: {@code auto} picks sorted on a stamped fixture and
- * falls back (with a reason metric) otherwise; {@code sorted} hard-fails on an ineligible fixture;
- * {@code duckdb} always forces role-1. Fixtures are built through the production paths ({@link
+ * {@code --serving-mode} resolution: {@code sorted} serves a stamped fixture and <b>hard-fails</b>,
+ * naming the reason, on every shape of ineligible one; {@code duckdb} always forces role-1 and still
+ * serves those shapes correctly. Fixtures are built through the production paths ({@link
  * CaptureSorter} for stamped, {@code PartWriter} for unstamped).
+ *
+ * <p>These used to assert that {@code auto} <em>fell back</em> to DuckDB on each of those shapes.
+ * The mode is gone — a measured run whose serving path can change without saying so is not a
+ * measurement — so each case now pins the pair that replaced it: the named hard failure, and role-1
+ * still serving the same fixture. The eligibility reasons themselves are covered exactly as before.
  */
 class ReplayServingFactoryTest {
 
     @Test
-    void autoPicksSortedOnAStampedObjectsFixture(@TempDir Path dir) throws IOException {
+    void sortedModeServesAStampedObjectsFixture(@TempDir Path dir) throws IOException {
         Path sorted = sortedFixture(dir, "b", "a", "c");
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(sorted, ServingMode.AUTO, 1);
+        ReplayServingFactory.Result result = ReplayServingFactory.open(sorted, ServingMode.SORTED, 1);
         try {
             assertThat(result.resolvedMode()).isEqualTo(ServingMode.SORTED);
             result.fixture().list(new S3ListRequest("bucket", null, null, null, null, 1000, true, false));
             assertThat(result.metrics().registry().find("swath.replay.serving.path")
                     .tag("mode", "sorted").counter().count()).isEqualTo(1.0);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback").counter()).isNull();
             // The index-derive meters land on the same shared registry as the request meters.
             assertThat(result.metrics().registry().find("swath.replay.index.load.latency")
                     .tag("source", "derived").timer().count()).isEqualTo(1L);
@@ -60,22 +66,23 @@ class ReplayServingFactoryTest {
     }
 
     @Test
-    void autoFallsBackToDuckDbWithNoStampReasonOnAnUnstampedPart(@TempDir Path dir) throws IOException {
+    void duckDbStillServesAnUnstampedPartThatSortedModeRefuses(@TempDir Path dir) throws IOException {
         Path plain = dir.resolve("plain.parquet");
         writeUnsortedPart(plain, "a", "b", "c");
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(plain, ServingMode.AUTO, 1);
+        ReplayServingFactory.Result result = ReplayServingFactory.open(plain, ServingMode.DUCKDB, 1);
         try {
             assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "no_stamp").counter().count()).isEqualTo(1.0);
+            assertThat(keys(result.fixture().list(
+                    new S3ListRequest("bucket", null, null, null, null, 1000, true, false))))
+                    .containsExactly("a", "b", "c");
         } finally {
             result.fixture().close();
         }
     }
 
     @Test
-    void autoFallsBackWithSanityFailedOnMisorderedStampedFiles(@TempDir Path dir) throws IOException {
+    void sortedModeHardFailsWithSanityFailedOnMisorderedStampedFiles(@TempDir Path dir) throws IOException {
         // A genuine 2-file rolled publish (file 1 honestly stamped file_index=1, file 2 file_index=2
         // + file_final=true) so the completeness check passes — but the two files' NAMES are
         // then swapped, so resolveFiles' lexical order disagrees with each file's own key content
@@ -93,14 +100,9 @@ class ReplayServingFactoryTest {
         // "a" (file_index=1) — completeness still holds (indices {1,2} present, final on max), but the
         // flattened first-key sequence in lexical order is d, a — not ascending.
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.AUTO, 1);
-        try {
-            assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "sanity_failed").counter().count()).isEqualTo(1.0);
-        } finally {
-            result.fixture().close();
-        }
+        assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sanity_failed");
     }
 
     @Test
@@ -117,22 +119,19 @@ class ReplayServingFactoryTest {
      * (a): a stamped {@code mode=objects} fixture whose rows are actually a mix of {@code OBJECT} and
      * {@code COMMON_PREFIX} (the exact shape {@code sort-fixture} produces from
      * a legacy delimiter'd capture, since it never inspects {@code row_type}) must NOT be served
-     * sorted — {@code auto} falls back to DuckDB role-1 with the {@code mixed_row_types} reason,
-     * and role-1's own {@code row_type='OBJECT'} materialisation filter still serves it correctly:
+     * sorted, and role-1's own {@code row_type='OBJECT'} materialisation filter still serves it correctly:
      * the returned object keys are byte-identical to role-1 serving the equivalent objects-only
      * fixture.
      */
     @Test
-    void autoFallsBackToDuckDbOnMixedRowTypesAndDuckDbStillServesItCorrectly(@TempDir Path dir) throws IOException {
+    void duckDbServesAMixedRowTypeFixtureCorrectly(@TempDir Path dir) throws IOException {
         Path mixed = mixedRowTypeSortedFixture(dir);
         Path objectsOnly = dir.resolve("objects-only.parquet");
         writeUnsortedPart(objectsOnly, "a1", "a3", "a5", "a7");
 
-        ReplayServingFactory.Result mixedResult = ReplayServingFactory.open(mixed, ServingMode.AUTO, 1);
+        ReplayServingFactory.Result mixedResult = ReplayServingFactory.open(mixed, ServingMode.DUCKDB, 1);
         try {
             assertThat(mixedResult.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(mixedResult.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "mixed_row_types").counter().count()).isEqualTo(1.0);
 
             List<String> mixedKeys = keys(mixedResult.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
@@ -167,17 +166,18 @@ class ReplayServingFactoryTest {
      * serve sorted. Every resolved file's stamp must be checked.
      */
     @Test
-    void autoFallsBackWhenALaterFileInAMultiFileDirIsUnstamped(@TempDir Path dir) throws IOException {
+    void sortedModeHardFailsWhenALaterFileInAMultiFileDirIsUnstamped(@TempDir Path dir) throws IOException {
         Path fixtureDir = Files.createDirectories(dir.resolve("fixture"));
         sortToNamed(dir, fixtureDir.resolve("part-00001.parquet"), "a", "b");
         // A stray unstamped part, lexically AFTER the good stamped file, sharing the directory.
         writeUnsortedPart(fixtureDir.resolve("part-00002.parquet"), "c", "d");
 
-        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.AUTO, 1);
+        assertThatThrownBy(() -> ReplayServingFactory.open(fixtureDir, ServingMode.SORTED, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no_stamp");
+
+        ReplayServingFactory.Result result = ReplayServingFactory.open(fixtureDir, ServingMode.DUCKDB, 1);
         try {
-            assertThat(result.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(result.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "no_stamp").counter().count()).isEqualTo(1.0);
             // DuckDB role-1 still serves every key from every file in the directory, correctly.
             List<String> served = keys(result.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
@@ -190,13 +190,12 @@ class ReplayServingFactoryTest {
     /**
      * Multi-file publish isn't atomic across files — a crash after renaming a prefix of the roll
      * sequence leaves a stamped PREFIX of the true output on disk. Simulated here by deleting the
-     * true last file of a rolled fixture after the fact: {@code auto} must fall back with the
-     * {@code incomplete_multifile} reason (never silently serve a truncated listing sorted), DuckDB
-     * role-1 must still serve the remaining files correctly, and — critically — the UNTOUCHED
-     * complete set must still serve sorted.
+     * true last file of a rolled fixture after the fact: {@code sorted} must refuse it by name (never
+     * silently serve a truncated listing sorted), DuckDB role-1 must still serve the remaining files
+     * correctly, and — critically — the UNTOUCHED complete set must still serve sorted.
      */
     @Test
-    void autoFallsBackOnATruncatedMultiFilePublishButTheCompleteSetStillServesSorted(@TempDir Path dir)
+    void sortedModeRefusesATruncatedMultiFilePublishButServesTheCompleteSet(@TempDir Path dir)
             throws IOException {
         Path completeDir = Files.createDirectories(dir.resolve("complete"));
         Path truncatedDir = Files.createDirectories(dir.resolve("truncated"));
@@ -212,11 +211,13 @@ class ReplayServingFactoryTest {
         // happened.
         Files.delete(truncatedFiles.get(truncatedFiles.size() - 1));
 
-        ReplayServingFactory.Result truncatedResult = ReplayServingFactory.open(truncatedDir, ServingMode.AUTO, 1);
+        assertThatThrownBy(() -> ReplayServingFactory.open(truncatedDir, ServingMode.SORTED, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("incomplete_multifile");
+
+        ReplayServingFactory.Result truncatedResult = ReplayServingFactory.open(truncatedDir, ServingMode.DUCKDB, 1);
         try {
             assertThat(truncatedResult.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(truncatedResult.metrics().registry().find("swath.replay.serving.fallback")
-                    .tag("reason", "incomplete_multifile").counter().count()).isEqualTo(1.0);
             List<String> served = keys(truncatedResult.fixture().list(
                     new S3ListRequest("bucket", null, null, null, null, 1000, true, false)));
             // DuckDB still serves whatever remains, correctly (fewer keys — the deleted file's keys
@@ -227,7 +228,7 @@ class ReplayServingFactoryTest {
             truncatedResult.fixture().close();
         }
 
-        ReplayServingFactory.Result completeResult = ReplayServingFactory.open(completeDir, ServingMode.AUTO, 1);
+        ReplayServingFactory.Result completeResult = ReplayServingFactory.open(completeDir, ServingMode.SORTED, 1);
         try {
             assertThat(completeResult.resolvedMode()).isEqualTo(ServingMode.SORTED);
             assertThat(keys(completeResult.fixture().list(
@@ -317,5 +318,49 @@ class ReplayServingFactoryTest {
                 .filter(e -> e instanceof S3ResultEntry.ObjectResult)
                 .map(e -> ByteKeys.utf8(e.key()))
                 .toList();
+    }
+
+    /**
+     * The default belongs to the mode, and the mode is resolved here rather than by the caller.
+     *
+     * <p>Regression: the {@code serve} and {@code bench} commands used to resolve the default
+     * themselves, both via {@link DuckDbListingStore#defaultConnectionCount()}. Because that result
+     * is positive, the mode-aware branch below became unreachable from the CLI and
+     * {@code --serving-mode sorted} with no flag opened four readers instead of the eight-to-
+     * thirty-two the sorted store asks for. The factory was already right; nothing asserted that its
+     * callers let it be right, so the two tests below go through {@link ReplayServer} -- the seam the
+     * commands actually use -- and not through {@code open} alone.
+     */
+    @Test
+    void sortedModeWithNoRequestedCountTakesTheSortedStoreDefault(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", sorted, 0, ServingMode.SORTED)) {
+            assertThat(server.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
+            assertThat(server.resolvedParquetConnections())
+                    .isEqualTo(SortedParquetStore.defaultConnectionCount())
+                    .isNotEqualTo(DuckDbListingStore.defaultConnectionCount());
+        }
+    }
+
+    @Test
+    void duckDbModeWithNoRequestedCountTakesTheDuckDbDefault(@TempDir Path dir) throws Exception {
+        Path plain = dir.resolve("plain.parquet");
+        writeUnsortedPart(plain, "a", "b", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", plain, 0, ServingMode.DUCKDB)) {
+            assertThat(server.resolvedServingMode()).isEqualTo(ServingMode.DUCKDB);
+            assertThat(server.resolvedParquetConnections())
+                    .isEqualTo(DuckDbListingStore.defaultConnectionCount());
+        }
+    }
+
+    @Test
+    void anExplicitCountIsHonouredOverTheModeDefault(@TempDir Path dir) throws Exception {
+        Path sorted = sortedFixture(dir, "b", "a", "c");
+
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", sorted, 3, ServingMode.SORTED)) {
+            assertThat(server.resolvedParquetConnections()).isEqualTo(3);
+        }
     }
 }

@@ -70,7 +70,7 @@ class ResIdxCrashFallbackTest {
      * properly-built sorted fixture then resolves to the sorted path with no fallback.
      */
     @Test
-    void autoDeclinesACrashTmpDirectoryWithAMetricThenServesSortedAfterARealBuild(@TempDir Path dir)
+    void sortedModeRefusesACrashTmpDirectoryThenServesSortedAfterARealBuild(@TempDir Path dir)
             throws Exception {
         Path capture = Files.createDirectories(dir.resolve("capture"));
         writeUnsortedPart(capture.resolve("part-0.parquet"), "delta", "alpha", "charlie", "bravo");
@@ -81,26 +81,26 @@ class ResIdxCrashFallbackTest {
         writeUnsortedPart(crashDir.resolve("part-0.parquet"), "delta", "alpha", "charlie", "bravo");
         Files.writeString(crashDir.resolve("part-00001.parquet.tmp"), "partial-crash-bytes");
 
-        ReplayServingFactory.Result declined = ReplayServingFactory.open(crashDir, ServingMode.AUTO, 2);
+        // Sorted mode refuses it by name rather than quietly serving it a different way.
+        assertThatThrownBy(() -> ReplayServingFactory.open(crashDir, ServingMode.SORTED, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no_stamp");
+
+        ReplayServingFactory.Result declined = ReplayServingFactory.open(crashDir, ServingMode.DUCKDB, 2);
         try {
-            assertThat(declined.resolvedMode()).isEqualTo(ServingMode.DUCKDB);
-            assertThat(declined.metrics().registry()
-                    .find("swath.replay.serving.fallback").tag("reason", "no_stamp").counter().count())
-                    .isEqualTo(1.0);
-            // DuckDB fallback still serves the raw capture's objects.
+            // Role-1 still serves the raw capture's objects.
             assertThat(listKeys(declined)).containsExactly("alpha", "bravo", "charlie", "delta");
         } finally {
             declined.fixture().close();
         }
 
-        // A real sort-fixture build into a clean output directory: auto now serves sorted, no fallback.
+        // A real sort-fixture build into a clean output directory now serves sorted.
         Path sortedOut = Files.createDirectories(dir.resolve("part-out"));
         new CaptureSorter(config()).sort(capture, sortedOut);
 
-        ReplayServingFactory.Result sorted = ReplayServingFactory.open(sortedOut, ServingMode.AUTO, 2);
+        ReplayServingFactory.Result sorted = ReplayServingFactory.open(sortedOut, ServingMode.SORTED, 2);
         try {
             assertThat(sorted.resolvedMode()).isEqualTo(ServingMode.SORTED);
-            assertThat(sorted.metrics().registry().find("swath.replay.serving.fallback").counter()).isNull();
             assertThat(listKeys(sorted)).containsExactly("alpha", "bravo", "charlie", "delta");
         } finally {
             sorted.fixture().close();

@@ -326,6 +326,117 @@ class SortedRowGroupReaderTest {
     }
 
     /** Steps a key cursor to exhaustion, collecting every key it visits — a test-only bulk drain. */
+    /**
+     * A cursor that seeks by the page index must <b>refuse</b> a row group whose key pages are not in
+     * ascending order, rather than quietly skip the pages it was misled about.
+     *
+     * <p>This is the failure mode the per-row ascent check cannot see. That check proves what it steps
+     * over, which was everything while a cursor read the whole row group. A pruning cursor never reads
+     * the pages it prunes — and on a disordered group the page index is exactly what misleads it: a
+     * page whose keys sort below the target also has a {@code max} below the target, so it is pruned,
+     * and its rows leave the listing with nothing having read them and nothing to check. Measured
+     * before the fix on this very fixture: a seek to the {@code d…} run returned 4,096 keys and no
+     * exception, with the 2,048 {@code a…} keys silently gone. Through {@code delimitedRollup} that is
+     * a {@code 200 OK} listing missing a third of a directory.
+     *
+     * <p>The guard is {@code BoundaryOrder} off the column index — a footer read, cached per row
+     * group, no I/O per request — and it is complementary to the per-row check rather than a
+     * replacement: a single page is trivially "ascending" whatever its rows do, which is why
+     * {@link #keyCursorRefusesARowGroupWhoseRowsAreNotAscending} still has to exist.
+     */
+    @Test
+    void keyCursorRefusesAGroupWhosePagesAreOutOfOrderRatherThanSkippingThem(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        // Three whole pages, written out of order: d… then a… then g…. Every page is internally
+        // ascending, so only the page BOUNDARIES are wrong — invisible to a per-row check that never
+        // reads the pruned page.
+        SortConfig smallPages = config(Map.of("final-page-rows", "1024"));
+        try (SortedFileWriter writer = new SortedParquetWriter(path, smallPages, SortMode.OBJECTS, 1)) {
+            for (String prefix : List.of("d", "a", "g")) {
+                for (int i = 0; i < 2048; i++) {
+                    writer.write(object(prefix + String.format("%08d", i)));
+                }
+            }
+        }
+        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            assertThatThrownBy(() -> reader.openKeyCursor(0, bytes("d00000000"), true, null))
+                    .isInstanceOfSatisfying(RowGroupOrderException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(RowGroupOrderException.ROW_GROUP_DISORDER);
+                        assertThat(e.file()).isEqualTo(path);
+                        assertThat(e.rowGroup()).isZero();
+                    })
+                    .hasMessageContaining("strictly ascending");
+        }
+    }
+
+    /**
+     * A cursor must read a row group correctly across its own window boundaries — the stretch of
+     * pages it loads at a time — not just within the first one.
+     *
+     * <p>Every other fixture in this class is small enough to fit one window, so the second load and
+     * the position re-seat that goes with it were never exercised. The arithmetic there is the kind
+     * that is right or silently off by a window: a cursor that mis-seats its position after a reload
+     * reports a row index the skip-scan then trusts.
+     */
+    @Test
+    void keyCursorIsExactAcrossItsOwnWindowBoundaries(@TempDir Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 30_000; i++) {
+            keys.add(String.format("%08d", i) + "x".repeat(60));
+        }
+        Path path = dir.resolve("part-00001.parquet");
+        // One row group, 1,024-row pages: several windows' worth of pages inside a single group.
+        SortConfig manyPagesOneGroup = config(Map.of("final-page-rows", "1024",
+                "final-row-group-bytes", Long.toString(64L << 20)));
+        try (SortedFileWriter writer = new SortedParquetWriter(path, manyPagesOneGroup, SortMode.OBJECTS, 1)) {
+            for (String k : keys) {
+                writer.write(object(k));
+            }
+        }
+        assertThat(SortedFileIndex.rowGroupSpans(path)).hasSize(1);
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            List<byte[]> bulk = new ArrayList<>();
+            reader.forEachKey(0, bulk::add);
+            assertThat(bulk).hasSize(keys.size());
+
+            // A full drain from the start must cross every window and agree with the bulk tier.
+            try (SortedRowGroupReader.KeyCursor cursor = reader.openKeyCursor(0)) {
+                List<byte[]> stepped = drain(cursor);
+                assertThat(stepped).hasSize(keys.size());
+                for (int i = 0; i < keys.size(); i++) {
+                    assertThat(stepped.get(i)).isEqualTo(bulk.get(i));
+                }
+            }
+
+            // And a seek to either side of a window boundary must land on the right row, with
+            // position() still meaning "row index within the row group".
+            for (int at : new int[] {0, 1, 1023, 1024, 8191, 8192, 8193, 9000, 20_000, 29_999}) {
+                try (SortedRowGroupReader.KeyCursor cursor =
+                             reader.openKeyCursor(0, bytes(keys.get(at)), true, null)) {
+                    // The cursor opens at the first row of the PAGE that can hold the target, never at
+                    // the target itself — the page filter prunes pages, never rows — so it must still
+                    // be stepped there, exactly as the skip-scan steps it.
+                    assertThat(cursor.hasCurrent()).isTrue();
+                    assertThat(cursor.position()).as("page start at/below %d", at).isLessThanOrEqualTo(at);
+                    cursor.advanceTo(bytes(keys.get(at)), true);
+                    assertThat(cursor.currentKey()).as("key at %d", at).isEqualTo(bytes(keys.get(at)));
+                    assertThat(cursor.position()).as("position at %d", at).isEqualTo(at);
+                    // Step past the next boundary from wherever it landed.
+                    int ahead = Math.min(at + 2500, keys.size() - 1);
+                    cursor.advanceTo(bytes(keys.get(ahead)), true);
+                    assertThat(cursor.currentKey()).as("key at %d after stepping", ahead)
+                            .isEqualTo(bytes(keys.get(ahead)));
+                    assertThat(cursor.position()).as("position at %d after stepping", ahead)
+                            .isEqualTo(ahead);
+                }
+            }
+        }
+    }
+
     private static List<byte[]> drain(SortedRowGroupReader.KeyCursor cursor) {
         List<byte[]> out = new ArrayList<>();
         while (cursor.hasCurrent()) {

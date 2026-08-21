@@ -51,6 +51,16 @@ public final class SortConfigs {
     }
 
     /**
+     * {@link #base()} with data pages capped at {@code pageRows} rows — the knob a served fixture's
+     * cold-read cost turns on. A test that wants several pages inside <em>one</em> row group asks for
+     * this rather than shrinking the row group, because those are different granularities and only
+     * this one is what a bounded range read pays for.
+     */
+    public static SortConfig pagesOf(int pageRows) {
+        return base().withFinalPageRows(pageRows);
+    }
+
+    /**
      * {@link #base()} with tiny (1&nbsp;KiB) final row groups under a bounded 64&nbsp;MB merge budget,
      * so a few hundred keys form many row groups — exercises the multi-row-group serving path.
      */

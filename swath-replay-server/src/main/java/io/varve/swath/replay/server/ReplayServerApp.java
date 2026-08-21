@@ -6,7 +6,6 @@
 package io.varve.swath.replay.server;
 
 import io.varve.swath.replay.fixture.SortFixtureCommand;
-import io.varve.swath.replay.store.DuckDbListingStore;
 import java.nio.file.Path;
 import java.util.concurrent.Callable;
 import picocli.CommandLine;
@@ -56,23 +55,45 @@ public final class ReplayServerApp implements Callable<Integer> {
     }
 
     private static Integer serve(Path fixture, String bucket, ServeOptions options) throws Exception {
-        int connections = options.parquetConnections > 0
-                ? options.parquetConnections : DuckDbListingStore.defaultConnectionCount();
+        // Not resolved here. The default belongs to the store the serving mode resolves to, and
+        // only the factory knows which that is -- sorted mode wants a small multiple of the cores
+        // (a slot is a Parquet file handle plus its decoded footer), DuckDB mode wants at most four
+        // (a slot is a connection owning a thread pool). Resolving in the caller picked one store's
+        // default for both modes, and since the result is positive the factory's own mode-aware
+        // default became unreachable: `serve --serving-mode sorted` with no flag opened four readers
+        // rather than the eight-to-thirty-two the sorted store asks for. Pass the request through
+        // unresolved -- <= 0 means "the mode's own default" -- and report what came back.
         ShapeLatency injected =
                 ShapeLatency.parse(options.injectLatency, options.latencyJitter, options.latencyScale);
+        long startedNanos = System.nanoTime();
         try (ReplayServer server = injected == null
-                ? new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode)
-                : new ReplayServer(options.host, options.port, bucket, fixture, connections, options.servingMode,
-                        injected)) {
+                ? new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
+                        options.servingMode, options.maxConcurrentRequests)
+                : new ReplayServer(options.host, options.port, bucket, fixture, options.parquetConnections,
+                        options.servingMode, injected, options.maxConcurrentRequests)) {
             server.start();
-            System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
-                            + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s%n",
-                    options.host, server.port(), bucket, fixture.toAbsolutePath(),
-                    server.resolvedServingMode(), connections,
-                    injected == null ? "off" : options.injectLatency, options.latencyScale);
-            server.join();
+            // Opened after the fixture is served, so a reader that can reach /metrics knows the
+            // index derive is already done and the numbers it reads are serving numbers.
+            try (MetricsEndpoint metrics = options.metricsPort < 0 ? null
+                    : MetricsEndpoint.start(options.host, options.metricsPort, server.metrics().registry(),
+                            server.resolvedServingMode().toString(), startedNanos)) {
+                System.err.printf("s3_listing_replay_server endpoint=http://%s:%d bucket=%s fixture=%s "
+                                + "serving_mode=%s parquet_connections=%d inject_latency=%s latency_scale=%s "
+                                + "metrics_endpoint=%s max_concurrent_requests=%d%n",
+                        options.host, server.port(), bucket, fixture.toAbsolutePath(),
+                        server.resolvedServingMode(), server.resolvedParquetConnections(),
+                        injected == null ? "off" : options.injectLatency, options.latencyScale,
+                        metrics == null ? "off" : metricsEndpoint(options.host, metrics.port()),
+                        options.maxConcurrentRequests);
+                server.join();
+            }
         }
         return 0;
+    }
+
+    static String metricsEndpoint(String host, int port) {
+        String authorityHost = host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
+        return "http://%s:%d/metrics".formatted(authorityHost, port);
     }
 
     @Command(name = "serve",

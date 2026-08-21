@@ -5,7 +5,6 @@
  */
 package io.varve.swath.replay.server;
 
-import io.varve.swath.replay.store.DuckDbListingStore;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,8 +37,8 @@ public final class BenchCommand implements Callable<Integer> {
     @Option(names = "--host", defaultValue = "127.0.0.1", description = "Bind host for the temporary server(s).")
     String host;
 
-    @Option(names = "--modes", defaultValue = "auto", split = ",",
-            description = "Serving mode(s) to benchmark: auto, duckdb, sorted. Comma-separated to run the SAME "
+    @Option(names = "--modes", defaultValue = "sorted", split = ",",
+            description = "Serving mode(s) to benchmark: sorted, duckdb. Comma-separated to run the SAME "
                     + "fixture through more than one mode in this invocation (e.g. sorted,duckdb), reporting a "
                     + "ratio of each later mode against the first.")
     List<ServingMode> modes;
@@ -64,9 +63,11 @@ public final class BenchCommand implements Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        int connections = parquetConnections > 0 ? parquetConnections : DuckDbListingStore.defaultConnectionCount();
+        // Passed through unresolved: this command runs one server per requested mode, so a single
+        // pre-resolved default would hand every mode the same number and hide exactly the per-mode
+        // difference the comparison exists to show. <= 0 means "each mode's own default".
         var options = new TokenWalkBenchmark.Options(
-                fixture, bucket, host, new ArrayList<>(modes), maxKeys, prefix, delimiter, connections);
+                fixture, bucket, host, new ArrayList<>(modes), maxKeys, prefix, delimiter, parquetConnections);
         TokenWalkBenchmark.Report report = TokenWalkBenchmark.run(options);
         System.out.print(report.humanTable());
         if (json != null) {

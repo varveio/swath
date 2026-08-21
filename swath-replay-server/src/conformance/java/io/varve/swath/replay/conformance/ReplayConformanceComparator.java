@@ -58,7 +58,10 @@ public final class ReplayConformanceComparator {
         String replayMetrics;
         try (ReplayServer server = new ReplayServer(
                 options.host(), 0, options.bucket(), options.fixture(), options.replayParquetConnections(),
-                ServingMode.AUTO)) {
+                // Explicitly DUCKDB, not a mode that picks: conformance serves raw HAR captures, which
+                // are the fixtures sorted serving cannot take, and the choice must be stated rather
+                // than arrived at by a fallback that a future eligibility change could silently move.
+                ServingMode.DUCKDB)) {
             server.start();
             HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(options.timeout())

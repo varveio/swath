@@ -54,7 +54,7 @@ class SortedModeConformanceTest {
         // Guard: auto must genuinely resolve this fixture to the SORTED path (not silently fall back),
         // so the conformance run below actually exercises role 2.
         try (ReplayServer sortedServer = new ReplayServer(
-                "127.0.0.1", 0, "bucket", sortedFixture, 0, ServingMode.AUTO)) {
+                "127.0.0.1", 0, "bucket", sortedFixture, 0, ServingMode.SORTED)) {
             sortedServer.start();
             assertThat(sortedServer.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
         }

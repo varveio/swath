@@ -33,7 +33,8 @@ final class SegmentParquetSink implements AutoCloseable {
     SegmentParquetSink(Path path, long rowGroupBytes) throws IOException {
         this.path = path;
         this.writer = ListEntryParquetWriters.build(
-                path, new ListEntryWriteSupport(ParquetSchema.canonical()), rowGroupBytes);
+                path, new ListEntryWriteSupport(ParquetSchema.canonical()), rowGroupBytes,
+                ListEntryParquetWriters.PageLayout.staging());
     }
 
     void write(ListEntry e) throws IOException {

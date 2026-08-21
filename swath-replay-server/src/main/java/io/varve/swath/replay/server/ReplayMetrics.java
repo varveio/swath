@@ -11,6 +11,9 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.EnumMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -47,6 +50,7 @@ public final class ReplayMetrics {
     private final Counter httpErrors;
     private final Timer httpRequestLatency;
     private final Timer fixtureListLatency;
+    private final Map<ShapeLatency.Shape, Timer> shapedRequestLatency;
     private final Counter servingPath;
     private final Timer pageReadLatency;
     private final Timer parquetQueryLatency;
@@ -83,6 +87,13 @@ public final class ReplayMetrics {
                 .publishPercentiles(0.5, 0.99).register(registry);
         fixtureListLatency = Timer.builder("swath.replay.fixture.list.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
+        shapedRequestLatency = new EnumMap<>(ShapeLatency.Shape.class);
+        for (ShapeLatency.Shape shape : ShapeLatency.Shape.values()) {
+            shapedRequestLatency.put(shape, Timer.builder("swath.replay.request.latency")
+                    .tag("shape", shape.name().toLowerCase(Locale.ROOT))
+                    .publishPercentiles(0.5, 0.99)
+                    .register(registry));
+        }
         servingPath = Counter.builder("swath.replay.serving.path").tag("mode", servingMode).register(registry);
         pageReadLatency = Timer.builder("swath.replay.page.read.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
@@ -172,6 +183,47 @@ public final class ReplayMetrics {
     public void recordPrefetchMiss(String reason) {
         Counter.builder("swath.replay.prefetch.window.miss")
                 .tag("reason", reason).register(registry).increment();
+    }
+
+    /**
+     * Records the server's own cost of serving one request, tagged with the request's
+     * {@link ShapeLatency.Shape shape} — {@code worker_page}, {@code pivot_probe} or
+     * {@code structure_probe}, the same three the latency injector keys on.
+     *
+     * <p>The shapes cost wildly different amounts to serve and are issued in wildly different
+     * proportions by different clients: a work-stealing scan probes constantly, a sequential pager
+     * only ever asks for worker pages. An untagged average over that mixture describes no client in
+     * particular, and moves when the client's mixture moves rather than when the server does — which
+     * is exactly the wrong behavior for a number whose job is to prove the server was not the
+     * bottleneck.
+     *
+     * <p>Timed around the fixture read and <b>excluding</b> any injected delay: this measures what
+     * the server costs, not what it was told to pretend to cost.
+     */
+    public void recordShapedRequest(Timer.Sample sample, ShapeLatency.Shape shape) {
+        sample.stop(shapedRequestLatency.get(shape));
+    }
+
+
+    /**
+     * Records one request the server could not serve within its injected latency profile, tagged
+     * with the request's shape, plus how far past the profile it went.
+     *
+     * <p>This is the fairness gate for any benchmark run against an injected profile. While the
+     * server is faster than the backend it imitates, every client observes exactly the profile and
+     * the server is invisible. Once it is slower, the client observes the server instead — and it
+     * does so unevenly, because server cost depends on the access pattern the client happens to
+     * have. A run whose overruns are a negligible fraction of its requests measured what it meant
+     * to; a run full of them measured the harness. Only a counter can tell those apart after the
+     * fact, and the server that could have said so is usually gone by then.
+     */
+    public void recordInjectionOverrun(ShapeLatency.Shape shape, long overshootNanos) {
+        String tag = shape.name().toLowerCase(Locale.ROOT);
+        Counter.builder("swath.replay.inject.overrun")
+                .tag("shape", tag).register(registry).increment();
+        DistributionSummary.builder("swath.replay.inject.overrun.ms")
+                .tag("shape", tag).register(registry)
+                .record(overshootNanos / 1_000_000.0);
     }
 
     /**

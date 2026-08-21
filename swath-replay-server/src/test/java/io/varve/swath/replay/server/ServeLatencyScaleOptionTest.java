@@ -18,6 +18,13 @@ import picocli.CommandLine;
  */
 class ServeLatencyScaleOptionTest {
 
+    @Test
+    void metricsEndpointBracketsIpv6Authorities() {
+        assertThat(ReplayServerApp.metricsEndpoint("::1", 9090)).isEqualTo("http://[::1]:9090/metrics");
+        assertThat(ReplayServerApp.metricsEndpoint("127.0.0.1", 9090))
+                .isEqualTo("http://127.0.0.1:9090/metrics");
+    }
+
     /** Mirrors {@link ReplayServerApp#main}'s own parser configuration. */
     private static CommandLine parser(Object command) {
         return new CommandLine(command).setCaseInsensitiveEnumValuesAllowed(true);

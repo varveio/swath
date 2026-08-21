@@ -34,9 +34,9 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code duckdb} — always the role-1 DuckDB store (materialised); the oracle, any capture.</li>
  *   <li>{@code sorted} — require a stamped, objects-mode, strictly-sorted fixture; otherwise fail
  *       fast with a clear message (the server does not start).</li>
- *   <li>{@code auto} — serve sorted when eligible; otherwise fall back to DuckDB, recording
- *       {@code serving.fallback\{reason\}} and logging why.</li>
  * </ul>
+ *
+ * <p>There is deliberately no mode that picks for you — see {@link ServingMode}.
  */
 public final class ReplayServingFactory {
 
@@ -52,7 +52,7 @@ public final class ReplayServingFactory {
 
     /**
      * Opens {@code fixturePath} under the requested {@code mode}. {@code parquetConnections <= 0}
-     * uses the CPU-bounded default for the chosen store (also the request-concurrency bound).
+     * uses the chosen store's own default (also the request-concurrency bound).
      *
      * @throws IllegalArgumentException in {@code sorted} mode when the fixture is not sorted-eligible
      */
@@ -74,22 +74,6 @@ public final class ReplayServingFactory {
                 throw new IllegalArgumentException(
                         "--serving-mode sorted requires a stamped, objects-mode, strictly-sorted, "
                                 + "pure-OBJECT fixture (" + reason + "): " + fixturePath);
-            }
-            case AUTO -> {
-                SortedEligibility.Result eligibility = SortedEligibility.decide(files, fixtureMetrics, true);
-                if (eligibility instanceof SortedEligibility.Result.Eligible eligible) {
-                    yield sorted(files, eligible.index(), parquetConnections, registry);
-                }
-                String reason = ((SortedEligibility.Result.Ineligible) eligibility).reason();
-                // SANITY_FAILED/MIXED_ROW_TYPES are recorded inside SortedFixtures.loadIndex; record
-                // the other reasons (which never reached loadIndex) here so every auto decline lands
-                // exactly one counter, never zero and never two.
-                if (!SortedEligibility.RECORDED_BY_LOAD_INDEX.contains(reason)) {
-                    fixtureMetrics.recordFallback(reason);
-                }
-                log.info("replay_serving auto declined sorted serving (reason={}) — falling back to DuckDB for {}",
-                        reason, fixturePath);
-                yield duckDb(fixturePath, parquetConnections, registry);
             }
         };
     }
