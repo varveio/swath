@@ -1,0 +1,37 @@
+# swath replay toolkit image — fixture data is supplied at runtime.
+#
+# A local build compiles :swath-replay:installDist from source. CI and release builds
+# replace the `build` stage with the promotion payload produced from the already-tested
+# installDist tree, preserving the same build-once/promote-exact-bytes contract as the
+# main swath image. The distribution is architecture-neutral; only the JRE base varies.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:3eb81ed94d8c1a34422f19f8188548bdf02cae69c91d0328afdbb7abed90f617 AS build
+WORKDIR /src
+
+COPY gradlew ./
+COPY gradle/ gradle/
+COPY build-logic/ build-logic/
+COPY settings.gradle.kts build.gradle.kts gradle.properties ./
+COPY swath-model/build.gradle.kts swath-model/build.gradle.kts
+COPY swath-core/build.gradle.kts swath-core/build.gradle.kts
+COPY swath-s3/build.gradle.kts swath-s3/build.gradle.kts
+COPY swath-cli/build.gradle.kts swath-cli/build.gradle.kts
+COPY swath-replay/build.gradle.kts swath-replay/build.gradle.kts
+COPY swath-sim/build.gradle.kts swath-sim/build.gradle.kts
+RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon help >/dev/null 2>&1 || true
+
+COPY . .
+RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-replay:installDist
+
+# RUN-free runtime stage keeps foreign-architecture builds free of emulation. The Gradle
+# launcher uses `exec`, so the JVM becomes PID 1 and receives container signals directly.
+FROM eclipse-temurin:25-jre-noble@sha256:2f1da100788559b397bcf48c736169ea5b070bde84e55f203bbee8e83d87a175 AS runtime
+
+COPY --from=build --chown=10001:10001 /src/swath-replay/build/install/swath-replay /opt/swath-replay
+COPY --from=build --chown=10001:10001 /src/LICENSE /opt/swath-replay/LICENSE
+COPY --from=build --chown=10001:10001 /src/NOTICE /opt/swath-replay/NOTICE
+COPY --from=build --chown=10001:10001 /src/THIRD_PARTY_NOTICES.md /opt/swath-replay/THIRD_PARTY_NOTICES.md
+
+USER 10001:10001
+WORKDIR /opt/swath-replay
+
+ENTRYPOINT ["/opt/swath-replay/bin/swath-replay"]

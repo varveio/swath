@@ -56,7 +56,7 @@ subprojects {
     apply(plugin = "com.github.jk1.dependency-license-report")
 
     configure<LicenseReportExtension> {
-        // Only the runtime closure ships (fat jar / replay-server dist). Test-only, JMH,
+        // Only the runtime closure ships (fat jar / replay dist). Test-only, JMH,
         // and annotation-processor deps are never distributed — out of scope.
         configurations = arrayOf("runtimeClasspath")
 

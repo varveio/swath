@@ -11,12 +11,21 @@ payload=$1
 reference_jar=${2:-}
 required=(
   src/swath-cli/build/libs/swath.jar
+  src/swath-replay/build/install/swath-replay/bin/swath-replay
+  src/swath-replay/build/install/swath-replay/bin/swath-replay-conformance
   src/LICENSE
   src/NOTICE
   src/THIRD_PARTY_NOTICES.md
 )
 for path in "${required[@]}"; do
   test -s "$payload/$path" || { echo "promotion payload missing or empty: $path" >&2; exit 1; }
+done
+
+for launcher in swath-replay swath-replay-conformance; do
+  test -x "$payload/src/swath-replay/build/install/swath-replay/bin/$launcher" || {
+    echo "promotion payload launcher is not executable: $launcher" >&2
+    exit 1
+  }
 done
 
 test -s "$payload/SHA256SUMS" || { echo "promotion payload lacks SHA256SUMS" >&2; exit 1; }

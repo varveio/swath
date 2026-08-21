@@ -21,7 +21,8 @@ human side of it.
 
 ## Container tags
 
-- **Releases** publish `ghcr.io/varveio/swath:X.Y.Z` and `:latest`.
+- **Releases** publish `ghcr.io/varveio/swath:X.Y.Z` and
+  `ghcr.io/varveio/swath-replay:X.Y.Z`, plus `:latest` for each package.
 - **Merges to `main`** publish the immutable `sha-<gitsha>` tag plus the mutable `main`
   pointer.
 - **Manual dispatch** (any branch) publishes `sha-<gitsha>` **only** — the branch-name tag
@@ -91,8 +92,8 @@ For each `vX.Y.Z` tag, once the environment is approved:
 - the exact tested fat jar as `swath-X.Y.Z.jar`, `.zip`/`.tar.gz` distributions, and an
   SPDX SBOM;
 - a `SHA256SUMS` file plus a per-asset keyless (cosign) signature bundle;
-- a multi-arch (`linux/amd64,linux/arm64`) container image built from the exact tested
-  jar, signed and attested;
+- multi-arch (`linux/amd64,linux/arm64`) `swath` and `swath-replay` container images built
+  from the exact tested jar/installDist artifacts, signed and attested;
 - a GitHub release led by the repository-owned human summary, followed by generated notes
   from the merged pull requests.
 
@@ -127,8 +128,11 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
 # 3. The image, by digest.
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
   ghcr.io/varveio/swath@sha256:<digest>
+cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+  ghcr.io/varveio/swath-replay@sha256:<replay-digest>
 
 # 4. Build provenance — which workflow, at which commit, built this.
 gh attestation verify oci://ghcr.io/varveio/swath@sha256:<digest> --repo varveio/swath
+gh attestation verify oci://ghcr.io/varveio/swath-replay@sha256:<replay-digest> --repo varveio/swath
 gh attestation verify SHA256SUMS --repo varveio/swath
 ```

@@ -25,7 +25,7 @@ The Gradle module graph and allowed dependencies are documented separately in
 | Observability | `observability` | Meters, progress, run summaries, fingerprints, and traces. |
 | CLI | `cli` | Picocli commands, option validation, target parsing, and exit codes. |
 
-`swath-sim` drives the policy layer in virtual time. `swath-replay-server` serves a
+`swath-sim` drives the policy layer in virtual time. `swath-replay` serves a
 captured listing through an S3-like API for repeatable integration and performance work.
 Neither sits on the production listing path.
 

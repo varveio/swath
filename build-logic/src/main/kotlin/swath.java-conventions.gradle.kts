@@ -36,7 +36,7 @@ java {
 // the resolved runtimeClasspath that `installDist` packages. A configuration-level
 // exclude filters the whole resolved graph regardless of which edge introduced the
 // module, so it reaches every module's runtimeClasspath (in particular swath-cli's and
-// swath-replay-server's, the ones whose installDist actually ships a lib/ directory).
+// swath-replay's, the ones whose installDist actually ships a lib/ directory).
 configurations.all {
     exclude(group = "org.apache.hadoop", module = "hadoop-auth")
     exclude(group = "org.apache.hadoop", module = "hadoop-hdfs-client")

@@ -21,7 +21,7 @@
 # uber-jar for this stage via a BuildKit build-context override
 # (`--build-context build=<dir>` / `build-contexts: build=promote`), so the pushed
 # image ships the exact bytes that passed the tests and skips this recompile — while
-# a bare `docker build .` (and the PR docker-image job) still exercises this stage
+# a bare `docker build .` (and the PR docker-check job) still exercises this stage
 # from source. The override dir mirrors this stage's output path
 # (/src/swath-cli/build/libs/swath.jar); keep the runtime COPY below in sync with it.
 # See .github/workflows/ci.yml.
@@ -51,7 +51,8 @@ COPY swath-model/build.gradle.kts swath-model/build.gradle.kts
 COPY swath-core/build.gradle.kts swath-core/build.gradle.kts
 COPY swath-s3/build.gradle.kts swath-s3/build.gradle.kts
 COPY swath-cli/build.gradle.kts swath-cli/build.gradle.kts
-COPY swath-replay-server/build.gradle.kts swath-replay-server/build.gradle.kts
+COPY swath-replay/build.gradle.kts swath-replay/build.gradle.kts
+COPY swath-sim/build.gradle.kts swath-sim/build.gradle.kts
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon help >/dev/null 2>&1 || true
 
 COPY . .

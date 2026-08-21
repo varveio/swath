@@ -1,7 +1,7 @@
 # Packaging and release engineering
 
 This is the contributor reference for building, packaging, testing, and publishing the
-self-contained jar, application archives, and Docker image. It is not the installation or
+self-contained jar, application archives, and container images. It is not the installation or
 container-usage guide. To run a release, use [Installation](install.md); for credentials,
 output mounts, and production object-store access, use
 [Operating swath](operating.md).
@@ -11,8 +11,8 @@ For the module and dependency graph behind the artifacts, see
 
 ## 1. Overview
 
-`swath` is a Java 25 object-store lister. One Gradle build produces three
-equivalent ways to run it:
+`swath` is a Java 25 object-store lister with a separately distributed replay toolkit. One
+Gradle build produces three equivalent ways to run the lister:
 
 - an **uber-jar** (`swath.jar`) — `java -jar swath.jar ...`,
 - an **`installDist` tree** (`bin/swath` + `lib/`) — a launcher script plus
@@ -20,7 +20,9 @@ equivalent ways to run it:
 - a **Docker image** — a container that runs the uber-jar.
 
 All three are built from the same `swath-cli` module and the same compiled
-classes; nothing is compiled twice.
+classes; nothing is compiled twice. The `swath-replay` module additionally produces an
+`installDist` toolkit and a separate `ghcr.io/varveio/swath-replay` image. It is not folded
+into the lister jar or image.
 
 ## 2. Prerequisites
 
@@ -51,13 +53,13 @@ faster, Docker-free inner loop (no Testcontainers/LocalStack), add
 ```
 
 See [`build-and-modules.md`](internals/build-and-modules.md) for the module graph
-(`swath-model` → `swath-core` → `swath-s3`/`swath-replay-server` → `swath-cli`)
+(`swath-model` → `swath-core` → `swath-s3`/`swath-replay` → `swath-cli`)
 and dependency rules, and [`ops/dev/TESTING.md`](ops/dev/TESTING.md) for the
 full set of test-tier gradle properties.
 
 ## 4. Distributions
 
-Both distributions below are produced by the `swath-cli` module
+The two CLI packaging forms below are produced by the `swath-cli` module
 (`swath-cli/build.gradle.kts`) and share the same compiled classes and
 runtime classpath — they differ only in how that classpath is packaged.
 
@@ -104,6 +106,16 @@ passing extra JVM flags without editing the script. `distZip`/`distTar`
 (and their `assembleDist` aggregate) package the same tree as a `.zip`/`.tar.gz`
 for distribution without a JDK-execute step.
 
+### Replay toolkit (`bin/swath-replay`)
+
+```
+./gradlew :swath-replay:installDist
+swath-replay/build/install/swath-replay/bin/swath-replay --help
+```
+
+The replay distribution carries `swath-replay` and `swath-replay-conformance`. It is a separate developer toolkit, not
+part of the `swath` CLI distribution. See the [replay toolkit guide](swath-replay.md).
+
 ### Dependency slimming
 
 `swath` only ever lists/reads/writes local Parquet — it never talks to HDFS,
@@ -118,7 +130,7 @@ which transitive edge would otherwise reintroduce it. This keeps unused service
 stacks out of every distribution. `hadoop-common` still brings some runtime
 transitives; inspect the current distribution if artifact size matters to you.
 
-## 5. Docker image
+## 5. Docker images
 
 ### Build
 
@@ -128,6 +140,16 @@ needs no prior host Gradle run:
 ```
 docker build -t swath:dev .
 ```
+
+`Dockerfile.replay` builds the replay toolkit independently:
+
+```
+docker build -f Dockerfile.replay -t swath-replay:dev .
+```
+
+It runs the Gradle `installDist` launcher as numeric UID/GID `10001:10001` from
+`/opt/swath-replay`. The published image contains no fixture; callers mount fixture data at
+runtime as documented in the [replay toolkit guide](swath-replay.md#container-image).
 
 For a local multi-arch build (`linux/amd64` + `linux/arm64`), loaded into the
 local image store with no registry push:
@@ -172,10 +194,10 @@ in [Getting started](getting-started.md) and
 
 ### Multi-arch
 
-The image supports `linux/amd64` and `linux/arm64` with **no QEMU emulation**
+Both images support `linux/amd64` and `linux/arm64` with **no QEMU emulation**
 required, even when building the non-native architecture on a single-arch CI
 runner: the runtime stage is deliberately `RUN`-free (it only pulls the
-per-arch JRE base image and `COPY`s the arch-neutral uber-jar onto it), so
+per-arch JRE base image and `COPY`s the arch-neutral uber-jar or replay installDist onto it), so
 there is nothing to *execute* in the foreign-arch rootfs during the build —
 only pull, copy, and metadata operations, all of which work without
 emulating the target CPU.
@@ -198,10 +220,14 @@ Note this differs from the `installDist` launcher (§4), which reads
 `JAVA_OPTS`/`SWATH_OPTS` — the Docker entrypoint invokes `java` directly with
 no such script in between, so those variables have no effect here.
 
+The replay image uses the Gradle launcher as its entrypoint; that script replaces itself with
+the JVM, so signal delivery remains direct. It accepts `JAVA_OPTS` and `SWATH_REPLAY_OPTS` in
+addition to the JVM-native `JAVA_TOOL_OPTIONS`.
+
 ## 6. Container images (GHCR)
 
-The tag-driven release workflow publishes a multi-arch image at
-`ghcr.io/varveio/swath`. The exact image path and digest are printed in the
+The tag-driven release workflow publishes multi-arch images at
+`ghcr.io/varveio/swath` and `ghcr.io/varveio/swath-replay`. Their exact paths and digests are printed in the
 workflow run summary. Package visibility is controlled by the repository's GHCR
 settings; build from source (§3–§5) if the package is not available to your
 account.
@@ -211,6 +237,7 @@ immutable reference:
 
 ```
 docker pull ghcr.io/varveio/swath@sha256:<digest>
+docker pull ghcr.io/varveio/swath-replay@sha256:<digest>
 ```
 
 The release workflow prints the pushed manifest's digest to its run summary, so
@@ -220,14 +247,15 @@ ships the signed, attested assets to verify against
 
 ### Tags & versioning
 
-Each release image carries these tags:
+Each release image carries the same release-cadence tags:
 
 | Tag | Meaning | Mutable? |
 |---|---|---|
 | `<version>` (e.g. `0.1.0`) | The release tag's canonical Gradle version | Intended immutable |
 | `latest` | Most recently published release | Moves |
 
-The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
+The replay image shares the repository's canonical Gradle version and release cadence but is
+not a GitHub release archive or part of the CLI image. The uber-jar ships as a versioned release asset, `swath-<version>.jar` (the build
 output keeps the fixed `swath.jar` name — the image promotion depends on it).
 Release tags must exactly match the canonical
 Gradle version (`v0.1.0` ↔ `0.1.0`). **For anything that must not shift under
@@ -236,11 +264,10 @@ it — for example a downstream image built `FROM` this one — pin the digest, 
 
 ## 7. CI image checks and release publication
 
-Two jobs in `.github/workflows/ci.yml` handle CI images. **`docker-check`**
-builds the multi-arch image (validating both `linux/amd64` and `linux/arm64`,
-no QEMU per §5), loads the native-arch build, and smoke-tests it
-(`docker run … --help`) — it never pushes. **`docker-publish`** builds, runs a
-deep container smoke, and pushes dev images to GHCR. Tagged publication belongs
+Two jobs in `.github/workflows/ci.yml` handle both CI images. **`docker-check`**
+builds each multi-arch image (validating both `linux/amd64` and `linux/arm64`,
+no QEMU per §5), loads native-arch builds, and smoke-tests their launchers — it never pushes.
+**`docker-publish`** builds, smokes, and pushes both dev images to GHCR. Tagged publication belongs
 to `.github/workflows/release.yml`, behind the protected `public-release`
 environment.
 
@@ -278,7 +305,7 @@ which queues publishes so shared tags cannot race. The `push` trigger is scoped
 to `main`, so
 **pushing a feature branch by itself runs nothing** — a feature branch is
 exercised through its **pull request**, which builds and smoke-tests the image
-but does not push it. Ordinary merges never publish; manual dispatch is a
+but does not push it. Merges to `main` publish development tags; manual dispatch is a
 maintainer decision. Public tagged releases require the guarded release
 workflow described above. PRs from forks never push and never touch registry
 credentials.

@@ -148,11 +148,11 @@ default `:swath-core:test` tier (no `@Tag`) — every commit.
 - **No real-bucket replay fixtures.** The fixture matrix is entirely synthetic
   (`Keyspaces.*` generators, plus a few hand-built keyspaces in
   `DecisionTraceGoldenTest` itself). Real-bucket fixtures served through
-  `:swath-replay-server` would be a strong addition, but `swath-replay-server`
+  `:swath-replay` would be a strong addition, but `swath-replay`
   *depends on* `swath-core` — reaching it from `swath-core`'s own test source set
   would need a dependency cycle, so it cannot be wired in from here as this module
   is laid out today. If this gap is worth closing, the goldens (or a
-  replay-server-backed variant of them) cannot live in `swath-core`. `swath-sim`
+  replay-backed variant of them) cannot live in `swath-core`. `swath-sim`
   now depends on both core and the replay server and is the available home for
   such a check, but no end-to-end real-fixture golden trace-parity test exists
   there today. This is a standing coverage gap, not a claim that the simulator's

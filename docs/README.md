@@ -59,7 +59,7 @@ For the repository-level technical model, continue with
 - [Build and module structure](internals/build-and-modules.md)
 - [Testing](ops/dev/TESTING.md)
 - [Packaging and release engineering](packaging-and-docker.md)
-- [Replay server reference](swath-replay-server.md) and the
+- [Replay toolkit reference](swath-replay.md) and the
   [reproduction workflow](replay-troubleshooting.md)
 - [Decision-trace goldens](ops/dev/decision-trace-goldens.md)
 - [Field investigations](ops/dev/field-investigations.md) — dated supporting

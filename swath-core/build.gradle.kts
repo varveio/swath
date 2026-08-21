@@ -55,7 +55,7 @@ dependencies {
     // bindings so logback stays the only SLF4J binding.
     // Deliberately `implementation`, NOT `api`, even though some public output.parquet types
     // (ParquetSchema/PartWriter/ParquetWriterPool) expose parquet `MessageType` — making it `api`
-    // would put parquet on swath-replay-server's COMPILE classpath (it depends on core via
+    // would put parquet on swath-replay's COMPILE classpath (it depends on core via
     // `implementation`), breaking the compile-classpath-purity guard, i.e.
     // verifyNoParquetOrHadoopOnCompileClasspath (docs/internals/build-and-modules.md, Dependency
     // rules). A published-swath-core consumer that uses the parquet-output classes adds parquet

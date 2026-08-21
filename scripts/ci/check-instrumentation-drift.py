@@ -1135,7 +1135,7 @@ def parse_doc_table(doc_path: Path) -> list[DocRow]:
 
 # Multi-module layout: the root is now an aggregator with no production
 # src/ -- what used to be one `src/main/java` tree is split across these modules.
-# swath-replay-server is deliberately EXCLUDED: its FixtureMetrics#recordStealReason
+# swath-replay is deliberately EXCLUDED: its FixtureMetrics#recordStealReason
 # was never scanned pre-reorg either (it always lived in its own top-level module,
 # never under the root's `src/`), so excluding it here is a no-op vs. prior behavior,
 # not a new gap -- the guard's job is the LISTING engine's instrumentation, not the

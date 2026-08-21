@@ -61,7 +61,7 @@ The test-side mirror of `ByteMidpoint.isSafe`'s excluded set,
 same `0x25` exclusion so the properties that guard synthesis check against the same set
 the production code enforces.
 
-**Why swath's own replay server doesn't catch this.** `swath-replay-server` is deliberately
+**Why swath's own replay server doesn't catch this.** `swath-replay` is deliberately
 S3-faithful in its XML encoding — it re-percent-encodes echoed fields the way real S3 does, not
 verbatim — so replaying a fixture through it can never reproduce this crash. The actual
 LocalStack integration-test path exercises the verbatim-echo behavior; a hermetic hand-
