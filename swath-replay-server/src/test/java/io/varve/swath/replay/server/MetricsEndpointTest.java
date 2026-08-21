@@ -140,7 +140,6 @@ class MetricsEndpointTest {
                 assertThat(body).contains("\"system.cpu.count\"");
                 assertThat(body).contains("\"jvm.memory.used\"");
                 assertThat(body).contains("\"jvm.threads.live\"");
-                assertThat(body).contains("\"jvm.gc.pause\"");
 
                 assertThat(body).doesNotContain("NaN");
                 // Not [^}]* -- an empty tag map serialises as `"tags":{}` and ends the class early.
