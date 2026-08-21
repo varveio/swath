@@ -10,8 +10,8 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.filter.SizeParser;
 import io.varve.swath.output.OutputFormat;
-import io.varve.swath.output.parquet.PartWriter;
 import io.varve.swath.output.text.TextCompression;
+import io.varve.swath.output.text.TextWriterPoolConfig;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.FileDescriptor;
@@ -45,7 +45,8 @@ final class OutputOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--compression", paramLabel = "none|gzip|zstd", converter = CompressionConverter.class,
-            description = "Compress text output; inferred from .gz/.zst when omitted (default: none).")
+            description = "Compress table/TSV/JSONL streams, files, or dataset parts; inferred from "
+                    + ".gz/.zst file names when omitted (default: none).")
     void setCompression(TextCompression compression) {
         this.compression = compression;
         this.compressionSpecified = true;
@@ -120,7 +121,8 @@ final class OutputOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--text-writers", paramLabel = "N",
-            description = "Parallel writers for a TSV/JSONL directory dataset (default: 3; range: 2-4).")
+            description = "Parallel writers for a TSV/JSONL directory dataset (default: 3; range: "
+                    + TextWriterPoolConfig.MIN_WRITERS + "-" + TextWriterPoolConfig.MAX_WRITERS + ").")
     int textWriters = 3;
 
     /** Resolved -o destination kind: set once by {@link #resolveOutput} in {@code call()}. */
@@ -133,9 +135,9 @@ final class OutputOptions {
      * step with its {@code resolved} local across the resume restore. */
     OutputFormat resolvedFormat;
 
-    /** The two axes {@code -o} resolves to: a durable directory dataset (today: parquet
-     * only -- the multi-writer pool) or an atomically-named single file. {@code STDOUT} is its own
-     * kind (no destination given, or {@code -o -}). */
+    /** The two axes {@code -o} resolves to: a directory dataset (Parquet, TSV, or JSONL) or an
+     * atomically-published single file. {@code STDOUT} is its own kind (no destination given, or
+     * {@code -o -}). */
     enum DestinationKind { STDOUT, FILE, DIRECTORY }
 
     /** A fully resolved {@code --format} x {@code -o} decision. */
@@ -160,7 +162,7 @@ final class OutputOptions {
     }
 
     private static String extensionOf(String destination) {
-        Path name = Path.of(destination).getFileName();
+        Path name = Path.of(stripTrailingSeparators(destination)).getFileName();
         String fileName = name == null ? "" : withoutCompressionExtension(name.toString());
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot).toLowerCase(Locale.ROOT);
@@ -175,18 +177,10 @@ final class OutputOptions {
         // for the final name component, otherwise a recorded
         // "out.jsonl/" would evade FILE-origin resume refusal. Treat both common separator
         // spellings as metadata may have been written on a different host OS.
-        int end = destination.length();
-        while (end > 0) {
-            char last = destination.charAt(end - 1);
-            if (last != '/' && last != '\\') {
-                break;
-            }
-            end--;
-        }
-        if (end == 0) {
+        String normalized = stripTrailingSeparators(destination);
+        if (normalized.isEmpty()) {
             return null;
         }
-        String normalized = destination.substring(0, end);
         String fileName;
         try {
             Path name = Path.of(normalized).getFileName();
@@ -222,17 +216,21 @@ final class OutputOptions {
         if (isStdoutDestination()) {
             return TextCompression.NONE;
         }
-        int end = destination.length();
+        String lower = stripTrailingSeparators(destination).toLowerCase(Locale.ROOT);
+        return lower.endsWith(".gz") ? TextCompression.GZIP
+                : lower.endsWith(".zst") ? TextCompression.ZSTD : TextCompression.NONE;
+    }
+
+    private static String stripTrailingSeparators(String value) {
+        int end = value.length();
         while (end > 0) {
-            char last = destination.charAt(end - 1);
+            char last = value.charAt(end - 1);
             if (last != '/' && last != '\\') {
                 break;
             }
             end--;
         }
-        String lower = destination.substring(0, end).toLowerCase(Locale.ROOT);
-        return lower.endsWith(".gz") ? TextCompression.GZIP
-                : lower.endsWith(".zst") ? TextCompression.ZSTD : TextCompression.NONE;
+        return value.substring(0, end);
     }
 
     private void resolveCompression(OutputFormat resolved) throws InvalidArgsException {
@@ -244,7 +242,10 @@ final class OutputOptions {
         }
         resolvedCompression = compressionSpecified ? compression : inferred;
         if (resolved == OutputFormat.PARQUET && resolvedCompression != TextCompression.NONE) {
-            throw new InvalidArgsException("--compression applies only to text output formats "
+            String cause = compressionSpecified
+                    ? "--compression " + resolvedCompression.name().toLowerCase(Locale.ROOT)
+                    : "the compression extension of -o " + destination;
+            throw new InvalidArgsException(cause + " applies only to text output formats "
                     + "(table, tsv, jsonl); Parquet manages its own compression");
         }
     }
@@ -400,6 +401,9 @@ final class OutputOptions {
         }
         String what = resolvedKind == DestinationKind.DIRECTORY
                 ? token(resolved.format()) + " dataset" : token(resolved.format());
+        if (resolvedCompression != TextCompression.NONE) {
+            what += " (" + resolvedCompression.name().toLowerCase(Locale.ROOT) + ")";
+        }
         err.println("→ writing " + what + " to " + destination);
     }
 
@@ -482,6 +486,9 @@ final class OutputOptions {
      */
     static final Duration MIN_PART_ROTATION_INTERVAL = Duration.ofMillis(100);
 
+    /** Shared default rotation target for Parquet and partitioned text parts. */
+    static final long DEFAULT_PART_SIZE_BYTES = 256L * 1024 * 1024;
+
     /**
      * Resolve the Parquet writer-pool size, enforcing the contract's bounded memory model
      * (contract §4.1 "2–4 writers", I11). A {@code -o path.parquet} single-file destination
@@ -503,20 +510,31 @@ final class OutputOptions {
     }
 
     int resolveTextWriters() throws InvalidConfigException {
-        if (textWriters < MIN_PARQUET_WRITERS || textWriters > MAX_PARQUET_WRITERS) {
-            throw new InvalidConfigException("--text-writers must be between 2 and 4 (got " + textWriters + ")");
+        if (textWriters < TextWriterPoolConfig.MIN_WRITERS
+                || textWriters > TextWriterPoolConfig.MAX_WRITERS) {
+            throw new InvalidConfigException("--text-writers must be between "
+                    + TextWriterPoolConfig.MIN_WRITERS + " and " + TextWriterPoolConfig.MAX_WRITERS
+                    + " (got " + textWriters + ")");
         }
         return textWriters;
     }
 
     /** The Parquet part rotation target in bytes: {@code --parquet-part-size} if set, else 256 MB. */
     long partSizeBytes() throws InvalidConfigException, InvalidArgsException {
-        return partSize != null ? SizeParser.parse(partSize)
-                : PartWriter.ROW_GROUP_BYTES * 4;
+        return positivePartSize("--parquet-part-size",
+                partSize != null ? SizeParser.parse(partSize) : DEFAULT_PART_SIZE_BYTES);
     }
 
     long textPartSizeBytes() throws InvalidConfigException, InvalidArgsException {
-        return textPartSize != null ? SizeParser.parse(textPartSize) : 256L * 1024 * 1024;
+        return positivePartSize("--text-part-size",
+                textPartSize != null ? SizeParser.parse(textPartSize) : DEFAULT_PART_SIZE_BYTES);
+    }
+
+    private static long positivePartSize(String option, long bytes) throws InvalidConfigException {
+        if (bytes <= 0) {
+            throw new InvalidConfigException(option + " must be greater than zero");
+        }
+        return bytes;
     }
 
     Duration resolvePartRotationInterval() throws InvalidConfigException {
@@ -570,36 +588,56 @@ final class OutputOptions {
     private Path pendingRealPath;
     private Writer pendingWriter;
 
+    @FunctionalInterface
+    interface EncodedWriterFactory {
+        Writer open(OutputStream stream) throws IOException;
+    }
+
+    EncodedWriterFactory encodedWriterFactoryOverride;
+
     /**
-     * Open the text output sink. Stdout is opened directly (fd 1). A real {@code -o} destination is
-     * always FILE-kind for text formats (a directory dataset is rejected upstream in {@link
-     * #resolveOutput}) and is staged through a hidden temp sibling — {@link #commitFileSink()}
+     * Open a streaming text output sink. Stdout is opened directly (fd 1). A FILE-kind {@code -o}
+     * destination is staged through a hidden temp sibling — {@link #commitFileSink()}
      * atomically renames it into place, and MUST be called by the caller only after a successful
      * run (never on a crash/exception path), so an interrupted run leaves no partial file at the
      * real destination. Single-file destinations are non-resumable (refused in {@link
      * ListCommand#runWithCheckpoint}), so there is no append mode to support here.
      */
     Writer openSink() throws IOException {
-        OutputStream os;
         if (isStdoutDestination()) {
-            os = new FileOutputStream(FileDescriptor.out);   // raw fd → broken pipe throws (INT-12)
-        } else {
-            Path real = Path.of(destination);
-            Path name = real.getFileName();
-            String prefix = "." + (name == null ? "swath-out" : name.toString()) + ".swath.";
-            Path parent = real.getParent();
-            Path temp = Files.createTempFile(parent == null ? Path.of(".") : parent, prefix, ".tmp");
-            pendingTempPath = temp;
-            pendingRealPath = real;
-            try {
-                os = Files.newOutputStream(temp, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-            } catch (IOException | RuntimeException | Error e) {
-                // createTempFile succeeded, so make an open failure obey the same zero-litter
-                // contract as a later listing/write failure. cleanupFileSink is best-effort and
-                // therefore cannot mask the primary open exception.
-                cleanupFileSink();
-                throw e;
+            return encode(new FileOutputStream(FileDescriptor.out));   // raw fd → broken pipe throws (INT-12)
+        }
+        Path real = Path.of(destination);
+        Path name = real.getFileName();
+        String prefix = "." + (name == null ? "swath-out" : name.toString()) + ".swath.";
+        Path parent = real.getParent();
+        Path temp = Files.createTempFile(parent == null ? Path.of(".") : parent, prefix, ".tmp");
+        pendingTempPath = temp;
+        pendingRealPath = real;
+        OutputStream os = null;
+        try {
+            os = Files.newOutputStream(temp, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            Writer writer = encode(os);
+            pendingWriter = writer;
+            return writer;
+        } catch (IOException | RuntimeException | Error e) {
+            if (os != null) {
+                try {
+                    os.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
             }
+            // createTempFile succeeded, so both raw-open and compression-wrapper failures obey
+            // the zero-litter contract without leaking the descriptor or masking the primary error.
+            cleanupFileSink();
+            throw e;
+        }
+    }
+
+    private Writer encode(OutputStream os) throws IOException {
+        if (encodedWriterFactoryOverride != null) {
+            return encodedWriterFactoryOverride.open(os);
         }
         OutputStream buffered = new BufferedOutputStream(os);
         OutputStream encoded = switch (resolvedCompression) {
@@ -607,11 +645,7 @@ final class OutputOptions {
             case GZIP -> new GZIPOutputStream(buffered);
             case ZSTD -> new ZstdOutputStream(buffered);
         };
-        Writer writer = new BufferedWriter(new OutputStreamWriter(encoded, StandardCharsets.UTF_8));
-        if (!isStdoutDestination()) {
-            pendingWriter = writer;
-        }
-        return writer;
+        return new BufferedWriter(new OutputStreamWriter(encoded, StandardCharsets.UTF_8));
     }
 
     /**

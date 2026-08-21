@@ -21,6 +21,7 @@ import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.testkit.MockObject;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -626,8 +627,8 @@ final class ResumeCommandTest {
         DatasetLayout layout =
                 DatasetLayout.of(outputDir);
         Files.createDirectories(layout.dataDir());
-        Files.writeString(layout.manifest(),
-                "{\"sourceBucket\":\"" + BUCKET + "\",\"files\":[]}");
+        Manifest.write(outputDir, BUCKET, "message swath { required binary key; }",
+                List.of(), false, null);
         Files.writeString(layout.success(), "");
         // No co-located checkpoint: completion deleted it.
         assertThat(CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir)).doesNotExist();

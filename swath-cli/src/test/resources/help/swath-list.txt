@@ -29,8 +29,9 @@ List a bucket or prefix.
 
 Output:
       --compression=none|gzip|zstd
-                             Compress text output; inferred from .gz/.zst when
-                               omitted (default: none).
+                             Compress table/TSV/JSONL streams, files, or
+                               dataset parts; inferred from .gz/.zst file names
+                               when omitted (default: none).
       --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
                                parquet (default: auto).
   -o, --output=PATH          Write to PATH; known extension selects a file,
@@ -118,9 +119,10 @@ Run control:
 Resume:
       --checkpoint=PATH|none|auto
                              auto (default) co-locates the checkpoint in a
-                               directory output (<dir>/.swath/checkpoint.
-                               sqlite) and keeps nothing for stdout; a path
-                               pins the SQLite file; none runs ephemeral.
+                               managed Parquet directory (<dir>/.
+                               swath/checkpoint.sqlite) and keeps nothing for
+                               streams/files; a path pins the SQLite file; none
+                               runs ephemeral (required for TSV/JSONL datasets).
       --force, --overwrite   Discard a COMPLETED run for this destination and
                                re-list it.
       --restart              Discard any prior checkpoint and start fresh.

@@ -40,9 +40,10 @@ history and delete-marker listing are not implemented yet.
 
 `--format auto` is the default. It chooses an aligned table when stdout is a terminal
 and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, and
-`parquet`. `--compression none|gzip|zstd` compresses text output to a file or stdout;
-for files it is also inferred from `.gz` or `.zst`. Parquet uses its own compression
-and rejects this option.
+`parquet`. `--compression none|gzip|zstd` compresses table, TSV, or JSONL output to a
+file or stdout, and TSV/JSONL parts in a directory dataset. For files it is also
+inferred from `.gz` or `.zst`; stdout needs the explicit option. Parquet uses its own
+compression and rejects this option.
 
 TSV and JSONL directory datasets use 2–4 bounded writer lanes (`--text-writers`,
 default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
@@ -50,25 +51,25 @@ Each compressed part is a complete gzip or Zstandard frame. The dataset publishe
 manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore
 requires `--checkpoint none`.
 
-Prefer `-o out/`. That directory is a managed Parquet dataset: it supports parallel
-writers, checkpointing, and resume. Text file destinations are published atomically but
-are not resumable; compressed files are published only after their gzip or Zstandard
-frame finishes.
+Use a managed Parquet directory when checkpoint/resume matters. Text file destinations
+are published atomically but are not resumable; compressed files are published only
+after their gzip or Zstandard frame finishes. TSV/JSONL directories are bounded,
+parallel, one-shot datasets.
 
 Do not use `-o inventory.parquet` when you expect one physical Parquet file. In the
 current release that FILE-kind path creates a one-writer, non-resumable dataset directory
 and requires `--checkpoint none`. Write a normal managed dataset and combine it
 downstream when a consumer requires one file.
 
-### Parquet dataset layout
+### Directory dataset layout
 
-A completed `-o out/ --format parquet` run looks like this:
+A completed directory dataset has one common root layout. The parts below are Parquet
+for `--format parquet`, `.tsv[.gz|.zst]` for TSV, or `.jsonl[.gz|.zst]` for JSONL:
 
 ```text
 out/
   data/
-    part-00000.parquet
-    part-00001.parquet
+    part-...
   manifest.json
   .swath-state.json
   _swath_summary.json
@@ -76,18 +77,24 @@ out/
   symlink.txt
 ```
 
-- `data/` contains only Parquet parts, so `out/data/*.parquet` is a safe reader glob.
+- `data/` contains only parts of the selected format, so a format-specific glob such as
+  `out/data/*.parquet` or `out/data/*.jsonl.gz` is safe.
 - `manifest.json` lists the parts, row counts, checksums, and dataset metadata. Sorted
   datasets also carry key-range metadata.
-- `.swath-state.json` is swath's internal published-run identity; consumers should ignore it.
-- `_swath_summary.json` is the machine-readable run report.
+- `.swath-state.json` is swath's internal ownership and run identity. It is written
+  durably before the first part and refreshed during publication; consumers should
+  ignore it.
+- `_swath_summary.json` is the machine-readable run report. It is automatic for
+  Parquet directories and available for text datasets through `--report`.
 - `_SUCCESS` is written last. Its presence means the complete snapshot was published.
 - `symlink.txt` lists part paths for Hive-, Athena-, and Trino-style discovery.
 
-While a resumable run is active, `.swath/checkpoint.sqlite` is present. A sorted run also
-uses `_staging/`. Both are internal and disappear after successful publication. Do not
-edit, move, or concurrently reuse a managed output directory. swath refuses symlinked
-managed paths and a directory that belongs to another or unfinished run.
+While a resumable Parquet run is active, `.swath/checkpoint.sqlite` is present. A sorted
+run also uses `_staging/`. Both are internal and disappear after successful publication.
+Text datasets never have a live checkpoint. Do not edit, move, or concurrently reuse an
+output directory. swath refuses symlinked managed paths and any non-empty directory that
+lacks durable swath ownership evidence; a filename such as `data/part-personal.jsonl`
+does not establish ownership and will never authorize deletion.
 
 Read the parts as one dataset:
 

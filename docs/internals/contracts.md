@@ -417,12 +417,14 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   additionally clamps the poll *wait* (never the staleness check above, which
   always uses the true configured interval) to a 50 ms floor as defense-in-
   depth against a `ParquetSpec` constructed outside the CLI.
-- **On-disk layout.** The dataset root (the `-o` dir) holds
-  a **pure-parquet `data/` subdirectory** for the part files, plus the
-  root-level `manifest.json`, `_SUCCESS`, the internal `.swath-state.json`, and
-  `symlink.txt`. `data/` contains **only** `*.parquet` (no manifest, no
-  markers), so a `data/*` glob is safe by construction — DuckDB's directory
-  glob (swath's own ingest) does **not** honor the Hadoop `_`-prefix skip rule.
+- **On-disk layout.** Every directory dataset has a `data/` subdirectory for
+  its parts plus root-level `manifest.json`, `_SUCCESS`, the internal
+  `.swath-state.json`, and `symlink.txt`. A Parquet dataset's `data/` is pure
+  `*.parquet`; a TSV/JSONL dataset's `data/` contains only parts of that text
+  format, optionally as complete gzip/Zstandard frames. There are no manifests
+  or markers under `data/`, so a format-specific glob is safe by construction —
+  DuckDB's directory glob (swath's own ingest) does **not** honor the Hadoop
+  `_`-prefix skip rule.
 - parquet-mr `_metadata` summary files are deprecated/off-by-default — swath
   writes its **own consumer `manifest.json`** at the dataset root in the
   **S3-Inventory schema plus additive sortedness fields**:
@@ -443,7 +445,12 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   outside the active-buffer bound in I11.
   **Resume bookkeeping stays out of the consumer manifest**: `args_hash` and
   the checkpoint `run_id` live in the internal `.swath-state.json` (same
-  atomic write), which the sorted publish-reentry check reads to distinguish
+  atomic write). For every directory format, swath creates and fsyncs that
+  identity before the first part or staging segment; a fresh-run cleanup may
+  treat reserved part filenames as owned only after this durable evidence
+  exists. Part-looking names alone never establish ownership. Publication
+  refreshes the identity, which the sorted publish-reentry check reads to
+  distinguish
   "published by this run" from a stale/foreign dataset in the same dir. The
   whole-snapshot completion marker **`_SUCCESS`** (empty) is written **last**,
   after the manifest; `symlink.txt` lists the `data/<part>` paths for
@@ -799,6 +806,9 @@ published.
 | AIMD | ×0.7 down on 503 / +1 up per clean 10 s | the 0.7/+1 numbers are DECIDED. The 10 s clean-window cool-down is re-armed **only by a REAL reduction** (`T` actually lowered); a **floor no-op** decrease (`floor(0.7·T) >= T`, i.e. `T` already at the floor) still casts its AIMD vote, still latches congestion, and still pauses stealing, but no longer resets the clean window. The re-arm write is **monotonic** (`max` with the prior timestamp): a concurrent, stale-timestamped decrease can never shorten an already-armed window. (algorithms.md §5) |
 | Parquet writers | 3 | decoupled from `T` |
 | Parquet part target size | 256 MB | rotate by size |
+| `--text-writers` | 3 (range 2–4) | bounded TSV/JSONL directory writer lanes; decoupled from `T` |
+| `--text-part-size` | 256 MB | per-lane TSV/JSONL part rotation target; zero is rejected |
+| `--compression` | `none` unless a text file suffix implies gzip/Zstandard | table/TSV/JSONL streams and TSV/JSONL dataset parts only; Parquet rejects it |
 | `--part-rotation-interval` | 30 s | rotate a lane's open part by time too, even below the size target, so `durable_cursor` advances on a bounded cadence instead of only when a part happens to fill up; `0`/`none` disables; forced to `0` for a single-file `-o *.parquet` destination; a positive value below the 100 ms minimum is rejected (spin-storm guard — see below); `ParquetWriterPool` additionally floors its idle-lane poll wait at 50 ms as defense-in-depth |
 | `--part-rotation-max-rows` | 2_000_000 | rotate by row count too, for bursts fast enough to write millions of small rows well inside the time interval; `0` disables; forced to `0` for a single-file `-o *.parquet` destination |
 | `parquet.block.size` / `page.size` | 64 MB / 1 MB | **pinned**, measured in the PERF gate. block.size chosen so the §7.2 active-buffer Parquet heap budget holds for the current 100,000-key test (3 writers × 64 MB × parquet-mr uncompressed-row-group overshoot). This is not an N-independent whole-run heap claim: finalized-part metadata is `O(parts)`. Raising it toward 128 MB improves compression/scan but risks the measured budget — re-measure if you do. |
@@ -821,7 +831,7 @@ published.
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
 | `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`); a resume whose checkpoint records any other staging format is refused (§6) — informational, not user-tunable |
 | `ulimit -n` (OS, not a swath knob) | raise to ~65536 for single-pass | with fan-in 10000, a single merge pass opens up to ~`min(segments, fan-in)` page-run readers at once; a low `ulimit -n` forces the fd clamp to shrink `effectiveFanIn` and **degrade to a multi-pass cascade**. Raise the soft limit (`ulimit -n 65536`, or the launcher does it) for single-pass merges on large buckets |
-| `--checkpoint` | `auto` (co-located at `<dir>/.swath/checkpoint.sqlite` for a directory-dataset output; ephemeral for stdout), deleted on clean completion | FILE kind accepts only `none`; `none` ⇒ in-memory worklist and **no resume**. An explicit path is valid only with a directory dataset, but the public `swath resume` command opens the managed co-located layout, not an arbitrary SQLite path. |
+| `--checkpoint` | `auto` (co-located at `<dir>/.swath/checkpoint.sqlite` for a managed Parquet directory; ephemeral for stdout), deleted on clean completion | FILE kind and TSV/JSONL directories accept only `none`; `none` ⇒ in-memory worklist and **no resume**. An explicit path is valid only with a Parquet directory, but the public `swath resume` command opens the managed co-located layout, not an arbitrary SQLite path. |
 
 ### 7.1 Router thresholds (the single-engine router)
 

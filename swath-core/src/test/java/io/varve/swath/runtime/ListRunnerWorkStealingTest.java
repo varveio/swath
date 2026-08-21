@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Statistic;
@@ -18,18 +19,24 @@ import io.varve.swath.checkpoint.RunKey;
 import io.varve.swath.checkpoint.RunMeta;
 import io.varve.swath.checkpoint.RunStatus;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
+import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.engine.RetryConfig;
 import io.varve.swath.error.CancelledException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.ListingStatistics;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.text.TextCompression;
+import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -54,6 +61,7 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>NOT the PROP-1/RES-3/CONC interleavings — those are covered separately.
  */
 final class ListRunnerWorkStealingTest {
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private static RunKey textKey() {
         return new RunKey("s3", null, "bucket", new byte[0], "ws-text-hash",
@@ -202,6 +210,82 @@ final class ListRunnerWorkStealingTest {
             assertThat(store.loadResumable(run.id(), false))
                     .as("an after-fetch cancelled text run remains resumable")
                     .isNotEmpty();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void partitionedTextDataset_realWorkStealingLifecyclePublishesExactMultisetAndCompletes(
+            @TempDir Path tmp) throws Exception {
+        List<byte[]> keys = Keyspaces.exactly(1500);
+        MockPageFetcher fetcher = MockPageFetcher.builder().keys(keys).build();
+        Path output = Files.createDirectories(tmp.resolve("out"));
+
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(tmp.resolve("c.sqlite"))) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            store.insertNode(NodeSpec.rootRange(run.id()));
+            List<Node> seeds = store.loadResumable(run.id(), false);
+            ListRunner.Spec listing = new ListRunner.Spec(new byte[0], OutputFormat.JSONL, true,
+                    8000, 1000, FilterChain.EMPTY, null, null);
+            TextWriterPoolConfig writer = new TextWriterPoolConfig(
+                    output, OutputFormat.JSONL, TextCompression.NONE, true,
+                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200);
+
+            ListingStatistics stats = new ListRunner().runToTextDatasetWorkStealing(
+                    RunContext.create(), fetcher, new ListRunner.TextDatasetSpec(listing, writer),
+                    store, run.id(), 4, seeds, EngineToggles.DEFAULT, TraceSink.NONE,
+                    RetryConfig.DEFAULT);
+
+            List<String> actual = new ArrayList<>();
+            for (Path part : DatasetLayout.of(output).dataParts(".jsonl")) {
+                for (String line : Files.readAllLines(part, StandardCharsets.UTF_8)) {
+                    actual.add(JSON.readTree(line).path("key").asText());
+                }
+            }
+            List<String> expected = keys.stream()
+                    .map(key -> new String(key, StandardCharsets.UTF_8)).toList();
+            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+            assertThat(stats.objects()).isEqualTo(keys.size());
+            assertThat(DatasetLayout.of(output).manifest()).exists();
+            assertThat(DatasetLayout.of(output).state()).exists();
+            assertThat(DatasetLayout.of(output).symlink()).exists();
+            assertThat(DatasetLayout.of(output).success()).exists();
+            assertThat(store.loadResumable(run.id(), false))
+                    .as("published run is complete — no resumable nodes").isEmpty();
+        }
+    }
+
+    @Test
+    @Timeout(10)
+    void partitionedTextDataset_preCancelledRunPublishesNothingAndRemainsResumable(
+            @TempDir Path tmp) throws Exception {
+        RunContext ctx = RunContext.create();
+        ctx.cancellation().cancel();
+        MockPageFetcher fetcher = MockPageFetcher.builder().keys(Keyspaces.exactly(1500)).build();
+        Path output = Files.createDirectories(tmp.resolve("out"));
+
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(tmp.resolve("c.sqlite"))) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            store.insertNode(NodeSpec.rootRange(run.id()));
+            List<Node> seeds = store.loadResumable(run.id(), false);
+            ListRunner.Spec listing = new ListRunner.Spec(new byte[0], OutputFormat.JSONL, true,
+                    8000, 1000, FilterChain.EMPTY, null, null);
+            TextWriterPoolConfig writer = new TextWriterPoolConfig(
+                    output, OutputFormat.JSONL, TextCompression.NONE, true,
+                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200);
+
+            assertThatThrownBy(() -> new ListRunner().runToTextDatasetWorkStealing(
+                    ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
+                    4, seeds, EngineToggles.DEFAULT, TraceSink.NONE, RetryConfig.DEFAULT))
+                    .isInstanceOf(CancelledException.class);
+
+            DatasetLayout layout = DatasetLayout.of(output);
+            assertThat(layout.manifest()).doesNotExist();
+            assertThat(layout.state()).doesNotExist();
+            assertThat(layout.symlink()).doesNotExist();
+            assertThat(layout.success()).doesNotExist();
+            assertThat(layout.dataParts(".jsonl")).isEmpty();
+            assertThat(store.loadResumable(run.id(), false)).isNotEmpty();
         }
     }
 

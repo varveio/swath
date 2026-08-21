@@ -24,10 +24,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.LongSupplier;
 import org.apache.commons.codec.digest.DigestUtils;
 
@@ -60,7 +64,7 @@ import org.apache.commons.codec.digest.DigestUtils;
  * empty part (an idle lane never produces empty parts). {@code 0} disables
  * either trigger.
  */
-public class SharedDatasetWriterPool implements DatasetWriterPool {
+public final class SharedDatasetWriterPool implements DatasetWriterPool {
 
     private static final PageBatch POISON = new PageBatch(-1, -1, List.of());
 
@@ -111,8 +115,19 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
 
     private final List<PartInfo> committedParts = Collections.synchronizedList(new ArrayList<>());
     private final Object manifestLock = new Object();
-    private volatile boolean aborting = false;
-    private boolean joined = false;
+    private enum ShutdownMode { OPEN, CLOSE, ABORT }
+
+    /**
+     * The read side admits concurrent submitters; the write side closes admission before poison is
+     * queued, so no batch can ever land behind a lane's poison sentinel and wait forever.
+     */
+    private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
+    private final AtomicReference<ShutdownMode> shutdownMode =
+            new AtomicReference<>(ShutdownMode.OPEN);
+    private final AtomicBoolean joinInitiated = new AtomicBoolean();
+    private final CompletableFuture<Void> joined = new CompletableFuture<>();
+    private final AtomicBoolean publicationInitiated = new AtomicBoolean();
+    private final CompletableFuture<Void> published = new CompletableFuture<>();
 
     /** The pool owns scheduling and publication; the adapter owns encoding. */
     public SharedDatasetWriterPool(Path dir, DatasetFormat format, String argsHash,
@@ -170,10 +185,18 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
 
     /** Route a batch to its sticky lane (blocking on a full lane queue — backpressure). */
     public void submit(PageBatch batch) throws OutputException, InterruptedException {
-        checkFailure();
-        int lane = (int) Math.floorMod(batch.nodeId(), numWriters);
-        lanes[lane].queue.put(batch);
-        checkFailure();
+        lifecycleLock.readLock().lockInterruptibly();
+        try {
+            if (shutdownMode.get() != ShutdownMode.OPEN) {
+                throw new OutputException(sinkName + " writer pool is shutting down");
+            }
+            checkFailure();
+            int lane = (int) Math.floorMod(batch.nodeId(), numWriters);
+            lanes[lane].queue.put(batch);
+            checkFailure();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
     }
 
     public long committedPartCount() {
@@ -207,64 +230,88 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
         // re-run the same rotation check with nothing new to write. Disabled
         // (rotationIntervalNanos == 0, incl. --single-file) keeps the exact
         // prior take() behavior.
-        while (true) {
-            // Floor the poll WAIT (never the staleness check in rotationReason()) so a tiny
-            // positive rotationIntervalNanos can't spin this thread — see ROTATION_POLL_FLOOR_NANOS.
-            PageBatch batch = rotationIntervalNanos > 0
-                    ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS), TimeUnit.NANOSECONDS)
-                    : lane.queue.take();
-            if (batch == null) {
-                // Timed out — no new batch arrived. Re-evaluate the SAME rotation
-                // check; rotationReason() short-circuits on rows==0 so an idle EMPTY
-                // lane still produces nothing, and finalizeCurrent() no-ops when
-                // there is no open part (lane.current == null).
-                if (!aborting && failure.get() == null && lane.current != null) {
-                    RotationReason reason = rotationReason(lane);
-                    if (reason != RotationReason.NONE) {
-                        long startedAt = nanoClock.getAsLong();
-                        try {
-                            recordRotation(reason);
-                            finalizeCurrent(lane);
-                        } catch (Throwable t) {
-                            failure.compareAndSet(null, t);
-                        } finally {
-                            recordLaneWork(startedAt);
+        try {
+            while (true) {
+                // Floor the poll WAIT (never the staleness check in rotationReason()) so a tiny
+                // positive rotationIntervalNanos can't spin this thread — see ROTATION_POLL_FLOOR_NANOS.
+                PageBatch batch = rotationIntervalNanos > 0
+                        ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS),
+                                TimeUnit.NANOSECONDS)
+                        : lane.queue.take();
+                if (batch == null) {
+                    // Timed out — no new batch arrived. Re-evaluate the SAME rotation
+                    // check; rotationReason() short-circuits on rows==0 so an idle EMPTY
+                    // lane still produces nothing, and finalizeCurrent() no-ops when
+                    // there is no open part (lane.current == null).
+                    if (shutdownMode.get() != ShutdownMode.ABORT
+                            && failure.get() == null && lane.current != null) {
+                        RotationReason reason = rotationReason(lane);
+                        if (reason != RotationReason.NONE) {
+                            long startedAt = nanoClock.getAsLong();
+                            try {
+                                recordRotation(reason);
+                                finalizeCurrent(lane);
+                            } catch (Throwable t) {
+                                recordFailure(t);
+                            } finally {
+                                recordLaneWork(startedAt);
+                            }
                         }
                     }
+                    continue;
                 }
-                continue;
+                if (batch == POISON) {
+                    break;
+                }
+                if (shutdownMode.get() == ShutdownMode.ABORT || failure.get() != null) {
+                    continue;   // draining and discarding
+                }
+                long startedAt = nanoClock.getAsLong();
+                try {
+                    writeBatch(lane, batch);
+                } catch (Throwable t) {
+                    recordFailure(t);
+                } finally {
+                    recordLaneWork(startedAt);
+                }
             }
-            if (batch == POISON) {
-                break;
-            }
-            if (aborting || failure.get() != null) {
-                continue;   // draining and discarding
-            }
-            long startedAt = nanoClock.getAsLong();
-            try {
-                writeBatch(lane, batch);
-            } catch (Throwable t) {
-                failure.compareAndSet(null, t);
-            } finally {
-                recordLaneWork(startedAt);
-            }
+        } catch (InterruptedException e) {
+            recordFailure(e);
+            throw e;
+        } finally {
+            finishLane(lane);
         }
+        return null;
+    }
+
+    /** Finalize or discard exactly once on every lane exit, including queue-wait interruption. */
+    private void finishLane(Lane lane) {
         boolean hasOpenPart = lane.current != null;
         long startedAt = nanoClock.getAsLong();
         try {
-            if (aborting || failure.get() != null) {
+            if (shutdownMode.get() == ShutdownMode.ABORT || failure.get() != null) {
                 discardCurrent(lane);   // partial part is NOT durable → delete it
             } else {
                 finalizeCurrent(lane);
             }
         } catch (Throwable t) {
-            failure.compareAndSet(null, t);
+            recordFailure(t);
         } finally {
             if (hasOpenPart) {   // no open part ⇒ both paths no-op; don't record a fabricated zero
                 recordLaneWork(startedAt);
             }
         }
-        return null;
+    }
+
+    /** First failure wins; later cleanup failures are retained as suppressed diagnostics. */
+    private void recordFailure(Throwable next) {
+        if (failure.compareAndSet(null, next)) {
+            return;
+        }
+        Throwable primary = failure.get();
+        if (primary != next) {
+            primary.addSuppressed(next);
+        }
     }
 
     /**
@@ -353,8 +400,16 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
             // needed (the `joined` latch would skip it). Then surface the failure.
             lane.current = null;
             lane.partNodeMaxKey.clear();
-            Files.deleteIfExists(path);
-            observer.recordPart("finalize_failed");
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException cleanupFailure) {
+                e.addSuppressed(cleanupFailure);
+            }
+            try {
+                observer.recordPart("finalize_failed");
+            } catch (Throwable observationFailure) {
+                e.addSuppressed(observationFailure);
+            }
             throw e;
         }
         if (finalizeSample != null) {
@@ -379,11 +434,11 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
                 lane.id, relPath, rows, bytes, contributions));
         committedParts.add(new PartInfo(relPath, lane.id, rows, bytes, md5));
         observer.recordPart("finalized");
-            // A part finalize (footer fsync + manifest commit) is real forward progress that no
-            // LISTING page/object counter reflects — a large multi-part non-sort finalize tail
-            // (close()'s drainAndJoin() below) can otherwise sit with progressSignal() frozen for
-            // longer than the stall window and get falsely aborted (worse: it could force the STUCK
-            // exit 75 over what should have been a clean --max-duration exit 0).
+        // A part finalize (footer fsync + manifest commit) is real forward progress that no
+        // LISTING page/object counter reflects — a large multi-part non-sort finalize tail
+        // (close()'s drainAndJoin() below) can otherwise sit with progressSignal() frozen for
+        // longer than the stall window and get falsely aborted (worse: it could force the STUCK
+        // exit 75 over what should have been a clean --max-duration exit 0).
         observer.markProgress();
         writeManifest();   // atomic, on each finalize
     }
@@ -393,13 +448,30 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
             return;
         }
         Path path = lane.current.path();
+        IOException failure = null;
         try {
             lane.current.discard();   // release the handle WITHOUT a durable footer-fsync (I6/RES-4)
-        } finally {
-            lane.current = null;
+        } catch (IOException e) {
+            failure = e;
+        }
+        lane.current = null;
+        try {
             observer.recordPart("discarded");
-            lane.partNodeMaxKey.clear();
+        } catch (Throwable ignored) {
+            // observation only — cleanup must still finish
+        }
+        lane.partNodeMaxKey.clear();
+        try {
             Files.deleteIfExists(path);
+        } catch (IOException cleanupFailure) {
+            if (failure == null) {
+                failure = cleanupFailure;
+            } else {
+                failure.addSuppressed(cleanupFailure);
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -423,25 +495,18 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
      */
     @Override
     public void close() throws OutputException {
+        beginShutdown(ShutdownMode.CLOSE);
         drainAndJoin();
-        checkFailure();
-        try {
-            synchronized (manifestLock) {
-                List<PartInfo> snapshot = snapshotParts();
-                Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
-                        snapshot, false, null);   // ensure a manifest exists
-                Manifest.writeState(dir, argsHash, null);
-                Manifest.writeSymlink(dir, snapshot);
-                Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker (success only)
-            }
-        } catch (IOException e) {
-            throw new OutputException("failed to write manifest", e);
+        if (shutdownMode.get() == ShutdownMode.ABORT) {
+            throw new OutputException(sinkName + " writer pool was aborted");
         }
+        checkFailure();
+        publishSuccess();
     }
 
     /** Failure path: discard open (non-finalized) parts; finalized parts + their manifest remain. */
     public void abort() {
-        aborting = true;
+        beginShutdown(ShutdownMode.ABORT);
         try {
             drainAndJoin();
         } catch (OutputException ignored) {
@@ -449,25 +514,93 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
         }
     }
 
-    private void drainAndJoin() throws OutputException {
-        if (joined) {
-            return;
-        }
-        joined = true;
+    /** Close admission atomically; the first close/abort request owns the terminal mode. */
+    private void beginShutdown(ShutdownMode requested) {
+        lifecycleLock.writeLock().lock();
         try {
-            for (Lane lane : lanes) {
-                lane.queue.put(POISON);
+            shutdownMode.compareAndSet(ShutdownMode.OPEN, requested);
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    /** Publish final metadata once; idempotent concurrent {@link #close()} callers await it. */
+    private void publishSuccess() throws OutputException {
+        if (publicationInitiated.compareAndSet(false, true)) {
+            try {
+                synchronized (manifestLock) {
+                    List<PartInfo> snapshot = snapshotParts();
+                    Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
+                            snapshot, false, null);   // ensure a manifest exists
+                    Manifest.writeState(dir, argsHash, null);
+                    Manifest.writeSymlink(dir, snapshot);
+                    Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker
+                }
+                published.complete(null);
+            } catch (Throwable t) {
+                published.completeExceptionally(t);
             }
-            for (Future<?> f : laneFutures) {
-                f.get();
+        }
+        try {
+            published.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new OutputException("interrupted publishing " + sinkName + " dataset", e);
+        } catch (ExecutionException e) {
+            throw new OutputException("failed to write manifest", e.getCause());
+        }
+    }
+
+    private void drainAndJoin() throws OutputException {
+        if (joinInitiated.compareAndSet(false, true)) {
+            Throwable terminal = null;
+            try {
+                for (Lane lane : lanes) {
+                    lane.queue.put(POISON);
+                }
+                for (Future<?> f : laneFutures) {
+                    f.get();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                terminal = new OutputException(
+                        "interrupted closing " + sinkName + " writer pool", e);
+            } catch (ExecutionException e) {
+                terminal = new OutputException(sinkName + " writer failed", e.getCause());
+            } catch (CancellationException e) {
+                // A test/owner interruption marks its Future cancelled before the task's finally
+                // completes. scope.close() below awaits that cleanup; checkFailure() then surfaces
+                // the lane's recorded InterruptedException to a graceful close.
+            } catch (Throwable t) {
+                terminal = t;
+            } finally {
+                try {
+                    scope.close();
+                } catch (Throwable closeFailure) {
+                    if (terminal == null) {
+                        terminal = closeFailure;
+                    } else {
+                        terminal.addSuppressed(closeFailure);
+                    }
+                }
+                if (terminal == null) {
+                    joined.complete(null);
+                } else {
+                    joined.completeExceptionally(terminal);
+                }
             }
+        }
+        try {
+            joined.get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new OutputException("interrupted closing " + sinkName + " writer pool", e);
         } catch (ExecutionException e) {
-            throw new OutputException(sinkName + " writer failed", e.getCause());
-        } finally {
-            scope.close();
+            Throwable cause = e.getCause();
+            if (cause instanceof OutputException output) {
+                throw output;
+            }
+            throw new OutputException(sinkName + " writer failed", cause);
         }
     }
 
@@ -494,5 +627,10 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
             current = format.openPart(path);
             partOpenedAtNanos = nanoClock.getAsLong();
         }
+    }
+
+    /** Package-private deterministic seam for interruption/cleanup lifecycle tests. */
+    void interruptLanesForTest() {
+        laneFutures.forEach(future -> future.cancel(true));
     }
 }
