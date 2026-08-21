@@ -31,7 +31,7 @@
 # multi-arch INDEX digest (not a per-arch manifest), so `--platform` selection still
 # resolves every target normally. The tag is kept alongside it for readability and
 # because Dependabot updates both (.github/dependabot.yml, `docker` ecosystem).
-FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:3eb81ed94d8c1a34422f19f8188548bdf02cae69c91d0328afdbb7abed90f617 AS build
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:e94f1dc880339ab3884b69176b79c8dc4124b722e059c7ff7f0bf53b603a46f8 AS build
 WORKDIR /src
 
 # The checked-in legal notices verifier runs its renderer during shadowJar.
@@ -85,7 +85,7 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon :swath-cli:sha
 # Digest-pinned for the same reason as the build stage above; this is the one that
 # ships, so a mutable base here is what would put an unnoticed stale JRE in every
 # published image.
-FROM eclipse-temurin:25-jre-noble@sha256:2f1da100788559b397bcf48c736169ea5b070bde84e55f203bbee8e83d87a175 AS runtime
+FROM eclipse-temurin:25-jre-noble@sha256:1a99f30a84d58729f1184c1c693f25fb6f91970ddf05395515540bc5773b8edd AS runtime
 
 COPY --from=build --chown=10001:10001 /src/swath-cli/build/libs/swath.jar /opt/swath/swath.jar
 COPY --from=build --chown=10001:10001 /src/LICENSE /opt/swath/LICENSE
