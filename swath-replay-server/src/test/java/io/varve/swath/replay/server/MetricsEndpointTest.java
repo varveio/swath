@@ -15,10 +15,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class MetricsEndpointTest {
+
+    @TempDir
+    Path temp;
 
     @Test
     void servesTheRegistryAsJsonOnItsOwnPort() throws Exception {
@@ -89,6 +95,34 @@ class MetricsEndpointTest {
 
                 assertThat(scrape(endpoint, "/healthz")).isEqualTo("ok\n");
                 assertThat(status(endpoint, "/bucket?list-type=2")).isEqualTo(404);
+            }
+        }
+    }
+
+    @Test
+    void servesRuntimeAttestationWithoutPerturbingListingCounters() throws Exception {
+        Path proc = Files.createDirectories(temp.resolve("proc/self"));
+        Path cgroup = Files.createDirectories(temp.resolve("cgroup/server"));
+        Files.writeString(proc.resolve("cgroup"), "0::/server\n");
+        Files.writeString(proc.resolve("status"), "Cpus_allowed_list:\t1-2\n");
+        Files.writeString(cgroup.resolve("cpuset.cpus.effective"), "1-2\n");
+        Files.writeString(cgroup.resolve("memory.max"), "1073741824\n");
+        Files.writeString(cgroup.resolve("memory.swap.max"), "max\n");
+        RuntimeAttestation attestation = new RuntimeAttestation(
+                proc.resolve("cgroup"), proc.resolve("status"), temp.resolve("cgroup"));
+
+        try (ReplayServer server = server()) {
+            server.start();
+            try (MetricsEndpoint endpoint = MetricsEndpoint.start("127.0.0.1", 0,
+                    server.metrics().registry(), "sorted", System.nanoTime(), attestation)) {
+                long before = server.metrics().snapshot().httpRequests();
+
+                String body = scrape(endpoint, "/runtime-attestation");
+
+                assertThat(body).contains("\"schema_version\":\"runtime-attestation-v1\"");
+                assertThat(body).contains("\"cpuset_cpus_effective\":{\"value\":\"1-2\","
+                        + "\"error\":null}");
+                assertThat(server.metrics().snapshot().httpRequests()).isEqualTo(before);
             }
         }
     }

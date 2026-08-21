@@ -115,12 +115,25 @@ swath-replay-server serve ... --metrics-port 19192
 curl -s http://127.0.0.1:19192/metrics | jq .
 ```
 
-Two paths and nothing else: `GET /metrics` returns the whole registry as JSON,
-`GET /healthz` returns `ok` once the server is listening — which is also the
-readiness signal to poll before starting a client, since a large fixture's index
-derive is not instant. A negative port (the default) disables the endpoint; `0`
-binds a free port and reports it in the startup line, which carries
-`metrics_endpoint=` whenever the endpoint is on.
+Three paths and nothing else: `GET /metrics` returns the whole registry as JSON,
+`GET /runtime-attestation` returns the resource limits visible inside this
+server process, and `GET /healthz` returns `ok` once the server is listening —
+which is also the readiness signal to poll before starting a client, since a
+large fixture's index derive is not instant. A negative port (the default)
+disables the endpoint; `0` binds a free port and reports it in the startup line,
+which carries `metrics_endpoint=` whenever the endpoint is on.
+
+The attestation uses `schema_version: runtime-attestation-v1`. Its `cgroup_v2`
+object names the resolved directory and records `cpuset.cpus.effective`,
+`memory.max`, and `memory.swap.max`; `proc_self_status` independently records
+`Cpus_allowed_list`. Each observation is a `{value, error}` pair. Finite memory
+and swap limits are byte counts, the kernel's unlimited value remains the
+literal `max`, and an absent, unreadable, or empty source — or an invalid memory
+or swap limit — stays an explicit error instead of becoming a requested or
+inferred limit. CPU-list grammar, agreement between the two CPU observations,
+and agreement with the declared allocation are downstream verifier checks, not
+claims made by this producer. This is runtime evidence for a controller to
+compare with its declared allocation, not an allocation request of its own.
 
 The payload is `{schema_version, serving_mode, uptime_ms, sampled_at_epoch_ms,
 meters[]}`. Each meter carries its `name`, `type` (`timer`, `counter`,
@@ -134,11 +147,12 @@ Read server headroom from `swath.replay.request.latency{shape}` per request shap
 against the injected profile for that same shape. A pooled average would hide the
 important case because clients issue different mixtures of differently priced requests.
 
-**It is a second port on purpose.** A scrape never enters the serving path: it
-takes no read permit, receives no injected latency, and increments no request
-counter, so polling cannot perturb what it measures — and it still answers while
-every serving thread is parked in an injected sleep, which is exactly when an
-answer is most wanted. Its thread pool is deliberately tiny (4), because taxing
+**It is a second port on purpose.** A metrics or runtime-attestation scrape never
+enters the serving path: it takes no read permit, receives no injected latency,
+and increments no listing request counter, so polling cannot perturb what it
+measures — and it still answers while every serving thread is parked in an
+injected sleep, which is exactly when an answer is most wanted. Its thread pool
+is deliberately tiny (4), because taxing
 the box to answer a diagnostic would tax the measurement the diagnostic exists
 to validate.
 

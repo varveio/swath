@@ -37,9 +37,10 @@ final class ServeOptions {
 
     @Option(names = "--metrics-port", defaultValue = "-1",
             description = "Serve this server's own meters as JSON on a second port (GET /metrics, "
-                    + "GET /healthz). Negative disables it (the default); 0 binds a free port, "
-                    + "reported in the startup line. A scrape never touches the serving path, so "
-                    + "reading the metrics cannot perturb them.")
+                    + "GET /runtime-attestation, GET /healthz). The attestation reports this "
+                    + "process's cgroup-v2 CPU, memory, and swap limits with explicit errors. "
+                    + "Negative disables it (the default); 0 binds a free port, reported in the "
+                    + "startup line. A scrape never touches the serving path or listing counters.")
     int metricsPort;
 
     @Option(names = "--max-concurrent-requests", defaultValue = "512",

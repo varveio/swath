@@ -24,8 +24,10 @@ import org.eclipse.jetty.util.Callback;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 
 /**
- * A read-only HTTP surface over a running {@code serve}'s meters: {@code GET /metrics} answers the
- * whole registry as JSON, {@code GET /healthz} answers {@code ok} once the server is listening.
+ * A read-only HTTP surface over a running {@code serve}'s meters and runtime: {@code GET /metrics}
+ * answers the whole registry as JSON, {@code GET /runtime-attestation} answers the Linux resource
+ * limits visible inside the server container, and {@code GET /healthz} answers {@code ok} once the
+ * server is listening.
  *
  * <p><b>Why an endpoint and not a report file.</b> Run as a sidecar, this server is typically
  * <em>killed</em> when the process it serves exits, rather than asked to stop — so anything written
@@ -94,6 +96,11 @@ final class MetricsEndpoint implements AutoCloseable {
      */
     static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
                                  long startedNanos) throws Exception {
+        return start(host, port, registry, servingMode, startedNanos, RuntimeAttestation.system());
+    }
+
+    static MetricsEndpoint start(String host, int port, MeterRegistry registry, String servingMode,
+                                 long startedNanos, RuntimeAttestation attestation) throws Exception {
         QueuedThreadPool pool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
         pool.setName("replay-metrics");
         Server server = new Server(pool);
@@ -101,7 +108,7 @@ final class MetricsEndpoint implements AutoCloseable {
         connector.setHost(host);
         connector.setPort(port);
         server.addConnector(connector);
-        server.setHandler(new MetricsHandler(registry, servingMode, startedNanos));
+        server.setHandler(new MetricsHandler(registry, servingMode, startedNanos, attestation));
         Binders binders = bindProcessMeters(registry);
         server.start();
         return new MetricsEndpoint(server, binders.gc(), binders.heapPressure());
@@ -128,11 +135,14 @@ final class MetricsEndpoint implements AutoCloseable {
         private final MeterRegistry registry;
         private final String servingMode;
         private final long startedNanos;
+        private final RuntimeAttestation attestation;
 
-        private MetricsHandler(MeterRegistry registry, String servingMode, long startedNanos) {
+        private MetricsHandler(MeterRegistry registry, String servingMode, long startedNanos,
+                               RuntimeAttestation attestation) {
             this.registry = registry;
             this.servingMode = servingMode;
             this.startedNanos = startedNanos;
+            this.attestation = attestation;
         }
 
         @Override
@@ -142,9 +152,14 @@ final class MetricsEndpoint implements AutoCloseable {
                 write(response, HttpStatus.OK_200, "text/plain", "ok\n", callback);
                 return true;
             }
+            if ("/runtime-attestation".equals(path)) {
+                write(response, HttpStatus.OK_200, "application/json", attestation.render() + "\n", callback);
+                return true;
+            }
             if (!"/metrics".equals(path)) {
                 write(response, HttpStatus.NOT_FOUND_404, "text/plain",
-                        "not found; this port serves /metrics and /healthz only\n", callback);
+                        "not found; this port serves /metrics, /runtime-attestation, and /healthz only\n",
+                        callback);
                 return true;
             }
             long uptimeMillis = (System.nanoTime() - startedNanos) / 1_000_000L;
