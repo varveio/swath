@@ -1124,7 +1124,6 @@ public final class RunMetrics {
     public void recordSortFinalizeClose(long nanos) {
         long nonNegative = Math.max(0L, nanos);
         sortFinalizeCloseLatency.record(nonNegative, TimeUnit.NANOSECONDS);
-        sortFinalizeLatency.record(nonNegative, TimeUnit.NANOSECONDS);
     }
 
     /** Incremental exact-byte digest work performed by a final writer (or safe readback fallback). */

@@ -88,6 +88,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -841,8 +842,9 @@ public final class ListRunner {
         // liveness progress — during the k-way merge NO page completes, so without this the watchdog
         // would false-trip a long final merge. Throttled to every N rows in
         // ProgressMarkingSortedFileWriter (never per key).
+        FinalizeWallClock finalizeClock = new FinalizeWallClock();
         SortedFileWriterFactory writerFactory = progressMarkingFactory(
-                new SortedParquetWriterFactory(config, mode), ctx.metrics());
+                new SortedParquetWriterFactory(config, mode), ctx.metrics(), finalizeClock);
         // The WIDE stale-finals sweep (ALL data/*.parquet, not
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path
         // (ListCommand#isPublishedByThisRun gates whether runSortMergeOnly is ever reached) — see
@@ -882,7 +884,7 @@ public final class ListRunner {
             Files.createDirectories(dataDir);
             SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
                     (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
-                            finalParts, ctx.metrics()),
+                            finalParts, ctx.metrics(), finalizeClock),
                     ctx.metrics()::recordProgress,
                     // WRITING becomes reachable here — the cascade passes above stay MERGING;
                     // once only the output-writing work + publish remain, the swath.phase gauge
@@ -940,7 +942,14 @@ public final class ListRunner {
      */
     static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
             List<FinalPart> finalParts, RunMetrics metrics) throws IOException {
-        long finalizeStartNanos = System.nanoTime();
+        FinalizeWallClock finalizeClock = new FinalizeWallClock();
+        finalizeClock.start();
+        writeSortedManifest(outputDir, bucket, argsHash, runId, finalParts, metrics, finalizeClock);
+    }
+
+    private static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
+            List<FinalPart> finalParts, RunMetrics metrics, FinalizeWallClock finalizeClock) throws IOException {
+        finalizeClock.start();
         try {
             List<PartInfo> parts = new ArrayList<>(finalParts.size());
             for (FinalPart finalPart : finalParts) {
@@ -984,7 +993,7 @@ public final class ListRunner {
                 metrics.recordSortPublication(System.nanoTime() - publishStartNanos);
             }
         } finally {
-            metrics.recordSortFinalizeTail(System.nanoTime() - finalizeStartNanos);
+            metrics.recordSortFinalizeTail(finalizeClock.elapsedNanos());
         }
     }
 
@@ -1052,8 +1061,21 @@ public final class ListRunner {
      * progress as rows are written, keeping the watchdog from false-tripping a long sort-merge tail.
      */
     private static SortedFileWriterFactory progressMarkingFactory(SortedFileWriterFactory delegate,
-                                                                  RunMetrics metrics) {
-        return (path, fileIndex) -> new ProgressMarkingSortedFileWriter(delegate.create(path, fileIndex), metrics);
+            RunMetrics metrics, FinalizeWallClock finalizeClock) {
+        return (path, fileIndex) -> new ProgressMarkingSortedFileWriter(
+                delegate.create(path, fileIndex), metrics, finalizeClock);
+    }
+
+    private static final class FinalizeWallClock {
+        private final AtomicLong startNanos = new AtomicLong();
+
+        void start() {
+            startNanos.compareAndSet(0L, System.nanoTime());
+        }
+
+        long elapsedNanos() {
+            return Math.max(0L, System.nanoTime() - startNanos.get());
+        }
     }
 
     /**
@@ -1068,12 +1090,15 @@ public final class ListRunner {
 
         private final SortedFileWriter delegate;
         private final RunMetrics metrics;
+        private final FinalizeWallClock finalizeClock;
         private long sinceMark;
         private boolean closeRecorded;
 
-        ProgressMarkingSortedFileWriter(SortedFileWriter delegate, RunMetrics metrics) {
+        ProgressMarkingSortedFileWriter(
+                SortedFileWriter delegate, RunMetrics metrics, FinalizeWallClock finalizeClock) {
             this.delegate = delegate;
             this.metrics = metrics;
+            this.finalizeClock = finalizeClock;
         }
 
         @Override
@@ -1121,6 +1146,7 @@ public final class ListRunner {
             // the operator docs note on raising --stall-timeout for billion-scale --sort).
             metrics.markProgress();
             metrics.recordStealReason("SORT", "finalize_progress_tick");
+            finalizeClock.start();
             delegate.close();
             if (!closeRecorded && delegate.finalMetadata().isPresent()) {
                 FinalPartMetadata metadata = delegate.finalMetadata().orElseThrow();

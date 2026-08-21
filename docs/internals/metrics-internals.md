@@ -57,8 +57,11 @@ the failing attempt spent.
 
 The terminal `sort` block decomposes that inclusive clock further. `range_merge_ms` is the maximum
 overlapping `swath.sort.merge.range.latency` sample on the parallel path (or the serial remainder),
-`finalize_ms` is close/fsync service plus metadata assembly/validation and local publication, and `finalize_close_ms` and
-`local_publication_ms` expose those components. `manifest_md5_bytes`/`manifest_md5_ms` describe
+`finalize_ms` is wall time from the first final-part close/fsync starting through metadata
+assembly/validation and local publication. Concurrent closes overlap in that clock;
+`finalize_close_ms` instead sums every part's close/fsync service time, so it may exceed
+`finalize_ms`. `local_publication_ms` exposes the publication component.
+`manifest_md5_bytes`/`manifest_md5_ms` describe
 incremental byte-exact digest work for fresh finals and full-file MD5 readback for metadata-less
 carried finals; nonzero fallback values therefore represent compatibility reread work, not
 write-stream digest time. `manifest_bounds_rows`/`bytes`/`ms` describe only a post-close

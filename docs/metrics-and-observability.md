@@ -149,9 +149,11 @@ trailer samples from compatibility fallback scans. `merge_boundary_bytes` is the
 the two byte fields. Parquet boundary selection contributes zero to these page-run totals.
 
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
-`local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. Fresh final parts
-derive their digest, byte count, row count, and exact bounds while writing; nonzero manifest
-bounds-read metrics identify the compatibility path that reopened a carried part.
+`local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
+time from the first final close through publication, while `finalize_close_ms` sums per-part
+close service and can exceed wall time when closes overlap. Fresh final parts derive their
+digest, byte count, row count, and exact bounds while writing; nonzero manifest bounds-read
+metrics identify the compatibility path that reopened a carried part.
 
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.

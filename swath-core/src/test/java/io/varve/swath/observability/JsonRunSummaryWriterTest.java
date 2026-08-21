@@ -387,13 +387,14 @@ final class JsonRunSummaryWriterTest {
     }
 
     @Test
-    void sortBlockSeparatesRangeFinalizeManifestAndPublicationCosts(@TempDir Path dir) throws Exception {
+    void sortBlockSeparatesParallelCloseServiceFromFinalizeWallTime(@TempDir Path dir) throws Exception {
         Path path = dir.resolve("summary.json");
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         RunMetrics metrics = new RunMetrics(registry);
         registry.get("swath.sort.merge.latency").timer().record(10, TimeUnit.SECONDS);
         metrics.recordSortMergeRange(TimeUnit.SECONDS.toNanos(2));
         metrics.recordSortMergeBoundaries(TimeUnit.SECONDS.toNanos(1));
+        metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortManifestMd5(1234, TimeUnit.MILLISECONDS.toNanos(250));
         metrics.recordSortManifestBounds(0, 0, 0); // fresh writer: no post-close scan
@@ -415,8 +416,8 @@ final class JsonRunSummaryWriterTest {
 
         JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
         assertThat(sort.get("range_merge_ms").asLong()).isEqualTo(2_000);
-        assertThat(sort.get("finalize_ms").asLong()).isEqualTo(7_000);
-        assertThat(sort.get("finalize_close_ms").asLong()).isEqualTo(3_000);
+        assertThat(sort.get("finalize_ms").asLong()).isEqualTo(4_000);
+        assertThat(sort.get("finalize_close_ms").asLong()).isEqualTo(6_000);
         assertThat(sort.get("manifest_md5_bytes").asLong()).isEqualTo(1234);
         assertThat(sort.get("manifest_md5_ms").asLong()).isEqualTo(250);
         assertThat(sort.get("manifest_bounds_rows").asLong()).isZero();

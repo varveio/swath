@@ -467,7 +467,9 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   finally `_SUCCESS`). Each final writer computes the byte-exact MD5 over the
   exact bytes it emits and retains its exact first key, last key, row count,
   and emitted byte count. Those immutable facts become publishable only after
-  footer close + file/directory fsync succeeds; the ordered merge result carries
+  footer close + mandatory file fsync succeeds and the directory-fsync attempt
+  completes (a debug-logged no-op on unsupported platforms, as qualified below);
+  the ordered merge result carries
   them through the rename into manifest assembly, so a newly produced final is
   not re-opened for either an MD5 pass or a projected-key bounds pass. A carried
   or third-party final without equivalent trustworthy close-gated metadata keeps
