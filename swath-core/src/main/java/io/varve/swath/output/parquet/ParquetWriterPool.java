@@ -6,515 +6,54 @@
 package io.varve.swath.output.parquet;
 
 import io.micrometer.core.instrument.Timer;
-import io.varve.swath.concurrent.Scope;
-import io.varve.swath.error.OutputException;
-import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
-import java.io.IOException;
-import java.nio.file.Files;
+import io.varve.swath.output.dataset.DatasetWriterObserver;
+import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
-import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.parquet.schema.MessageType;
 
-/**
- * The decoupled Parquet writer pool: {@code numWriters} lanes
- * (2–4, default 3), each on its own virtual thread draining a bounded queue, so
- * Parquet I/O never blocks the listing workers. <b>Sticky</b> assignment — every
- * page of a node goes to {@code writer = nodeId % numWriters}, so a node's pages
- * occupy a contiguous run of one lane's size-rotated parts (which finalize in
- * order, making the {@code durable_cursor} model sound).
- *
- * <p><b>Durability (I6).</b> A part is durable iff finalized (footer fsynced,
- * {@link PartWriter#close()}); on every finalize the atomic {@code manifest.json}
- * is rewritten to include it, so a crash mid-run never loses committed-part
- * metadata. On {@link #close()} (success) each lane finalizes its open part; on
- * {@link #abort()} (failure) each lane <b>discards</b> its open part (deleted, not
- * finalized) so a resumed run re-lists those rows exactly once — only naturally
- * rotated, finalized parts survive.
- *
- * <p>Lanes <b>always drain to the poison sentinel</b> (even after a write
- * failure), so a full lane queue can never deadlock {@link #submit} or shutdown.
- *
- * <p><b>Rotation cadence.</b> Beyond the {@code targetBytes} size
- * trigger, a lane also rotates once its open part has been open
- * {@code rotationIntervalNanos} or has buffered {@code rotationMaxRows} rows —
- * whichever fires first — so {@code durable_cursor} advances on a bounded cadence
- * instead of only when a part happens to fill up (the resume RPO gap). Both are
- * checked on the lane's own thread alongside the size check (no new
- * concurrency), reuse {@link #finalizeCurrent} verbatim, and never fire on an
- * empty part (an idle lane never produces empty parts). {@code 0} disables
- * either trigger.
- */
-public final class ParquetWriterPool implements AutoCloseable {
-
-    private static final PageBatch POISON = new PageBatch(-1, -1, List.of());
-
-    /**
-     * Anti-spin floor for the idle-lane poll wait below. The CLI now
-     * rejects a too-small {@code --part-rotation-interval} ({@code ListCommand.
-     * MIN_PART_ROTATION_INTERVAL}), but this constructor is a public API — a caller could
-     * still hand {@link #rotationIntervalNanos} an arbitrarily small positive value (e.g. one
-     * nanosecond), which would otherwise make the lane thread {@code poll()}-timeout and
-     * re-loop continuously with no work (a CPU wakeup storm). Clamping only the poll WAIT to
-     * {@code max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS)} bounds how often an idle
-     * lane's thread wakes; it never changes the staleness decision itself — {@link
-     * #rotationReason} still compares elapsed time against the true, unclamped {@code
-     * rotationIntervalNanos}, so when a part is judged stale/rotated is unaffected.
-     */
-    private static final long ROTATION_POLL_FLOOR_NANOS = 50_000_000L;   // 50 ms
-
-    private final Path dir;
-    private final DatasetLayout layout;
-    private final MessageType schema;
-    private final String argsHash;
-    private final String bucket;
-    private final int numWriters;
-    private final long targetBytes;
-    private final long rotationIntervalNanos;
-    private final long rotationMaxRows;
-    private final LongSupplier nanoClock;
-    private final PartListener partListener;
-    // Optional (null-safe) run metrics — rotation-trigger attribution, finalize/
-    // discard counters, footer-fsync latency, and the lanes' own encode/write span
-    // (recordLaneWork). Null for every caller that doesn't pass one
-    // (several constructors below + most tests).
-    private final RunMetrics metrics;
-
-    /** Which of the three rotation triggers fired ({@link #rotationReason}); {@code NONE} = don't rotate. */
-    private enum RotationReason {
-        NONE, SIZE, ROWS, TIME;
-
-        String tag() {
-            return name().toLowerCase(Locale.ROOT);
-        }
+/** Parquet construction facade over the format-neutral dataset writer machinery. */
+public final class ParquetWriterPool extends SharedDatasetWriterPool {
+    public ParquetWriterPool(Path dir, MessageType schema, String argsHash,
+                             int writers, long targetBytes, int queueCapacity) {
+        this(dir, schema, argsHash, writers, targetBytes, queueCapacity, ParquetWriterPoolConfig.DEFAULT);
     }
 
-    private final Lane[] lanes;
-    // Writer lanes do blocking Parquet file I/O (writes + fsync), which pins a
-    // virtual thread's carrier — run them on dedicated platform threads so the
-    // hot path never pins (PERF-2). They are few (2–4) and long-lived.
-    private final Scope scope = Scope.ofPlatformThreads("parquet-writer");
-    private final List<Future<?>> laneFutures = new ArrayList<>();
-    private final AtomicReference<Throwable> failure = new AtomicReference<>();
-
-    private final List<PartInfo> committedParts = Collections.synchronizedList(new ArrayList<>());
-    private final Object manifestLock = new Object();
-    private volatile boolean aborting = false;
-    private boolean joined = false;
-
     public ParquetWriterPool(Path dir, MessageType schema, String argsHash,
-                             int numWriters, long targetBytes, int queueCapacity) {
-        this(dir, schema, argsHash, numWriters, targetBytes, queueCapacity, ParquetWriterPoolConfig.DEFAULT);
-    }
-
-    /**
-     * Canonical constructor: the pool's required resources plus its optional wiring/knob clump
-     * ({@link ParquetWriterPoolConfig} — bucket, part listener, carried-over parts, rotation cadence,
-     * metrics). Production wires the whole clump once; tests pass {@link ParquetWriterPoolConfig#DEFAULT}
-     * with any single knob derived via a {@code withX}.
-     */
-    public ParquetWriterPool(Path dir, MessageType schema, String argsHash,
-                             int numWriters, long targetBytes, int queueCapacity,
+                             int writers, long targetBytes, int queueCapacity,
                              ParquetWriterPoolConfig config) {
-        this(dir, schema, argsHash, numWriters, targetBytes, queueCapacity, config, System::nanoTime);
+        super(dir, new ParquetDatasetFormat(schema), argsHash, writers, targetBytes, queueCapacity,
+                sharedConfig(config));
     }
 
-    /** Base constructor. Test seam: {@code nanoClock} injects a deterministic monotonic clock
-     *  instead of {@link System#nanoTime()} (production always uses {@code System::nanoTime}). */
     ParquetWriterPool(Path dir, MessageType schema, String argsHash,
-                      int numWriters, long targetBytes, int queueCapacity,
+                      int writers, long targetBytes, int queueCapacity,
                       ParquetWriterPoolConfig config, LongSupplier nanoClock) {
-        this.dir = dir;
-        this.layout = DatasetLayout.of(dir);
-        this.schema = schema;
-        this.argsHash = argsHash;
-        this.bucket = config.bucket() == null ? "" : config.bucket();
-        this.numWriters = Math.max(1, numWriters);
-        this.targetBytes = targetBytes;
-        this.rotationIntervalNanos = config.rotationIntervalNanos();
-        this.rotationMaxRows = config.rotationMaxRows();
-        this.nanoClock = nanoClock;
-        this.partListener = config.partListener();
-        this.metrics = config.metrics();
-        this.committedParts.addAll(config.existingParts());
-        this.lanes = new Lane[this.numWriters];
-        for (int i = 0; i < this.numWriters; i++) {
-            lanes[i] = new Lane(i, new ArrayBlockingQueue<>(Math.max(1, queueCapacity)));
-        }
-        // Resume: continue each lane's part sequence PAST any carried-over part so a
-        // resumed run never reuses (and so overwrites) a prior finalized part's filename.
-        for (PartInfo p : config.existingParts()) {
-            int w = p.writerId();
-            if (w >= 0 && w < this.numWriters) {
-                lanes[w].seq = Math.max(lanes[w].seq, parseSeq(p.path()) + 1);
-            }
-        }
-        for (Lane lane : lanes) {
-            laneFutures.add(scope.fork(() -> runLane(lane)));
-        }
+        super(dir, new ParquetDatasetFormat(schema), argsHash, writers, targetBytes, queueCapacity,
+                sharedConfig(config), nanoClock);
     }
 
-    /** Extract the {@code %05d} sequence from a {@code part-w{id}-{seq}.parquet} file name. */
-    private static int parseSeq(String fileName) {
-        String base = fileName.endsWith(".parquet")
-                ? fileName.substring(0, fileName.length() - ".parquet".length()) : fileName;
-        int dash = base.lastIndexOf('-');
-        try {
-            return dash < 0 ? -1 : Integer.parseInt(base.substring(dash + 1));
-        } catch (NumberFormatException e) {
-            return -1;   // unrecognized name ⇒ don't constrain the sequence
-        }
+    private static DatasetWriterPoolConfig sharedConfig(ParquetWriterPoolConfig config) {
+        return new DatasetWriterPoolConfig("parquet", config.bucket(), config.partListener(),
+                config.existingParts(), config.rotationIntervalNanos(), config.rotationMaxRows(),
+                observer(config.metrics()));
     }
 
-    /** Route a batch to its sticky lane (blocking on a full lane queue — backpressure). */
-    public void submit(PageBatch batch) throws OutputException, InterruptedException {
-        checkFailure();
-        int lane = (int) Math.floorMod(batch.nodeId(), numWriters);
-        lanes[lane].queue.put(batch);
-        checkFailure();
-    }
-
-    public long committedPartCount() {
-        synchronized (committedParts) {
-            return committedParts.size();
-        }
-    }
-
-    public long committedBytes() {
-        synchronized (committedParts) {
-            return committedParts.stream().mapToLong(PartInfo::bytes).sum();
-        }
-    }
-
-    private void checkFailure() throws OutputException {
-        Throwable t = failure.get();
-        if (t != null) {
-            throw new OutputException("parquet writer failed", t);
-        }
-    }
-
-    private Void runLane(Lane lane) throws InterruptedException {
-        // Always drain to POISON — never exit early on failure, or a full queue
-        // would wedge submit()/shutdown (the lane-failure deadlock).
-        //
-        // Idle-lane cadence: check-on-write alone never
-        // re-evaluates a lane that stopped receiving batches, so a stale non-empty
-        // part can sit non-durable indefinitely. When the time trigger is
-        // configured, wake on a timeout (instead of blocking forever) so THIS
-        // lane's OWN thread — no new thread, no shared mutable state — can
-        // re-run the same rotation check with nothing new to write. Disabled
-        // (rotationIntervalNanos == 0, incl. --single-file) keeps the exact
-        // prior take() behavior.
-        while (true) {
-            // Floor the poll WAIT (never the staleness check in rotationReason()) so a tiny
-            // positive rotationIntervalNanos can't spin this thread — see ROTATION_POLL_FLOOR_NANOS.
-            PageBatch batch = rotationIntervalNanos > 0
-                    ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS), TimeUnit.NANOSECONDS)
-                    : lane.queue.take();
-            if (batch == null) {
-                // Timed out — no new batch arrived. Re-evaluate the SAME rotation
-                // check; rotationReason() short-circuits on rows==0 so an idle EMPTY
-                // lane still produces nothing, and finalizeCurrent() no-ops when
-                // there is no open part (lane.current == null).
-                if (!aborting && failure.get() == null && lane.current != null) {
-                    RotationReason reason = rotationReason(lane);
-                    if (reason != RotationReason.NONE) {
-                        long startedAt = nanoClock.getAsLong();
-                        try {
-                            recordRotation(reason);
-                            finalizeCurrent(lane);
-                        } catch (Throwable t) {
-                            failure.compareAndSet(null, t);
-                        } finally {
-                            recordLaneWork(startedAt);
-                        }
-                    }
-                }
-                continue;
-            }
-            if (batch == POISON) {
-                break;
-            }
-            if (aborting || failure.get() != null) {
-                continue;   // draining and discarding
-            }
-            long startedAt = nanoClock.getAsLong();
-            try {
-                writeBatch(lane, batch);
-            } catch (Throwable t) {
-                failure.compareAndSet(null, t);
-            } finally {
-                recordLaneWork(startedAt);
-            }
-        }
-        boolean hasOpenPart = lane.current != null;
-        long startedAt = nanoClock.getAsLong();
-        try {
-            if (aborting || failure.get() != null) {
-                discardCurrent(lane);   // partial part is NOT durable → delete it
-            } else {
-                finalizeCurrent(lane);
-            }
-        } catch (Throwable t) {
-            failure.compareAndSet(null, t);
-        } finally {
-            if (hasOpenPart) {   // no open part ⇒ both paths no-op; don't record a fabricated zero
-                recordLaneWork(startedAt);
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Close one stretch of lane-thread work into the {@code parquet_write} client-cost span
-     * ({@code swath.parquet.write.latency}) — see {@link RunMetrics#recordParquetWrite}. Called from
-     * the three places a lane does work between waits on its queue (batch write, idle-cadence
-     * rotation, drain-time finalize/discard), so summing the span over a run accounts for the pool's
-     * CPU rather than for the dispatch that {@code emit} sees. Measured on {@link #nanoClock}, the
-     * same monotonic clock the rotation triggers read.
-     *
-     * <p>Swallows anything thrown while recording. This is the only work in the lane loop that is
-     * NOT already inside a catch-all, and it is pure observation: letting a metrics/clock failure
-     * escape would kill the lane thread before it consumes the poison sentinel, which is exactly the
-     * lane-failure deadlock the "always drain to POISON" rule exists to prevent.
-     */
-    private void recordLaneWork(long startedAtNanos) {
+    private static DatasetWriterObserver observer(RunMetrics metrics) {
         if (metrics == null) {
-            return;
+            return DatasetWriterObserver.NONE;
         }
-        try {
-            metrics.recordParquetWrite(nanoClock.getAsLong() - startedAtNanos);
-        } catch (Throwable ignored) {
-            // observation only — never take the lane down with it
-        }
-    }
-
-    private void writeBatch(Lane lane, PageBatch batch) throws Exception {
-        if (lane.current == null) {
-            lane.openPart();
-        }
-        for (ListEntry e : batch.entries()) {
-            lane.current.write(e);
-        }
-        // Track the highest key this node contributed to the open part — the
-        // durable_cursor it makes durable when the part finalizes (§4.5). Listing is
-        // ascending per node, so the latest batch's last key is the max.
-        if (!batch.entries().isEmpty()) {
-            lane.partNodeMaxKey.put(batch.nodeId(), batch.entries().getLast().key().rawUnsafe());
-        }
-        RotationReason reason = rotationReason(lane);
-        if (reason != RotationReason.NONE) {
-            recordRotation(reason);
-            finalizeCurrent(lane);
-        }
-    }
-
-    /**
-     * Which of the three triggers fires — size (unchanged), row count, or
-     * time-open — first, or {@code NONE}. Never fires for an empty part (an idle/just-opened
-     * lane must not produce empty parts).
-     */
-    private RotationReason rotationReason(Lane lane) {
-        PartWriter w = lane.current;
-        long rows = w.rows();
-        if (rows == 0) {
-            return RotationReason.NONE;
-        }
-        if (w.bufferedDataSize() >= targetBytes) {
-            return RotationReason.SIZE;
-        }
-        if (rotationMaxRows > 0 && rows >= rotationMaxRows) {
-            return RotationReason.ROWS;
-        }
-        if (rotationIntervalNanos > 0
-                && (nanoClock.getAsLong() - lane.partOpenedAtNanos) >= rotationIntervalNanos) {
-            return RotationReason.TIME;
-        }
-        return RotationReason.NONE;
-    }
-
-    /** Engagement counter — did the cadence trigger earn its keep, and how often. */
-    private void recordRotation(RotationReason reason) {
-        if (metrics != null) {
-            metrics.recordParquetRotation(reason.tag());
-        }
-    }
-
-    private void finalizeCurrent(Lane lane) throws Exception {
-        if (lane.current == null) {
-            return;
-        }
-        PartWriter w = lane.current;
-        long rows = w.rows();
-        Path path = w.path();
-        Timer.Sample fsyncSample = metrics == null ? null : metrics.startParquetFinalizeTimer();
-        try {
-            w.close();   // footer + fsync ⇒ finalized (I6)
-        } catch (IOException e) {
-            // Finalization failed (e.g. fsync error). The part is NOT in the manifest
-            // and is therefore not durable; delete the half-written file so it cannot
-            // be mistaken for a finalized part and so abort()'s later cleanup isn't
-            // needed (the `joined` latch would skip it). Then surface the failure.
-            lane.current = null;
-            lane.partNodeMaxKey.clear();
-            Files.deleteIfExists(path);
-            if (metrics != null) {
-                metrics.recordParquetPart("finalize_failed");
+        return new DatasetWriterObserver() {
+            @Override public void recordLaneWork(long elapsedNanos) { metrics.recordParquetWrite(elapsedNanos); }
+            @Override public void recordRotation(String reason) { metrics.recordParquetRotation(reason); }
+            @Override public Object startFinalize() { return metrics.startParquetFinalizeTimer(); }
+            @Override public void recordFinalize(Object sample) {
+                metrics.recordParquetFinalizeLatency((Timer.Sample) sample);
             }
-            throw e;
-        }
-        if (fsyncSample != null) {
-            metrics.recordParquetFinalizeLatency(fsyncSample);
-        }
-        lane.current = null;
-        long bytes = Files.size(path);
-        // Canonical relative form: data/<filename>, shared verbatim by the consumer
-        // manifest files[].key, the checkpoint part_file.path (via the event's fileName), and the
-        // resume disk-sweep. MD5 is computed ONCE here, at finalize — never on every
-        // manifest rewrite (which would be O(n²)).
-        String relPath = DatasetLayout.key(path.getFileName().toString());
-        String md5;
-        try (var in = Files.newInputStream(path)) {
-            md5 = DigestUtils.md5Hex(in);
-        }
-        // The footer is on disk; the checkpoint commit (record part + advance durable_cursor)
-        // is the exactly-once boundary, BEFORE the manifest — a crash here discards the part on resume.
-        Map<Long, byte[]> contributions = Map.copyOf(lane.partNodeMaxKey);
-        lane.partNodeMaxKey.clear();
-        partListener.onFinalized(new PartListener.PartFinalizedEvent(
-                lane.id, relPath, rows, bytes, contributions));
-        committedParts.add(new PartInfo(relPath, lane.id, rows, bytes, md5));
-        if (metrics != null) {
-            metrics.recordParquetPart("finalized");
-            // A part finalize (footer fsync + manifest commit) is real forward progress that no
-            // LISTING page/object counter reflects — a large multi-part non-sort finalize tail
-            // (close()'s drainAndJoin() below) can otherwise sit with progressSignal() frozen for
-            // longer than the stall window and get falsely aborted (worse: it could force the STUCK
-            // exit 75 over what should have been a clean --max-duration exit 0).
-            metrics.markProgress();
-        }
-        writeManifest();   // atomic, on each finalize
-    }
-
-    private void discardCurrent(Lane lane) throws IOException {
-        if (lane.current == null) {
-            return;
-        }
-        Path path = lane.current.path();
-        try {
-            lane.current.discard();   // release the handle WITHOUT a durable footer-fsync (I6/RES-4)
-        } finally {
-            lane.current = null;
-            if (metrics != null) {
-                metrics.recordParquetPart("discarded");
-            }
-            lane.partNodeMaxKey.clear();
-            Files.deleteIfExists(path);
-        }
-    }
-
-    private void writeManifest() throws IOException {
-        synchronized (manifestLock) {
-            Manifest.write(dir, bucket, schema.toString(), snapshotParts(), false, null);
-        }
-    }
-
-    private List<PartInfo> snapshotParts() {
-        synchronized (committedParts) {
-            return new ArrayList<>(committedParts);
-        }
-    }
-
-    /**
-     * Graceful completion: finalize every lane's open part, commit the consumer manifest, then write
-     * the final-commit artifacts: {@code .swath-state.json} (with a null run id — the
-     * pool has none), {@code symlink.txt}, and finally the empty {@code _SUCCESS} marker LAST.
-     */
-    @Override
-    public void close() throws OutputException {
-        drainAndJoin();
-        checkFailure();
-        try {
-            synchronized (manifestLock) {
-                List<PartInfo> snapshot = snapshotParts();
-                Manifest.write(dir, bucket, schema.toString(), snapshot, false, null);   // ensure a manifest exists
-                Manifest.writeState(dir, argsHash, null);
-                Manifest.writeSymlink(dir, snapshot);
-                Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker (success only)
-            }
-        } catch (IOException e) {
-            throw new OutputException("failed to write manifest", e);
-        }
-    }
-
-    /** Failure path: discard open (non-finalized) parts; finalized parts + their manifest remain. */
-    public void abort() {
-        aborting = true;
-        try {
-            drainAndJoin();
-        } catch (OutputException ignored) {
-            // already failing — surface the original error, not the shutdown
-        }
-    }
-
-    private void drainAndJoin() throws OutputException {
-        if (joined) {
-            return;
-        }
-        joined = true;
-        try {
-            for (Lane lane : lanes) {
-                lane.queue.put(POISON);
-            }
-            for (Future<?> f : laneFutures) {
-                f.get();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new OutputException("interrupted closing parquet writer pool", e);
-        } catch (ExecutionException e) {
-            throw new OutputException("parquet writer failed", e.getCause());
-        } finally {
-            scope.close();
-        }
-    }
-
-    private final class Lane {
-        final int id;
-        final BlockingQueue<PageBatch> queue;
-        // Per node id, the highest key written to the open part — flushed to the
-        // listener (durable_cursor advance) when the part finalizes; cleared per part.
-        final Map<Long, byte[]> partNodeMaxKey = new HashMap<>();
-        PartWriter current;
-        int seq;
-        // When the open part was created, on the injected clock — the time-trigger baseline.
-        long partOpenedAtNanos;
-
-        Lane(int id, BlockingQueue<PageBatch> queue) {
-            this.id = id;
-            this.queue = queue;
-        }
-
-        void openPart() throws IOException {
-            Path dataDir = layout.dataDir();   // parts live under <root>/data/
-            Files.createDirectories(dataDir);
-            Path path = dataDir.resolve(String.format("part-w%d-%05d.parquet", id, seq++));
-            current = new PartWriter(path, schema);
-            partOpenedAtNanos = nanoClock.getAsLong();
-        }
+            @Override public void recordPart(String result) { metrics.recordParquetPart(result); }
+            @Override public void markProgress() { metrics.markProgress(); }
+        };
     }
 }

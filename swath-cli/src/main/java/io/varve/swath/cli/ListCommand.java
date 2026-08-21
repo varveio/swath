@@ -47,6 +47,7 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.ParquetResume;
 import io.varve.swath.output.parquet.PartInfo;
+import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.CancelSource;
 import io.varve.swath.runtime.CancellationToken;
@@ -370,8 +371,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // non-empty dir or a DAMAGED manifest so we never write into / delete unowned files. A dir
         // that holds a VALID swath dataset falls through to openRun's checkpoint-status gate
         // (unfinished/completed). Only a parquet DIRECTORY destination has this dataset layout.
-        if (!checkpoint.resume && resolved == OutputFormat.PARQUET
-                && resolvedOutput.kind() == OutputOptions.DestinationKind.DIRECTORY) {
+        if (!checkpoint.resume && resolvedOutput.kind() == OutputOptions.DestinationKind.DIRECTORY) {
             DatasetDirGuard.guardFreshRunDatasetDir(Path.of(output.destination),
                     checkpoint.overwrite, checkpoint.restart);
         }
@@ -1011,6 +1011,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         return runEngineGuarded(store, run.id(), () -> runEngineParquet(s3uri, channelCapacity,
                                 pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink));
                     }
+                    if (output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY) {
+                        OutputFormat textFormat = resolved;
+                        return runEngineGuarded(store, run.id(), () -> runEngineTextDataset(
+                                s3uri, textFormat, channelCapacity, pageMax, filterChain, ctx, argsHash,
+                                store, run, nodes, fetcher, config, traceSink));
+                    }
                     ListRunner.Spec listSpec = listSpec(s3uri, resolved, channelCapacity, pageMax, filterChain, argsHash, config);
                     // run.resumed() here can only be a STDOUT destination (never FILE-kind -- that
                     // was refused above), so openSink() needs no resumed/append mode to support.
@@ -1247,6 +1253,27 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
 
         new ListRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
                 connection.maxParallelListings, nodes, existing, engine.toggles, traceSink, retryConfig());
+        return ExitCodes.SUCCESS;
+    }
+
+    private Integer runEngineTextDataset(
+            S3Uri s3uri, OutputFormat format, int channelCapacity, int pageMax,
+            FilterChain filterChain, RunContext ctx, String argsHash, CheckpointStore store,
+            RunMeta run, List<Node> nodes, PageFetcher fetcher, S3Config config, TraceSink traceSink)
+            throws Exception {
+        Path directory = output.openDatasetDir();
+        ctx.metrics().registerDiskFreeGauge(directory);
+        DatasetDirGuard.clearDatasetForFreshRun(directory);
+        ListRunner.Spec listing = listSpec(
+                s3uri, format, channelCapacity, pageMax, filterChain, argsHash, config);
+        TextWriterPoolConfig writer = new TextWriterPoolConfig(
+                directory, format, output.resolvedCompression, !output.rawOutput,
+                argsHash, s3uri.bucket(), output.resolveTextWriters(), output.textPartSizeBytes(),
+                PARQUET_WRITER_QUEUE_CAPACITY, output.resolvePartRotationInterval().toNanos(),
+                output.resolvePartRotationMaxRows());
+        new ListRunner().runToTextDatasetWorkStealing(
+                ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
+                connection.maxParallelListings, nodes, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
     }
 
@@ -1595,6 +1622,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             CheckpointOptions.CheckpointMode mode, OutputFormat resolved) {
         if (mode.isNone()) {
             return null;
+        }
+        if (kind == OutputOptions.DestinationKind.DIRECTORY && resolved != OutputFormat.PARQUET) {
+            return "partitioned text datasets are non-resumable in this release; pass --checkpoint none";
         }
         boolean fileKind = kind == OutputOptions.DestinationKind.FILE;
         boolean refuse = fileKind || (kind == OutputOptions.DestinationKind.STDOUT && !mode.isAuto());

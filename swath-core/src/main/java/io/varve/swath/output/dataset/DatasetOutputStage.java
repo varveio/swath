@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-package io.varve.swath.output.parquet;
+package io.varve.swath.output.dataset;
 
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.SwathException;
@@ -21,17 +21,15 @@ import io.varve.swath.runtime.RunContext;
 import java.time.Duration;
 
 /**
- * Output stage for Parquet: dispatches each {@link PageBatch} to the decoupled
- * {@link ParquetWriterPool} (sticky by node id). The pool is closed by the
- * caller after the pipeline completes (so the footer + manifest commit happen
- * once listing has quiesced).
+ * Dispatches each {@link PageBatch} to a decoupled dataset writer pool. The caller closes the pool
+ * after listing quiesces, which finalizes open parts and publishes the completed dataset.
  */
-public final class ParquetOutputStage implements Pipeline.Consumer<PageBatch> {
+public final class DatasetOutputStage implements Pipeline.Consumer<PageBatch> {
 
-    private final ParquetWriterPool pool;
+    private final DatasetWriterPool pool;
     private final RowTally tally = new RowTally();
 
-    public ParquetOutputStage(ParquetWriterPool pool) {
+    public DatasetOutputStage(DatasetWriterPool pool) {
         this.pool = pool;
     }
 
@@ -71,8 +69,8 @@ public final class ParquetOutputStage implements Pipeline.Consumer<PageBatch> {
                     switch (failure.cause()) {
                         case SwathException s -> throw s;
                         case InterruptedException ie -> throw ie;
-                        case null -> throw new ListingException("listing failed upstream of parquet output");
-                        default -> throw new ListingException("listing failed upstream of parquet output", failure.cause());
+                        case null -> throw new ListingException("listing failed upstream of dataset output");
+                        default -> throw new ListingException("listing failed upstream of dataset output", failure.cause());
                     }
                 }
             }

@@ -32,8 +32,7 @@ import org.slf4j.LoggerFactory;
  * data/} directory whose entries are swath-authored part files, an internal {@code .swath/}
  * sidecar (the co-located checkpoint), and the {@code --sort} staging directory
  * ({@link ListCommand#SORT_STAGING_DIR}). A file under {@code data/} is swath-OWNED only under the
- * reserved part naming — {@code part-*.parquet} (finalized/committed parts, exactly what a valid
- * manifest records) and {@code part-*.parquet.tmp} (in-flight finals). Anything else is foreign.
+ * reserved part naming for Parquet, TSV, or JSONL (optionally gzip/Zstandard-compressed).
  *
  * <p>The guard refuses a FOREIGN or DAMAGED directory rather than write into it: a plain file
  * where a dataset is expected, a {@code manifest.json} that is present but unparseable, or a
@@ -320,13 +319,19 @@ final class DatasetDirGuard {
     }
 
     /**
-     * Ownership test for a file under {@code data/}: the reserved {@code part-*.parquet}/{@code
-     * part-*.parquet.tmp} naming defined in the class javadoc. Anything else is unowned and MUST NOT
+     * Ownership test for a file under {@code data/}: the reserved dataset-part naming defined in
+     * the class javadoc. Anything else is unowned and MUST NOT
      * be deleted on a fresh/restart clear.
      */
     private static boolean isSwathOwnedPart(String fileName) {
-        return fileName.startsWith("part-")
-                && (fileName.endsWith(".parquet") || fileName.endsWith(".parquet.tmp"));
+        if (!fileName.startsWith("part-")) {
+            return false;
+        }
+        String finalName = fileName.endsWith(".tmp")
+                ? fileName.substring(0, fileName.length() - ".tmp".length()) : fileName;
+        return finalName.endsWith(".parquet")
+                || finalName.endsWith(".tsv") || finalName.endsWith(".tsv.gz") || finalName.endsWith(".tsv.zst")
+                || finalName.endsWith(".jsonl") || finalName.endsWith(".jsonl.gz") || finalName.endsWith(".jsonl.zst");
     }
 
     /**

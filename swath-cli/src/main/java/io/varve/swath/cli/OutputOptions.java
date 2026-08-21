@@ -11,6 +11,7 @@ import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.filter.SizeParser;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.PartWriter;
+import io.varve.swath.output.text.TextCompression;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.FileDescriptor;
@@ -42,25 +43,23 @@ import picocli.CommandLine.TypeConversionException;
  */
 final class OutputOptions {
 
-    enum Compression { NONE, GZIP, ZSTD }
-
     @Resume(ResumeClass.FREE)
     @Option(names = "--compression", paramLabel = "none|gzip|zstd", converter = CompressionConverter.class,
             description = "Compress text output; inferred from .gz/.zst when omitted (default: none).")
-    void setCompression(Compression compression) {
+    void setCompression(TextCompression compression) {
         this.compression = compression;
         this.compressionSpecified = true;
     }
 
-    Compression compression = Compression.NONE;
+    TextCompression compression = TextCompression.NONE;
     private boolean compressionSpecified;
-    Compression resolvedCompression = Compression.NONE;
+    TextCompression resolvedCompression = TextCompression.NONE;
 
-    static final class CompressionConverter implements ITypeConverter<Compression> {
+    static final class CompressionConverter implements ITypeConverter<TextCompression> {
         @Override
-        public Compression convert(String value) {
+        public TextCompression convert(String value) {
             try {
-                return Compression.valueOf(value.toUpperCase(Locale.ROOT));
+                return TextCompression.valueOf(value.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new TypeConversionException(
                         "'" + value + "' is not one of [none, gzip, zstd]");
@@ -118,6 +117,11 @@ final class OutputOptions {
     boolean rawOutput;
 
     int parquetWriters = 3;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--text-writers", paramLabel = "N",
+            description = "Parallel writers for a TSV/JSONL directory dataset (default: 3; range: 2-4).")
+    int textWriters = 3;
 
     /** Resolved -o destination kind: set once by {@link #resolveOutput} in {@code call()}. */
     DestinationKind resolvedKind = DestinationKind.STDOUT;
@@ -214,9 +218,9 @@ final class OutputOptions {
         return fileName;
     }
 
-    private Compression compressionFromExtension() {
+    private TextCompression compressionFromExtension() {
         if (isStdoutDestination()) {
-            return Compression.NONE;
+            return TextCompression.NONE;
         }
         int end = destination.length();
         while (end > 0) {
@@ -227,19 +231,19 @@ final class OutputOptions {
             end--;
         }
         String lower = destination.substring(0, end).toLowerCase(Locale.ROOT);
-        return lower.endsWith(".gz") ? Compression.GZIP
-                : lower.endsWith(".zst") ? Compression.ZSTD : Compression.NONE;
+        return lower.endsWith(".gz") ? TextCompression.GZIP
+                : lower.endsWith(".zst") ? TextCompression.ZSTD : TextCompression.NONE;
     }
 
     private void resolveCompression(OutputFormat resolved) throws InvalidArgsException {
-        Compression inferred = compressionFromExtension();
-        if (compressionSpecified && inferred != Compression.NONE && compression != inferred) {
+        TextCompression inferred = compressionFromExtension();
+        if (compressionSpecified && inferred != TextCompression.NONE && compression != inferred) {
             throw new InvalidArgsException("--compression " + compression.name().toLowerCase(Locale.ROOT)
                     + " conflicts with the compression extension of -o " + destination
                     + " (which implies --compression " + inferred.name().toLowerCase(Locale.ROOT) + ")");
         }
         resolvedCompression = compressionSpecified ? compression : inferred;
-        if (resolved == OutputFormat.PARQUET && resolvedCompression != Compression.NONE) {
+        if (resolved == OutputFormat.PARQUET && resolvedCompression != TextCompression.NONE) {
             throw new InvalidArgsException("--compression applies only to text output formats "
                     + "(table, tsv, jsonl); Parquet manages its own compression");
         }
@@ -352,7 +356,7 @@ final class OutputOptions {
                     + "use a file path with a known extension, or --output-type file to force a "
                     + "single-file destination without a matching extension");
         }
-        if (kind == DestinationKind.DIRECTORY && resolved != OutputFormat.PARQUET) {
+        if (kind == DestinationKind.DIRECTORY && resolved == OutputFormat.TABLE) {
             // DEFERRED: text-format directory datasets need a multi-writer
             // text framework that does not exist in swath-core today -- this guard is permanent
             // until that framework lands, not a placeholder. No promise of future support here.
@@ -360,8 +364,8 @@ final class OutputOptions {
                     ? "pass --output-type file, or choose a recognized-extension path "
                             + "(.tsv/.jsonl/.parquet) with its matching --format"
                     : "use a ." + token(resolved) + " file path, or --output-type file";
-            throw new InvalidArgsException("directory dataset output (-o " + destination + ") is "
-                    + "supported for --format parquet only today; " + correction);
+            throw new InvalidArgsException("directory dataset output (-o " + destination + ") does not support "
+                    + "--format table; " + correction);
         }
         resolvedKind = kind;
         resolvedFormat = resolved;
@@ -408,6 +412,11 @@ final class OutputOptions {
     @Resume(ResumeClass.FREE)
     @Option(names = "--parquet-part-size", paramLabel = "SIZE", description = "Target Parquet part size (default: 256mb).")
     String partSize;
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--text-part-size", paramLabel = "SIZE",
+            description = "Target uncompressed text part size (default: 256mb).")
+    String textPartSize;
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--part-rotation-interval", paramLabel = "DURATION",
@@ -499,10 +508,21 @@ final class OutputOptions {
         return parquetWriters;
     }
 
+    int resolveTextWriters() throws InvalidConfigException {
+        if (textWriters < MIN_PARQUET_WRITERS || textWriters > MAX_PARQUET_WRITERS) {
+            throw new InvalidConfigException("--text-writers must be between 2 and 4 (got " + textWriters + ")");
+        }
+        return textWriters;
+    }
+
     /** The Parquet part rotation target in bytes: {@code --parquet-part-size} if set, else 256 MB. */
     long partSizeBytes() throws InvalidConfigException, InvalidArgsException {
         return partSize != null ? SizeParser.parse(partSize)
                 : PartWriter.ROW_GROUP_BYTES * 4;
+    }
+
+    long textPartSizeBytes() throws InvalidConfigException, InvalidArgsException {
+        return textPartSize != null ? SizeParser.parse(textPartSize) : 256L * 1024 * 1024;
     }
 
     Duration resolvePartRotationInterval() throws InvalidConfigException {
@@ -534,6 +554,15 @@ final class OutputOptions {
     Path openParquetDir() throws InvalidConfigException, IOException {
         if (isStdoutDestination()) {
             throw new InvalidConfigException("Parquet output requires -o <dir> (a directory for the part files)");
+        }
+        Path dir = Path.of(destination);
+        Files.createDirectories(dir);
+        return dir;
+    }
+
+    Path openDatasetDir() throws InvalidConfigException, IOException {
+        if (isStdoutDestination()) {
+            throw new InvalidConfigException("dataset output requires -o <dir>");
         }
         Path dir = Path.of(destination);
         Files.createDirectories(dir);

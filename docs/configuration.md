@@ -12,6 +12,10 @@ swath resume --help
 swath list --tune help
 ```
 
+Text directory datasets use `--text-writers` (default `3`, range `2..4`) and
+`--text-part-size` (default `256mb`); `--compression` is inferred from `.gz`/`.zst`
+when possible and otherwise defaults to `none`.
+
 This page documents configuration sources that are not self-evident from help, plus the
 expert and diagnostic controls.
 

@@ -129,11 +129,17 @@ public final class Manifest {
      */
     public static void write(Path dir, String sourceBucket, String schema, List<PartInfo> parts,
                              boolean sorted, String sortKey) throws IOException {
+        write(dir, sourceBucket, "Parquet", schema, parts, sorted, sortKey);
+    }
+
+    /** Common manifest writer for every partitioned dataset format. */
+    public static void write(Path dir, String sourceBucket, String fileFormat, String schema,
+                             List<PartInfo> parts, boolean sorted, String sortKey) throws IOException {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("sourceBucket", sourceBucket);
         root.put("version", MANIFEST_VERSION);
         root.put("creationTimestamp", System.currentTimeMillis());
-        root.put("fileFormat", "Parquet");
+        root.put("fileFormat", fileFormat);
         root.put("fileSchema", schema);
         root.put("sorted", sorted);
         root.put("sortKey", sortKey);   // an explicit JSON null for an unsorted publish, never absent

@@ -34,6 +34,7 @@ history and delete-marker listing are not implemented yet.
 | Inspect rows in a terminal | `swath list s3://bucket/prefix` | No |
 | Pipe TSV | `swath list ... \| command` | No |
 | Write JSONL or TSV | `swath list ... --format jsonl -o rows.jsonl --checkpoint none` | No |
+| Write partitioned JSONL or TSV | `swath list ... --format jsonl --output-type dir -o rows/ --checkpoint none` | No |
 | Keep a managed Parquet dataset | `swath list ... --format parquet -o out/` | Yes |
 | Keep globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
 
@@ -42,6 +43,12 @@ and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`,
 `parquet`. `--compression none|gzip|zstd` compresses text output to a file or stdout;
 for files it is also inferred from `.gz` or `.zst`. Parquet uses its own compression
 and rejects this option.
+
+TSV and JSONL directory datasets use 2–4 bounded writer lanes (`--text-writers`,
+default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
+Each compressed part is a complete gzip or Zstandard frame. The dataset publishes a
+manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore
+requires `--checkpoint none`.
 
 Prefer `-o out/`. That directory is a managed Parquet dataset: it supports parallel
 writers, checkpointing, and resume. Text file destinations are published atomically but
@@ -182,6 +189,7 @@ managed output directory, not an arbitrary SQLite path.
 | Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
 | stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
 | FILE-kind text | One-shot and non-resumable; successful publication atomically replaces the destination. |
+| Directory-dataset TSV/JSONL | Non-resumable; bounded parallel parts are published with `_SUCCESS` last, and a failed run has no success marker. |
 | FILE-kind Parquet | One-writer, non-resumable dataset directory in the current release. |
 
 The exact commit, split, and sink contracts are in

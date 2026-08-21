@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.github.luben.zstd.ZstdInputStream;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.text.TextCompression;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.Writer;
@@ -33,7 +34,7 @@ final class TextCompressionTest {
         OutputOptions.Resolved resolved = options.resolveOutput(false);
         assertThat(resolved).isEqualTo(new OutputOptions.Resolved(
                 OutputFormat.JSONL, OutputOptions.DestinationKind.FILE));
-        assertThat(options.resolvedCompression).isEqualTo(OutputOptions.Compression.GZIP);
+        assertThat(options.resolvedCompression).isEqualTo(TextCompression.GZIP);
 
         try (Writer writer = options.openSink()) {
             writer.write("{\"key\":\"value\"}\n");
@@ -53,7 +54,7 @@ final class TextCompressionTest {
 
         assertThat(options.resolveOutput(false)).isEqualTo(new OutputOptions.Resolved(
                 OutputFormat.JSONL, OutputOptions.DestinationKind.FILE));
-        assertThat(options.resolvedCompression).isEqualTo(OutputOptions.Compression.GZIP);
+        assertThat(options.resolvedCompression).isEqualTo(TextCompression.GZIP);
     }
 
     @Test
@@ -79,18 +80,18 @@ final class TextCompressionTest {
         OutputOptions stdout = new OutputOptions();
         new CommandLine(stdout).parseArgs("--compression", "GZIP");
         assertThat(stdout.resolveOutput(false).format()).isEqualTo(OutputFormat.TSV);
-        assertThat(stdout.resolvedCompression).isEqualTo(OutputOptions.Compression.GZIP);
+        assertThat(stdout.resolvedCompression).isEqualTo(TextCompression.GZIP);
 
         OutputOptions parquet = new OutputOptions();
         parquet.destination = "listing.parquet";
-        parquet.setCompression(OutputOptions.Compression.ZSTD);
+        parquet.setCompression(TextCompression.ZSTD);
         assertThatThrownBy(() -> parquet.resolveOutput(false))
                 .isInstanceOf(InvalidArgsException.class)
                 .hasMessageContaining("applies only to text output formats");
 
         OutputOptions conflict = new OutputOptions();
         conflict.destination = "listing.jsonl.gz";
-        conflict.setCompression(OutputOptions.Compression.ZSTD);
+        conflict.setCompression(TextCompression.ZSTD);
         assertThatThrownBy(() -> conflict.resolveOutput(false))
                 .isInstanceOf(InvalidArgsException.class)
                 .hasMessageContaining("conflicts with the compression extension");

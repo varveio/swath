@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.dataset.DatasetPartWriter;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -26,7 +27,7 @@ import org.apache.parquet.schema.MessageType;
  * <b>iff</b> it is finalized — {@link #close()} writes the footer and fsyncs the
  * file before the part is recorded in the manifest.
  */
-public final class PartWriter implements AutoCloseable {
+public final class PartWriter implements AutoCloseable, DatasetPartWriter {
 
     /** Pinned writer settings. */
     public static final long ROW_GROUP_BYTES = 64L * 1024 * 1024;

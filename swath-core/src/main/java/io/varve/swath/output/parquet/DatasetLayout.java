@@ -74,13 +74,19 @@ public record DatasetLayout(Path root) {
      * disk-sweep and the tests instead of each re-rolling a {@code Files.list(...).filter(...)}.
      */
     public List<Path> dataParts() throws IOException {
+        return dataParts(".parquet");
+    }
+
+    /** Finalized parts for a specific dataset format suffix. */
+    public List<Path> dataParts(String suffix) throws IOException {
         Path data = dataDir();
         if (!Files.isDirectory(data)) {
             return List.of();
         }
         try (Stream<Path> entries = Files.list(data)) {
             return entries
-                    .filter(p -> p.getFileName().toString().endsWith(".parquet"))
+                    .filter(p -> p.getFileName().toString().startsWith("part-"))
+                    .filter(p -> p.getFileName().toString().endsWith(suffix))
                     .sorted()
                     .toList();
         }
