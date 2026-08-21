@@ -4,8 +4,9 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--bearer-token-command=CMD]
                   [--bearer-token-refresh-interval=DURATION]
                   [--checkpoint=PATH|none|auto] [--color=MODE]
-                  [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
-                  [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
+                  [--compression=none|gzip|zstd] [--concurrency=N]
+                  [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
+                  [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
                   [--metrics-endpoint=URL] [--min-size=SIZE]
                   [--modified-since=DATE] [--modified-until=DATE]
@@ -26,6 +27,9 @@ List a bucket or prefix.
   -V, --version              Print version information and exit.
 
 Output:
+      --compression=none|gzip|zstd
+                             Compress text output; inferred from .gz/.zst when
+                               omitted (default: none).
       --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
                                parquet (default: auto).
   -o, --output=PATH          Write to PATH; known extension selects a file,

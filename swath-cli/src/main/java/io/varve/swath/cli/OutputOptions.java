@@ -5,6 +5,7 @@
  */
 package io.varve.swath.cli;
 
+import com.github.luben.zstd.ZstdOutputStream;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.filter.SizeParser;
@@ -29,6 +30,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Map;
+import java.util.zip.GZIPOutputStream;
 import picocli.CommandLine.ITypeConverter;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.TypeConversionException;
@@ -39,6 +41,32 @@ import picocli.CommandLine.TypeConversionException;
  * and Parquet sinks and validating the memory-bounded writer/rotation knobs.
  */
 final class OutputOptions {
+
+    enum Compression { NONE, GZIP, ZSTD }
+
+    @Resume(ResumeClass.FREE)
+    @Option(names = "--compression", paramLabel = "none|gzip|zstd", converter = CompressionConverter.class,
+            description = "Compress text output; inferred from .gz/.zst when omitted (default: none).")
+    void setCompression(Compression compression) {
+        this.compression = compression;
+        this.compressionSpecified = true;
+    }
+
+    Compression compression = Compression.NONE;
+    private boolean compressionSpecified;
+    Compression resolvedCompression = Compression.NONE;
+
+    static final class CompressionConverter implements ITypeConverter<Compression> {
+        @Override
+        public Compression convert(String value) {
+            try {
+                return Compression.valueOf(value.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new TypeConversionException(
+                        "'" + value + "' is not one of [none, gzip, zstd]");
+            }
+        }
+    }
 
     /** The leading {@code _} keeps the sidecar out of a bare {@code *.parquet} glob. */
     static final String DEFAULT_SUMMARY_JSON_NAME = "_swath_summary.json";
@@ -129,7 +157,7 @@ final class OutputOptions {
 
     private static String extensionOf(String destination) {
         Path name = Path.of(destination).getFileName();
-        String fileName = name == null ? "" : name.toString();
+        String fileName = name == null ? "" : withoutCompressionExtension(name.toString());
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot).toLowerCase(Locale.ROOT);
     }
@@ -169,9 +197,52 @@ final class OutputOptions {
         if (fileName.isEmpty()) {
             return null;
         }
+        fileName = withoutCompressionExtension(fileName);
         int dot = fileName.lastIndexOf('.');
         String extension = dot < 0 ? "" : fileName.substring(dot).toLowerCase(Locale.ROOT);
         return EXTENSION_FORMATS.get(extension);
+    }
+
+    private static String withoutCompressionExtension(String fileName) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".gz")) {
+            return fileName.substring(0, fileName.length() - 3);
+        }
+        if (lower.endsWith(".zst")) {
+            return fileName.substring(0, fileName.length() - 4);
+        }
+        return fileName;
+    }
+
+    private Compression compressionFromExtension() {
+        if (isStdoutDestination()) {
+            return Compression.NONE;
+        }
+        int end = destination.length();
+        while (end > 0) {
+            char last = destination.charAt(end - 1);
+            if (last != '/' && last != '\\') {
+                break;
+            }
+            end--;
+        }
+        String lower = destination.substring(0, end).toLowerCase(Locale.ROOT);
+        return lower.endsWith(".gz") ? Compression.GZIP
+                : lower.endsWith(".zst") ? Compression.ZSTD : Compression.NONE;
+    }
+
+    private void resolveCompression(OutputFormat resolved) throws InvalidArgsException {
+        Compression inferred = compressionFromExtension();
+        if (compressionSpecified && inferred != Compression.NONE && compression != inferred) {
+            throw new InvalidArgsException("--compression " + compression.name().toLowerCase(Locale.ROOT)
+                    + " conflicts with the compression extension of -o " + destination
+                    + " (which implies --compression " + inferred.name().toLowerCase(Locale.ROOT) + ")");
+        }
+        resolvedCompression = compressionSpecified ? compression : inferred;
+        if (resolved == OutputFormat.PARQUET && resolvedCompression != Compression.NONE) {
+            throw new InvalidArgsException("--compression applies only to text output formats "
+                    + "(table, tsv, jsonl); Parquet manages its own compression");
+        }
     }
 
     /**
@@ -247,6 +318,7 @@ final class OutputOptions {
             }
             resolvedKind = DestinationKind.STDOUT;
             resolvedFormat = selected;
+            resolveCompression(selected);
             return new Resolved(selected, resolvedKind);
         }
         String ext = extensionOf(destination);
@@ -293,6 +365,7 @@ final class OutputOptions {
         }
         resolvedKind = kind;
         resolvedFormat = resolved;
+        resolveCompression(resolved);
         return new Resolved(resolved, kind);
     }
 
@@ -472,6 +545,7 @@ final class OutputOptions {
      * REAL destination path -- single files are published atomically. */
     private Path pendingTempPath;
     private Path pendingRealPath;
+    private Writer pendingWriter;
 
     /**
      * Open the text output sink. Stdout is opened directly (fd 1). A real {@code -o} destination is
@@ -504,7 +578,17 @@ final class OutputOptions {
                 throw e;
             }
         }
-        return new BufferedWriter(new OutputStreamWriter(new BufferedOutputStream(os), StandardCharsets.UTF_8));
+        OutputStream buffered = new BufferedOutputStream(os);
+        OutputStream encoded = switch (resolvedCompression) {
+            case NONE -> buffered;
+            case GZIP -> new GZIPOutputStream(buffered);
+            case ZSTD -> new ZstdOutputStream(buffered);
+        };
+        Writer writer = new BufferedWriter(new OutputStreamWriter(encoded, StandardCharsets.UTF_8));
+        if (!isStdoutDestination()) {
+            pendingWriter = writer;
+        }
+        return writer;
     }
 
     /**
@@ -518,6 +602,9 @@ final class OutputOptions {
             return;
         }
         try {
+            // Closing finishes gzip/zstd frames before the staged file becomes visible.
+            pendingWriter.close();
+            pendingWriter = null;
             try {
                 Files.move(pendingTempPath, pendingRealPath,
                         StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -536,6 +623,7 @@ final class OutputOptions {
         Path temp = pendingTempPath;
         pendingTempPath = null;
         pendingRealPath = null;
+        pendingWriter = null;
         if (temp != null) {
             try {
                 Files.deleteIfExists(temp);

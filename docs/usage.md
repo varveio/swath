@@ -39,11 +39,14 @@ history and delete-marker listing are not implemented yet.
 
 `--format auto` is the default. It chooses an aligned table when stdout is a terminal
 and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, and
-`parquet`.
+`parquet`. `--compression none|gzip|zstd` compresses text output to a file or stdout;
+for files it is also inferred from `.gz` or `.zst`. Parquet uses its own compression
+and rejects this option.
 
 Prefer `-o out/`. That directory is a managed Parquet dataset: it supports parallel
 writers, checkpointing, and resume. Text file destinations are published atomically but
-are not resumable.
+are not resumable; compressed files are published only after their gzip or Zstandard
+frame finishes.
 
 Do not use `-o inventory.parquet` when you expect one physical Parquet file. In the
 current release that FILE-kind path creates a one-writer, non-resumable dataset directory
