@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * fsync helpers for the sort package's crash-durability points (I6), mirroring the
- * output.parquet {@code Fsync} discipline: forcing a file's bytes is not enough — the directory
+ * output.dataset {@code DurableFiles} discipline: forcing a file's bytes is not enough — the directory
  * entry that names it (or a rename that commits it) must also be durable. v1 targets
  * POSIX/Linux/macOS; directory fsync degrades to a debug-logged no-op where unsupported.
  */

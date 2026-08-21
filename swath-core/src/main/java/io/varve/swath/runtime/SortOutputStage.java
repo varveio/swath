@@ -27,7 +27,7 @@ import java.time.Duration;
 /**
  * Output stage for {@code --sort}: admits each {@link PageBatch} into the single ordered
  * {@link SortLane} (keyed by node id, so the lane accumulates per-node max keys for the checkpoint).
- * Mirrors {@link io.varve.swath.output.parquet.ParquetOutputStage}, but the lane's async encoder is
+ * Mirrors {@link io.varve.swath.output.dataset.DatasetOutputStage}, but the lane's async encoder is
  * drained by the caller ({@code close()}/{@code abort()}) after the listing quiesces, then the merge
  * step publishes the final sorted file.
  */

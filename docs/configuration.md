@@ -15,6 +15,33 @@ swath list --tune help
 This page documents configuration sources that are not self-evident from help, plus the
 expert and diagnostic controls.
 
+## Output resolution at startup
+
+For a fresh `swath list`, swath resolves format, destination kind, and compression before
+it opens a checkpoint, contacts S3, or creates output. `swath resume` first opens its
+checkpoint, then restores and echoes the recorded output without mutating the destination.
+The resolution rules are deliberately independent:
+
+| Input | Resolution |
+| --- | --- |
+| No `-o`, or `-o -` | stdout; `auto` is table on a terminal and TSV when redirected |
+| `-o` ending in `.tsv` or `.jsonl` | atomically published single file; the suffix supplies the format when `--format` is omitted |
+| `-o` ending in `.parquet` | FILE-kind, one-writer Parquet dataset directory containing one part; it is not one physical Parquet file |
+| A `.gz` or `.zst` outer suffix | stripped before format inference and implies gzip or Zstandard for text; for example, `rows.jsonl.gz` is a gzip JSONL file |
+| Any other real `-o` path | directory dataset; `--format` is required because the path supplies none |
+| `--output-type file` or `--output-type dir` | overrides only destination kind, never a path's implied format |
+
+An explicit `--format` must agree with a recognized suffix. An explicit
+`--compression` must agree with `.gz`/`.zst`; Parquet rejects either form because its
+compression is internal. Table, TSV, and JSONL support optional compression as stdout
+or single-file streams. Only TSV and JSONL support bounded directory datasets; those
+datasets are non-resumable and require `--checkpoint none` in this release.
+
+Text directory datasets use `--text-writers` (default `3`, range `2..4`) and
+`--text-part-size` (default `256mb`). At startup, unless stdout or `-q` suppresses it,
+swath echoes the resolved format, destination kind, compression, and destination so the
+effective choice is visible before listing begins.
+
 ## Precedence
 
 An explicit CLI option wins over an environment value. AWS SDK environment values win

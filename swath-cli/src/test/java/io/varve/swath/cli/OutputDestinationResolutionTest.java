@@ -138,12 +138,11 @@ class OutputDestinationResolutionTest {
     }
 
     @Test
-    void directoryKindWithATextFormatIsRejected() {
+    void directoryKindWithATextFormatIsAccepted() throws Exception {
         OutputOptions out = destOnly("results");
         out.format = OutputFormat.JSONL;
-        assertThatThrownBy(() -> out.resolveOutput(false))
-                .isInstanceOf(InvalidArgsException.class)
-                .hasMessageContaining("supported for --format parquet only today");
+        assertThat(out.resolveOutput(false)).isEqualTo(
+                new OutputOptions.Resolved(OutputFormat.JSONL, OutputOptions.DestinationKind.DIRECTORY));
     }
 
     @Test

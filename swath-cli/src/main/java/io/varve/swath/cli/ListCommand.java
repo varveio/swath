@@ -47,6 +47,7 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.ParquetResume;
 import io.varve.swath.output.parquet.PartInfo;
+import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.CancelSource;
 import io.varve.swath.runtime.CancellationToken;
@@ -122,7 +123,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     static final String SORT_STAGING_DIR = "_staging";
 
     /** Per-writer submission-queue depth (in batches) for {@link ListRunner.ParquetSpec#writerQueueCapacity()}. */
-    private static final int PARQUET_WRITER_QUEUE_CAPACITY = 64;
+    private static final int DATASET_WRITER_QUEUE_CAPACITY = 64;
+
+    private DatasetDirGuard.FreshDirectoryState freshDatasetDirectoryState;
 
     @Spec
     CommandSpec spec;
@@ -369,10 +372,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // the -o dir at all — no checkpoint row, no seed probe, no file write — refuse a FOREIGN
         // non-empty dir or a DAMAGED manifest so we never write into / delete unowned files. A dir
         // that holds a VALID swath dataset falls through to openRun's checkpoint-status gate
-        // (unfinished/completed). Only a parquet DIRECTORY destination has this dataset layout.
-        if (!checkpoint.resume && resolved == OutputFormat.PARQUET
-                && resolvedOutput.kind() == OutputOptions.DestinationKind.DIRECTORY) {
-            DatasetDirGuard.guardFreshRunDatasetDir(Path.of(output.destination),
+        // (unfinished/completed). Parquet, TSV, and JSONL DIRECTORY destinations share this layout.
+        if (!checkpoint.resume && resolvedOutput.kind() == OutputOptions.DestinationKind.DIRECTORY) {
+            freshDatasetDirectoryState = DatasetDirGuard.guardFreshRunDatasetDir(Path.of(output.destination),
                     checkpoint.overwrite, checkpoint.restart);
         }
         // System.err (not spec.commandLine().getErr()): many unit tests construct ListCommand
@@ -728,6 +730,15 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         && output.destination != null) {
                     DatasetDirGuard.requireNoManagedSymlinks(Path.of(output.destination));
                 }
+                if (output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
+                        && resolved != OutputFormat.PARQUET) {
+                    // Text datasets have no durable output journal. Refuse immediately after the
+                    // effective destination/format restore, before summary creation, directory
+                    // clearing, S3 construction, or any output mutation.
+                    throw new InvalidArgsException("swath resume refused: partitioned text datasets "
+                            + "are non-resumable in this release; start a fresh run with "
+                            + "--checkpoint none");
+                }
             }
             // Build config AFTER any resume-context restore (region/profile/no-sign), and BEFORE the
             // resume-safety summary + the S3Client below are built from it.
@@ -992,10 +1003,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     // branch just keeps sort runs out of the generic "nothing to do" early return
                     // below — an empty node set means listing is complete, but the merge/publish
                     // may still be pending (contract §6 state machine); runSortedParquet owns that.
+                    ListRunner.ParquetSpec writer = parquetSpec(
+                            s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
                     try (TraceSink traceSink = engine.openTraceSink()) {
                         return runEngineGuarded(store, run.id(), () -> runSortedParquet(s3uri, channelCapacity,
                                 pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink,
-                                runStartedNs));
+                                runStartedNs, writer));
                     }
                 }
 
@@ -1008,8 +1021,19 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
 
                 try (TraceSink traceSink = engine.openTraceSink()) {
                     if (fileSink) {
+                        ListRunner.ParquetSpec writer = parquetSpec(
+                                s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
                         return runEngineGuarded(store, run.id(), () -> runEngineParquet(s3uri, channelCapacity,
-                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config, traceSink));
+                                pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config,
+                                traceSink, writer));
+                    }
+                    if (output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY) {
+                        OutputFormat textFormat = resolved;
+                        TextWriterPoolConfig writer = textWriterPoolConfig(
+                                s3uri, textFormat, argsHash);
+                        return runEngineGuarded(store, run.id(), () -> runEngineTextDataset(
+                                s3uri, textFormat, channelCapacity, pageMax, filterChain, ctx, argsHash,
+                                store, run, nodes, fetcher, config, traceSink, writer));
                     }
                     ListRunner.Spec listSpec = listSpec(s3uri, resolved, channelCapacity, pageMax, filterChain, argsHash, config);
                     // run.resumed() here can only be a STDOUT destination (never FILE-kind -- that
@@ -1204,15 +1228,15 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      RunMeta run,
                                      List<Node> nodes,
                                      PageFetcher fetcher, S3Config config,
-                                     TraceSink traceSink) throws Exception {
+                                     TraceSink traceSink,
+                                     ListRunner.ParquetSpec parquetSpec) throws Exception {
         Path dir = output.openParquetDir();
         // Sample free space on the volume that actually takes the write load (Parquet parts).
         ctx.metrics().registerDiskFreeGauge(dir);
         if (!run.resumed()) {
-            DatasetDirGuard.clearDatasetForFreshRun(dir);   // a fresh run never inherits a stale dataset's markers/parts
+            DatasetDirGuard.prepareDatasetForFreshRun(
+                    dir, argsHash, run.id(), freshDatasetDirectoryState);
         }
-        ListRunner.ParquetSpec parquetSpec = parquetSpec(s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
-
         // Resume reconciliation (I6): finalized parts are carried into the manifest;
         // every other part-*.parquet on disk is discarded (its rows are not durable).
         List<PartRef> finalized = store.finalizedParts(run.id());
@@ -1248,6 +1272,41 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         new ListRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
                 connection.maxParallelListings, nodes, existing, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
+    }
+
+    private Integer runEngineTextDataset(
+            S3Uri s3uri, OutputFormat format, int channelCapacity, int pageMax,
+            FilterChain filterChain, RunContext ctx, String argsHash, CheckpointStore store,
+            RunMeta run, List<Node> nodes, PageFetcher fetcher, S3Config config, TraceSink traceSink,
+            TextWriterPoolConfig writer)
+            throws Exception {
+        if (run.resumed()) {
+            throw new InvalidArgsException("swath resume refused: partitioned text datasets are "
+                    + "non-resumable in this release; start a fresh run with --checkpoint none");
+        }
+        Path directory = output.openDatasetDir();
+        ctx.metrics().registerDiskFreeGauge(directory);
+        DatasetDirGuard.prepareDatasetForFreshRun(
+                directory, argsHash, run.id(), freshDatasetDirectoryState);
+        ListRunner.Spec listing = listSpec(
+                s3uri, format, channelCapacity, pageMax, filterChain, argsHash, config);
+        new ListRunner().runToTextDatasetWorkStealing(
+                ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
+                connection.maxParallelListings, nodes, engine.toggles, traceSink, retryConfig());
+        return ExitCodes.SUCCESS;
+    }
+
+    TextWriterPoolConfig textWriterPoolConfig(S3Uri s3uri, OutputFormat format, String argsHash)
+            throws InvalidConfigException, InvalidArgsException {
+        try {
+            return new TextWriterPoolConfig(
+                    Path.of(output.destination), format, output.resolvedCompression, !output.rawOutput,
+                    argsHash, s3uri.bucket(), output.resolveTextWriters(), output.textPartSizeBytes(),
+                    DATASET_WRITER_QUEUE_CAPACITY, output.resolvePartRotationInterval().toNanos(),
+                    output.resolvePartRotationMaxRows());
+        } catch (IllegalArgumentException e) {
+            throw new InvalidConfigException(e.getMessage(), e);
+        }
     }
 
     /**
@@ -1344,21 +1403,22 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                      RunMeta run,
                                      List<Node> nodes,
                                      PageFetcher fetcher, S3Config config,
-                                     TraceSink traceSink, long runStartedNs) throws Exception {
+                                     TraceSink traceSink, long runStartedNs,
+                                     ListRunner.ParquetSpec parquetSpec) throws Exception {
         Path outputDir = output.openParquetDir();
         // Sample free space on the volume that takes the write load — sort-staging segments +
         // Parquet parts both live under outputDir (a prior incident crashed on sort-segment disk exhaustion).
         ctx.metrics().registerDiskFreeGauge(outputDir);
         Path stagingDir = outputDir.resolve(SORT_STAGING_DIR);
         if (!run.resumed()) {
-            DatasetDirGuard.clearDatasetForFreshRun(outputDir);   // never inherit a stale dataset's markers/parts
+            DatasetDirGuard.prepareDatasetForFreshRun(
+                    outputDir, argsHash, run.id(), freshDatasetDirectoryState);
             // A fresh/--restart run owns no prior staging entry. Unlink the old run's immediate
             // entries before deterministic segment writers can open any name with TRUNCATE_EXISTING;
             // this is deliberately fresh-only, so resume retains checkpoint-finalized segments.
             clearSortStagingContents(outputDir, stagingDir);
         }
         Files.createDirectories(stagingDir);
-        ListRunner.ParquetSpec parquetSpec = parquetSpec(s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
         SortConfig sortConfig = SortConfig.fromSystemProperties();
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
@@ -1511,7 +1571,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         long rotationMaxRows = singleFile ? 0L : output.resolvePartRotationMaxRows();
         return new ListRunner.ParquetSpec(
                 s3uri.prefix(), channelCapacity, pageMax, filterChain, writers, rotation,
-                PARQUET_WRITER_QUEUE_CAPACITY, argsHash,
+                DATASET_WRITER_QUEUE_CAPACITY, argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
                 rotationIntervalNanos, rotationMaxRows, s3uri.bucket());
     }
@@ -1595,6 +1655,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             CheckpointOptions.CheckpointMode mode, OutputFormat resolved) {
         if (mode.isNone()) {
             return null;
+        }
+        if (kind == OutputOptions.DestinationKind.DIRECTORY && resolved != OutputFormat.PARQUET) {
+            return "partitioned text datasets are non-resumable in this release; pass --checkpoint none";
         }
         boolean fileKind = kind == OutputOptions.DestinationKind.FILE;
         boolean refuse = fileKind || (kind == OutputOptions.DestinationKind.STDOUT && !mode.isAuto());

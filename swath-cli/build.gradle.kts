@@ -24,6 +24,9 @@ dependencies {
     // transitively, via hadoop-common), so it doesn't cross the module boundary on its
     // own; ListCommand's resume path recomputes a finalized part's MD5 directly.
     implementation(libs.commons.codec)
+    // Text output supports Zstandard streams directly; swath-core's implementation-scoped
+    // Parquet dependency does not cross the module boundary onto the CLI compile classpath.
+    implementation(libs.zstd.jni)
     // Terminal geometry for ProgressDisplay's in-place redraw (TerminalGeometry). JLine is used for
     // the size query alone: it never receives this process's stderr, its streams or its signals.
     // jline-native is the JNI provider's bundled natives, dead weight next to the FFM provider a

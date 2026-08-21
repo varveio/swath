@@ -298,7 +298,7 @@ final class SingleFileAtomicityAndResumeTest {
     }
 
     @Test
-    void bareResumeTreatsUnrecognizedRecordedExtensionAsDirectoryDataset(@TempDir Path dir)
+    void bareResumeTreatsUnrecognizedRecordedExtensionAsNonResumableTextDataset(@TempDir Path dir)
             throws Exception {
         Path db = dir.resolve("c.sqlite");
         Path out = dir.resolve("legacy-output");
@@ -312,7 +312,14 @@ final class SingleFileAtomicityAndResumeTest {
         cmd.checkpoint.resume = true;
         cmd.checkpoint.location = db.toString();
 
-        assertThat(cmd.call()).isEqualTo(ExitCodes.SUCCESS);
+        assertThatThrownBy(cmd::call)
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("partitioned text datasets")
+                .hasMessageContaining("non-resumable")
+                .hasMessageContaining("--checkpoint none")
+                .hasMessageNotContaining("FILE kind");
+        // The refusal follows restore + destination-kind recomputation. This keeps the original
+        // characterization: an unrecognized recorded suffix denotes a directory, never a file.
         assertThat(cmd.output.resolvedKind).isEqualTo(OutputOptions.DestinationKind.DIRECTORY);
     }
 

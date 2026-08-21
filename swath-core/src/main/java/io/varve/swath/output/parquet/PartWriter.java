@@ -6,10 +6,10 @@
 package io.varve.swath.output.parquet;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.dataset.DatasetPartWriter;
+import io.varve.swath.output.dataset.DurableFiles;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetFileWriter;
@@ -26,7 +26,7 @@ import org.apache.parquet.schema.MessageType;
  * <b>iff</b> it is finalized — {@link #close()} writes the footer and fsyncs the
  * file before the part is recorded in the manifest.
  */
-public final class PartWriter implements AutoCloseable {
+public final class PartWriter implements AutoCloseable, DatasetPartWriter {
 
     /** Pinned writer settings. */
     public static final long ROW_GROUP_BYTES = 64L * 1024 * 1024;
@@ -78,10 +78,7 @@ public final class PartWriter implements AutoCloseable {
     @Override
     public void close() throws IOException {
         writer.close();
-        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.WRITE)) {
-            ch.force(true);
-        }
-        Fsync.directory(path.getParent());
+        DurableFiles.fileAndParent(path);
     }
 
     /**

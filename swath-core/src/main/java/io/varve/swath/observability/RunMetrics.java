@@ -56,7 +56,7 @@ public final class RunMetrics {
     private final AtomicLong splits = new AtomicLong();
     // Liveness watchdog: a monotonic, phase-appropriate forward-progress tick. During LISTING the
     // watchdog reads page/object progress directly (see progressSignal); this counter carries the
-    // progress that pages/objects DON'T reflect — the sort-merge/parquet-finalize tail, where no page
+    // progress that pages/objects DON'T reflect — the sort-merge/dataset-finalize tail, where no page
     // completes but real work advances (marking rows written / phase boundaries) — so the watchdog
     // does NOT false-trip a nearly-done sorted run in its final k-way merge. Bumped by markProgress().
     private final AtomicLong livenessProgress = new AtomicLong();
@@ -205,6 +205,10 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> parquetParts = new ConcurrentHashMap<>();
     private final Timer parquetFinalizeLatency;
     private final Timer parquetWriteLatency;
+    private final ConcurrentMap<String, Counter> textDatasetRotations = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Counter> textDatasetParts = new ConcurrentHashMap<>();
+    private final AtomicReference<Timer> textDatasetFinalizeLatency = new AtomicReference<>();
+    private final AtomicReference<Timer> textDatasetWriteLatency = new AtomicReference<>();
 
     // Output-completeness meters — the Micrometer surface was blind to written output
     // beyond the Parquet main path (JSONL/TSV/TABLE/sort-final all passed 0 bytes / hardcoded
@@ -543,7 +547,6 @@ public final class RunMetrics {
         // work — a client-service-cost span, see #buildClientCostSummary).
         parquetFinalizeLatency = runScopedTimer("swath.parquet.finalize.latency").register(registry);
         parquetWriteLatency = clientCostSpanTimer("swath.parquet.write.latency").register(registry);
-
         // Text-sink broken-pipe outcome + end-of-run duration/throughput aggregates.
         outputBrokenPipe = Counter.builder("swath.output.broken_pipe").register(registry);
         // The consumer stage's own per-page sink-write span (client service cost, see
@@ -843,7 +846,7 @@ public final class RunMetrics {
 
     /**
      * Mark one unit of phase-appropriate forward progress that page/object counters do NOT
-     * capture — the sort-merge / parquet-finalize tail (rows drained into the final sorted file,
+     * capture — the sort-merge / dataset-finalize tail (rows drained into the final sorted file,
      * phase-boundary handoffs). Cheap (one atomic increment); the liveness watchdog reads the result
      * via {@link #progressSignal()} to tell "the merge is still advancing" from "the pipeline is
      * wedged". Throttle the call granularity at the hook (e.g. every N rows) so it is never per-key.
@@ -1664,6 +1667,56 @@ public final class RunMetrics {
         parquetWriteLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
+    // ---- Partitioned text dataset writer pool -----------------------
+
+    /** A text-dataset lane rotation actually fired ({@code trigger}: {@code size|rows|time}). */
+    public void recordTextDatasetRotation(String trigger) {
+        textDatasetRotations.computeIfAbsent(normalizeTag(trigger),
+                t -> Counter.builder("swath.text_dataset.rotation").tag("trigger", t)
+                        .register(registry)).increment();
+    }
+
+    /** A text-dataset part reached a terminal outcome. */
+    public void recordTextDatasetPart(String outcome) {
+        textDatasetParts.computeIfAbsent(normalizeTag(outcome),
+                o -> Counter.builder("swath.text_dataset.parts").tag("outcome", o)
+                        .register(registry)).increment();
+    }
+
+    public Timer.Sample startTextDatasetFinalizeTimer() {
+        return Timer.start(registry);
+    }
+
+    /** Encoder close + compressor trailer + file/directory fsync latency. */
+    public void recordTextDatasetFinalizeLatency(Timer.Sample sample) {
+        sample.stop(textDatasetFinalizeTimer());
+    }
+
+    /** One stretch of partitioned-text writer-lane work between queue waits. */
+    public void recordTextDatasetWrite(long nanos) {
+        textDatasetWriteTimer().record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    private Timer textDatasetFinalizeTimer() {
+        Timer existing = textDatasetFinalizeLatency.get();
+        if (existing != null) {
+            return existing;
+        }
+        Timer created = runScopedTimer("swath.text_dataset.finalize.latency").register(registry);
+        textDatasetFinalizeLatency.compareAndSet(null, created);
+        return textDatasetFinalizeLatency.get();
+    }
+
+    private Timer textDatasetWriteTimer() {
+        Timer existing = textDatasetWriteLatency.get();
+        if (existing != null) {
+            return existing;
+        }
+        Timer created = clientCostSpanTimer("swath.text_dataset.write.latency").register(registry);
+        textDatasetWriteLatency.compareAndSet(null, created);
+        return textDatasetWriteLatency.get();
+    }
+
     // ---- Output-completeness + run-level aggregate meters ----------------
 
     /**
@@ -1728,7 +1781,7 @@ public final class RunMetrics {
      * The per-page entries-emitted bump: {@code swath.entries.emitted} plus universal progress
      * (§3.2). Called from exactly ONE of {@link io.varve.swath.output.OutputStage} ("the single
      * output stage" — its own class javadoc), {@link
-     * io.varve.swath.output.parquet.ParquetOutputStage} or {@code SortOutputStage} per run — the
+     * io.varve.swath.output.dataset.DatasetOutputStage} or {@code SortOutputStage} per run — the
      * three are mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
      * wires up exactly one depending on the sink, never more than one concurrently. That makes this
      * call site THE already-serialized point for this run: no extra synchronization is needed for a
@@ -2517,6 +2570,8 @@ public final class RunMetrics {
     public static final String CLIENT_COST_SPAN_WRITER_BACKPRESSURE = "writer_backpressure";
     /** {@code span} name: a Parquet writer lane's own encode/write stretch, off the page's critical path. */
     public static final String CLIENT_COST_SPAN_PARQUET_WRITE = "parquet_write";
+    /** {@code span} name: a partitioned-text writer lane's work, off the page's critical path. */
+    public static final String CLIENT_COST_SPAN_TEXT_DATASET_WRITE = "text_dataset_write";
 
     /**
      * Read back every client-service-cost span's p50/p90/p99/max/count into the JSON summary's
@@ -2533,11 +2588,11 @@ public final class RunMetrics {
      * {@code phase=}{@value #LATENCY_PHASE_RESPONSE_PARSE} rather than being flattened into
      * call-class-blind rows.
      *
-     * <p>{@value #CLIENT_COST_SPAN_PARQUET_WRITE} is the one member measured OFF the page's critical
-     * path — a Parquet run's sink work is done by the writer-pool lanes, so {@code emit} sees only
-     * the dispatch and the real encode/write cost is only visible here. It is what makes a Parquet
-     * run's client cost measurable rather than a lower bound; see {@link #recordParquetWrite} for
-     * the overlap that follows from it running on its own threads.
+     * <p>{@value #CLIENT_COST_SPAN_PARQUET_WRITE} and {@value
+     * #CLIENT_COST_SPAN_TEXT_DATASET_WRITE} are measured OFF the page's critical path — dataset sink
+     * work is done by writer-pool lanes, so {@code emit} sees only dispatch and the real
+     * encode/write cost is visible in the corresponding lane span. See {@link #recordParquetWrite}
+     * and {@link #recordTextDatasetWrite} for the overlap that follows from separate threads.
      *
      * <p>Omits any span with zero observations — never a fabricated all-zero row.
      */
@@ -2549,6 +2604,10 @@ public final class RunMetrics {
         addClientCostSpan(out, CLIENT_COST_SPAN_EMIT, emitLatency);
         addClientCostSpan(out, CLIENT_COST_SPAN_WRITER_BACKPRESSURE, queueWait);
         addClientCostSpan(out, CLIENT_COST_SPAN_PARQUET_WRITE, parquetWriteLatency);
+        Timer textWrite = textDatasetWriteLatency.get();
+        if (textWrite != null) {
+            addClientCostSpan(out, CLIENT_COST_SPAN_TEXT_DATASET_WRITE, textWrite);
+        }
         return out;
     }
 

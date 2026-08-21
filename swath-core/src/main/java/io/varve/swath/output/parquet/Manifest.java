@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.varve.swath.output.dataset.DurableFiles;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -26,11 +27,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The on-disk output layout for the Parquet sink. The dataset root (the
+ * The format-neutral on-disk output layout for swath dataset sinks. The dataset root (the
  * {@code -o} directory) holds:
  *
  * <ul>
- *   <li>{@code data/} — PURE parquet part files (no markers, no manifest);</li>
+ *   <li>{@code data/} — pure data-part files for the manifest's declared {@code fileFormat}
+ *       (no markers and no manifest metadata);</li>
  *   <li>{@code manifest.json} — the <b>consumer</b> manifest (S3-Inventory schema plus sortedness
  *       fields: {@code sourceBucket}, {@code version},
  *       {@code creationTimestamp}, {@code fileFormat}, {@code fileSchema}, top-level {@code sorted}
@@ -54,7 +56,7 @@ public final class Manifest {
     public static final String SUCCESS_FILE_NAME = "_SUCCESS";
     public static final String SYMLINK_FILE_NAME = "symlink.txt";
 
-    /** The pure-parquet subdirectory of the dataset root; the canonical {@code data/<part>} prefix. */
+    /** The pure-data subdirectory of the dataset root; the canonical {@code data/<part>} prefix. */
     public static final String DATA_DIR = "data";
 
     /** Consumer-manifest schema version (S3-Inventory-style; a string, not the old integer). */
@@ -90,7 +92,7 @@ public final class Manifest {
         }
         try {
             JsonNode root = MAPPER.readTree(file.toFile());
-            if (root != null && root.isObject() && root.path("files").isArray()) {
+            if (isCompleteManifest(root)) {
                 return ManifestState.VALID;
             }
             return ManifestState.DAMAGED;
@@ -98,6 +100,39 @@ public final class Manifest {
             log.debug("failed to parse manifest at {}; treating as damaged/foreign", file, e);
             return ManifestState.DAMAGED;
         }
+    }
+
+    /** Require the complete typed shape emitted by {@link #write}; generic JSON is never ownership. */
+    private static boolean isCompleteManifest(JsonNode root) {
+        if (root == null || !root.isObject()
+                || !root.path("sourceBucket").isTextual()
+                || !root.path("version").isTextual()
+                || !MANIFEST_VERSION.equals(root.path("version").textValue())
+                || !root.path("creationTimestamp").isIntegralNumber()
+                || !root.path("fileFormat").isTextual()
+                || !root.path("fileSchema").isTextual()
+                || !root.path("sorted").isBoolean()
+                || !root.has("sortKey")
+                || !root.path("files").isArray()) {
+            return false;
+        }
+        boolean sorted = root.path("sorted").booleanValue();
+        JsonNode sortKey = root.get("sortKey");
+        if (sorted ? !sortKey.isTextual() : !sortKey.isNull()) {
+            return false;
+        }
+        for (JsonNode file : root.path("files")) {
+            if (!file.isObject()
+                    || !file.path("key").isTextual()
+                    || !file.path("size").isIntegralNumber()
+                    || !file.path("MD5checksum").isTextual()
+                    || !file.path("rowCount").isIntegralNumber()
+                    || (file.has("minKey") && !file.path("minKey").isTextual())
+                    || (file.has("maxKey") && !file.path("maxKey").isTextual())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -129,11 +164,17 @@ public final class Manifest {
      */
     public static void write(Path dir, String sourceBucket, String schema, List<PartInfo> parts,
                              boolean sorted, String sortKey) throws IOException {
+        write(dir, sourceBucket, "Parquet", schema, parts, sorted, sortKey);
+    }
+
+    /** Common manifest writer for every partitioned dataset format. */
+    public static void write(Path dir, String sourceBucket, String fileFormat, String schema,
+                             List<PartInfo> parts, boolean sorted, String sortKey) throws IOException {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("sourceBucket", sourceBucket);
         root.put("version", MANIFEST_VERSION);
         root.put("creationTimestamp", System.currentTimeMillis());
-        root.put("fileFormat", "Parquet");
+        root.put("fileFormat", fileFormat);
         root.put("fileSchema", schema);
         root.put("sorted", sorted);
         root.put("sortKey", sortKey);   // an explicit JSON null for an unsorted publish, never absent
@@ -201,7 +242,7 @@ public final class Manifest {
             ch.force(true);
         }
         Files.move(tmp, dir.resolve(fileName), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        Fsync.directory(dir);   // the atomic rename's directory entry must be durable too (I6)
+        DurableFiles.directory(dir);   // the atomic rename's directory entry must be durable too (I6)
     }
 
     /**
@@ -217,9 +258,16 @@ public final class Manifest {
         }
         try {
             JsonNode root = MAPPER.readTree(file.toFile());
-            String argsHash = root.path("args_hash").isMissingNode() ? null : root.path("args_hash").asText();
-            JsonNode runIdNode = root.path("run_id");
-            Long runId = runIdNode.isMissingNode() || runIdNode.isNull() ? null : runIdNode.asLong();
+            if (root == null || !root.isObject() || root.size() != 2
+                    || !root.path("args_hash").isTextual() || !root.has("run_id")) {
+                return Optional.empty();
+            }
+            JsonNode runIdNode = root.get("run_id");
+            if (!runIdNode.isNull() && !runIdNode.isIntegralNumber()) {
+                return Optional.empty();
+            }
+            String argsHash = root.path("args_hash").textValue();
+            Long runId = runIdNode.isNull() ? null : runIdNode.longValue();
             return Optional.of(new Identity(argsHash, runId));
         } catch (IOException | RuntimeException e) {
             // Empty-identity fallback here is intentional (see javadoc above): a corrupt/foreign

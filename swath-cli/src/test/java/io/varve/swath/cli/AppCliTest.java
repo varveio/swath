@@ -145,7 +145,7 @@ class AppCliTest {
         int[] exit = new int[1];
         String text = run(exit, "resume", "--help");
         assertThat(exit[0]).isZero();
-        assertThat(text).contains("Resume a run by its output directory");
+        assertThat(text).contains("Resume a managed Parquet run by its output directory");
     }
 
     @Test

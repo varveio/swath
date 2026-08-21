@@ -39,15 +39,18 @@ import io.varve.swath.output.Formatters;
 import io.varve.swath.output.ListingStatistics;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.OutputStage;
+import io.varve.swath.output.dataset.DatasetOutputStage;
+import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
-import io.varve.swath.output.parquet.ParquetOutputStage;
 import io.varve.swath.output.parquet.ParquetResume;
 import io.varve.swath.output.parquet.ParquetSchema;
 import io.varve.swath.output.parquet.ParquetWriterPool;
 import io.varve.swath.output.parquet.ParquetWriterPoolConfig;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.parquet.PartListener;
+import io.varve.swath.output.text.TextWriterPool;
+import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.FinalPart;
@@ -181,6 +184,18 @@ public final class ListRunner {
         }
     }
 
+    /** Cohesive listing and writer configuration for a partitioned TSV/JSONL dataset. */
+    public record TextDatasetSpec(Spec listing, TextWriterPoolConfig writer) {
+        public TextDatasetSpec {
+            if (listing == null || writer == null) {
+                throw new IllegalArgumentException("listing and writer configuration are required");
+            }
+            if (listing.format() != writer.format()) {
+                throw new IllegalArgumentException("listing and writer formats must match");
+            }
+        }
+    }
+
     // ---- text sinks (jsonl / tsv / table) -----------------------------------
 
     public ListingStatistics run(RunContext ctx, PageFetcher fetcher, Writer out, Spec spec)
@@ -304,7 +319,7 @@ public final class ListRunner {
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), partFinalizedListener(store, runId), existingParts,
                         spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
-        ParquetOutputStage stage = new ParquetOutputStage(pool);
+        DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "SEQUENTIAL",
                 pool.committedPartCount(), pool.committedBytes());
 
@@ -432,6 +447,40 @@ public final class ListRunner {
                 .build());
     }
 
+    /** Work-stealing listing into a bounded parallel text dataset. */
+    public ListingStatistics runToTextDatasetWorkStealing(
+            RunContext ctx, PageFetcher fetcher, TextDatasetSpec spec,
+            CheckpointStore store, long runId, int workerCount, List<Node> seeds,
+            EngineToggles toggles, TraceSink trace, RetryConfig retryConfig)
+            throws SwathException, InterruptedException {
+        Spec listing = spec.listing();
+        WorkStealingScan producer = new WorkStealingScan(
+                new EngineContext(runId, listing.prefix(), ListingMode.OBJECTS,
+                        ctx.metrics(), toggles, trace, retryConfig),
+                fetcher, store, workerCount, listing.maxKeys(), seeds, listing.filters());
+        TextWriterPool pool = new TextWriterPool(spec.writer().withMetrics(ctx.metrics()));
+        DatasetOutputStage stage = new DatasetOutputStage(pool);
+        ctx.metrics().recordStealReason("OUTPUT", "partitioned_text_dataset");
+        Function<Duration, RunSummary> summary = elapsed -> ctx.metrics().summary(
+                elapsed, "WORK_STEALING", pool.committedPartCount(), pool.committedBytes());
+
+        return this.<RuntimeException>runLifecycle(ctx, LifecyclePlan.<RuntimeException>builder()
+                .strategy("WORK_STEALING").strategyWhy("partitioned_text_dataset").runId(runId)
+                .prefix(listing.prefix()).queueCapacity(listing.queueCapacity())
+                .progressInterval(listing.progressInterval())
+                .startLog(() -> log.info(
+                        "list_run_start strategy={} checkpointed={} run_id={} output_format={} worker_count={}",
+                        "WORK_STEALING", false, runId, listing.format(), workerCount))
+                .producer(producer).consumerStage(stage)
+                .jsonSummaryConfig(listing.jsonSummary()).snapshotSummary(summary).terminalSummary(summary)
+                .statistics(stage::statistics).drain(poolDrain(pool))
+                .complete(() -> store.markRunFinished(runId, RunStatus.COMPLETED))
+                .epilogue(() -> ctx.metrics().recordOutput(
+                        listing.format().name().toLowerCase(Locale.ROOT), "written",
+                        pool.committedPartCount(), pool.committedBytes()))
+                .build());
+    }
+
     /**
      * Engine-backed Parquet run: seeds {@link WorkStealingScan} from the full
      * {@code seeds} list with {@code workerCount} workers, reusing the EXACT
@@ -507,7 +556,7 @@ public final class ListRunner {
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), partFinalizedListener(store, runId), existingParts,
                         spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
-        ParquetOutputStage stage = new ParquetOutputStage(pool);
+        DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "WORK_STEALING",
                 pool.committedPartCount(), pool.committedBytes());
 
@@ -1232,7 +1281,7 @@ public final class ListRunner {
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), PartListener.NONE, List.of(),
                         spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
-        ParquetOutputStage stage = new ParquetOutputStage(pool);
+        DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "SEQUENTIAL",
                 pool.committedPartCount(), pool.committedBytes());
 
@@ -1648,7 +1697,7 @@ public final class ListRunner {
     }
 
     /** Drain for a parquet sink: finalize the pool (footer fsync + manifest, I6) on success, abort on failure. */
-    private static DrainStep poolDrain(ParquetWriterPool pool) {
+    private static DrainStep poolDrain(DatasetWriterPool pool) {
         return new DrainStep() {
             @Override
             public void onDrained() throws OutputException {

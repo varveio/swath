@@ -200,6 +200,37 @@ class ManifestJsonTest {
     }
 
     @Test
+    void readIdentityRejectsIncompleteOrWronglyTypedForeignJson(@TempDir Path dir) throws IOException {
+        Path state = dir.resolve(Manifest.STATE_FILE_NAME);
+        for (String json : List.of(
+                "{}", "null", "[]", "{\"args_hash\":null,\"run_id\":1}",
+                "{\"args_hash\":\"h\",\"run_id\":\"1\"}",
+                "{\"args_hash\":\"h\"}",
+                "{\"args_hash\":\"h\",\"run_id\":1,\"foreign\":true}")) {
+            Files.writeString(state, json, StandardCharsets.UTF_8);
+            assertThat(Manifest.readIdentity(dir)).as(json).isEmpty();
+        }
+    }
+
+    @Test
+    void probeRejectsGenericOrIncompleteJsonButAcceptsCurrentManifest(@TempDir Path dir)
+            throws IOException {
+        Path manifest = dir.resolve(Manifest.FILE_NAME);
+        for (String json : List.of(
+                "{}", "null", "[]", "{\"files\":[]}",
+                "{\"sourceBucket\":\"b\",\"version\":\"1\","
+                        + "\"creationTimestamp\":1,\"fileFormat\":\"JSONL\","
+                        + "\"fileSchema\":\"schema\",\"sorted\":false,"
+                        + "\"sortKey\":null,\"files\":{}}")) {
+            Files.writeString(manifest, json, StandardCharsets.UTF_8);
+            assertThat(Manifest.probe(dir)).as(json).isEqualTo(Manifest.ManifestState.DAMAGED);
+        }
+
+        Manifest.write(dir, "b", "JSONL", "schema", List.of(), false, null);
+        assertThat(Manifest.probe(dir)).isEqualTo(Manifest.ManifestState.VALID);
+    }
+
+    @Test
     void artifactsAreLfTerminatedUtf8(@TempDir Path dir) throws IOException {
         Manifest.write(dir, "b", SCHEMA, List.of(), false, null);
         Manifest.writeState(dir, "h", 1L);

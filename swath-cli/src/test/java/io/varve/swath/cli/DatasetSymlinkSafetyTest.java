@@ -115,6 +115,9 @@ final class DatasetSymlinkSafetyTest {
     void freshSortedRunUnlinksPlantedSegmentSymlinkWithoutTouchingExternalTarget(
             @TempDir Path root) throws Exception {
         Path outputDir = Files.createDirectories(root.resolve("output"));
+        // The staging namespace is destructive only inside a directory with durable Swath
+        // ownership evidence. The planted entry models an abandoned segment of that prior run.
+        Manifest.writeState(outputDir, "prior-run", 1L);
         Path stagingDir = Files.createDirectories(outputDir.resolve(ListCommand.SORT_STAGING_DIR));
         Path externalTarget = root.resolve("external-segment-target");
         Files.writeString(externalTarget, "must survive fresh sorted staging cleanup");

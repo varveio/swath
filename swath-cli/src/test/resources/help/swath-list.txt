@@ -4,8 +4,9 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--bearer-token-command=CMD]
                   [--bearer-token-refresh-interval=DURATION]
                   [--checkpoint=PATH|none|auto] [--color=MODE]
-                  [--concurrency=N] [--endpoint-url=URL] [--exclude=REGEX]
-                  [--format=FORMAT] [--idle-timeout=DURATION] [--include=REGEX]
+                  [--compression=none|gzip|zstd] [--concurrency=N]
+                  [--endpoint-url=URL] [--exclude=REGEX] [--format=FORMAT]
+                  [--idle-timeout=DURATION] [--include=REGEX]
                   [--max-duration=DURATION] [--max-size=SIZE]
                   [--metrics-endpoint=URL] [--min-size=SIZE]
                   [--modified-since=DATE] [--modified-until=DATE]
@@ -16,7 +17,8 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--part-rotation-max-rows=N] [--profile=NAME]
                   [--progress-interval=DURATION] [--region=REGION]
                   [--report=PATH] [--request-rate=N]
-                  [--requester-pays=requester] [--trace=PATH]
+                  [--requester-pays=requester] [--text-part-size=SIZE]
+                  [--text-writers=N] [--trace=PATH]
                   [--engine-toggle=NAME=VALUE]... [--storage-class=CLASS[,CLASS]
                   [,CLASS[,CLASS]...]]... [--tune=KEY=VALUE]... [<s3-uri>]
 List a bucket or prefix.
@@ -26,6 +28,10 @@ List a bucket or prefix.
   -V, --version              Print version information and exit.
 
 Output:
+      --compression=none|gzip|zstd
+                             Compress table/TSV/JSONL streams, files, or
+                               dataset parts; inferred from .gz/.zst file names
+                               when omitted (default: none).
       --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
                                parquet (default: auto).
   -o, --output=PATH          Write to PATH; known extension selects a file,
@@ -34,10 +40,10 @@ Output:
       --parquet-part-size=SIZE
                              Target Parquet part size (default: 256mb).
       --part-rotation-interval=DURATION
-                             Rotate Parquet parts by age (default: 30s; 0/none
+                             Rotate dataset parts by age (default: 30s; 0/none
                                disables).
       --part-rotation-max-rows=N
-                             Rotate Parquet parts by row count (default:
+                             Rotate dataset parts by row count (default:
                                2000000; 0 disables).
       --[no-]progress        Print live progress records to stderr (default: on
                                when stderr is a terminal and neither -q nor -v
@@ -47,6 +53,10 @@ Output:
                                on for runs over 1.5s, runs that produce output,
                                and runs that stop short of finishing; a closed
                                downstream pipe stays silent).
+      --text-part-size=SIZE  Target uncompressed text part size (default:
+                               256mb).
+      --text-writers=N       Parallel writers for a TSV/JSONL directory dataset
+                               (default: 3; range: 2-4).
 
 Connection:
       --bearer-token-command=CMD
@@ -109,9 +119,10 @@ Run control:
 Resume:
       --checkpoint=PATH|none|auto
                              auto (default) co-locates the checkpoint in a
-                               directory output (<dir>/.swath/checkpoint.
-                               sqlite) and keeps nothing for stdout; a path
-                               pins the SQLite file; none runs ephemeral.
+                               managed Parquet directory (<dir>/.
+                               swath/checkpoint.sqlite) and keeps nothing for
+                               streams/files; a path pins the SQLite file; none
+                               runs ephemeral (required for TSV/JSONL datasets).
       --force, --overwrite   Discard a COMPLETED run for this destination and
                                re-list it.
       --restart              Discard any prior checkpoint and start fresh.

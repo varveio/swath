@@ -13,9 +13,9 @@ final class CheckpointOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--checkpoint", paramLabel = "PATH|none|auto",
-            description = "auto (default) co-locates the checkpoint in a directory output "
-                    + "(<dir>/.swath/checkpoint.sqlite) and keeps nothing for stdout; a path pins the "
-                    + "SQLite file; none runs ephemeral.")
+            description = "auto (default) co-locates the checkpoint in a managed Parquet directory "
+                    + "(<dir>/.swath/checkpoint.sqlite) and keeps nothing for streams/files; a path "
+                    + "pins the SQLite file; none runs ephemeral (required for TSV/JSONL datasets).")
     String location = "auto";
 
     boolean resume;
@@ -40,9 +40,9 @@ final class CheckpointOptions {
     static final String COLOCATED_FILE = "checkpoint.sqlite";
 
     /**
-     * The checkpoint storage mode: {@code auto} co-locates the checkpoint inside a directory-dataset
-     * output at {@code <dir>/.swath/checkpoint.sqlite} (the output dir is the whole run handle) and is
-     * ephemeral for stdout / single-file (nothing on disk); {@code none} → in-memory (no resume);
+     * The checkpoint storage mode: {@code auto} co-locates the checkpoint inside a managed Parquet
+     * directory at {@code <dir>/.swath/checkpoint.sqlite} (the output dir is the whole run handle) and
+     * is ephemeral for stdout / single-file (nothing on disk); {@code none} → in-memory (no resume);
      * otherwise an explicit DB path.
      */
     record CheckpointMode(String raw) {
@@ -60,7 +60,7 @@ final class CheckpointOptions {
 
         /**
          * The durable checkpoint file for this mode, or {@code null} for an ephemeral run that keeps
-         * nothing on disk. {@code auto} co-locates inside a directory-dataset output at
+         * nothing on disk. {@code auto} co-locates inside a managed Parquet directory at
          * {@code <dir>/.swath/checkpoint.sqlite}; a stdout or single-file {@code auto} run is
          * ephemeral (zero litter). An explicit path is used verbatim.
          */

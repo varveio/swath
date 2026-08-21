@@ -88,7 +88,8 @@ class FormatAutoDetectionTest {
     }
 
     @Test
-    void explicitAutoOnResumeUsesTheCurrentTerminalAndParticipatesInFormatMismatch(@TempDir Path dir)
+    void explicitAutoOnResumeUsesTheCurrentTerminalAndRefusesTextAgainstManagedParquet(
+            @TempDir Path dir)
             throws Exception {
         Path db = dir.resolve("c.sqlite");
         Path outDir = Files.createDirectories(dir.resolve("parquet-dataset"));
@@ -111,13 +112,18 @@ class FormatAutoDetectionTest {
         cmd.connection.endpointUrl = ENDPOINT;
         cmd.terminalOverride = new TerminalCapabilities(fd -> fd == TerminalCapabilities.STDOUT_FD);
 
-        // The terminal auto-detects to a text format, which mismatches the stored parquet identity:
-        // the registry refusal names output_format as the changed column.
+        // The terminal resolves explicit auto to table before the checkpoint opens. Restore then
+        // reconstructs the checkpoint's managed directory destination. That effective text +
+        // directory combination must hit the earlier non-resumable-text refusal, rather than
+        // bypassing it to report a later registry mismatch or attempting Parquet resume.
         assertThatThrownBy(cmd::call)
                 .isInstanceOf(InvalidArgsException.class)
-                .hasMessageContaining("output_format")
-                .hasMessageContaining("changed since the checkpointed run")
+                .hasMessageContaining("partitioned text datasets")
+                .hasMessageContaining("non-resumable")
+                .hasMessageContaining("--checkpoint none")
                 .hasMessageNotContaining("FILE kind");
+        Assertions.assertThat(cmd.output.resolvedKind)
+                .isEqualTo(OutputOptions.DestinationKind.DIRECTORY);
     }
 
     /**
