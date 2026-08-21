@@ -99,8 +99,8 @@ class ParquetWriterPoolTest {
         for (Path part : parts(dir)) {
             durableRows += ParquetReads.keys(part).size();
         }
-        // Only finalized parts are durable; the open tail was discarded ⇒ strictly fewer rows.
-        assertThat(durableRows).isLessThan(1001).isGreaterThan(0);
+        // Only the 1,000-row finalized part is durable; the open tail was discarded.
+        assertThat(durableRows).isEqualTo(1000);
     }
 
     @Test

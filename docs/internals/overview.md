@@ -27,7 +27,7 @@ overlap.
 The shipped product is a Java 25 CLI for general-purpose S3 buckets. It supports:
 
 - recursive current-object listing;
-- current objects, with schema support for delete markers and versions;
+- current objects; the output schema can also represent delete markers and versioned rows;
 - JSONL, TSV, table, and managed Parquet output;
 - filtering by key, size, modification time, and storage class;
 - checkpoint/resume for managed Parquet datasets (the CLI's directory output);

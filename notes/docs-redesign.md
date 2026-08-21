@@ -98,7 +98,7 @@ not carry a second detailed table or explanation.
 
 - Put a copy-pasteable successful listing before architecture, tuning, benchmarks, or every install
   variant.
-- Explain the work-stealing idea once in plain language, with a small range example. Deep pages may
+- Explain the work-stealing idea once in plain language, with a small range-based example. Deep pages may
   use the exact `(A, B]` model after linking back to that explanation.
 - Keep decision-critical warnings next to the action they affect: LIST cost before a large run,
   sorted-output disk requirements beside `--sort`, and resume limitations beside output choice.
