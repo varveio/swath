@@ -24,7 +24,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -567,13 +566,16 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                         "interrupted closing " + sinkName + " writer pool", e);
             } catch (ExecutionException e) {
                 terminal = new OutputException(sinkName + " writer failed", e.getCause());
-            } catch (CancellationException e) {
-                // A test/owner interruption marks its Future cancelled before the task's finally
-                // completes. scope.close() below awaits that cleanup; checkFailure() then surfaces
-                // the lane's recorded InterruptedException to a graceful close.
             } catch (Throwable t) {
                 terminal = t;
             } finally {
+                if (terminal != null) {
+                    // Coordination did not complete gracefully. scope.close() interrupts any lane
+                    // still blocked on its queue, so publishable CLOSE semantics are no longer
+                    // possible: every open part must take the abort/discard path in runLane's
+                    // finally block instead of trying to finalize under interruption.
+                    shutdownMode.set(ShutdownMode.ABORT);
+                }
                 try {
                     scope.close();
                 } catch (Throwable closeFailure) {
@@ -581,6 +583,15 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                         terminal = closeFailure;
                     } else {
                         terminal.addSuppressed(closeFailure);
+                    }
+                }
+                Throwable laneFailure = failure.get();
+                if (laneFailure != null && laneFailure != terminal
+                        && (terminal == null || terminal.getCause() != laneFailure)) {
+                    if (terminal == null) {
+                        terminal = laneFailure;
+                    } else {
+                        terminal.addSuppressed(laneFailure);
                     }
                 }
                 if (terminal == null) {
@@ -629,8 +640,4 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         }
     }
 
-    /** Package-private deterministic seam for interruption/cleanup lifecycle tests. */
-    void interruptLanesForTest() {
-        laneFutures.forEach(future -> future.cancel(true));
-    }
 }
