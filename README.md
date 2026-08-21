@@ -27,9 +27,9 @@ controlled by somebody else, and a serial listing is too slow.
 is difficult to parallelize, then walks through swath's range model, safe splitting,
 work stealing, checkpoints, and the cases where swath is not the right tool.
 
-[![Swath demo: interrupt and resume a 39.7-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
+[![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
 
-*A real 39.7-million-object run: one of 513 initial range guesses held 68% of the
+*A real 39.6-million-object run: one of 513 initial range guesses held 68% of the
 bucket. swath discovered the imbalance while listing and split the busy ranges so idle
 workers could help. [Explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
 or [see the visual field guide](https://swath.varve.io/field-guide/).*
@@ -39,7 +39,7 @@ or [see the visual field guide](https://swath.varve.io/field-guide/).*
 ## Try it
 
 This is the exact listing shown in the demo. It scans the entire public NOAA bucket—
-39.7 million objects in the recorded run—and saves a resumable Parquet dataset:
+39.6 million objects in the recorded run—and saves a resumable Parquet dataset:
 
 ```bash
 mkdir -p out
