@@ -100,7 +100,8 @@ connector queueing is not mistaken for backend latency.
 `max(8, min(32, 2 × cores))` for sorted serving and `min(4, cores)` for DuckDB.
 Size this for concurrent decode work, not total requests: readers are returned before
 injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
-very large pools can waste file descriptors and heap.
+very large pools can waste file descriptors and heap. Sorted mode opens both a row-group
+and range-reader pool per file: approximately `2 × connections × files` readers.
 
 ## Reading a running server's meters (`--metrics-port`)
 
