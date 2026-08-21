@@ -46,6 +46,7 @@ finalized-part metadata is `O(parts)` and sorted staging metadata is
 - [9. Versioned listing (`ListObjectVersions`)](#9-versioned-listing-listobjectversions)
 - [10. Express One Zone (directory buckets)](#10-express-one-zone-directory-buckets)
 - [11. Edge-case checklist (must be handled / tested)](#11-edge-case-checklist-must-be-handled--tested)
+- [12. Parallel sort boundary selection](#12-parallel-sort-boundary-selection)
 
 ---
 
@@ -1639,3 +1640,20 @@ only to general-purpose buckets.
     deliberately re-lists the unfinalized tail. Either path resumes a node
     split in a prior run without relying on a stale token; covered by the
     fault-injection resume tier.
+
+---
+
+## 12. Parallel sort boundary selection
+
+When the range-merge gates admit `R > 1`, boundary selection builds one global unsigned `TreeSet`
+of page-minimum candidates and chooses ranks `j * candidates / R` for `j = 1..R-1`. Each page-run
+original listing-phase segment contributes the systematic sample in contracts §6.1. Cascade
+intermediates are produced after this phase and therefore carry no sample. A valid embedded sample
+is committed only after its complete block passes structural, CRC, count, and ordering validation;
+otherwise that segment alone is scanned through `PageFrontierReader`, preserving legacy behavior. Repeated
+minima remain in the per-segment sample and are deduplicated only by the same global set, so
+embedded, legacy, and mixed inputs choose byte-identical boundaries.
+
+Boundary choice affects balance only: every range still filters every retained page row against its
+exact `[lo, hi)` bounds. The final unbounded range drains every original segment to EOF, retaining
+the whole-input CRC/order/count proof even though all-new boundary selection reads no page bodies.

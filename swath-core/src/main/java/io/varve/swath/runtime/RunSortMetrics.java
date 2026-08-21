@@ -33,4 +33,9 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     public void markProgress() {
         metrics.markProgress();
     }
+
+    @Override
+    public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        metrics.recordSortMergeBoundaryIo(embeddedEntries, embeddedBytes, scanBytes);
+    }
 }

@@ -53,6 +53,8 @@ final class PageRunSegmentIo implements AutoCloseable {
     final long totalEntries;
     /** Absolute file offset where the trailer begins (the O(1) seek target for the key bounds). */
     final long trailerStart;
+    /** Complete file length captured at open; bounds the optional trailer extension. */
+    final long fileSize;
 
     /** Previous page's minKey (monotonicity guard); null until the first page is read. */
     private byte[] previousMin;
@@ -60,7 +62,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     private long pagesRead;
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, long maxRecordLen,
-                            long totalRecords, long totalEntries, long trailerStart) {
+                            long totalRecords, long totalEntries, long trailerStart, long fileSize) {
         this.channel = channel;
         this.path = path;
         this.metrics = metrics;
@@ -68,6 +70,7 @@ final class PageRunSegmentIo implements AutoCloseable {
         this.totalRecords = totalRecords;
         this.totalEntries = totalEntries;
         this.trailerStart = trailerStart;
+        this.fileSize = fileSize;
     }
 
     /**
@@ -121,7 +124,7 @@ final class PageRunSegmentIo implements AutoCloseable {
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
             return new PageRunSegmentIo(channel, path, metrics, maxRecordLen, totalRecords, totalEntries,
-                    trailerStart);
+                    trailerStart, size);
         } catch (IOException | RuntimeException e) {
             channel.close();
             throw e;
@@ -253,6 +256,18 @@ final class PageRunSegmentIo implements AutoCloseable {
     /** Positional read of exactly {@code n} bytes (does not move the channel position). */
     ByteBuffer readAt(long position, int n) throws IOException {
         return readAt(channel, path, position, n);
+    }
+
+    /** Positional read into caller-owned scratch storage (does not move the channel position). */
+    void readAt(long position, ByteBuffer destination) throws IOException {
+        long pos = position;
+        while (destination.hasRemaining()) {
+            int read = channel.read(destination, pos);
+            if (read < 0) {
+                throw new EOFException("unexpected EOF reading page-run segment " + path);
+            }
+            pos += read;
+        }
     }
 
     /** Sequential read of exactly {@code n} bytes from the current channel position. */

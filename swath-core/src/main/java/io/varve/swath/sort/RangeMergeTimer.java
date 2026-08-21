@@ -29,9 +29,9 @@ public interface RangeMergeTimer {
      * Record the boundary-sampling prologue's wall time in nanoseconds — the parallel path's own
      * SERIAL fraction, run once before any range starts.
      *
-     * <p>Reported separately because it is the term that does not parallelise: on page-run staging it
-     * walks every page's frontier across every segment, so it grows with staging size while the ranges
-     * beside it get faster as {@code R} rises. Folded into {@code merge_ms} it is invisible, and an
+     * <p>Reported separately because it is the term that does not parallelise: it reads bounded
+     * embedded metadata on current page-run staging and scans only legacy/fallback segments. Folded into
+     * {@code merge_ms} it is invisible, and an
      * A/B reading the run report cannot tell a merge that stopped scaling from one whose prologue grew
      * to dominate it — which is exactly the question tuning {@code R} turns on.
      *

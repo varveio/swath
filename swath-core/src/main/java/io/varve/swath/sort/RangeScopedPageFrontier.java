@@ -46,13 +46,11 @@ import java.io.IOException;
  * <p><b>Completeness cross-check.</b> {@link PageFrontierReader#advance()} runs
  * {@code io.checkComplete} only when it walks off the end of a segment, and a range that abandons
  * its tail never does. The check is nevertheless still run once per segment per merge, by
- * {@link ParallelRangeMerge#boundaries}: boundary sampling walks EVERY page of EVERY segment to EOF
- * before any range starts (it advances through all pages, sampling a stride of their keys), so each
- * segment is cross-checked there, and a corrupt trailer fails the merge before a range ever opens.
- * Two further ranges' worth of redundancy exist on top of that — the LAST range ({@code hi == null})
- * cannot set {@code pastRange} ({@link #beyondRange()} requires a non-null {@code hi}) and so also
- * drains every segment — but the sampling pass is what makes the guarantee unconditional, and it is
- * the reason no range-construction argument has to be load-bearing for it.
+ * the LAST range ({@code hi == null}): it cannot set {@code pastRange} ({@link #beyondRange()}
+ * requires a non-null {@code hi}) and therefore drains every original segment. That range is the
+ * authoritative whole-input CRC/order/count proof now that valid embedded boundary samples avoid
+ * the old redundant full scan. The parallel coordinator does not publish until every range succeeds;
+ * a late corruption cancels siblings and sweeps their temporary output.
  */
 final class RangeScopedPageFrontier implements PageFrontierStream {
 

@@ -230,6 +230,9 @@ public final class RunMetrics {
     private final Timer sortMergeRangeLatency;
     // The parallel path's SERIAL prologue: boundary sampling, once per run, before any range starts.
     private final Timer sortMergeBoundariesLatency;
+    private final Counter sortMergeBoundaryEmbeddedEntries;
+    private final Counter sortMergeBoundaryEmbeddedBytes;
+    private final Counter sortMergeBoundaryScanBytes;
     private final Timer sortBackpressureWait;
     private final DistributionSummary sortPageRunsPerBuffer;
 
@@ -551,6 +554,12 @@ public final class RunMetrics {
         sortMergeRangeLatency = runScopedTimer("swath.sort.merge.range.latency").register(registry);
         sortMergeBoundariesLatency =
                 runScopedTimer("swath.sort.merge.boundaries.latency").register(registry);
+        sortMergeBoundaryEmbeddedEntries =
+                Counter.builder("swath.sort.merge.boundaries.embedded.entries").register(registry);
+        sortMergeBoundaryEmbeddedBytes = Counter.builder("swath.sort.merge.boundaries.embedded.bytes")
+                .baseUnit("bytes").register(registry);
+        sortMergeBoundaryScanBytes = Counter.builder("swath.sort.merge.boundaries.scan.bytes")
+                .baseUnit("bytes").register(registry);
         sortBackpressureWait = runScopedTimer("swath.sort.backpressure.wait").register(registry);
         sortPageRunsPerBuffer = runScopedSummary("swath.sort.page_runs_per_buffer").register(registry);
         // Peak in-flight staging bytes / handoff-queue depth / off-thread buffer count — see
@@ -1081,6 +1090,13 @@ public final class RunMetrics {
      */
     public void recordSortMergeBoundaries(long nanos) {
         sortMergeBoundariesLatency.record(Duration.ofNanos(nanos));
+    }
+
+    /** Boundary metadata/page-scan volume for the persisted-sample A/B. */
+    public void recordSortMergeBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        sortMergeBoundaryEmbeddedEntries.increment(embeddedEntries);
+        sortMergeBoundaryEmbeddedBytes.increment(embeddedBytes);
+        sortMergeBoundaryScanBytes.increment(scanBytes);
     }
 
     public void recordProbeFetch() {

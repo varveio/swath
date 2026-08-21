@@ -315,11 +315,10 @@ public final class SortTransform {
             // exclusively to the boundary sampler below.
             return null;
         }
-        // Boundary sampling is this path's SERIAL fraction: on page-run staging it walks every page's
-        // frontier across every segment before any range starts. Recorded to its own timer as well as
+        // Boundary sampling is this path's SERIAL fraction: new page-run staging reads its bounded
+        // trailer samples; legacy or invalid extensions scan only the affected segments. Recorded to its own timer as well as
         // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
-        // term is invisible, and it is the one that does NOT shrink as R rises (it is the first thing
-        // to optimise, by reusing the listing phase's own keyspace partition, if it grows large).
+        // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries =
                 ParallelRangeMerge.boundaries(stagingSegments, desiredRanges, metrics);

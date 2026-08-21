@@ -44,6 +44,7 @@ import java.util.zip.CRC32C;
  * [magic u32][format-version u16 = 1]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [segMinKey u16-len-prefixed][segMaxKey u16-len-prefixed]
+ *           [optional boundary-sample extension]
  *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
  * </pre>
  * {@code segMinKey}/{@code segMaxKey} are the ACTUAL first/last keys (first page's {@code firstKey()},
@@ -53,9 +54,11 @@ import java.util.zip.CRC32C;
  * reader seek straight to the bounds in O(1) instead of walking every record's length prefix.
  * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in clamp uses it as
  * the exact per-stream memory bound, and the reader uses it to bound a record's claimed length before
- * allocating). The trailer is written LAST: with the file-then-directory fsync below, a half-written
- * page-run file has no valid trailer and is discarded whole on resume (I6 — durable iff finalized;
- * segment-granularity, not sub-file).
+ * allocating). A listing-phase segment's optional extension stores the exact capped systematic
+ * page-minimum sample used by the parallel merge while preserving format version 1 and the fixed
+ * 28-byte EOF tail; post-boundary cascade intermediates omit it. The trailer is written LAST: with
+ * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
+ * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
  */
 final class PageRunSegmentWriter {
 
@@ -145,7 +148,8 @@ final class PageRunSegmentWriter {
      * The CASCADE backstop (the multi-pass merge path taken when the runtime-clamped fan-in falls below
      * the staging-segment count): batch an already-sorted {@link SortedCursor} into
      * pages of {@link #INTERMEDIATE_PAGE_ENTRIES} and write them as a page-run segment. The caller
-     * closes {@code sorted}. Streams one page at a time so memory stays bounded. Returns total rows.
+     * closes {@code sorted}. Streams one page at a time so memory stays bounded; because boundary
+     * selection has already completed, this path omits the unused sample extension. Returns total rows.
      */
     long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
         long totalEntries = 0;
@@ -155,7 +159,8 @@ final class PageRunSegmentWriter {
         byte[] segMax = EMPTY_KEY;
 
         try (FileChannel ch = FileChannel.open(path,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
             writeHeader(ch);
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
@@ -183,7 +188,8 @@ final class PageRunSegmentWriter {
                 totalRecords++;
             }
             long trailerStart = ch.position();
-            writeTrailer(ch, segMin, segMax, trailerStart, totalRecords, totalEntries, maxRecordLen);
+            writeTrailer(ch, segMin, segMax, null, trailerStart, totalRecords, totalEntries,
+                    maxRecordLen);
             ch.force(true);
         }
         Durability.directory(path.getParent());
@@ -215,7 +221,8 @@ final class PageRunSegmentWriter {
             byte[] segMin = pages.isEmpty() ? EMPTY_KEY : pages.get(0).firstKey();
             byte[] segMax = pages.isEmpty() ? EMPTY_KEY : pages.get(pages.size() - 1).lastKey();
             long trailerStart = ch.position();
-            writeTrailer(ch, segMin, segMax, trailerStart, pages.size(), totalEntries, maxRecordLen);
+            writeTrailer(ch, segMin, segMax, PageRunBoundarySample.select(pages), trailerStart,
+                    pages.size(), totalEntries, maxRecordLen);
             ch.force(true);
         }
         Durability.directory(path.getParent());
@@ -241,11 +248,18 @@ final class PageRunSegmentWriter {
         return body.length;
     }
 
-    private static void writeTrailer(FileChannel ch, byte[] segMin, byte[] segMax, long trailerStart,
-                                     int totalRecords, long totalEntries, int maxRecordLen) throws IOException {
-        ByteBuffer t = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length + TRAILER_FIXED_TAIL_BYTES);
-        t.putShort((short) segMin.length).put(segMin);
-        t.putShort((short) segMax.length).put(segMax);
+    /** {@code sample == null} emits the legacy extension-free trailer used by cascade intermediates. */
+    private static void writeTrailer(FileChannel ch, byte[] segMin, byte[] segMax, List<byte[]> sample,
+                                     long trailerStart, int totalRecords, long totalEntries,
+                                     int maxRecordLen) throws IOException {
+        ByteBuffer bounds = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length);
+        bounds.putShort((short) segMin.length).put(segMin);
+        bounds.putShort((short) segMax.length).put(segMax);
+        writeFully(ch, bounds.flip());
+        if (sample != null) {
+            PageRunBoundarySample.write(ch, sample);
+        }
+        ByteBuffer t = ByteBuffer.allocate(TRAILER_FIXED_TAIL_BYTES);
         t.putLong(trailerStart);
         t.putInt(totalRecords);
         t.putLong(totalEntries);
