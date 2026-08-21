@@ -189,7 +189,8 @@ public final class SimStoreFactory {
 
     /**
      * Builds the forced windowed tier using the replay server's prefetch configuration; disabled
-     * prefetch returns the bare sorted store. The wrapper owns page-read latency measurement.
+     * prefetch returns the bare sorted store. In either case, {@link SortedParquetStore}'s backing
+     * range reader records page-read latency only after borrowing a reader; cache hits add no sample.
      */
     private static ListingStore windowedStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
         // Parse before opening a pool, so malformed properties cannot leak one.
@@ -199,8 +200,8 @@ public final class SimStoreFactory {
             log.info("sim_store windowed prefetch DISABLED (bare store) for {}", files);
             return new SortedParquetStore(files, index, metrics, connections);
         }
-        // The wrapper records the outer page latency.
-        SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
+        // The backing reader owns post-borrow page-decode timing; cache hits add no sample.
+        SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections);
         try {
             log.info("sim_store windowed prefetch ENABLED (window_rows={} max_windows={}) for {}",
                     prefetch.windowRows(), prefetch.maxWindows(), files);

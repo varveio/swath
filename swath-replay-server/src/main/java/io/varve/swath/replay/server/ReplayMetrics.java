@@ -162,9 +162,14 @@ public final class ReplayMetrics {
         return startTimer();
     }
 
-    /** Records one store-level range read (see {@link #startPageReadTimer()}). */
+    /** Records one store-level backing read (see {@link #startPageReadTimer()}). */
     public void recordPageRead(Timer.Sample sample) {
         sample.stop(pageReadLatency);
+    }
+
+    /** Records a backing-reader lease whose duration was measured after pool acquisition. */
+    public void recordPageRead(long elapsedNanos) {
+        pageReadLatency.record(elapsedNanos, TimeUnit.NANOSECONDS);
     }
 
     public void recordParquetQuery(Timer.Sample sample, int rows, boolean success) {

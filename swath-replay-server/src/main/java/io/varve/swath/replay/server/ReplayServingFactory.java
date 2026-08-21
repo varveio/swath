@@ -52,7 +52,9 @@ public final class ReplayServingFactory {
 
     /**
      * Opens {@code fixturePath} under the requested {@code mode}. {@code parquetConnections <= 0}
-     * uses the chosen store's own default (also the request-concurrency bound).
+     * uses the chosen store's own default. It is also the outer request-admission bound for DuckDB
+     * and bare sorted serving; prefetch-enabled sorted serving admits requests to the cache first and
+     * applies the bound only inside the backing reader pools.
      *
      * @throws IllegalArgumentException in {@code sorted} mode when the fixture is not sorted-eligible
      */
@@ -93,10 +95,7 @@ public final class ReplayServingFactory {
         WindowedListingStore.Config prefetch = WindowedListingStore.Config.fromSystemProperties();
         ListingStore store;
         if (prefetch.enabled()) {
-            // Suppress the delegate's own page.read.latency: the wrapper owns the outer per-page timer
-            // (a hit costs sub-ms, a miss pays a window fill measured separately by prefetch.window.fill)
-            // so the corridor metric stays the honest amortized per-page cost.
-            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections, false);
+            SortedParquetStore backing = new SortedParquetStore(files, index, metrics, connections);
             store = new WindowedListingStore(backing, metrics, prefetch.windowRows(), prefetch.maxWindows());
             log.info("replay_serving sorted prefetch ENABLED (window_rows={} max_windows={}) for {}",
                     prefetch.windowRows(), prefetch.maxWindows(), files);

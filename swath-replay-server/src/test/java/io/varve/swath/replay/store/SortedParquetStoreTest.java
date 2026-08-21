@@ -346,6 +346,26 @@ class SortedParquetStoreTest {
         }
     }
 
+    @Test
+    void delimiterBareObjectOwnsRowGroupAndRangeReadersSimultaneously(@TempDir Path dir) throws IOException {
+        ReplayMetrics metrics = new ReplayMetrics();
+        Fixture fixture = writeSorted(dir, manySmallGroups(), "bare-1", "bare-2", "dir/child");
+
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
+            assertThat(entryStrings(store.delimitedRollup(
+                    null, true, null, null, slash(), 1000, Projection.KEYS_ONLY)))
+                    .containsExactly("OBJ:bare-1", "OBJ:bare-2", "CP:dir/");
+        }
+
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
+                .as("one delimiter request owns its row-group cursor while reading a bare object's full row")
+                .isEqualTo(2.0);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
+        assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count())
+                .as("only the post-borrow full-row range decode is sampled; the outer query times the skip-scan")
+                .isEqualTo(1L);
+    }
+
     /**
      * The no-prefix root rollup's real shape — {@code toExclusive == null} and {@code prefix == null}
      * (a genuinely open upper bound, {@link UpperBound.Open}) — must now be answered natively rather

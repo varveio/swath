@@ -17,6 +17,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.function.LongConsumer;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
@@ -92,14 +93,14 @@ public final class SortedRangeReader implements AutoCloseable {
     private final MessageColumnIO columnIoWithOwner;
     private final MessageColumnIO columnIoWithoutOwner;
     private final Runnable readerAcquired;
-    private final Runnable readerReleased;
+    private final LongConsumer readerReleased;
 
     public SortedRangeReader(Path file, int poolSize) throws IOException {
-        this(file, poolSize, () -> { }, () -> { });
+        this(file, poolSize, () -> { }, ignored -> { });
     }
 
     public SortedRangeReader(
-            Path file, int poolSize, Runnable readerAcquired, Runnable readerReleased) throws IOException {
+            Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased) throws IOException {
         int size = Math.max(1, poolSize);
         this.readerAcquired = Objects.requireNonNull(readerAcquired, "readerAcquired");
         this.readerReleased = Objects.requireNonNull(readerReleased, "readerReleased");
@@ -152,8 +153,12 @@ public final class SortedRangeReader implements AutoCloseable {
         FilterCompat.Filter filter = FilterCompat.get(predicate(from, fromInclusive, toExclusive));
         List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
         ParquetFileReader reader = borrow();
-        readerAcquired.run();
+        boolean acquisitionRecorded = false;
+        long readStartedNanos = 0L;
         try {
+            readerAcquired.run();
+            acquisitionRecorded = true;
+            readStartedNanos = System.nanoTime();
             reader.setRequestedSchema(schema);
             for (int block = Math.max(0, startRowGroup); block < blocks.size() && out.size() < limit; block++) {
                 ColumnIndexStore indexStore = reader.getColumnIndexStore(block);
@@ -177,8 +182,13 @@ public final class SortedRangeReader implements AutoCloseable {
                 }
             }
         } finally {
-            readerReleased.run();
-            readers.add(reader);
+            try {
+                if (acquisitionRecorded) {
+                    readerReleased.accept(System.nanoTime() - readStartedNanos);
+                }
+            } finally {
+                readers.add(reader);
+            }
         }
         return out;
     }

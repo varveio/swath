@@ -326,8 +326,9 @@ class WindowedListingStoreTest {
                 .isEqualTo(1.0);
         assertThat(metrics.registry().find("swath.replay.prefetch.anchors.live").gauge().value())
                 .isGreaterThan(0.0);
-        // The outer per-page corridor timer fires once per rows() call (hit or miss).
-        assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count()).isEqualTo(4L);
+        // The cache decorator never owns the backing-decode timer. This fake has no instrumented
+        // reader, so neither its two fills nor its two hits fabricate a page.read sample.
+        assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count()).isZero();
     }
 
     @Test

@@ -67,9 +67,9 @@ final class ReplayHandler extends Handler.Abstract {
 
     /**
      * @param maxConcurrentReads if positive, request concurrency into the fixture is bounded to this
-     *                           many in-flight reads (fairly), so store-level reads never wait on a
-     *                           connection pool — keeping pool contention out of page-read latency.
-     *                           Zero or negative leaves concurrency unbounded.
+     *                           many in-flight reads (fairly). Zero or negative leaves request
+     *                           admission unbounded; backing stores still enforce their own reader
+     *                           limits, and page-read latency starts only after a reader is acquired.
      */
     ReplayHandler(String bucket, ListingFixture fixture, ReplayMetrics metrics, int maxConcurrentReads) {
         this(bucket, fixture, metrics, maxConcurrentReads, (req, result) -> Duration.ZERO);
@@ -139,7 +139,7 @@ final class ReplayHandler extends Handler.Abstract {
     private ServedListing boundedList(S3ListRequest listRequest) {
         S3ListResult result;
         // Started before the permit wait, unlike page.read.latency: what a client experiences from a
-        // saturated server includes queueing for a connection, and this timer is the one asked
+        // saturated server includes admission and backing-pool queueing, and this timer is the one asked
         // whether the server kept out of the way.
         long startNanos = System.nanoTime();
         var shaped = metrics.startTimer();

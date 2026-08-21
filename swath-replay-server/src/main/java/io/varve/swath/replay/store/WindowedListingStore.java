@@ -5,7 +5,6 @@
  */
 package io.varve.swath.replay.store;
 
-import io.micrometer.core.instrument.Timer;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.replay.protocol.ListedObject;
 import io.varve.swath.replay.server.ReplayMetrics;
@@ -157,12 +156,7 @@ public final class WindowedListingStore implements ListingStore {
     @Override
     public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                    Projection projection) {
-        var pageSample = metrics.startPageReadTimer();
-        try {
-            return serve(from, fromInclusive, toExclusive, limit, projection);
-        } finally {
-            metrics.recordPageRead(pageSample);
-        }
+        return serve(from, fromInclusive, toExclusive, limit, projection);
     }
 
     private List<ListedObject> serve(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
@@ -302,7 +296,7 @@ public final class WindowedListingStore implements ListingStore {
 
     private List<ListedObject> fill(ByteKey from, boolean fromInclusive, ByteKey toExclusive, Projection projection,
                                     int requested) {
-        Timer.Sample fillSample = metrics.startPrefetchFillTimer();
+        var fillSample = metrics.startPrefetchFillTimer();
         try {
             return delegate.rows(from, fromInclusive, toExclusive, requested, projection);
         } finally {

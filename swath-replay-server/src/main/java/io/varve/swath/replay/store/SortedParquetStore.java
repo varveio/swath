@@ -89,7 +89,6 @@ public final class SortedParquetStore implements ListingStore {
 
     private final List<IndexEntry> index;
     private final ReplayMetrics metrics;
-    private final boolean recordPageReadLatency;
     private final Map<Path, SortedRangeReader> rangeReaders;
     private final Map<Path, BlockingQueue<SortedRowGroupReader>> groupReaders;
     /** Every group reader this store made, borrowed or not — {@link #close()} closes the list, not the pool. */
@@ -110,29 +109,20 @@ public final class SortedParquetStore implements ListingStore {
      */
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics,
                               int connectionCount) {
-        this(files, index, metrics, connectionCount, true);
-    }
-
-    /**
-     * @param recordPageReadLatency whether this store records {@code swath.replay.page.read.latency}
-     *                              around each read. {@code true} for the bare (unwrapped) sorted path;
-     *                              {@code false} when a {@link WindowedListingStore} decorates this
-     *                              store — the wrapper then owns the outer per-page {@code
-     *                              page.read.latency} so the corridor metric measures the amortized
-     *                              per-page cost (hit or miss), not the ~50k-row window fill, and the
-     *                              fill is instead measured by {@code prefetch.window.fill}.
-     */
-    public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics,
-                              int connectionCount, boolean recordPageReadLatency) {
         this.index = List.copyOf(index);
         validateIndexWithinFiles(this.index, files);
         this.metrics = metrics;
-        this.recordPageReadLatency = recordPageReadLatency;
         if (connectionCount < 1) {
             throw new IllegalArgumentException("reader count must be at least 1, got " + connectionCount);
         }
         this.rangeReaders = openRangeReaders(files, connectionCount,
-                metrics::parquetReaderAcquired, metrics::parquetReaderReleased);
+                metrics::parquetReaderAcquired, elapsedNanos -> {
+                    try {
+                        metrics.recordPageRead(elapsedNanos);
+                    } finally {
+                        metrics.parquetReaderReleased();
+                    }
+                });
         this.groupReaders = openGroupReaders(files, connectionCount);
         this.ownedGroupReaders = groupReaders.values().stream()
                 .flatMap(java.util.Collection::stream).toList();
@@ -156,15 +146,7 @@ public final class SortedParquetStore implements ListingStore {
     @Override
     public List<ListedObject> rows(ByteKey from, boolean fromInclusive, ByteKey toExclusive, int limit,
                                    Projection projection) {
-        if (!recordPageReadLatency) {
-            return rangeRead(from, fromInclusive, toExclusive, limit, projection);
-        }
-        var sample = metrics.startPageReadTimer();
-        try {
-            return rangeRead(from, fromInclusive, toExclusive, limit, projection);
-        } finally {
-            metrics.recordPageRead(sample);
-        }
+        return rangeRead(from, fromInclusive, toExclusive, limit, projection);
     }
 
     /**
@@ -279,7 +261,8 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     private static Map<Path, SortedRangeReader> openRangeReaders(
-            List<Path> files, int poolSize, Runnable readerAcquired, Runnable readerReleased) {
+            List<Path> files, int poolSize, Runnable readerAcquired,
+            java.util.function.LongConsumer readerReleased) {
         Map<Path, SortedRangeReader> readers = new LinkedHashMap<>();
         try {
             for (Path file : files) {
@@ -460,8 +443,7 @@ public final class SortedParquetStore implements ListingStore {
                         Path doneFile = openFile;
                         reader = null;
                         openFile = null;
-                        metrics.parquetReaderReleased();
-                        pool(doneFile).add(done);
+                        returnGroupReader(doneFile, done);
                     }
                     reader = borrowGroupReader(entry.file());
                     metrics.parquetReaderAcquired();
@@ -523,11 +505,19 @@ public final class SortedParquetStore implements ListingStore {
                 keyCursor.close();
             }
             if (reader != null) {
-                metrics.parquetReaderReleased();
-                pool(openFile).add(reader);
+                returnGroupReader(openFile, reader);
             }
         }
         return out;
+    }
+
+    /** Returns one delimiter reader without letting diagnostics strand the pooled resource. */
+    private void returnGroupReader(Path file, SortedRowGroupReader reader) {
+        try {
+            metrics.parquetReaderReleased();
+        } finally {
+            pool(file).add(reader);
+        }
     }
 
     /**
