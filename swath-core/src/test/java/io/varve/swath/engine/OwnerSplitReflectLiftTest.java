@@ -210,7 +210,7 @@ final class OwnerSplitReflectLiftTest {
     @Timeout(60)
     void reflectOffKillsTheLiftEvenWithReflectLiftSeparatelyOn(@TempDir Path dir) throws Exception {
         // reflect=off, reflect_lift=on: the lift must never fire (reflect=off wins), matching
-        // docs/usage.md's "reflect=off restores exact pre-reflection placement" claim -- behavior
+        // docs/configuration.md's "reflect=off restores exact pre-reflection placement" claim -- behavior
         // identical to a full reflect=off ablation (clamp and lift both silent), not just the lift toggle.
         EngineToggles reflectOffLiftOn = EngineToggles.DEFAULT.withReflect(false);
         Map<String, Long> reasons = runScan(dir, "reflect-off-lift-on", denseFlat(40_000), reflectOffLiftOn);

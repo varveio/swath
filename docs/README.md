@@ -1,40 +1,75 @@
-# docs/
+# Documentation
 
-`docs/` is **current truth** — every file here describes swath as it ships and is safe
-to read without archaeology. When reality changes, these files are **rewritten**, not
-appended-to with correction banners.
+Choose the path that matches what you are trying to do. You do not need to read the
+internals to use swath.
 
-The docs split into two tiers.
+## Start
 
-## Tier 1 — use it
+1. [Getting started](getting-started.md) — try a public listing with Docker, save a
+   managed Parquet dataset, query it, and learn how resume works.
+2. [Installation](install.md) — choose Docker, the self-contained jar, a release archive,
+   or a source build.
+3. [Common workflows](usage.md) — choose an output, filter rows, sort Parquet, resume a
+   run, and consume the result.
 
-What the average user needs, roughly in the order you'll want it:
+For the current command-line options, ask the installed version:
 
-- [`install.md`](install.md) — build and install the CLI.
-- [`usage.md`](usage.md) — the `list` subcommand: flags, output formats, checkpoint/resume, `--max-duration`, exit codes, examples.
-- [`configuration.md`](configuration.md) — tuning knobs, environment variables, defaults.
-- [`operating.md`](operating.md) — running swath against real S3: credentials, the minimal IAM policy, S3-compatible endpoints, and what a run costs.
-- [`performance.md`](performance.md) — concurrency, throughput expectations, sizing guidance.
-- [`faq.md`](faq.md) — common questions and troubleshooting: credential/region errors, exit codes, `--sort` OOMs.
-- [`packaging-and-docker.md`](packaging-and-docker.md) — the Docker image and release artifacts.
-- [`metrics-and-observability.md`](metrics-and-observability.md) — the Micrometer meters, the `-v` progress line, and the JSON run-summary artifact.
+```bash
+swath list --help
+swath resume --help
+```
 
-## Tier 2 — how it works (internals)
+## Operate
 
-You don't need this to use swath. It's for contributors, and for anyone curious how the
-engine gets a no-gap/no-overlap listing without a client-chosen partition key.
+- [Credentials, IAM, S3-compatible endpoints, and request cost](operating.md)
+- [Troubleshooting and FAQ](faq.md)
+- [Configuration and advanced controls](configuration.md)
+- [Performance and resource sizing](performance.md)
+- [Progress, run reports, metrics, and traces](metrics-and-observability.md)
 
-- [`internals/overview.md`](internals/overview.md) — module map and where to start reading the engine.
-- [`internals/architecture.md`](internals/architecture.md) — module boundaries, the AIMD/steal loop, the load-bearing invariants.
-- [`internals/algorithms.md`](internals/algorithms.md) — the work-stealing scan: pivot synthesis, seeding, and the dense-tail placement mechanisms.
-- [`internals/contracts.md`](internals/contracts.md) — the numbered invariants and contracts the engine holds.
-- [`internals/walkthroughs.md`](internals/walkthroughs.md) — five step-by-step traces of the engine handling hard bucket shapes (deep tree, dense tail, skewed mass, saturated wide, crash/resume).
-- [`internals/s3-implementation-compatibility.md`](internals/s3-implementation-compatibility.md) — deviations between real S3 and S3-compatible endpoints (LocalStack/MinIO) that swath designs around.
-- [`internals/metrics-internals.md`](internals/metrics-internals.md) — the full steal-reason counter registry, JSON forensics fields, and run-trace format.
-- [`internals/probe-budgets.md`](internals/probe-budgets.md) — how each call class's per-attempt timeout is sized (point vs scan), and the probe-timeout storm that motivated the split.
-- [`internals/build-and-modules.md`](internals/build-and-modules.md) — the module graph, dependency rules, and shared build config.
-- [`swath-replay-server.md`](swath-replay-server.md) — the S3-listing replay server used to test against fixture bucket shapes without hitting real S3.
-- [`swath-sim`](../swath-sim/README.md) — the deterministic virtual-time policy simulator, its fixture backends, model limits, and experiment harnesses.
-- [`ops/dev/TESTING.md`](ops/dev/TESTING.md) — test tiers, speed, and the no-mass-populate rule.
-- [`ops/dev/decision-trace-goldens.md`](ops/dev/decision-trace-goldens.md) — the policy-seam decision-trace golden recorder: format, regeneration workflow, determinism requirement, known gaps.
-- [`ops/dev/field-investigations.md`](ops/dev/field-investigations.md) — write-ups of runs against specific real buckets, and the changes they drove.
+The defaults are intended for ordinary runs. Use [Common workflows](usage.md) and
+[Operating swath](operating.md) first; open the configuration, performance, or
+observability references when a specific run gives you a reason to.
+
+## Understand
+
+The [visual field guide](https://swath.varve.io/field-guide/) is the clearest explanation
+of the problem and the algorithm. It shows why an S3 listing is difficult to parallelize,
+how swath divides an unknown keyspace, how safe splits move work to idle workers, and where
+a live parallel scan is the wrong choice.
+
+For the repository-level technical model, continue with
+[the internals overview](internals/overview.md), then go only as deep as you need:
+
+- [Architecture](internals/architecture.md) — components and the flow of a run.
+- [Listing algorithms](internals/algorithms.md) — seeding, pivots, stealing, AIMD,
+  sorting, and the correctness argument.
+- [Contracts and data model](internals/contracts.md) — invariants I1–I12, types,
+  persistence schemas, output schemas, and delivery guarantees.
+- [Worked bucket shapes](internals/walkthroughs.md) — step-by-step traces through
+  difficult key distributions.
+- [Instrumentation internals](internals/metrics-internals.md) — engagement-counter
+  registry and trace schema.
+- [S3 implementation compatibility](internals/s3-implementation-compatibility.md)
+  and [probe budgets](internals/probe-budgets.md) — focused protocol details.
+
+## Contribute
+
+- [Contributing](../CONTRIBUTING.md)
+- [Build and module structure](internals/build-and-modules.md)
+- [Testing](ops/dev/TESTING.md)
+- [Packaging and release engineering](packaging-and-docker.md)
+- [Replay server reference](swath-replay-server.md) and the
+  [reproduction workflow](replay-troubleshooting.md)
+- [Decision-trace goldens](ops/dev/decision-trace-goldens.md)
+- [Field investigations](ops/dev/field-investigations.md) — dated supporting
+  evidence, not product semantics.
+- [Release process](../RELEASING.md) and the current
+  [release notes](ops/dev/RELEASE_NOTES.md)
+
+## Documentation contract
+
+User and internals pages describe current behavior; code remains the final authority when
+they disagree. Dated field evidence and release notes explain why behavior changed but do
+not override current contracts. Rewrite stale guidance instead of adding correction banners,
+and give each detailed fact one canonical owner so linked summaries cannot drift.

@@ -14,28 +14,36 @@ import org.junit.jupiter.api.Test;
 /** Parses the launch commands readers meet first; execution would require a real S3 endpoint. */
 class HeadlineDocsCommandSmokeTest {
 
+    private static final String PUBLIC_DEMO_BUCKET = "s3://noaa-gestofs-pds/";
+
     @Test
     void readmeQuickstartUsesAnExplicitResumableFormatAndConsistentLauncher() throws Exception {
         String readme = Files.readString(Path.of("..", "README.md"));
         assertThat(readme).contains("export PATH=\"$PWD/swath-cli/build/install/swath/bin:$PATH\"")
-                .contains("swath list s3://my-bucket/prefix/ "
-                        + "--no-sign-request --format parquet -o out/")
-                .contains("swath resume out/");
+                .contains("swath list " + PUBLIC_DEMO_BUCKET)
+                .contains("--no-sign-request --region us-east-1")
+                .contains("--concurrency 128")
+                .contains("--format parquet -o out/noaa-gestofs-pds")
+                .contains("swath resume out/noaa-gestofs-pds");
 
-        parse("list", "s3://my-bucket/prefix/", "--no-sign-request", "--format", "parquet", "-o", "out/");
-        parse("resume", "out/");
+        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
+                "--concurrency", "128", "--format", "parquet", "-o", "out/noaa-gestofs-pds");
+        parse("resume", "out/noaa-gestofs-pds");
     }
 
     @Test
-    void installQuickstartCommandsParse() throws Exception {
-        String install = Files.readString(Path.of("..", "docs", "install.md"));
-        assertThat(install).contains("swath list s3://my-bucket/prefix/ --no-sign-request")
-                .contains("swath list s3://my-bucket/prefix/ --no-sign-request -o out/ --format parquet")
-                .contains("swath resume out/");
+    void gettingStartedCommandsParse() throws Exception {
+        String gettingStarted = Files.readString(Path.of("..", "docs", "getting-started.md"));
+        assertThat(gettingStarted).contains("exact listing command shown in the demo")
+                .contains("list " + PUBLIC_DEMO_BUCKET)
+                .contains("--no-sign-request --region us-east-1")
+                .contains("--concurrency 128")
+                .contains("resume /out/noaa-gestofs-pds")
+                .contains("--format parquet -o /out/noaa-gestofs-pds");
 
-        parse("list", "s3://my-bucket/prefix/", "--no-sign-request");
-        parse("list", "s3://my-bucket/prefix/", "--no-sign-request", "-o", "out/", "--format", "parquet");
-        parse("resume", "out/");
+        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
+                "--concurrency", "128", "--format", "parquet", "-o", "/out/noaa-gestofs-pds");
+        parse("resume", "/out/noaa-gestofs-pds");
     }
 
     private static void parse(String... args) {

@@ -1,419 +1,173 @@
-# swath — architecture overview
+# Architecture
 
-`swath` is a high-performance Java 25 CLI designed for very large listings of
-general-purpose Amazon S3 buckets. It tiles their globally ordered keyspace into
-disjoint half-open byte ranges `(A, B]` that are scanned in parallel by a pool
-of virtual-thread workers — the `WorkStealingScan` engine — whose load imbalance is corrected
-on-the-fly by demand-driven range stealing. Each page advances the listing
-`cursor` before its rows are sent downstream. In one-shot stdout and FILE-kind
-text runs, that ordering can omit a committed page if the process stops before
-emission; those destinations are not resumable. Managed directory-dataset
-Parquet separately advances `durable_cursor` only when a part is finalized
-(footer-fsynced); resume discards the unfinalized tail and re-lists it, giving
-exactly-once durable dataset output.
-Part files are **not** globally key-sorted — each part concatenates
-several nodes' key-ranges in listing order, not key order. Global key order is
-opt-in `--sort` (`--format parquet` only), which forces a single sorted output
-file instead of unordered parts.
+swath is a bounded pipeline around one adaptive range engine. This page maps the design
+to the repository and follows a run from the CLI to publication.
 
-For CLI flags, options, and output formats see [`docs/usage.md`](../usage.md).
-For the design shape — the problem, scope, requirements, and the two design laws
-— see [`overview.md`](overview.md). For the full engine algorithm (pseudocode,
-correctness proof, `byteMidpoint`, versioned listing, AIMD) see
-[`docs/internals/algorithms.md`](algorithms.md).
-The authoritative contracts and invariants live in
-[`contracts.md`](contracts.md).
-For how the repository is organized as a Gradle build — the module graph,
-dependency rules, and the decisions behind them — see
-[`docs/build-and-modules.md`](build-and-modules.md).
-
----
+For the motivation, read [Internals overview](overview.md). For exact types, schemas, and
+guarantees use [Contracts](contracts.md); for engine pseudocode and correctness arguments
+use [Algorithms](algorithms.md).
 
 ## Component map
 
-| Package | Source path | Responsibility |
-|---|---|---|
-| `model` | `io.varve.swath.model` | Core types: `KeyBytes` (raw byte key + unsigned comparator), sealed `ListEntry` (`ObjectEntry`, `CommonPrefixEntry`, `DeleteMarkerEntry`), `PageBatch`, `ByteMidpoint` (UTF-8-safe pivot math) |
-| `store` | `io.varve.swath.store` | Internal, unsupported v0.1 seams: `PageFetcher.fetchPage(PageRequest) → ListPage`; `StoreCapabilities` descriptor (v0.1 reads only `maxKeysCap` in `RangeScanner`; no router ships); `PaginationKind` (KEY vs OPAQUE_MARKER) |
-| `store.s3` | `io.varve.swath.store.s3` | S3 implementation: `S3PageFetcher` (SDK v2 sync, `encoding-type=url`; the SDK's `DecodeUrlEncodedResponseInterceptor` decodes response keys, read via `getBytes(UTF_8)`), `S3ClientFactory` |
-| `engine` | `io.varve.swath.engine` | `WorkStealingScan` (worklist + fixed VT pool), `RangeScanner` (`runRange` loop), `Thief` (steal executor mechanics: pool→view/snapshot translation, RPC issuing, the lock-guarded CAS hand-off, metrics/trace emission — the pivot cascade itself is `engine.policy`'s), `OwnerSelfSplit` (owner-side self-split executor mechanics: `WorkerState`→view translation, the durable split CAS, the child hand-off, the tagged-child confetti-completion lifecycle — the gate chain itself is `engine.policy`'s), `ConfettiFeedbackGate` (the realized-child-mass feedback MEASUREMENT `OwnerSelfSplit` maintains and snapshots into every view; the classification decision itself lives in `engine.policy`'s owner-split governor — issue #22), `StealMath` (`byteMidpoint`, `extrapolate`, victim-selection math), `WorkerState` (per-worker cursor/hi/lock; its futility-pacing counters own the `AtomicInteger` read/writes, the trip/growth/decay/reset arithmetic itself is `engine.policy`'s `FutilityPacingPolicy`), `IdleStealBackoff` (the fleet-wide one-attempt slot: ownership/release/`RunMetrics` — the pacing-window arithmetic itself is `engine.policy`'s `IdleStealPacingPolicy`), `ConcurrencyGauge` (AIMD), `SeedStep` (shallow `delimiter=/` seed pass executor: issues every probe `engine.policy`'s `HybridSeedPlanner` requests, decodes pages, tiles the finished cut set into `NodeSpec`s — the descent itself is `engine.policy`'s), `SeedMode` (`SHALLOW`/`NONE`/`HINTS`) |
-| `engine.policy` | `io.varve.swath.engine.policy` | The policy seam: `StealPolicy`/`StealAttempt`/`ThiefPolicy` — victim selection and the full pivot cascade (§3 below); `OwnerSplitPolicy`/`OwnerSplitGovernor` — the owner-side proactive self-split's gate chain (§3.3); `FutilityPacingPolicy` — the per-victim futility-cooldown trip/growth/decay/reset arithmetic, pure functions of one `int` at a time (never a combined view — see `contracts.md` §2.1); `IdleStealPacingPolicy`/`IdleStealPacingState`/`IdleStealPacingDecision` — the fleet-wide idle-steal backoff's pacing-window arithmetic, a combined immutable state record (safe because every access stays inside `IdleStealBackoff`'s own `synchronized` methods) — as source-agnostic decision interfaces (views/decisions/probe outcomes carry keys as bytes, counts, streaks, and policy-domain enums only — no `store.ListPage` or other protocol type). `Thief` drives `ThiefPolicy` through a request/response loop, issuing every RPC it requests; `OwnerSelfSplit` drives `OwnerSplitGovernor` with one call per page-commit (owner-split is zero-probe, so there is no request/response loop). `SeedPlanner`/`SeedDescent`/`HybridSeedPlanner` — the seed step's descent (§8: span-priority frontier, probe-budget accounting, per-level classification, cut-set assembly) as a source-agnostic decision interface, with no `View` and no mutation list at all (its frontier/cut-set/probe-budget state is never shared — see `contracts.md` §2.1's third-shape note); `SeedStep` drives it through the identical request/response shape `Thief` uses for `ThiefPolicy`, decoding each page into a `SeedProbeOutcome` before handing it to `SeedDescent#onProbeResult`. |
-| `checkpoint` | `io.varve.swath.checkpoint` | `CheckpointStore` interface; `SqliteCheckpointStore` (single writer thread, WAL, `commitPage`, `splitNode`); node/run state types |
-| `output` | `io.varve.swath.output` | `EntryFormatter` (sealed), text formatters (`JsonlFormatter`, `TsvFormatter`, `AlignedFormatter`), `OutputStage`, `ControlCharEscaper` |
-| `output.parquet` | `io.varve.swath.output.parquet` | `ParquetWriterPool` (2–4 writers, decoupled from listing concurrency), `PartWriter` (size-rotated parts, footer fsync), `Manifest` (atomic `manifest.json`), `ParquetSchema`, `ParquetResume` |
-| `filter` | `io.varve.swath.filter` | Sealed `Filter`: `IncludeRegexFilter`, `ExcludeRegexFilter`, `SizeFilter`, `MtimeFilter`, `StorageClassFilter`; `FilterChain` |
-| `pipeline` | `io.varve.swath.pipeline` | `Channel` (bounded blocking queue), sealed `Msg` envelope (`Item`, `End`, `Failure`), `Pipeline` wiring |
-| `runtime` | `io.varve.swath.runtime` | `RunContext` (token, metrics, config — bound as a `ScopedValue`), `ListRunner` (pipeline orchestration), `ScanProducer`, `CheckpointedScanProducer`, `ArgsHash` |
-| `concurrent` | `io.varve.swath.concurrent` | `Scope` — the in-house structured-concurrency helper over virtual threads (no `--enable-preview`) |
-| `cli` | `io.varve.swath.cli` | `App` (Picocli root), `ListCommand`, `ResumeCommand`, `ExitCodes`, `S3Uri` |
-| `error` | `io.varve.swath.error` | Sealed `SwathException` hierarchy (`ListingException`, `CheckpointException`, `OutputException`, `InvalidArgsException`, …) |
-| `observability` | `io.varve.swath.observability` | `RunMetrics` (Micrometer counters/gauges/timers), `RunSummary`/`JsonRunSummaryWriter` (end-of-run + `--report` sidecar), `RunProgressReporter` (the run's single progress lifecycle) + `ProgressSink`/`ProgressEvent` (the neutral seam a presentation layer renders through), `ResourceMetrics` (peak RSS/heap, CPU seconds), `RunFingerprint`, `StopReason` |
+The Gradle module graph and allowed dependencies are documented separately in
+[Build and modules](build-and-modules.md).
 
-`swath-sim` is a present consumer of the policy seam: `SimExecutor` drives `HybridSeedPlanner`,
-`OwnerSplitGovernor`, `IdleStealPacingPolicy`, and `ThiefPolicy` in virtual time.
+| Area | Main packages/classes | Responsibility |
+| --- | --- | --- |
+| Model | `io.varve.swath.model` | Byte-exact keys, entries, pages, and pivot primitives. |
+| Store | `store`, `store.s3` | Ordered-page abstraction and the AWS SDK `ListObjectsV2` adapter. |
+| Engine | `engine` | Worker pool, range scanner, stealing executor, owner splits, seeding, and adaptive concurrency. |
+| Policy | `engine.policy` | Source-agnostic views and deterministic decisions for seed, victim, pivot, pacing, and owner-split policy. |
+| Checkpoint | `checkpoint` | Worklist state and single-writer SQLite transactions. |
+| Pipeline | `pipeline`, `runtime`, `concurrent` | Bounded message channel, lifecycle, cancellation, and orchestration. |
+| Output | `output`, `output.parquet`, `sort` | Text formatting, managed Parquet, staging, merge, manifest publication. |
+| Filters | `filter` | Key, size, time, and storage-class predicates. |
+| Observability | `observability` | Meters, progress, run summaries, fingerprints, and traces. |
+| CLI | `cli` | Picocli commands, option validation, target parsing, and exit codes. |
 
-**Known seam exceptions:** four, all closed. `engine.policy`'s convention is that a policy is a
-deterministic function of its view (no I/O, no ambient randomness, no ambient collaborator state)
-and returns reason enums for the executor to record (so AGENTS.md's counter-per-path law stays
-mechanically checkable against the decision enum). The policy-seam refactor closed the first three,
-and the determinism audit (`DecisionPathPurityTest`) enforces the convention mechanically against
-each of the four SHAPES they took. Nothing here is disclosed-but-unenforced any more; if a fifth
-shape is found, add its check alongside them rather than documenting an exception.
+`swath-sim` drives the policy layer in virtual time. `swath-replay-server` serves a
+captured listing through an S3-like API for repeatable integration and performance work.
+Neither sits on the production listing path.
 
-The four CLOSED exceptions:
+## Run lifecycle
 
-- `OwnerSplitGovernor`'s confetti feedback gate probe-counter side effect (issue #22) — `decide(view)`
-  is now a genuine pure function of its argument; see `OwnerSplitGovernor`'s javadoc for how the
-  classification math and the `ConfettiFeedbackGate` collaborator now divide the work.
-- `ThiefPolicy`'s structure-probe suppression recovery reaching for ambient
-  `ThreadLocalRandom.current()` (issue #20) — the draw is now injected as a `DecisionRng`
-  (`ThiefPolicy`'s third constructor parameter); `Thief` supplies the engine's live default as
-  `bound -> ThreadLocalRandom.current().nextInt(bound)` — the identical ambient source as before, so
-  live-run behavior is unchanged (goldens verified byte-identical) — while tests and the simulator
-  inject a reproducible one. The fleet-wide idle-steal backoff got the same treatment
-  proactively for its ambient `System.nanoTime()` read: `IdleStealBackoff` now holds a
-  `DecisionClock` (live default `System::nanoTime`) and passes the timestamp into
-  `IdleStealPacingPolicy`, which owns no clock of its own. A per-worker seeded generator for
-  live-run determinism is no longer a deferred question: it is an
-  **opt-in** `EngineContext#decisionRngSeed` seam, `null` by default. Unset, `WorkStealingScan`
-  threads `Thief`'s identical ambient default (`ThreadLocalRandom.current()`) — byte-identical to
-  every run before this seam existed, goldens untouched. Set, every worker instead draws from a
-  `SeededDecisionRng` stream deterministically derived from that seed plus the worker's own stable
-  identity (`RunContext.workerIdOrNone()`) via a SplitMix64 mixing step, so worker *k*'s stream is a
-  pure function of `(seed, k)` alone — growing or shrinking `workerCount` adds/removes streams
-  without reshuffling the ones that stay. `SeededDecisionRng` is never held as a field of any
-  `io.varve.swath.engine.policy` type (only the `DecisionRng` interface is, in `ThiefPolicy`), so —
-  like `Thief`'s own ambient default — it sits in `DecisionPathPurityTest`'s documented Gap 1
-  (an injected implementation's body is unreachable from the policy's field-type closure).
-- `AlphabetDigest` (carried through in `StealAttemptView`, consumed by `StealMath.interpolate(...,
-  digest, collector)`) held its own `RunMetrics` reference and fired `ALPHABET.*` fallback counters
-  directly from inside `chooseScalar` (issue #19) — CLOSED: the fallback reason is now an
-  `AlphabetFallback` enum reported through a caller-owned `List<Engagement>` collector threaded from
-  `ThiefPolicy`'s pivot cascade / `OwnerSplitGovernor`'s carve, exactly like every other engagement;
-  `AlphabetDigest` holds no metrics reference of any kind.
-
-- `StealAttemptView.alphabetDigest` / `OwnerSplitView.alphabetDigest` was a live reference, not a
-  snapshot (issue #30) — the view is documented as an immutable snapshot the policy decides over, and
-  this was the one field for which it was not: the victim's actual `AlphabetDigest` instance, whose
-  `long[][] mask` / `boolean[] clean` are final *references* with mutable *contents*, so a concurrent
-  page commit could change what the digest reported between view construction and `ThiefPolicy`'s
-  dereference of it. CLOSED: both views now carry an immutable `AlphabetDigest.Snapshot`, frozen by
-  the executor at view construction (a fixed 8 positions × 2 words plus 8 packed clean flags — one
-  small allocation per steal attempt / owner-split consult). Consult semantics are unchanged
-  byte-for-byte, including which `ALPHABET.*` fallback fires, because the live digest and its snapshot
-  share one implementation of the consult. The extraction itself never changed production behavior —
-  the pre-extraction code read the digest live at the same point, and the split CAS re-validate keeps
-  tiling safe regardless — so what the fix bought is the *claim*: a recorded `(view, decision)` pair
-  is now reproducible from the recorded view alone, which is the replay-equivalence property the
-  simulator is built on. contracts.md §2.1 carries the mechanism and the per-field audit row.
-
-The determinism audit's enforcement test (`DecisionPathPurityTest`, `swath-core`) scans the policy
-package plus the transitive closure of every field-reachable `io.varve.swath.*` type for a held
-`RunMetrics`/`TraceSink` reference or `java.util.concurrent.atomic` state, and the same closure's
-source for a direct ambient clock/randomness call — so a class shaped like any of the first three
-CLOSED exceptions above (in the policy package or reached through a view/decision/event field,
-regardless of which package it lives in) fails a mechanical check rather than waiting for the next
-review pass. Issue #30's shape needed a fourth check, since mutable primitive arrays and volatile
-fields are legal under all three: `viewsCarryNoLiveExecutorState` walks every policy-package
-record's component types transitively and rejects any that exposes a mutator (a non-private
-instance method returning `void`) or hands out its own array. That check is verified by
-reintroducing #30 — a view component typed to the live `AlphabetDigest` — and confirming it reports
-both `observe(byte[])` and `maskWords()` while the other three checks stay green. Its own residual
-blind spots (a mutator that returns a value; a value type aliasing an array its caller keeps
-writing to) are disclosed in the test's javadoc.
-
-**Simulator port present, production port not wired: `ConcurrencyPolicy`.** `SimExecutor` constructs
-`SimConcurrencyPolicy`, which implements this interface as a virtual-time port of the AIMD controller.
-Production still uses `ConcurrencyGauge` directly; nothing in production constructs, holds, or calls a
-`ConcurrencyPolicy`. Extracting the real controller remains deferred because its clean-window
-cooldowns, shed windows, valve pacing, and latency baseline race under CAS. The simulator tests the
-port's deterministic signals and documented transitions, but no test proves it equivalent under
-production concurrency. `DecisionPathPurityTest` also does not reach the simulator implementation;
-see that test's "Known gaps" javadoc and `ConcurrencyPolicy`'s own javadoc for the exact audit boundary.
-
-**Dormant seams (built but not active in v0.1):**
-- `ExpressionFilter` — in the sealed `Filter` permits; JEXL evaluation deferred to v1.1.
-- `output_journal` / `--resume-output` — at-least-once stdout replay; deferred to v1.1.
-- Multi-store (`gs://`, `az://`, …) — `StoreCapabilities`, `OPAQUE_MARKER`
-  pagination kind, and `PREFIX` node kind are internal design seams, not a
-  supported SPI; only the S3 fetcher ships in v0.1. The range engine additionally
-  requires global lexical ordering and a `StartAfter`-equivalent lower bound.
-
-**No longer dormant:** `--sort` / external merge sort (opt-in, `--format parquet` only)
-ships today; see the flow paragraph above. The sorted **text**-sink path and the
-default-on flip remain deferred.
-
----
-
-## How a list run flows
-
-```
-S3
- │  ListObjectsV2 pages
+```text
+CLI
+ │ validate target, output, filters, resume identity
  ▼
-[S3PageFetcher]  ──page──►  [RangeScanner / runRange]
-                                 │  PageBatch
-                                 ▼
-                          [Channel<Msg<PageBatch>>]  (bounded)
-                                 │
-                                 ▼
-                          [OutputStage / ParquetWriterPool]
-                                 │  finalized part files
-                                 ▼
-                          [manifest.json + SQLite checkpoint]
+SeedStep ──► SQLite worklist ──► WorkStealingScan workers
+                                      │ PageBatch
+                                      ▼
+                               bounded Channel
+                                      │
+                  ┌───────────────────┴───────────────────┐
+                  ▼                                       ▼
+             text / Parquet                         sort staging
+                  │                                       │
+                  └──────────────► publish ◄──── external merge
+                                         │
+                              report + manifest + checkpoint
 ```
 
-### Step by step
+### 1. Construct the run
 
-1. **Seed.** `SeedStep` runs a shallow `delimiter=/` probe to discover top-level
-   common prefixes `p1 < p2 < … < pk` and converts them into initial range
-   cut-points `(⊥, p1], (p1, p2], …, (pk, null]`. Cut-points are capped at
-   `min(1000, 4×W)` and then `subsampleEvenly` so the seed set is proportional to
-   the worker count. The insert is atomic (`CheckpointStore.insertNodes`). If the
-   top level has no common prefixes (flat bucket) the entire keyspace starts as one
-   range `(⊥, null]`. `SeedMode` is `SHALLOW` (default), `NONE`, or `HINTS`
-   (not yet implemented — throws); controlled by `--tune seed.mode=shallow|none|hints`.
+`ListCommand` validates options before opening a checkpoint or contacting the store.
+`ListRunner` creates the S3 client, metrics, stop token, checkpoint/output resources, and
+pipeline. `RunContext` carries run-scoped state without thread-local plumbing.
 
-2. **Workers claim ranges.** The fixed virtual-thread pool in `WorkStealingScan`
-   picks `PENDING` nodes off the ready queue. Each worker runs `RangeScanner.runRange`
-   — a tight pagination loop that calls `S3PageFetcher.fetchPage`, filters each key
-   against the node's current upper bound `hi` (re-read volatile on every key), and
-   accumulates a `PageBatch`.
+A resumable run persists an `args_hash` covering listing identity. Resume refuses changes
+that would alter the keyspace or output identity while allowing documented soft context to
+be re-supplied.
 
-3. **Commit, then emit.** Before pushing a `PageBatch` downstream the worker calls
-   `CheckpointStore.commitPage` (invariant I1 — commit-before-emit). The checkpoint
-   writer thread advances `cursor` and, on the final page, flips the node to
-   `COMPLETED`. Only after the commit future resolves does the worker enqueue the
-   batch onto the channel.
+### 2. Seed the worklist
 
-4. **Stealing.** When a worker finds the ready queue empty but `outstanding > 0`,
-   it becomes a thief. It picks the live worker with the largest estimated remaining
-   range, computes a UTF-8-safe pivot `m` via `byteMidpoint` (bounded ranges) or
-   density extrapolation (the open frontier), validates it with a 1-key probe, then
-   under `victim.lock` narrows the victim's `hi` to `m` and atomically commits a new
-   `PENDING` child `(m, oldHi]` via `CheckpointStore.splitNode`. The thief then runs
-   that child.
+`SeedStep` performs the configured shallow discovery and atomically inserts initial
+`listing_node` rows. `seed.mode=none` starts from one open range. A normal resume skips
+seeding and reopens incomplete nodes from persisted state.
 
-5. **Output.** `PageBatch`es flow through the `Channel` to the `OutputStage`. For
-   Parquet, `ParquetWriterPool` sticky-routes each node's batches to one writer
-   (`node_id % numWriters`). When a part file reaches its size target the writer
-   closes it (footer fsync), marks it `finalized` in `part_file`, advances each
-   node's `durable_cursor`, and atomically updates `manifest.json`.
+### 3. Scan ranges
 
-6. **Quiescence.** An `AtomicLong outstanding` counter is decremented only after a
-   node's `COMPLETED` status and any split child are durably committed. The run ends
-   when `outstanding == 0` and the channel drains.
+`WorkStealingScan` owns a fixed number of virtual-thread workers. A worker claims a
+`PENDING` node and `RangeScanner` paginates after its cursor. Keys beyond the node's current
+upper bound are not emitted, including when a split narrowed that bound while an API call
+was in flight.
 
-### Two concurrency shapes
+For each accepted page the worker:
 
-The run has two distinct concurrency shapes by design:
+1. records the next cursor in the checkpoint;
+2. waits for the writer acknowledgement;
+3. applies filters and sends a `PageBatch` to the bounded channel.
 
-- **The static pipeline DAG** (filter → sort → output) is a small fixed set of
-  siblings under the in-house `Scope` helper. It mirrors `s3ls-rs`: the terminal
-  `OutputStage` is awaited first so a downstream error (broken pipe, full disk)
-  propagates fast; drop the downstream receiver before joining the producer, and
-  `shutdownNow()` before `close()` (invariant I8).
-- **The listing engine** is the `WorkStealingScan` worklist — a fixed pool of N
-  workers draining `PENDING` `listing_node` rows, stealing to generate new ranges,
-  all DB writes funnelled through one checkpoint-writer thread. It is **not**
-  structured concurrency; it is a worklist, which is what caps threads at N
-  regardless of tree width and eliminates the permit-across-`join()` deadlock class
-  (invariant I7).
+That commit-before-emit order is invariant I1. Output durability is layered on top rather
+than changing the range cursor semantics.
 
----
+### 4. Rebalance live work
 
-## The seed+steal hybrid engine — conceptual
+When ready work is empty but outstanding nodes remain, an idle worker becomes a thief.
+`Thief` snapshots live executor state into policy views; `ThiefPolicy` selects a victim and
+requests any needed probes. The executor performs those store calls, feeds the results back,
+and finally attempts the guarded split transaction.
 
-The engine combines an **up-front seed pass** with **demand-driven range stealing**,
-giving early parallelism across varied supported general-purpose-bucket key
-distributions.
+The policy package does not perform I/O, mutate executor state, emit metrics, or read ambient
+time/randomness. Decisions return reason enums; executors perform mutations and record the
+matching engagement. `DecisionPathPurityTest` enforces the boundary. Random choices and clocks
+enter through explicit interfaces so simulation and focused tests can be deterministic.
 
-The engine's core invariant is a **partition of the keyspace**: at all times the set
-of live and completed ranges tiles `(⊥, ⊤]` — pairwise disjoint, union covering
-every key. This is what the project name encodes: adjacent swaths cover the whole
-field with no gaps and no overlap.
+`OwnerSelfSplit` uses the same separation but consults a zero-probe governor after page
+commits. It can publish an upper child before an idle thief asks, subject to demand, density,
+confetti, and pacing gates.
 
-**Seeding.** Before any worker starts listing, `SeedStep` issues a shallow
-`delimiter=/` pass to discover top-level prefixes and creates one range per
-cut-point — so every worker has a structurally disjoint slice from page 1. This
-eliminates the "near-serial start" that byte-midpoint stealing alone suffers on
-deep-tree buckets (`in_flight` was ~1 without seeding). The seed insert is atomic
-(`CheckpointStore.insertNodes`, invariant I2).
+### 5. Write and publish
 
-**Range model.** A range `(A, B]` means: send `start_after=A` to S3 (exclusive),
-emit keys `k` while `k <= B`, stop at the first `k > B`. `B = null` is the open
-frontier. **The boundary key belongs to the LEFT interval** — this is invariant I3
-and the most load-bearing convention in the whole system: the wrong choice (exclusive
-on both sides) drops one key at every split.
+The output consumer determines the delivery contract:
 
-**Splitting.** When an idle worker targets a busy victim with `cursor = c`, `hi = H`,
-it places the pivot from what the run has already observed: for a bounded range an
-interpolation inside `(c, H]` at a density-derived far-ahead fraction (≥ 0.5); for the
-open frontier a density extrapolation toward the prefix ceiling. Pivot synthesis is
-code-point-aware, so it always emits valid UTF-8 — and a `null` means one of two
-things. On a bounded range it is **terminal**: no key exists strictly between, the
-range is genuinely unsplittable, and it is cached as such. On an un-started frontier
-it means only that the owner has not committed page 1 yet, so the steal retries and
-the victim must **not** be cached — caching it would exclude the seed victim, which
-owns the whole keyspace, from every later steal and collapse the scan to one worker.
+- stdout and file text are one-shot streams;
+- direct managed Parquet routes each node consistently to one of a small fixed number of
+  writers, finalizes parts, advances durable cursors, and atomically replaces the manifest;
+- sorted Parquet packs pages into bounded segments and performs a resource-bounded external
+  merge before publication.
 
-Only when the single `max_keys=1` probe of `(m, H]` comes back **empty** does the
-thief spend more calls, and the two pathologies take different ladders. An **empty
-upper** steps back to the plain midpoint, then tries a bounded `delimiter=/` structure
-probe for a real populated directory boundary (which works well on hierarchical
-keyspaces where a uniform pivot lands in an empty gap), then the density-reflected
-pivot, then a budgeted bisection back toward the cursor. A pivot that degenerates into
-a **cursor-adjacent sliver** takes its own two rungs instead — an adaptive structure
-back-out that searches for the coarsest level yielding a far-ahead boundary, then a
-flat-leaf density pivot — and commits the byte-exact sliver if neither lands. The full
-ladder and its probe budgets are in [`algorithms.md`](algorithms.md) §3. Whichever rung produces `m`, the victim's range
-narrows and a new `PENDING` child is created atomically. The victim re-reads `hi` on
-every key (volatile), so an in-flight page fetched under the old bound stops at the
-new `m` without double-emitting.
+The terminal output stage is observed first so broken pipes, full disks, and writer failures
+cancel producers promptly. On shutdown, downstream receivers close before producer joins;
+executors receive `shutdownNow()` before `close()` (I8).
 
-**Victim selection.** `estRemaining(w) = localDensity(w) × remaining_span(w)` — the
-worker with the largest estimated remaining work is stolen from first. The frontier
-worker (`hi = null`) scores +∞ until it gets a finite bound. A worker is eligible
-to be a victim only after it has emitted at least one page since its last steal
-(**progress-gated victim eligibility**) — this prevents idle thieves
-from narrowing a victim's `hi` into an empty gap above its cursor faster than the
-page returns, which caused a livelock at default concurrency on real multi-page buckets.
+### 6. Detect completion
 
-**Idle backoff.** When steal attempts repeatedly find nothing splittable,
-idle workers back off exponentially (`IdleStealBackoff`, 5→50ms) rather than
-re-probing every 5ms. This bounds API calls on deep/serial-ish buckets where adding
-concurrency adds only probe overhead.
+An `outstanding` count covers every uncompleted range. A split adds its child within the
+same durable transition that narrows the parent; completion decrements only after the node
+state is durable. The scan ends at `outstanding == 0`, not merely an empty ready queue.
 
-**Quiescence.** Termination is signaled by `outstanding == 0`, not by an empty ready
-queue (a worker may be mid-page and about to spawn a child or complete).
+The pipeline then drains, writers finalize, sorted output merges if requested, manifests and
+reports publish, and the run records its terminal phase and exit classification.
 
-Full algorithm, `byteMidpoint` pseudocode, correctness proof, cost analysis, and
-edge-case checklist: see [`docs/internals/algorithms.md`](algorithms.md).
+## Two concurrency shapes
 
----
+The listing engine and outer pipeline intentionally use different structures:
 
-## Checkpoint and resume
+- The engine is a fixed work-stealing pool over a mutable worklist. Tree-shaped task joins
+  would risk holding permits while waiting for children and would make thread count scale
+  with split width.
+- The outer pipeline is a small fixed set of sibling stages with coordinated cancellation.
+  It uses the repository's `Scope` helper over virtual threads because the shipped JDK 25
+  artifact does not require preview features.
 
-The checkpoint store (`CheckpointStore` → `SqliteCheckpointStore`) doubles as the
-worklist. Each `listing_node` row is one unit of work: `PENDING → IN_PROGRESS →
-COMPLETED`. All checkpoint writes funnel through a **single writer thread** (SQLite
-WAL is single-writer) that batches commits for throughput.
+All SQLite mutations pass through one writer thread. Parquet encode/write concurrency is a
+separate pool of 2–4 writers, so object-store concurrency does not multiply file writers.
 
-Key properties:
+## Checkpoint and publication boundaries
 
-- **Commit-before-emit (I1).** `commitPage` advances `cursor` and sets `status` in one
-  transaction, and `WorkStealingScan` awaits that commit's durability *before* it runs
-  the filters and pushes the page to the channel. The checkpoint therefore never
-  reflects a page that was not durably committed — but the window has a deliberate
-  cost in the other direction: a stop between the commit and the emit leaves a page
-  that was **committed and never emitted**. Stdout and FILE-kind text have no public
-  resume path, so that page can simply be absent from their one-shot output — the
-  **at-most-once** behavior described in [`contracts.md`](contracts.md) §5. Managed
-  directory-dataset Parquet recovery instead resumes from `durable_cursor`, which lags
-  `cursor`, so the tail is re-listed and the non-finalized part discarded
-  (**exactly-once durable dataset**, I6 below).
+| Boundary | Durable fact |
+| --- | --- |
+| `commitPage` acknowledged | Range cursor/status transaction committed. |
+| `splitNode` acknowledged | Parent bound and child insertion committed together under CAS. |
+| Parquet part finalized | Footer fsynced, part recorded, covered node cursors may advance durably. |
+| Manifest replaced | Readers can discover the complete set of finalized parts. |
+| Sorted publish completes | Final ordered parts and metadata replace the staging result. |
 
-- **Cursor = last committed key.** The ordinary checkpoint reload primitive sets
-  `IN_PROGRESS → PENDING` while preserving `cursor` (I5), so a node would re-list
-  via `start_after=cursor`. The shipped CLI exposes resume only for managed
-  directory-dataset Parquet, whose recovery resets to `durable_cursor` as described
-  above. No opaque continuation token is stored for S3 range nodes.
+A crash between boundaries may repeat work but must not break the keyspace partition or
+duplicate a row in the published managed dataset. The recovery procedure and per-sink
+qualifications are in [contracts §5](contracts.md#5-resume-args_hash-and-per-sink-guarantees).
 
-- **Split transaction (I4).** `splitNode` is its own transaction, guarded by
-  `cursor < pivot AND range_end IS oldHi AND status <> COMPLETED`. This rejects a
-  stale second-thief split and a victim that finished via an empty page (which
-  completes without advancing cursor). A crash mid-split leaves the transaction
-  atomically absent (the victim keeps the full range) or committed (child appears);
-  the range set remains a valid partition either way.
+## Adaptive concurrency
 
-- **Parquet exactly-once (I6).** Part files are tracked in `part_file`. A finalized
-  part (footer fsynced) is never discarded. On resume non-finalized parts are
-  discarded and each node re-lists from its `durable_cursor` — the highest key whose
-  pages are all in finalized parts — so no finalized row is lost or duplicated.
+`ConcurrencyGauge` maintains the live request target. It begins at a small floor, increases
+after clean windows, and multiplicatively decreases on service throttling. Workers above a
+reduced target finish their current page before parking. The configured `--request-rate`
+cap is independent and applies before requests are issued.
 
-- **`args_hash`.** The run's scope identity (store scheme + endpoint + bucket +
-  prefix + recursive flag + `--all-versions` + hints) is hashed into `run_meta`.
-  Resuming against a mismatched hash is refused; `--restart` discards the old run.
-  Output format and filters are excluded from the hash (they don't change what is
-  listed).
+Adaptive concurrency is a safety control, not the source of parallelism. Seed and split
+supply determine whether useful work exists; AIMD only limits how much of that work may call
+the store at once. See [algorithms §5](algorithms.md#5-adaptive-concurrency-aimd).
 
----
+## Change map
 
-## Adaptive concurrency (AIMD)
+| If you change… | Also inspect… |
+| --- | --- |
+| range boundaries, cursor order, or split transaction | invariants I1–I6, PROP/RES tests, SQLite schema |
+| a seed/pivot/gate/backoff path | policy/executor seam, engagement reason, trace event, simulator |
+| output buffering or sorted merge | I11–I12, heap/FD/disk gates, resume and publish tests |
+| metrics or summary fields | public metrics page, internal registry, drift guard, schema compatibility |
+| CLI options affecting run identity | `ArgsHash`, resume classes, generated help, configuration docs |
 
-The live concurrency target `T` (the number of active worker permits in
-`ConcurrencyGauge`) is adjusted dynamically:
-
-- **Decrease on stress:** a 503 `SlowDown` / `ServiceUnavailable` or a `Retry-After`
-  triggers `T := max(1, floor(0.7 × T))`. Workers above the new `T` finish their
-  current page then park. Per-call retries are swath's own bounded, jittered exponential
-  backoff — SDK-internal retry is disabled (`maxAttempts=1`, see [`contracts.md`](contracts.md) §7) so the AIMD
-  gauge sees every real 503/5xx immediately; swath's AIMD on `T` is the only adaptive control
-  loop (two loops reacting to the same 503 would over-correct).
-- **Increase on health:** after a clean window (no throttles for ~10 s),
-  `T := min(Tmax, T + 1)`, and one parked stealer is unparked.
-- **Floor `T ≥ 1`** — the run always makes forward progress.
-
-On a healthy endpoint the decrease loop never triggers: `T` ramps from a slow-start floor
-(`min(4, Tmax)`) up to `Tmax` and stays there. AIMD is a **safety brake** for throttling
-storms — degrade gracefully, recover, never collapse — not a throughput lever; a clean run's
-speed comes from the engine, not from adaptivity.
-
-See [`docs/internals/algorithms.md`](algorithms.md) §5 for the full AIMD spec.
-
----
-
-## Key design decisions
-
-| Decision | Rationale |
-|---|---|
-| Project/binary name is `swath`; package root is `io.varve.swath` | The name describes the parallel-swath / no-gap-no-overlap technique; multi-store support is design intent, not v0.1 product support |
-| One engine: `WorkStealingScan` replaces the four-strategy router | Eliminates mis-routing; demand-driven stealing handles varied key distributions within the ordered general-purpose S3 support envelope; no overlap unlike S3P's 2× reads |
-| The worklist *is* the checkpoint table; fixed worker pool; termination by quiescence | Eliminates the semaphore-permit deadlock class; makes resume nearly free; single-writer thread scales |
-| JDK 25 LTS; no `--enable-preview`; in-house `Scope` helper over virtual threads instead of `StructuredTaskScope` (still preview) | `ScopedValue` and non-pinning `synchronized` are final in 25; uber-jar must run without flags |
-| Internal `StoreCapabilities` / `PageFetcher` seams and `PREFIX` node kind; other stores are post-v0.1 | Records the design intent without promising source/binary compatibility or claiming that an opaque-token store can use the range engine unchanged |
-
----
-
-## Load-bearing invariants
-
-The following invariants have named tests (see
-[`docs/ops/dev/TESTING.md`](../ops/dev/TESTING.md)) and must not be violated:
-
-| # | Invariant | Test |
-|---|---|---|
-| I1 | Commit-before-emit: checkpoint commits before the page is pushed downstream | RES-1 |
-| I2 | The range set always partitions the keyspace: pairwise-disjoint, union = full scope | PROP-1 |
-| I3 | Boundary key belongs to the LEFT interval (`(A,B]`: emit `k<=B`; right worker `start_after=B`) | PROP-1 |
-| I4 | A split is its own atomic transaction guarded by `cursor < pivot AND range_end IS oldHi AND status <> COMPLETED` | RES-3 |
-| I5 | Ordinary resume preserves `cursor`; Parquet resets it to `COALESCE(durable_cursor, range_start)` and reopens any not-output-complete node | RES-2 |
-| I6 | A part file's rows are durable iff it is `finalized` (footer fsynced); a node is output-complete iff `COMPLETED` and `durable_cursor == cursor` | RES-4 |
-| I7 | Worker permit / slot is never held while waiting on child work (worklist model eliminates this deadlock class) | CONC-2 |
-| I8 | Drop the downstream receiver before joining the producer; `shutdownNow()` before `close()` | CONC-1 |
-| I9 | Stuck continuation token / truncated-without-token → error, never an infinite loop | INT-3 |
-| I10 | Keys are byte-exact end-to-end; never `String.compareTo` (UTF-16 ≠ S3 byte order for supplementary code points ≥ U+10000 — the surrogate pairs reorder) | UNIT-1 |
-| I11 | Active row/page/merge buffers are functions of configured knobs, not object count. Finalized-part metadata is `O(parts)` and sorted staging metadata is `O(segments)`; these scale terms are outside the active-buffer bound. | PERF-2 |
-
-Full invariant definitions and the `args_hash` / per-sink delivery guarantees:
-[`contracts.md`](contracts.md) §0 and §5.
-
----
-
-## Implementation status
-
-The core listing path is built and green: the pipeline skeleton, the core types and
-`byteMidpoint`, `S3PageFetcher` and `runRange`, the output formatters, the filter
-chain, the Parquet writer pool, the checkpoint store and resume, and the
-`WorkStealingScan` engine all ship.
-
-Seeding is partial. The shallow `delimiter=/` seed pass (`SeedStep`, `SeedMode`,
-`--tune seed.mode=shallow|none|hints`) and the demand-side `delimiter=/` structure
-probe in `Thief` (median-common-prefix split) ship. The `--hints` file seed is not yet
-implemented (`--tune seed.mode=hints` reports "not yet implemented"). Versioned listing,
-dataset inspection, diff mode, and the live TTY progress display are not yet wired; see
-[`ROADMAP.md`](../../ROADMAP.md).
-
-Features deliberately deferred to v1.1: `-o s3://` output, `--resume-output` /
-`output_journal`, `--expr` JEXL filter, `--metrics-port` Prometheus endpoint. `--sort`
-(external merge sort) ships today (`--format parquet` only, opt-in); only its sorted
-**text**-sink path and the default-on flip remain deferred.
+The concise invariant list in this page is intentionally replaced by one canonical source:
+[contracts §0](contracts.md#0-load-bearing-invariants).

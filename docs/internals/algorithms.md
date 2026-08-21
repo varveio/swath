@@ -1413,7 +1413,7 @@ component map for the package split.
     (`223ms + 55ms per CommonPrefix`) took **~2m48s**, during which the run
     emits no objects at all. This is why the live progress display carries a
     `seeding` phase with a probe count and the age of the last completed probe
-    (`docs/usage.md` §Progress): every listing-shaped counter reads zero for
+    (`docs/metrics-and-observability.md` §4): every listing-shaped counter reads zero for
     that whole span, so a healthy seed and a wedged one are otherwise
     indistinguishable. Nothing here parallelizes the descent today; the probes
     are independent and could be batched, at the cost of the frontier's

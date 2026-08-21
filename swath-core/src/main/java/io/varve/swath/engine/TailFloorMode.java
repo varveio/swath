@@ -22,7 +22,7 @@ import java.util.Locale;
  *
  * <p>One exception to that framing, since 0.2.0: {@link #CURRENT} paired with {@code
  * rate_anchored_sensing=off} is the <b>documented, supported rollback</b> to pre-0.2.0 engine
- * behaviour ({@code docs/usage.md}). Every other mode here remains measurement-only.
+ * behaviour ({@code docs/configuration.md}). Every other mode here remains measurement-only.
  */
 public enum TailFloorMode {
 

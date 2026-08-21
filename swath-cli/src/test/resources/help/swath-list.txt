@@ -121,7 +121,7 @@ Diagnostics:
                                auto, always, or never (default: auto).
       --engine-toggle=NAME=VALUE
                              Set a diagnostic engine ablation (repeatable; see
-                               docs/usage.md).
+                               docs/configuration.md).
       --metrics-endpoint=URL Export OTLP metrics to URL (overrides
                                SWATH_OTLP_ENDPOINT).
       --no-metrics           Disable metrics export, including environment

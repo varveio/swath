@@ -135,14 +135,14 @@ class TuneOptionsTest {
 
     @Test
     void tuningDocumentationKeyAndRangeTableMatchesTheRegistry() throws Exception {
-        Path doc = Path.of("..", "docs", "usage.md");
+        Path doc = Path.of("..", "docs", "configuration.md");
         if (!Files.exists(doc)) {
-            doc = Path.of("docs", "usage.md");
+            doc = Path.of("docs", "configuration.md");
         }
         Map<String, String> documented = new LinkedHashMap<>();
         boolean inTuneTable = false;
         for (String line : Files.readAllLines(doc)) {
-            if (line.startsWith("#### Tuning (`--tune`)")) {
+            if (line.startsWith("## Tuning (`--tune`)")) {
                 inTuneTable = true;
                 continue;
             }

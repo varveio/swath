@@ -2,191 +2,170 @@
 
 # swath
 
-**Lists very large S3 buckets in parallel, working out how to split the keyspace
-while it lists.**
+**Parallel, resumable S3 listing for very large buckets.**
 
-![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)
+`swath` is an open-source CLI for finding out **what is in a very large S3 bucket
+right now**. It turns a live `ListObjectsV2` scan into a stream or a query-ready
+Parquet inventory, filling the gap between a simple `aws s3 ls` or SDK loop and a
+precomputed S3 Inventory.
 
-**Real 39.6-million-object run:** interrupt the listing, resume it from checkpoint,
-then query the Parquet inventory with DuckDB.
+- **Parallel without pre-partitioning.** swath learns the bucket's key distribution while
+  it lists, then moves work from dense ranges to idle workers. Flat keys, deep prefix
+  trees, and badly skewed layouts do not need different partitioning scripts.
+- **Resume instead of restarting.** Managed Parquet output checkpoints progress and
+  resumes after Ctrl+C or a crash, while keeping active memory buffers bounded.
+- **Analyze without downloading objects.** swath reads metadata only. Stream a table,
+  TSV, or JSONL, or query the Parquet result directly with tools such as DuckDB.
 
-S3 lists a bucket one page at a time: 1000 keys per request, strictly in
-lexicographic order. You can start anywhere by handing it a `start-after` token,
-and that token doesn't have to be a key that exists — but nothing tells you how
-many keys sit between two tokens. So parallelism is a guessing problem. Splitting
-the keyspace is free; knowing whether the split was balanced costs a listing.
+Use swath when a fresh S3 Inventory or S3 Metadata table is unavailable, stale, or
+controlled by somebody else, and a serial listing is too slow.
 
-swath guesses disjoint ranges blind, starts workers on the guesses, and corrects
-them as real keys come back — stealing work across a fixed pool when a range turns
-out denser or emptier than the guess assumed. No prefix hints, no pre-pass, no
-prior knowledge of how the keys are laid out. The name fits the method: the
-keyspace is tiled into adjacent ranges and swept in parallel, like mown swaths.
+**Want to understand how swath works? Read the
+[visual field guide](https://swath.varve.io/field-guide/).** It explains why S3 listing
+is difficult to parallelize, then walks through swath's range model, safe splitting,
+work stealing, checkpoints, and the cases where swath is not the right tool.
 
-To see the mechanism rather than read it, the
-[visual field guide](https://swath.varve.io/field-guide/) walks the range
-algebra, the split ladder, and a recorded 39.7-million-object listing where one
-guess secretly held 68% of the bucket — with the
-[generated trace report](https://swath.varve.io/runs/noaa-gestofs-pds/) of that
-run to interrogate. Both live at [swath.varve.io](https://swath.varve.io/).
+[![Swath demo: interrupt and resume a 39.7-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
 
-swath is built and maintained by [Varve](https://varve.io/) — we catalog the
-datasets inside object storage from listing structure alone, never object
-contents. swath is the listing layer underneath it, and we wanted it inspectable
-by the people who would have to trust it.
+*A real 39.7-million-object run: one of 513 initial range guesses held 68% of the
+bucket. swath discovered the imbalance while listing and split the busy ranges so idle
+workers could help. [Explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
+or [see the visual field guide](https://swath.varve.io/field-guide/).*
 
-It is a **Java 25** CLI for general-purpose S3 buckets (directory buckets are not
-supported), distributed as a self-contained jar and an installable launcher.
+<a id="quickstart"></a>
 
-**Status: pre-1.0.** The `list` and `resume` commands are built and tested,
-including globally sorted Parquet output and crash-safe checkpoint/resume. Still
-planned: the `inspect` and `diff` subcommands, versioned-bucket listing, and
-object stores beyond S3 (there are internal design seams, but no supported
-backend SPI yet) — see
-[`ROADMAP.md`](ROADMAP.md). Flags and output schemas may still change before 1.0.
+## Try it
 
-## Quickstart
-
-Tagged releases ship a signed multi-arch Docker image, a self-contained
-uber-jar, and application-distribution archives — grab the newest from the
-[releases page](https://github.com/varveio/swath/releases). See
-[`docs/install.md`](docs/install.md) for every install path, download
-verification, and a fuller quickstart.
+This is the exact listing shown in the demo. It scans the entire public NOAA bucket—
+39.7 million objects in the recorded run—and saves a resumable Parquet dataset:
 
 ```bash
-docker run --rm -v "$PWD/out:/out" ghcr.io/varveio/swath:latest \
-  list s3://my-bucket/prefix/ --no-sign-request --format parquet -o /out/data
+mkdir -p out
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/ \
+  --no-sign-request --region us-east-1 \
+  --concurrency 128 \
+  --format parquet -o /out/noaa-gestofs-pds
 ```
 
-Or from source:
+If the DuckDB CLI is installed, query the result directly—there is no conversion or
+compaction step:
+
+```bash
+duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
+```
+
+If the listing is interrupted, the output directory is the run handle:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
+```
+
+The recorded run made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around
+1.7 GB RSS. Read the [request-cost guidance](docs/operating.md#request-cost) before
+reproducing it.
+
+For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
+credentials into the container. Docker does not automatically inherit a host AWS profile;
+see [Credentials in Docker](docs/operating.md#credentials-in-docker) for environment,
+shared-profile, and workload-role paths.
+
+The [getting-started guide](docs/getting-started.md) walks through the same flow with
+expected files, a Docker-only DuckDB option, private credentials, resume behavior, and
+troubleshooting routes.
+
+Building from source requires JDK 25:
 
 ```bash
 ./gradlew :swath-cli:installDist
 export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
-swath list s3://my-bucket/prefix/ --no-sign-request --format parquet -o out/
+swath list s3://noaa-gestofs-pds/ \
+  --no-sign-request --region us-east-1 \
+  --concurrency 128 \
+  --format parquet -o out/noaa-gestofs-pds
+swath resume out/noaa-gestofs-pds
 ```
 
-Every object becomes one row. The columns you will use most:
+## How it works
+
+Imagine that one worker owns the key range `(A, Z]`. It lists forward from `A`. When
+another worker becomes idle, swath chooses a pivot such as `M` and atomically changes
+the ownership to two adjacent ranges:
 
 ```text
-key              BINARY       raw key bytes, byte-exact, never UTF-8 coerced
-size             INT64        object size in bytes
-last_modified    TIMESTAMP    micros, UTC
-etag             UTF8         quotes stripped, multipart ETags kept verbatim
-storage_class    UTF8         STANDARD, GLACIER, ...
-row_type         UTF8         OBJECT | COMMON_PREFIX (DELETE_MARKER reserved)
+before:  worker 1  (A ------------------------------- Z]
+after:   worker 1  (A ------------- M]  worker 2  (M - Z]
 ```
 
-Owner, checksum, and versioning columns are always present too, reserved for
-versioned listing rather than populated by it. The full schema is in
-[`docs/usage.md`](docs/usage.md).
+The ranges touch but never overlap, and the boundary belongs to exactly one side. If
+the upper range is sparse it finishes quickly and steals again; if it is dense it keeps
+a worker busy. Real keys and observed density improve later pivots, so a poor initial
+guess does not condemn the rest of the run.
 
-Resume an interrupted run from its output directory:
+Checkpointing follows the same ownership model. A page's cursor is committed before
+its rows enter the output pipeline. A finalized Parquet part is durable; after a crash,
+swath may re-list an unfinished tail but does not rewrite finalized parts. The exact
+range, split, and resume contracts are documented under
+[internals](docs/internals/overview.md).
 
-```bash
-swath resume out/
-```
+## When to use it
+
+- Large general-purpose S3 buckets with unknown, skewed, flat, or deeply nested key
+  distributions.
+- Listings where S3 Inventory or S3 Metadata is unavailable, stale, or controlled by
+  somebody else.
+- Streaming with bounded active buffers into Parquet, JSONL, TSV, or a terminal table.
+- Long-running inventories that need crash-safe checkpoint and resume.
+- Producing globally sorted Parquet when downstream readers require key order (opt-in;
+  unsorted output is the faster default).
+
+swath reads listings only. It never fetches object contents. Filters are applied after
+listing, so they reduce output size but not LIST requests.
 
 ## When not to use it
 
-swath reads listings, never objects. It is **LIST-only** by design, and it exists
-for buckets where a precomputed listing (AWS S3 Inventory or S3 Metadata tables)
-isn't an option — not enabled, too stale, or on a bucket you don't own. If you
-already have a fresh Inventory or Metadata table you can query, use that: reading a
-precomputed listing is strictly cheaper than any live `ListObjectsV2` lister, swath
-included, and swath will tell you so rather than pretend otherwise.
+If a fresh S3 Inventory or S3 Metadata table already exists, query that instead. A
+precomputed inventory is cheaper than any live `ListObjectsV2` scan. For small buckets,
+the AWS CLI or an SDK loop may also be simpler.
 
-## Behaviour and limits
+Every run costs roughly one LIST request per 1,000 returned keys, plus probes, retries,
+and any unfinished tail re-listed after interruption. swath reports its actual request
+count; see [operating swath](docs/operating.md) before pointing it at a very large or
+requester-pays bucket.
 
-- **Handles varied general-purpose S3 key distributions** — deep prefix trees,
-  flat random keys, heavy skew — with no manual partitioning step, discovering
-  the partitioning online as it lists. S3 directory buckets are not supported:
-  swath refuses their `--x-s3` naming form before the first LIST request.
-- **Is designed for very large listings** without accumulating object rows in
-  heap. Active pipeline buffers are configuration-bounded; Parquet output also
-  retains metadata proportional to finalized part count, and `--sort` retains
-  metadata proportional to staging-segment count.
-- **Published scale evidence is still thin.** The CI gate pins heap behaviour at
-  100,000 keys — a regression guard, not a scale measurement. Larger runs are in
-  progress; their figures, and a throughput number, will land in
-  [`docs/performance.md`](docs/performance.md).
-- **Costs one LIST request per 1000 keys.** A billion-key bucket is roughly 1M
-  requests — about $5 at a $0.005-per-1000-requests reference rate — before probe
-  and retry overhead, and before egress if you run it outside the bucket's region.
-  Verify current pricing for your region; every run reports its actual
-  `cost.api_calls`. See [`docs/operating.md`](docs/operating.md).
-- **Resumes managed Parquet directory datasets** after Ctrl+C or a crash.
-  Finalized parts stay durable; swath discards an unfinalized tail and re-lists
-  it from `durable_cursor`. Stdout and FILE-kind destinations are one-shot and
-  non-resumable; commit-before-emit means interrupted text output may omit rows.
-- **Keeps keys byte-exact** end to end, and the range set always partitions the
-  keyspace: no gaps or overlap between concurrent workers.
-- **Adapts to backpressure** — a single controller lowers concurrency under
-  sustained S3 throttling and restores it as conditions clear, a safety brake for
-  hostile endpoints rather than a throughput knob.
-- **Writes Parquet, JSONL, TSV, or an aligned table**, with optional globally
-  sorted Parquet output.
+## Status and limits
 
-## Replay server
+swath is **pre-1.0**. The `list` and `resume` commands, managed Parquet datasets,
+checkpoint/resume, and opt-in global sorting are implemented and tested. Flags and
+schemas may still change before 1.0.
 
-`swath-replay-server` serves a captured swath listing back as an S3-compatible
-`ListObjectsV2` endpoint. Point a lister at it and you get a deterministic,
-zero-cost bucket whose key distribution you already know — including the
-pathological shapes that are expensive to find and slow to list. It can inject
-per-request latency keyed on the shape of the request, so a bucket that only
-misbehaves under a particular latency profile can be reproduced on a laptop.
+Current scope:
 
-That makes it useful beyond swath itself: reproducing someone's bucket shape
-without their credentials or their bill, testing your own tooling against a
-listing that would otherwise cost money to enumerate every run, and pinning
-listing behaviour in regression tests.
+- general-purpose S3 buckets with globally ordered listings and `StartAfter`;
+- object listing only—version history and delete markers are not listed yet;
+- local output; and
+- JDK 25, with no preview features in shipped artifacts.
 
-It also works as a **listing cache**. A listing you have already paid to produce
-can be served back through the same API your tools already speak: list the bucket
-once with swath, then point everything that would otherwise re-list it at the
-replay server instead — local speed, no per-request S3 charge, and no load on the
-real bucket. Two things to weigh first. It serves a **point-in-time snapshot**,
-not live bucket state, so it fits workloads that can tolerate a listing as fresh
-as its last capture. And it has **no authentication**, so it belongs inside a
-trust boundary you already control. The operational surface is still being
-smoothed — see the scope note below.
-
-Scope: path-style `ListObjectsV2` over an existing listing fixture — no object
-data, no authentication, not a general S3 emulator. It is built by this repo but
-is not part of the swath CLI distribution. See
-[`docs/swath-replay-server.md`](docs/swath-replay-server.md).
-
-## Comparisons
-
-The head-to-head benchmarks and tool-by-tool mechanism notes belong to a separate
-repo, the [S3-listing comparison study](https://github.com/varveio/s3-listing-study),
-which Varve also maintains. Its methodology and tool roster were committed before
-any comparative runs began, so the results can be checked against a plan that
-predates them. Those runs have not started yet.
-
-## Have a bucket that breaks it
-
-That is the interesting case. Open an issue with the shape — key distribution,
-rough object count, what went wrong — or mail oss@varve.io if the shape isn't
-something you can post publicly. Bucket names and keys aren't needed; the
-distribution is.
+S3 directory buckets are rejected because their listing contract does not provide the
+ordering this engine requires. See the [roadmap](ROADMAP.md) for planned work.
 
 ## Documentation
 
-- **Use it** — [`docs/install.md`](docs/install.md) (install & quickstart),
-  [`docs/usage.md`](docs/usage.md) (full flag reference),
-  [`docs/operating.md`](docs/operating.md) (credentials, minimal IAM, cost),
-  [`docs/configuration.md`](docs/configuration.md) (every flag and knob with its
-  default), [`docs/performance.md`](docs/performance.md), and
-  [`docs/faq.md`](docs/faq.md).
-- **Understand it** — [`docs/internals/overview.md`](docs/internals/overview.md)
-  is the entry point for how swath works: the architecture, the listing
-  algorithm, the output contracts, and engine walkthroughs. You don't need any of
-  it to use swath.
-
-Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md) · Security:
-[`SECURITY.md`](SECURITY.md).
+- **Start:** [getting started](docs/getting-started.md) and
+  [installation](docs/install.md).
+- **Use and operate:** [common workflows](docs/usage.md),
+  [credentials and cost](docs/operating.md), [configuration](docs/configuration.md),
+  [performance](docs/performance.md), and [troubleshooting](docs/faq.md).
+- **Understand:** read the [visual field guide](https://swath.varve.io/field-guide/) first,
+  then continue to the repository's [internals overview](docs/internals/overview.md),
+  [architecture](docs/internals/architecture.md), [algorithms](docs/internals/algorithms.md),
+  and [correctness contracts](docs/internals/contracts.md).
+- **Contribute:** [contribution guide](CONTRIBUTING.md) and
+  [testing guide](docs/ops/dev/TESTING.md).
 
 ## License
 
-[Apache-2.0](LICENSE). Bundled third-party dependencies and their licenses are
-listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+[Apache-2.0](LICENSE). Bundled third-party dependencies and their licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

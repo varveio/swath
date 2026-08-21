@@ -358,7 +358,8 @@ final class JsonRunSummaryWriterTest {
      * Sort observability polish: {@code effective_fan_in} — the realized merge pass width
      * ({@code SortConfig#effectiveFanIn()}) — must be echoed in the {@code sort} block so a run is
      * self-describing about which knob (raw {@code fan-in} or the merge-budget bound) bound,
-     * without the reader re-deriving it from {@code segments}/{@code passes} (docs/usage.md).
+     * without the reader re-deriving it from {@code segments}/{@code passes}
+     * (docs/metrics-and-observability.md §3).
      */
     @Test
     void sortBlockEchoesEffectiveFanIn(@TempDir Path dir) throws Exception {

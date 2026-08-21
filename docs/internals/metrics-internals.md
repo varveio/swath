@@ -342,6 +342,8 @@ a shape vector that covers only the listed span of a timeboxed/interrupted run.
 
 ---
 
+<a id="5-instrumentation-discipline--post-hoc-classification-why-swath-emits-so-much"></a>
+
 ## 5. Instrumentation discipline & post-hoc classification (why swath emits so much)
 
 **Why.** swath runs **one** engine (`WorkStealingScan`) across varied supported
@@ -567,7 +569,7 @@ taxonomy so the signal set stays comparable:
   network health vs treat as a transient S3-side incident).
 
   **`--engine-toggle` ablation marks.** `swath` exposes a diagnostic-tier `--engine-toggle
-  NAME=VALUE` namespace (`docs/usage.md` §Diagnostic-tier ablation; NOT a supported configuration —
+  NAME=VALUE` namespace (`docs/configuration.md` §Diagnostic engine toggles; NOT a supported configuration —
   the defaults are) for per-mechanism A/B measurement of the engine. Turning a mechanism off mostly
   proves itself *inherently* — its own engagement counters above go quiet (e.g. `structure_probes=off`
   silences `swath.probe.structure_fetches` and every
@@ -904,6 +906,8 @@ row here until this guard was added). Run it locally with
 undocumented-counter / ghost-row smoke test.
 
 ---
+
+<a id="7-run-trace-format"></a>
 
 ## 7. Run trace format (`--trace`)
 

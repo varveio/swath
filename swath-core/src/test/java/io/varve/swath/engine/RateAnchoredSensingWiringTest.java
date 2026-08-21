@@ -127,7 +127,7 @@ final class RateAnchoredSensingWiringTest {
     }
 
     /**
-     * The documented rollback, exercised end-to-end as the pair {@code docs/usage.md} actually
+     * The documented rollback, exercised end-to-end as the pair {@code docs/configuration.md} actually
      * tells a user to pass: {@code rate_anchored_sensing=off} AND {@code tail_floor=current}
      * together, parsed from those strings and driven through a real bounded scan.
      *

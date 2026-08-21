@@ -98,7 +98,7 @@ final class ListOptionGroups {
 
         @Resume(ResumeClass.FREE)
         @Option(names = "--engine-toggle", paramLabel = "NAME=VALUE",
-                description = "Set a diagnostic engine ablation (repeatable; see docs/usage.md).")
+                description = "Set a diagnostic engine ablation (repeatable; see docs/configuration.md).")
         void engineToggle(String[] values) {
             engine.engineToggle = new ArrayList<>(List.of(values));
         }

@@ -243,7 +243,7 @@ public final class OwnerSplitGovernor implements OwnerSplitPolicy {
         // Gate on BOTH toggles: the lift is a density-reflection application — the SAME
         // StealMath.extrapolate the thief's reflection and the clamp above use, into the SAME
         // reflected-pivot family — so `reflect=off` disables the thief's reflection, this method's
-        // clamp, and the lift together (full reflection ablation, matching docs/usage.md's
+        // clamp, and the lift together (full reflection ablation, matching docs/configuration.md's
         // "reflect=off restores exact pre-reflection placement"); `reflect_lift=off` alone disables
         // only this lift.
         if (toggles.reflect() && toggles.reflectLift()) {

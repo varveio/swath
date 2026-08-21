@@ -8,6 +8,7 @@ package io.varve.swath.output.parquet;
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.batch;
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.parts;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +18,7 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.List;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
@@ -78,13 +80,17 @@ class ParquetWriterPoolTest {
 
     @Test
     void abortKeepsRotatedPartsButDropsTheOpenTail(@TempDir Path dir) throws Exception {
-        // Small target → some parts rotate (finalized + manifest); the un-rotated tail is dropped.
-        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, 64 * 1024, 64);
-        long submitted = 0;
-        for (int p = 0; p < 30; p++) {
-            pool.submit(batch(0, p, p * 1000, p * 1000 + 1000));
-            submitted += 1000;
-        }
+        // Make the durable part and open tail explicit so abort cannot race the lane before the
+        // first rotation or after every submitted row has already rotated.
+        var config = ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(1000);
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1,
+                Long.MAX_VALUE, 8, config);
+        pool.submit(batch(0, 0, 0, 1000));
+        await().atMost(Duration.ofSeconds(5)).until(() -> pool.committedPartCount() == 1);
+
+        pool.submit(batch(0, 1, 1000, 1001));
+        await().atMost(Duration.ofSeconds(5)).until(() ->
+                Files.exists(DatasetLayout.of(dir).dataFile("part-w0-00001.parquet")));
         pool.abort();
 
         assertThat(parts(dir)).isNotEmpty();                      // rotated parts survive
@@ -94,7 +100,7 @@ class ParquetWriterPoolTest {
             durableRows += ParquetReads.keys(part).size();
         }
         // Only finalized parts are durable; the open tail was discarded ⇒ strictly fewer rows.
-        assertThat(durableRows).isLessThan(submitted).isGreaterThan(0);
+        assertThat(durableRows).isLessThan(1001).isGreaterThan(0);
     }
 
     @Test

@@ -346,7 +346,7 @@ thief, so no-gap/no-overlap holds whether the split was owner- or thief-initiate
 ## 5. Crash mid-split, and resume
 
 **Shape.** Not a bucket shape — a fault. A `SIGKILL` (or a crash, or a hard
-power-loss) lands in the middle of a managed directory-dataset scan, and the next
+power-loss) lands in the middle of a managed Parquet dataset scan, and the next
 `swath resume` must pick the listing up from it. Two guarantees are at stake here, and they are **not** the same
 guarantee. **Split/resume integrity** — the range set still tiles the keyspace, no
 gap and no overlap, every key owned by exactly one node, and each node resumes only
@@ -405,7 +405,7 @@ The shipped CLI behavior now diverges by destination:
   `swath resume` cannot reload `q ∈ {c0, c}`. Commit-before-emit still matters:
   if `q=c` committed before the process stopped but emission did not happen, the
   text output can omit that page — its promised **at-most-once** behavior.
-- **Managed directory-dataset Parquet:** `swath resume <dir>` clears the lease,
+- **Managed Parquet dataset:** `swath resume <dir>` clears the lease,
   bumps the generation, reopens the node, resets its listing cursor to
   `COALESCE(durable_cursor, range_start)`, and discards every unfinalized part.
   `durable_cursor` advances only when a part is finalized, so it can lag both
