@@ -93,9 +93,11 @@ public final class ReplayServer implements AutoCloseable {
      */
     public static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 512;
 
-    private ReplayServer(String host, int port, String bucket, ReplayServingFactory.Result fixture,
-                         BiFunction<S3ListRequest, S3ListResult, Duration> latency,
-                         int maxConcurrentRequests) {
+    // Package-private so the wiring test can pass deliberately different backing-pool and outer
+    // admission limits and prove this boundary does not accidentally collapse them again.
+    ReplayServer(String host, int port, String bucket, ReplayServingFactory.Result fixture,
+                 BiFunction<S3ListRequest, S3ListResult, Duration> latency,
+                 int maxConcurrentRequests) {
         this(host, port, bucket, fixture.fixture(), fixture.fixture(), fixture.metrics(),
                 fixture.parquetConnections(), fixture.requestAdmissionLimit(), fixture.resolvedMode(), latency,
                 maxConcurrentRequests);

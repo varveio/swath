@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -565,6 +566,31 @@ class SortedParquetStoreTest {
         assertThat(registry.find("swath.replay.page.read.latency").timer().count()).isEqualTo(1);
     }
 
+    @Test
+    void rangeReadFailureReturnsTheReaderAndBalancesInFlightMetrics(@TempDir Path dir) throws IOException {
+        Fixture fixture = writeSorted(dir, manySmallGroups(), keys(120));
+        ReplayMetrics metrics = new ReplayMetrics(new SimpleMeterRegistry(), ReplayMetrics.SERVING_MODE_SORTED);
+
+        try (SortedParquetStore store = new SortedParquetStore(fixture.files, fixture.index, metrics, 1)) {
+            // Readers and footers are already open. Removing the page bytes now forces a deterministic
+            // IOException after the pooled range reader has been acquired.
+            try (var channel = Files.newByteChannel(
+                    fixture.files.getFirst(), StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                assertThat(channel.size()).isZero();
+            }
+
+            assertThatThrownBy(() -> store.rows(null, true, null, 10, Projection.KEYS_ONLY))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("failed to range-read");
+        }
+
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value()).isEqualTo(1.0);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
+        assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count())
+                .as("a failed post-borrow decode still records and releases its one reader lease")
+                .isEqualTo(1L);
+    }
+
     /**
      * <b>Red case.</b> Production code can no longer build an index like this one — {@code
      * SortedFixtures#loadIndex} now refuses any file with a row group that isn't provably pure {@code
@@ -669,6 +695,10 @@ class SortedParquetStoreTest {
         }
         assertThat(metrics.registry().find("swath.replay.serving.refused")
                 .tag("reason", RowGroupOrderException.ROW_GROUP_DISORDER).counter().count()).isEqualTo(1);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value()).isEqualTo(1.0);
+        assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value())
+                .as("the delimiter reader is returned even when its cursor rejects the fixture")
+                .isZero();
     }
 
     private record Fixture(List<Path> files, List<IndexEntry> index) {

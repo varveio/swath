@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
@@ -94,6 +95,7 @@ public final class SortedRangeReader implements AutoCloseable {
     private final MessageColumnIO columnIoWithoutOwner;
     private final Runnable readerAcquired;
     private final LongConsumer readerReleased;
+    private final LongSupplier nanoClock;
 
     public SortedRangeReader(Path file, int poolSize) throws IOException {
         this(file, poolSize, () -> { }, ignored -> { });
@@ -101,9 +103,15 @@ public final class SortedRangeReader implements AutoCloseable {
 
     public SortedRangeReader(
             Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased) throws IOException {
+        this(file, poolSize, readerAcquired, readerReleased, System::nanoTime);
+    }
+
+    SortedRangeReader(Path file, int poolSize, Runnable readerAcquired, LongConsumer readerReleased,
+                      LongSupplier nanoClock) throws IOException {
         int size = Math.max(1, poolSize);
         this.readerAcquired = Objects.requireNonNull(readerAcquired, "readerAcquired");
         this.readerReleased = Objects.requireNonNull(readerReleased, "readerReleased");
+        this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
         this.owned = new ArrayList<>(size);
         this.readers = new ArrayBlockingQueue<>(size);
         try {
@@ -158,7 +166,7 @@ public final class SortedRangeReader implements AutoCloseable {
         try {
             readerAcquired.run();
             acquisitionRecorded = true;
-            readStartedNanos = System.nanoTime();
+            readStartedNanos = nanoClock.getAsLong();
             reader.setRequestedSchema(schema);
             for (int block = Math.max(0, startRowGroup); block < blocks.size() && out.size() < limit; block++) {
                 ColumnIndexStore indexStore = reader.getColumnIndexStore(block);
@@ -184,7 +192,7 @@ public final class SortedRangeReader implements AutoCloseable {
         } finally {
             try {
                 if (acquisitionRecorded) {
-                    readerReleased.accept(System.nanoTime() - readStartedNanos);
+                    readerReleased.accept(nanoClock.getAsLong() - readStartedNanos);
                 }
             } finally {
                 readers.add(reader);

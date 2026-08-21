@@ -27,10 +27,12 @@ import java.util.concurrent.TimeUnit;
  * token-by-token over real HTTP exactly like a client would (mirroring the loopback pattern in
  * {@code ReplayConformanceComparator}), and reports the §6 latency/throughput corridor numbers —
  * index-load/startup time, page/key counts, wall time, pages/sec, keys/sec, and ms/page measured
- * two independent ways: client-side (this class's own request timing) and server-side (the {@code
- * page.read.latency}/{@code fixture.list.latency} timers already publishing p50/p99, read straight
- * off {@link ReplayMetrics#registry()}). Both are reported and labeled so a corridor check never
- * conflates "what the client observed" with "what the store itself spent".
+ * two independent ways: client-side (this class's own request timing) and server-side. The {@code
+ * fixture.list.latency} timer covers the store request; {@code page.read.latency} samples each
+ * backing-reader lease from immediately after pool admission through decode, so pool wait and
+ * prefetch cache hits are intentionally absent. Both timers publish p50/p99 and are read straight
+ * off {@link ReplayMetrics#registry()}. The results are labeled so a corridor check never conflates
+ * "what the client observed" with either store-request time or post-borrow decode time.
  */
 public final class TokenWalkBenchmark {
 
