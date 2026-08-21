@@ -949,10 +949,12 @@ public final class ListRunner {
                 FinalPartMetadata metadata;
                 if (finalPart.metadata().isPresent()) {
                     metadata = finalPart.metadata().orElseThrow();
+                    metrics.recordStealReason("SORT", "manifest_metadata_trusted");
                 } else {
                     // Compatibility/safety path for carried or third-party final parts without
                     // trustworthy close-gated metadata. Keep the old full validation reads; footer
                     // min/max statistics remain insufficient because Parquet may truncate them.
+                    metrics.recordStealReason("SORT", "manifest_metadata_fallback_scan");
                     long bytes = Files.size(f);
                     long md5Start = System.nanoTime();
                     String md5 = md5HexWithLivenessProgress(f, metrics);

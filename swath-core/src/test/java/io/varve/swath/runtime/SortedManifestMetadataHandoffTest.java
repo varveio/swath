@@ -39,9 +39,10 @@ class SortedManifestMetadataHandoffTest {
 
         // The path deliberately does not exist. Publication can succeed only if the new-part path
         // performs neither Files.size/MD5 nor SortedFileIndex.bounds after durable close.
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ListRunner.writeSortedManifest(root, "bucket", "args", 7,
                 List.of(new FinalPart(absent, Optional.of(metadata))),
-                new RunMetrics(new SimpleMeterRegistry()));
+                new RunMetrics(registry));
 
         JsonNode file = MAPPER.readTree(layout.manifest().toFile()).path("files").get(0);
         assertThat(file.path("key").asText()).isEqualTo("data/part-00001.parquet");
@@ -51,6 +52,8 @@ class SortedManifestMetadataHandoffTest {
         assertThat(file.path("minKey").asText()).isEqualTo("alpha");
         assertThat(file.path("maxKey").asText()).isEqualTo("omega");
         assertThat(Files.exists(layout.success())).isTrue();
+        assertThat(registry.counter("swath.steal_reason", "outcome", "SORT", "reason",
+                "manifest_metadata_trusted").count()).isEqualTo(1);
     }
 
     @Test
@@ -60,10 +63,23 @@ class SortedManifestMetadataHandoffTest {
         Path truncated = layout.dataDir().resolve("part-00001.parquet");
         Files.write(truncated, new byte[] {1, 2, 3, 4});
 
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
         assertThatThrownBy(() -> ListRunner.writeSortedManifest(root, "bucket", "args", 7,
                 List.of(new FinalPart(truncated, Optional.empty())),
-                new RunMetrics(new SimpleMeterRegistry())))
+                new RunMetrics(registry)))
                 .isInstanceOfAny(IOException.class, RuntimeException.class);
         assertThat(Files.exists(layout.success())).isFalse();
+        assertThat(registry.counter("swath.steal_reason", "outcome", "SORT", "reason",
+                "manifest_metadata_fallback_scan").count()).isEqualTo(1);
+    }
+
+    @Test
+    void metadataBoundsPresenceMustMatchRowCount() {
+        assertThatThrownBy(() -> new FinalPartMetadata(0, 1, "md5", "a", "z", 0, 0, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("empty parts must have no bounds");
+        assertThatThrownBy(() -> new FinalPartMetadata(1, 1, "md5", null, null, 0, 0, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("empty parts must have no bounds");
     }
 }
