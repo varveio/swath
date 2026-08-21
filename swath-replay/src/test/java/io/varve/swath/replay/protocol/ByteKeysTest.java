@@ -6,6 +6,7 @@
 package io.varve.swath.replay.protocol;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,12 @@ class ByteKeysTest {
                 .isEqualTo("a/has%20space%2Btilde%7E.txt");
         assertThat(ByteKeys.percentEncode(bytes("test_file(3).png")))
                 .isEqualTo("test_file%283%29.png");
+    }
+
+    @Test
+    void fromHexRejectsNonAsciiCharactersWhoseLowByteLooksLikeHex() {
+        assertThatThrownBy(() -> ByteKeys.fromHex("\u0141A"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
