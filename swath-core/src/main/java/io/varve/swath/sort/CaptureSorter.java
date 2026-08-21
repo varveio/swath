@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * The <b>sort-fixture engine</b> (§0.7): turns a legacy/unsorted
@@ -343,6 +344,11 @@ public final class CaptureSorter {
                 @Override
                 public void close() throws IOException {
                     target.close();
+                }
+
+                @Override
+                public Optional<FinalPartMetadata> finalMetadata() {
+                    return target.finalMetadata();
                 }
             };
         }

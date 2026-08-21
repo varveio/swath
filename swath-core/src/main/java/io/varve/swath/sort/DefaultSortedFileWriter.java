@@ -10,6 +10,7 @@ import io.varve.swath.output.parquet.ParquetSchema;
 import io.varve.swath.output.parquet.PartWriter;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Optional;
 
 /**
  * The default final-file writer: the plain existing high-level {@link PartWriter} path (canonical
@@ -52,5 +53,10 @@ final class DefaultSortedFileWriter implements SortedFileWriter {
     @Override
     public void close() throws IOException {
         delegate.close();
+    }
+
+    @Override
+    public Optional<FinalPartMetadata> finalMetadata() {
+        return Optional.empty();
     }
 }

@@ -386,6 +386,48 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("effective_fan_in").asInt()).isEqualTo(3);
     }
 
+    @Test
+    void sortBlockSeparatesParallelCloseServiceFromFinalizeWallTime(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("summary.json");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        registry.get("swath.sort.merge.latency").timer().record(10, TimeUnit.SECONDS);
+        metrics.recordSortMergeRange(TimeUnit.SECONDS.toNanos(2));
+        metrics.recordSortMergeBoundaries(TimeUnit.SECONDS.toNanos(1));
+        metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
+        metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
+        metrics.recordSortManifestMd5(1234, TimeUnit.MILLISECONDS.toNanos(250));
+        metrics.recordSortManifestBounds(0, 0, 0); // fresh writer: no post-close scan
+        metrics.recordSortPublication(TimeUnit.SECONDS.toNanos(4));
+        metrics.recordSortFinalizeTail(TimeUnit.SECONDS.toNanos(4));
+        metrics.recordSortFinalizeParallelism(4);
+
+        RunSummary snapshot = summary();
+        JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
+        JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
+                new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "abc123hash",
+                        runConfig, List.of()),
+                registry, Instant.now(), () -> snapshot);
+        try {
+            writer.complete(snapshot);
+        } finally {
+            writer.close();
+        }
+
+        JsonNode sort = MAPPER.readTree(path.toFile()).get("sort");
+        assertThat(sort.get("range_merge_ms").asLong()).isEqualTo(2_000);
+        assertThat(sort.get("finalize_ms").asLong()).isEqualTo(4_000);
+        assertThat(sort.get("finalize_close_ms").asLong()).isEqualTo(6_000);
+        assertThat(sort.get("manifest_md5_bytes").asLong()).isEqualTo(1234);
+        assertThat(sort.get("manifest_md5_ms").asLong()).isEqualTo(250);
+        assertThat(sort.get("manifest_bounds_rows").asLong()).isZero();
+        assertThat(sort.get("manifest_bounds_bytes").asLong()).isZero();
+        assertThat(sort.get("manifest_bounds_ms").asLong()).isZero();
+        assertThat(sort.get("local_publication_ms").asLong()).isEqualTo(4_000);
+        assertThat(sort.get("finalize_parallelism").asLong()).isEqualTo(4);
+        assertThat(sort.get("phase_rows_per_sec").asDouble()).isEqualTo(100.0);
+    }
+
     /** The pre-{@code effective_fan_in} {@code sortEnabled} constructor renders the field as JSON null. */
     @Test
     void sortBlockEffectiveFanInIsNullWhenTheCallerOmitsIt(@TempDir Path dir) throws Exception {

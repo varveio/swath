@@ -9,9 +9,11 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
 import org.apache.hadoop.conf.Configuration;
@@ -22,8 +24,8 @@ import org.apache.parquet.schema.MessageType;
 
 /**
  * The final-file writer: the high-level {@link ParquetWriter} path with small, seek-friendly row
- * groups ({@code final-row-group-bytes}) and pages ({@code final-page-rows} — the granularity a
- * bounded key-range read actually pays for) and the static sortedness stamp in the footer key-value
+ * groups ({@code final-row-group-bytes}) and pages ({@code final-page-rows}), plus the static
+ * sortedness stamp in the footer key-value
  * metadata, written via {@link WriteSupport#finalizeWrite()}, the one footer-KV hook the high-level
  * writer supports. {@link #close()} finalizes + fsyncs, matching
  * {@link io.varve.swath.output.parquet.PartWriter}/{@link SegmentParquetSink}'s durability discipline —
@@ -75,10 +77,15 @@ public final class SortedParquetWriter implements SortedFileWriter {
 
     private final Path path;
     private final ParquetWriter<ListEntry> writer;
+    private final ListEntryParquetWriters.DigestingOutputFile output;
     private long rows;
+    private long boundsBytes;
+    private byte[] firstKey;
+    private byte[] lastKey;
     private boolean finalFile;
     private int fileIndex;
     private boolean closed;   // guarded by this (see close())
+    private FinalPartMetadata finalMetadata;
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
         this.path = path;
@@ -96,13 +103,23 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // the range-local stamp the parallel path exists to fix.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
-        this.writer = ListEntryParquetWriters.build(path, writeSupport, config.finalRowGroupBytes(),
-                ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
+        ListEntryParquetWriters.TrackedWriter tracked =
+                ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
+                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
+        this.writer = tracked.writer();
+        this.output = tracked.output();
     }
 
     @Override
     public void write(ListEntry e) throws IOException {
         writer.write(e);
+        byte[] key = e.key().rawUnsafe();
+        if (firstKey == null) {
+            firstKey = key.clone();
+        }
+        // ListEntry/KeyBytes are immutable; retaining the latest reference avoids a per-row copy.
+        lastKey = key;
+        boundsBytes += key.length;
         rows++;
     }
 
@@ -156,8 +173,19 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // Set only AFTER the footer write and fsync succeed. Marking first would make a FAILED close
         // look completed, so a retry would silently skip a file whose footer was never written --
         // publishing a part with no stamp at all.
+        long closeStart = System.nanoTime();
         ListEntryParquetWriters.closeWithDurability(path, writer);
+        long closeNanos = System.nanoTime() - closeStart;
+        finalMetadata = new FinalPartMetadata(rows, output.bytes(), output.md5(),
+                firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),
+                lastKey == null ? null : new String(lastKey, StandardCharsets.UTF_8),
+                closeNanos, output.digestNanos(), boundsBytes);
         closed = true;
+    }
+
+    @Override
+    public synchronized Optional<FinalPartMetadata> finalMetadata() {
+        return Optional.ofNullable(finalMetadata);
     }
 
     /**

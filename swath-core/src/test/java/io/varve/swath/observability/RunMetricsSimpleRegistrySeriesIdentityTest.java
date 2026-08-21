@@ -114,6 +114,9 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.s3.pool.handshakes|{}",
             "COUNTER|swath.s3.socket_closure_recovered|{}",
             "COUNTER|swath.sort.entries|{}",
+            "COUNTER|swath.sort.manifest.bounds.bytes|{}",
+            "COUNTER|swath.sort.manifest.bounds.rows|{}",
+            "COUNTER|swath.sort.manifest.md5.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
@@ -234,6 +237,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "GAUGE|swath.s3.pool.leased|{}",
             "GAUGE|swath.s3.pool.max|{}",
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
+            "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
@@ -270,9 +274,14 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "TIMER|swath.rate_limit.wait|{}",
             "TIMER|swath.run.duration|{}",
             "TIMER|swath.sort.backpressure.wait|{}",
+            "TIMER|swath.sort.finalize.close.latency|{}",
+            "TIMER|swath.sort.finalize.latency|{}",
+            "TIMER|swath.sort.manifest.bounds.latency|{}",
+            "TIMER|swath.sort.manifest.md5.latency|{}",
             "TIMER|swath.sort.merge.boundaries.latency|{}",
             "TIMER|swath.sort.merge.latency|{}",
-            "TIMER|swath.sort.merge.range.latency|{}");
+            "TIMER|swath.sort.merge.range.latency|{}",
+            "TIMER|swath.sort.publication.latency|{}");
 
     /** Deterministic event counts for the same workload, as {@code name{tags}=count}. FROZEN. */
     private static final List<String> EXPECTED_DETERMINISTIC_COUNTS = List.of(
@@ -342,6 +351,13 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.s3.socket_closure_recovered{}=1",
             "swath.sort.backpressure.wait{}=1",
             "swath.sort.entries{}=500",
+            "swath.sort.finalize.close.latency{}=0",
+            "swath.sort.finalize.latency{}=0",
+            "swath.sort.manifest.bounds.bytes{}=0",
+            "swath.sort.manifest.bounds.latency{}=0",
+            "swath.sort.manifest.bounds.rows{}=0",
+            "swath.sort.manifest.md5.bytes{}=0",
+            "swath.sort.manifest.md5.latency{}=0",
             "swath.sort.merge.boundaries.embedded.bytes{}=0",
             "swath.sort.merge.boundaries.embedded.entries{}=0",
             "swath.sort.merge.boundaries.latency{}=0",
@@ -350,6 +366,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.sort.merge.passes{}=3",
             "swath.sort.merge.range.latency{}=1",
             "swath.sort.page_runs_per_buffer{}=1",
+            "swath.sort.publication.latency{}=0",
             "swath.sort.segment.bytes{}=2048",
             "swath.sort.segments.written{}=3",
             "swath.split.guard_aborts{}=1",
@@ -382,7 +399,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 197;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 206;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

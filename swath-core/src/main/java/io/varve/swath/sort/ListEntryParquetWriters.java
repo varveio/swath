@@ -10,6 +10,9 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetFileWriter;
@@ -18,6 +21,7 @@ import org.apache.parquet.hadoop.api.WriteSupport;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.io.OutputFile;
+import org.apache.parquet.io.PositionOutputStream;
 
 /**
  * Shared {@link ParquetWriter} scaffolding for {@link SegmentParquetSink} and
@@ -31,41 +35,14 @@ final class ListEntryParquetWriters {
 
     static final int PAGE_BYTES = 1024 * 1024;
     static final int ZSTD_LEVEL = 3;
-
-    /**
-     * The dictionary a <b>served</b> file's column chunk may carry, in bytes.
-     *
-     * <p>A dictionary is decoded <em>in full</em> before its column yields a single value, so its
-     * cost falls on every request that touches the column while its benefit is proportional to how
-     * often values repeat — for a seek-served file, the wrong way round, and worse the larger it
-     * gets. Parquet falls back to a plain/delta encoding once a chunk's dictionary outgrows this cap;
-     * setting the cap low is what makes the fallback fire on the columns that deserve it. 8&nbsp;KiB
-     * is about a page's worth of entries: the point where decoding the dictionary stops being cheaper
-     * than decoding the page it serves.
-     *
-     * <p>A cap rather than a list of columns to exclude, because which columns repeat is a property
-     * of the bucket, not of the schema — and measured smaller as well as faster than the equivalent
-     * list, on the fixture that list was chosen for.
-     */
     static final int SERVED_DICTIONARY_BYTES = 8 * 1024;
-
     static final int SEGMENT_PAGE_ROWS = ParquetProperties.DEFAULT_PAGE_ROW_COUNT_LIMIT;
 
-    /**
-     * How a written file's pages and encodings are laid out for the way it will be <em>read</em> —
-     * the axis, beyond row-group size, on which the two callers of {@link #build} differ.
-     *
-     * @param pageRows       cap on a data page's rows; see {@link #build}
-     * @param dictionaryBytes cap on a column chunk's dictionary; see {@link #SERVED_DICTIONARY_BYTES}
-     */
     record PageLayout(int pageRows, int dictionaryBytes) {
-
-        /** Read once, front to back, by the merge: parquet's defaults are right. */
         static PageLayout staging() {
             return new PageLayout(SEGMENT_PAGE_ROWS, ParquetProperties.DEFAULT_DICTIONARY_PAGE_SIZE);
         }
 
-        /** Seek-served a page of keys at a time: pay at write time for what a cold read would pay. */
         static PageLayout served(int pageRows) {
             return new PageLayout(pageRows, SERVED_DICTIONARY_BYTES);
         }
@@ -74,19 +51,27 @@ final class ListEntryParquetWriters {
     private ListEntryParquetWriters() {
     }
 
-    /**
-     * Builds a {@link ParquetWriter} for {@code path} with the shared knobs, given a caller-supplied
-     * {@link WriteSupport}, row-group size and {@link PageLayout} (the axes the two callers differ on).
-     *
-     * <p>{@link PageLayout#pageRows} caps a data page's <b>rows</b>; {@link #PAGE_BYTES} caps its
-     * bytes. The two are not interchangeable — the byte cap binds only on columns wide enough to reach
-     * it, so it is the row cap that decides what a narrow column's page costs to decode.
-     */
+    /** Builds a writer with caller-supplied write support and page/row-group geometry. */
     static ParquetWriter<ListEntry> build(Path path, WriteSupport<ListEntry> writeSupport, long rowGroupBytes,
-                                          PageLayout layout) throws IOException {
+                                          PageLayout layout)
+            throws IOException {
+        return build(writeSupport, rowGroupBytes, layout, new LocalOutputFile(path));
+    }
+
+    /** As {@link #build(Path, WriteSupport, long, PageLayout)}, with emitted-byte tracking. */
+    static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport, long rowGroupBytes,
+                                      PageLayout layout)
+            throws IOException {
+        DigestingOutputFile output = new DigestingOutputFile(new LocalOutputFile(path));
+        return new TrackedWriter(build(writeSupport, rowGroupBytes, layout, output), output);
+    }
+
+    private static ParquetWriter<ListEntry> build(WriteSupport<ListEntry> writeSupport,
+                                                   long rowGroupBytes, PageLayout layout, OutputFile output)
+            throws IOException {
         Configuration conf = new Configuration(false);
         conf.setInt("parquet.compression.codec.zstd.level", ZSTD_LEVEL);
-        return new Builder(new LocalOutputFile(path), writeSupport)
+        return new Builder(output, writeSupport)
                 .withConf(conf)
                 .withCompressionCodec(CompressionCodecName.ZSTD)
                 .withRowGroupSize(rowGroupBytes)
@@ -97,6 +82,133 @@ final class ListEntryParquetWriters {
                 .withWriterVersion(ParquetProperties.WriterVersion.PARQUET_2_0)
                 .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
                 .build();
+    }
+
+    record TrackedWriter(ParquetWriter<ListEntry> writer, DigestingOutputFile output) {
+    }
+
+    /** Sequential {@link OutputFile} decorator that digests the exact bytes parquet-mr emits. */
+    static final class DigestingOutputFile implements OutputFile {
+        private final OutputFile delegate;
+        private final MessageDigest digest;
+        private long bytes;
+        private long digestNanos;
+        private boolean opened;
+        private boolean finished;
+        private String md5;
+
+        DigestingOutputFile(OutputFile delegate) {
+            this.delegate = delegate;
+            try {
+                this.digest = MessageDigest.getInstance("MD5");
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("JVM has no MD5 provider", e);
+            }
+        }
+
+        @Override
+        public PositionOutputStream create(long blockSizeHint) throws IOException {
+            return tracking(delegate.create(blockSizeHint));
+        }
+
+        @Override
+        public PositionOutputStream createOrOverwrite(long blockSizeHint) throws IOException {
+            return tracking(delegate.createOrOverwrite(blockSizeHint));
+        }
+
+        @Override
+        public boolean supportsBlockSize() {
+            return delegate.supportsBlockSize();
+        }
+
+        @Override
+        public long defaultBlockSize() {
+            return delegate.defaultBlockSize();
+        }
+
+        synchronized long bytes() {
+            requireFinished();
+            return bytes;
+        }
+
+        synchronized long digestNanos() {
+            requireFinished();
+            return digestNanos;
+        }
+
+        synchronized String md5() {
+            requireFinished();
+            if (md5 == null) {
+                long start = System.nanoTime();
+                md5 = HexFormat.of().formatHex(digest.digest());
+                digestNanos += System.nanoTime() - start;
+            }
+            return md5;
+        }
+
+        private synchronized PositionOutputStream tracking(PositionOutputStream out) {
+            if (opened) {
+                throw new IllegalStateException("Parquet output stream opened more than once");
+            }
+            opened = true;
+            return new PositionOutputStream() {
+                @Override
+                public long getPos() throws IOException {
+                    return out.getPos();
+                }
+
+                @Override
+                public void write(int b) throws IOException {
+                    out.write(b);
+                    update(b);
+                }
+
+                @Override
+                public void write(byte[] b) throws IOException {
+                    out.write(b);
+                    update(b, 0, b.length);
+                }
+
+                @Override
+                public void write(byte[] b, int off, int len) throws IOException {
+                    out.write(b, off, len);
+                    update(b, off, len);
+                }
+
+                @Override
+                public void flush() throws IOException {
+                    out.flush();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    out.close();
+                    synchronized (DigestingOutputFile.this) {
+                        finished = true;
+                    }
+                }
+            };
+        }
+
+        private synchronized void update(byte[] b, int off, int len) {
+            long start = System.nanoTime();
+            digest.update(b, off, len);
+            digestNanos += System.nanoTime() - start;
+            bytes += len;
+        }
+
+        private synchronized void update(int b) {
+            long start = System.nanoTime();
+            digest.update((byte) b);
+            digestNanos += System.nanoTime() - start;
+            bytes++;
+        }
+
+        private void requireFinished() {
+            if (!finished) {
+                throw new IllegalStateException("final part metadata requested before durable close");
+            }
+        }
     }
 
     /**

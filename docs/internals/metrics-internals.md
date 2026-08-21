@@ -55,6 +55,22 @@ larger than `merge_ms`. On a FAILED merge `merge_ms` never records at all (the t
 on the success path only), while `duration_ms - listing_duration_ms` still measures whatever wall time
 the failing attempt spent.
 
+The terminal `sort` block decomposes that inclusive clock further. `range_merge_ms` is the maximum
+overlapping `swath.sort.merge.range.latency` sample on the parallel path (or the serial remainder),
+`finalize_ms` is wall time from the first final-part close/fsync starting through metadata
+assembly/validation and local publication. Concurrent closes overlap in that clock;
+`finalize_close_ms` instead sums every part's close/fsync service time, so it may exceed
+`finalize_ms`. `local_publication_ms` exposes the publication component.
+`manifest_md5_bytes`/`manifest_md5_ms` describe
+incremental byte-exact digest work for fresh finals and full-file MD5 readback for metadata-less
+carried finals; nonzero fallback values therefore represent compatibility reread work, not
+write-stream digest time. `manifest_bounds_rows`/`bytes`/`ms` describe only a post-close
+validation scan and are deterministically zero for newly written close-gated metadata; they become
+nonzero only on the safe metadata-less carried-part fallback. `finalize_parallelism` is the effective
+number of independently-writing ranges. `phase_rows_per_sec` divides published rows by `merge_ms`,
+so a merge-only resume has a meaningful phase rate even though the compatibility whole-run
+`keys_per_sec` correctly remains `0.0` listing keys/s.
+
 **`sort.merge_boundaries_ms`** is the run-total duration read from
 `swath.sort.merge.boundaries.latency`, recorded around `ParallelRangeMerge.boundaries` before any
 range thread starts. It is a component of, not an addition to, `sort.merge_ms` above. Therefore
@@ -904,7 +920,9 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_boundary_fallback_invalid_crc` | one otherwise-shaped page-run extension failed CRC32C validation, so its provisional keys were discarded and that segment was authoritatively scanned | |
 | `SORT` | `merge_boundary_fallback_invalid_order` | one page-run extension's provisional keys regressed under unsigned ordering, so they were discarded and that segment was authoritatively scanned | |
 | `SORT` | `merge_boundary_fallback_invalid_bounds` | one otherwise valid page-run extension did not begin at the trailer's exact `segMinKey`, ended above `segMaxKey`, or disagreed with empty-segment bounds; its provisional keys were discarded and that segment was authoritatively scanned | |
-| `SORT` | `finalize_progress_tick` | the finalize/publish tail emitted a liveness-progress tick — at each final part's footer boundary (`ProgressMarkingSortedFileWriter` ticks pre-fsync in both `markFinal()` and `close()`) and once per 64 MiB streamed while computing that part's manifest MD5 (`md5HexWithLivenessProgress`). Byte-keyed, not timer-keyed, so it keeps the watchdog honest: proves the multi-GB finalize window was advancing (a true stall emits none). Count is proportional to published bytes / part count | |
+| `SORT` | `finalize_progress_tick` | the finalize/publish tail emitted a liveness-progress tick at each final part's footer boundary (`ProgressMarkingSortedFileWriter` ticks pre-fsync in both `markFinal()` and `close()`). Newly produced finals compute MD5 incrementally on the write stream and need no post-close readback ticks; the once-per-64-MiB byte-keyed ticks remain on the compatibility path that validates a metadata-less carried final with `md5HexWithLivenessProgress`. A true stalled fallback read emits no tick | |
+| `SORT` | `manifest_metadata_trusted` | manifest publication used close-gated metadata captured inline by a freshly written final part. Fires once per such part | |
+| `SORT` | `manifest_metadata_fallback_scan` | manifest publication received a metadata-less carried or third-party final part and used the compatibility full-file MD5 and exact-bounds validation reads. Fires once per such part, before validation begins | |
 | `SORT` | `page_whole_emitted` | the page-run merge fast path: the final page-aware merge (`PageAwareMerger`, engaged when every survivor is a page-run segment) emitted a whole page decode-free-planned — its current page's `maxKey` was strictly `<` (unsigned) the `minKey` of every other segment's current page AND of its OWN next page, so the page was globally next with no interleaving and was streamed in order without a heap merge. Fires once per page so emitted; the count is "how many pages the disjoint fast path carried" — the page-oriented analogue of `merge_fastpath` (which stays the entry-level `StreamingMerger` same-reader signal). High on a well-formed OBJECTS run (work-stealing nodes own disjoint key ranges ⇒ range-disjoint pages) | |
 | `SORT` | `page_overlap_keymerge` | the page-run merge overlap guard (INVARIANT ALARM): the page-whole fast path did NOT hold for the minimum page — some other segment's current page (cross-segment guard) OR the same segment's own next page (intra-segment monotonicity guard: `page[i+1].minKey <= page[i].maxKey`, unsigned) began at/inside its `[minKey, maxKey]` range — so the involved pages were decoded and merged at the KEY level (always correct) instead of emitted whole. Fires once per such overlap-resolution event. **On a well-formed OBJECTS run this is 0** (pages are range-disjoint by the work-stealing ownership invariant): a nonzero value is a loud alarm that pages interleaved (mis-ordered/overlapping staging), never a silent misorder — the merge stays correct, but the disjoint-page assumption was violated | |
 | `SORT` | `page_run_entry_whole_page` | the entry-typed page-run READ path (fast path): the `PageRunSegmentReader` — the stream a `.pageseg` is opened as on the **mixed/`StreamingMerger` route** (a merge group that also holds a columnar Parquet segment) — streamed one page whole because it does not overlap the segment's own next page. This is the read-level analogue of `page_whole_emitted` (which stays the MERGE-level signal, `PageAwareMerger` only), kept under its own reason so the two routes are distinguishable post-hoc. Fires once per page so streamed. **0 on the all-page-run production path** (that route never opens this reader): a nonzero value simply means a mixed merge group existed, e.g. a `CaptureSorter` or parallel-range-merge fixture segment | |

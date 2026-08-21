@@ -226,6 +226,7 @@ public final class SortTransform {
 
         List<Path> finalFiles = new ArrayList<>();
         List<Path> tmpFiles = new ArrayList<>();
+        List<SortedFileWriter> finalWriters = new ArrayList<>();
         long totalRows;
         try (SortedCursor merged = merge.merge(stagingSegments, progressCallback)) {
             // merge() above already ran every cascade pass to completion before returning this
@@ -233,7 +234,8 @@ public final class SortTransform {
             // and it drains exactly the staged rows once: an honest completion denominator.
             onFinalPassStarting.onFinalPassStarting(true);
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
-                    () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, outputSequence),
+                    () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
+                            outputSequence),
                     true, progressCallback);
         }
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
@@ -249,7 +251,7 @@ public final class SortTransform {
         Durability.directory(outputDir);
 
         // Publish commit point (manifest.json is written here) — AFTER renames, BEFORE staging delete.
-        publishListener.onPublished(List.copyOf(finalFiles), totalRows);
+        publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
 
         // Staging is internal working state — delete what we own (originals + any intermediates).
         for (Path p : stagingSegments) {
@@ -263,7 +265,7 @@ public final class SortTransform {
         // recursive wipe of foreign content the sorter doesn't own).
         tryDeleteEmptyStagingDir(stagingDir);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
-                mergePasses, cascadedPasses, fastPathEmissions);
+                mergePasses, cascadedPasses, fastPathEmissions, 1);
     }
 
     /**
@@ -397,11 +399,12 @@ public final class SortTransform {
         }
 
         List<Path> finalFiles = new ArrayList<>();
+        List<SortedFileWriter> finalWriters = new ArrayList<>();
         if (tmpsInOrder.isEmpty()) {
             // Empty listing: publish one valid, self-describing empty sorted file (matches the serial
             // path). This single file legitimately carries the completeness stamp.
             List<Path> tf = new ArrayList<>();
-            SortedFileWriter writer = openNextFile(outputDir, stagingDir, finalFiles, tf,
+            SortedFileWriter writer = openNextFile(outputDir, stagingDir, finalFiles, tf, finalWriters,
                     finalWriterFactory.forOutputSequence());
             writer.markFinal();
             writer.close();
@@ -414,15 +417,18 @@ public final class SortTransform {
                 atomicRename(tmp, finalPath);
                 finalFiles.add(finalPath);
             }
+            for (ParallelRangeMerge.RangeResult rr : results) {
+                finalWriters.addAll(rr.writers());
+            }
         }
         Durability.directory(outputDir);
-        publishListener.onPublished(List.copyOf(finalFiles), totalRows);
+        publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
         for (Path p : stagingSegments) {
             Files.deleteIfExists(p);
         }
         tryDeleteEmptyStagingDir(stagingDir);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
-                mergePasses, cascadedPasses, fastPathEmissions);
+                mergePasses, cascadedPasses, fastPathEmissions, results.size());
     }
 
     /** Delete {@code stagingDir} iff it is now empty; foreign content is logged and left in place. */
@@ -447,7 +453,7 @@ public final class SortTransform {
     }
 
     private SortedFileWriter openNextFile(Path outputDir, Path stagingDir, List<Path> finalFiles,
-                                          List<Path> tmpFiles,
+                                          List<Path> tmpFiles, List<SortedFileWriter> finalWriters,
                                           SortedFileWriterFactory outputSequence) throws IOException {
         int index = finalFiles.size() + 1;
         String name = String.format("%s%05d%s", FINAL_PREFIX, index, FINAL_SUFFIX);
@@ -459,7 +465,22 @@ public final class SortTransform {
         SortedFileWriter writer = outputSequence.create(tmpPath, index);
         finalFiles.add(finalPath);
         tmpFiles.add(tmpPath);
+        finalWriters.add(writer);
         return writer;
+    }
+
+    private static List<FinalPart> finalParts(List<Path> paths, List<SortedFileWriter> writers) {
+        if (paths.size() != writers.size()) {
+            throw new IllegalStateException("final part path/writer count mismatch: paths="
+                    + paths.size() + " writers=" + writers.size());
+        }
+        List<FinalPart> parts = new ArrayList<>(paths.size());
+        for (int i = 0; i < paths.size(); i++) {
+            // This handoff runs only after all closes and renames succeeded. A partial close never
+            // reaches the publish listener and therefore cannot make its metadata trustworthy.
+            parts.add(new FinalPart(paths.get(i), writers.get(i).finalMetadata()));
+        }
+        return List.copyOf(parts);
     }
 
     private KWayMerge.SegmentIo<Path> segmentIo(PageRunSegmentWriter segmentWriter, Path stagingDir,

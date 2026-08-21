@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Writes the <b>final</b> sorted output file. Implemented by the stamped {@code SortedParquetWriter}
@@ -52,6 +53,15 @@ public interface SortedFileWriter extends AutoCloseable {
      * next decorator someone adds.
      */
     void setFileIndex(int fileIndex);
+
+    /**
+     * Immutable publish metadata, available only after a successful durable {@link #close()}.
+     * Writers that cannot capture it inline return empty and leave the publisher's existing
+     * validation/readback path in force.
+     */
+    default Optional<FinalPartMetadata> finalMetadata() {
+        return Optional.empty();
+    }
 
     /** Finalize (footer) and fsync. */
     @Override

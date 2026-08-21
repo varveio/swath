@@ -499,7 +499,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // emitted for a --sort run; the classification signals (page_runs_per_buffer,
         // buffer_sort_fallbacks) are the cheap "was pre-sortedness exploited" tells.
         if (rc.sortEnabled()) {
-            writeSort(root.putObject("sort"), rc);
+            writeSort(root.putObject("sort"), rc, summary);
         }
 
         // Per-call-class latency-phase percentile breakdown. Always present as an array
@@ -736,16 +736,20 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         }
     }
 
-    private void writeSort(ObjectNode sortNode, RunConfig rc) {
+    private void writeSort(ObjectNode sortNode, RunConfig rc, RunSummary summary) {
         sortNode.put("enabled", true);
         sortNode.put("segments", (long) counterCount("swath.sort.segments.written"));
         sortNode.put("passes", (long) counterCount("swath.sort.merge.passes"));
         sortNode.put("segment_bytes", (long) counterCount("swath.sort.segment.bytes"));
-        sortNode.put("merge_ms", timerTotalMs("swath.sort.merge.latency"));
+        long mergeMs = timerTotalMs("swath.sort.merge.latency");
+        long boundariesMs = timerTotalMs("swath.sort.merge.boundaries.latency");
+        long finalizeMs = timerTotalMs("swath.sort.finalize.latency");
+        long parallelRangeMs = timerMaxMs("swath.sort.merge.range.latency");
+        sortNode.put("merge_ms", mergeMs);
         // The parallel range merge's serial prologue. INCLUDED in merge_ms above and broken out here
         // because it is the one term that does not shrink as R rises: subtract it to see the ranges'
         // own scaling. Zero on the default serial merge, which never samples boundaries.
-        sortNode.put("merge_boundaries_ms", timerTotalMs("swath.sort.merge.boundaries.latency"));
+        sortNode.put("merge_boundaries_ms", boundariesMs);
         sortNode.put("merge_boundary_embedded_entries",
                 (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
         double embeddedBytes = counterCount("swath.sort.merge.boundaries.embedded.bytes");
@@ -753,6 +757,22 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_boundary_embedded_bytes", (long) embeddedBytes);
         sortNode.put("merge_boundary_scan_bytes", (long) scanBytes);
         sortNode.put("merge_boundary_bytes", (long) (embeddedBytes + scanBytes));
+        // Concurrent range timers overlap; their maximum, not their sum, is the parallel range
+        // wall. The serial path has no range samples, so its range term is the whole merge less the
+        // separately measured boundary/finalize tail (clamped for millisecond truncation).
+        sortNode.put("range_merge_ms", timerCount("swath.sort.merge.range.latency") > 0 ? parallelRangeMs
+                : Math.max(0L, mergeMs - boundariesMs - finalizeMs));
+        sortNode.put("finalize_ms", finalizeMs);
+        sortNode.put("finalize_close_ms", timerTotalMs("swath.sort.finalize.close.latency"));
+        sortNode.put("manifest_md5_bytes", (long) counterCount("swath.sort.manifest.md5.bytes"));
+        sortNode.put("manifest_md5_ms", timerTotalMs("swath.sort.manifest.md5.latency"));
+        sortNode.put("manifest_bounds_rows", (long) counterCount("swath.sort.manifest.bounds.rows"));
+        sortNode.put("manifest_bounds_bytes", (long) counterCount("swath.sort.manifest.bounds.bytes"));
+        sortNode.put("manifest_bounds_ms", timerTotalMs("swath.sort.manifest.bounds.latency"));
+        sortNode.put("local_publication_ms", timerTotalMs("swath.sort.publication.latency"));
+        sortNode.put("finalize_parallelism", (long) gaugeValue("swath.sort.finalize.parallelism"));
+        sortNode.put("phase_rows_per_sec", mergeMs <= 0 ? 0.0
+                : summary.objects() / (mergeMs / 1_000.0));
         sortNode.put("page_runs_per_buffer", distributionMean("swath.sort.page_runs_per_buffer"));
         sortNode.put("buffer_sort_fallbacks", (long) stealReasonCount("SORT", "buffer_sort_fallback"));
         // A merge-only `--sort --resume` (the listing was already complete in the
@@ -1000,6 +1020,16 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private long timerTotalMs(String name) {
         Timer t = registry.find(name).timer();
         return t == null ? 0L : (long) t.totalTime(TimeUnit.MILLISECONDS);
+    }
+
+    private long timerMaxMs(String name) {
+        Timer t = registry.find(name).timer();
+        return t == null ? 0L : (long) t.max(TimeUnit.MILLISECONDS);
+    }
+
+    private long timerCount(String name) {
+        Timer t = registry.find(name).timer();
+        return t == null ? 0L : t.count();
     }
 
     private double distributionMean(String name) {

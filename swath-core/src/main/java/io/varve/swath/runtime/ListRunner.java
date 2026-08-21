@@ -50,6 +50,8 @@ import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.FinalPart;
+import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
@@ -86,6 +88,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -839,8 +842,9 @@ public final class ListRunner {
         // liveness progress — during the k-way merge NO page completes, so without this the watchdog
         // would false-trip a long final merge. Throttled to every N rows in
         // ProgressMarkingSortedFileWriter (never per key).
+        FinalizeWallClock finalizeClock = new FinalizeWallClock();
         SortedFileWriterFactory writerFactory = progressMarkingFactory(
-                new SortedParquetWriterFactory(config, mode), ctx.metrics());
+                new SortedParquetWriterFactory(config, mode), ctx.metrics(), finalizeClock);
         // The WIDE stale-finals sweep (ALL data/*.parquet, not
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path
         // (ListCommand#isPublishedByThisRun gates whether runSortMergeOnly is ever reached) — see
@@ -879,8 +883,8 @@ public final class ListRunner {
         try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
             SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
-                    (finalFiles, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
-                            finalFiles, ctx.metrics()),
+                    (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
+                            finalParts, ctx.metrics(), finalizeClock),
                     ctx.metrics()::recordProgress,
                     // WRITING becomes reachable here — the cascade passes above stay MERGING;
                     // once only the output-writing work + publish remain, the swath.phase gauge
@@ -889,6 +893,7 @@ public final class ListRunner {
                     ctx.metrics()::startFinalMergePass);
             ctx.metrics().recordSortMerge(mergeSample);
             ctx.metrics().recordSortMergePasses(result.mergePasses());
+            ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
             return result;
         } catch (IOException | UncheckedIOException e) {
             // A CLASSIFIED merge failure (today: a staged page-run segment whose
@@ -933,33 +938,63 @@ public final class ListRunner {
      * {@code run_id}, recorded in {@code .swath-state.json} — {@link ListCommand}'s PUBLISHED dispatch
      * requires it to match, together with {@code args_hash}, before trusting an existing dataset as
      * THIS run's publish (never a stale one from a different prior run sharing the output directory).
-     * {@code finalFiles} live under {@code <root>/data/}, so their manifest keys are {@code data/}-prefixed.
+     * {@code finalParts} live under {@code <root>/data/}, so their manifest keys are {@code data/}-prefixed.
      */
+    static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
+            List<FinalPart> finalParts, RunMetrics metrics) throws IOException {
+        FinalizeWallClock finalizeClock = new FinalizeWallClock();
+        finalizeClock.start();
+        writeSortedManifest(outputDir, bucket, argsHash, runId, finalParts, metrics, finalizeClock);
+    }
+
     private static void writeSortedManifest(Path outputDir, String bucket, String argsHash, long runId,
-            List<Path> finalFiles, RunMetrics metrics) throws IOException {
-        List<PartInfo> parts = new ArrayList<>(finalFiles.size());
-        for (Path f : finalFiles) {
-            String relPath = DatasetLayout.key(f.getFileName().toString());
-            // The per-file MD5 is the DOMINANT segment of the finalize/publish window — hashing a
-            // multi-GB part streams the whole file and emits no progress on
-            // its own, so a complete run could be halt()-ed at the finish line. Hash it manually and tick
-            // liveness progress in proportion to BYTES actually consumed, keeping the watchdog HONEST: a
-            // digest that is slow-but-advancing stays alive, while one whose read truly stalls (no bytes
-            // move) emits no tick and still trips.
-            String md5 = md5HexWithLivenessProgress(f, metrics);
-            // minKey/maxKey/rowCount are the file's ACTUAL first/last key and row count (never
-            // footer stats — see SortedFileIndex#bounds), so the manifest's anti-lie invariant
-            // (minKey/maxKey/rowCount == the part's real content) holds by construction.
-            SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f);
-            String minKey = bounds.firstKey() == null ? null : new String(bounds.firstKey(), StandardCharsets.UTF_8);
-            String maxKey = bounds.lastKey() == null ? null : new String(bounds.lastKey(), StandardCharsets.UTF_8);
-            parts.add(new PartInfo(relPath, 0, bounds.rowCount(), Files.size(f), md5, minKey, maxKey));
+            List<FinalPart> finalParts, RunMetrics metrics, FinalizeWallClock finalizeClock) throws IOException {
+        finalizeClock.start();
+        try {
+            List<PartInfo> parts = new ArrayList<>(finalParts.size());
+            for (FinalPart finalPart : finalParts) {
+                Path f = finalPart.path();
+                String relPath = DatasetLayout.key(f.getFileName().toString());
+                FinalPartMetadata metadata;
+                if (finalPart.metadata().isPresent()) {
+                    metadata = finalPart.metadata().orElseThrow();
+                    metrics.recordStealReason("SORT", "manifest_metadata_trusted");
+                } else {
+                    // Compatibility/safety path for carried or third-party final parts without
+                    // trustworthy close-gated metadata. Keep the old full validation reads; footer
+                    // min/max statistics remain insufficient because Parquet may truncate them.
+                    metrics.recordStealReason("SORT", "manifest_metadata_fallback_scan");
+                    long bytes = Files.size(f);
+                    long md5Start = System.nanoTime();
+                    String md5 = md5HexWithLivenessProgress(f, metrics);
+                    metrics.recordSortManifestMd5(bytes, System.nanoTime() - md5Start);
+                    long boundsStart = System.nanoTime();
+                    SortedFileIndex.Bounds bounds = SortedFileIndex.bounds(f);
+                    metrics.recordSortManifestBounds(bounds.rowCount(), bytes,
+                            System.nanoTime() - boundsStart);
+                    metadata = new FinalPartMetadata(bounds.rowCount(), bytes, md5,
+                            bounds.firstKey() == null ? null
+                                    : new String(bounds.firstKey(), StandardCharsets.UTF_8),
+                            bounds.lastKey() == null ? null
+                                    : new String(bounds.lastKey(), StandardCharsets.UTF_8),
+                            0L, 0L, 0L);
+                }
+                parts.add(new PartInfo(relPath, 0, metadata.rows(), metadata.bytes(), metadata.md5(),
+                        metadata.minKey(), metadata.maxKey()));
+            }
+            long publishStartNanos = System.nanoTime();
+            try {
+                Manifest.write(outputDir, bucket, ParquetSchema.canonical().toString(), parts,
+                        true, SortedParquetWriter.ORDER_VALUE);
+                Manifest.writeState(outputDir, argsHash, runId);
+                Manifest.writeSymlink(outputDir, parts);
+                Manifest.writeSuccess(outputDir);
+            } finally {
+                metrics.recordSortPublication(System.nanoTime() - publishStartNanos);
+            }
+        } finally {
+            metrics.recordSortFinalizeTail(finalizeClock.elapsedNanos());
         }
-        Manifest.write(outputDir, bucket, ParquetSchema.canonical().toString(), parts,
-                true, SortedParquetWriter.ORDER_VALUE);
-        Manifest.writeState(outputDir, argsHash, runId);
-        Manifest.writeSymlink(outputDir, parts);
-        Manifest.writeSuccess(outputDir);
     }
 
     /** Every this-many bytes hashed/finalized, emit one liveness tick keyed to real work done. */
@@ -1026,8 +1061,21 @@ public final class ListRunner {
      * progress as rows are written, keeping the watchdog from false-tripping a long sort-merge tail.
      */
     private static SortedFileWriterFactory progressMarkingFactory(SortedFileWriterFactory delegate,
-                                                                  RunMetrics metrics) {
-        return (path, fileIndex) -> new ProgressMarkingSortedFileWriter(delegate.create(path, fileIndex), metrics);
+            RunMetrics metrics, FinalizeWallClock finalizeClock) {
+        return (path, fileIndex) -> new ProgressMarkingSortedFileWriter(
+                delegate.create(path, fileIndex), metrics, finalizeClock);
+    }
+
+    private static final class FinalizeWallClock {
+        private final AtomicLong startNanos = new AtomicLong();
+
+        void start() {
+            startNanos.compareAndSet(0L, System.nanoTime());
+        }
+
+        long elapsedNanos() {
+            return Math.max(0L, System.nanoTime() - startNanos.get());
+        }
     }
 
     /**
@@ -1042,11 +1090,15 @@ public final class ListRunner {
 
         private final SortedFileWriter delegate;
         private final RunMetrics metrics;
+        private final FinalizeWallClock finalizeClock;
         private long sinceMark;
+        private boolean closeRecorded;
 
-        ProgressMarkingSortedFileWriter(SortedFileWriter delegate, RunMetrics metrics) {
+        ProgressMarkingSortedFileWriter(
+                SortedFileWriter delegate, RunMetrics metrics, FinalizeWallClock finalizeClock) {
             this.delegate = delegate;
             this.metrics = metrics;
+            this.finalizeClock = finalizeClock;
         }
 
         @Override
@@ -1086,7 +1138,7 @@ public final class ListRunner {
         }
 
         @Override
-        public void close() throws IOException {
+        public synchronized void close() throws IOException {
             // A completed file is unambiguous forward progress, but delegate.close()
             // is a single footer-flush + fsync of a possibly multi-GB part — one blocking syscall that
             // emits no intra-call ticks. This pre-fsync tick resets the stall clock immediately before
@@ -1094,7 +1146,22 @@ public final class ListRunner {
             // the operator docs note on raising --stall-timeout for billion-scale --sort).
             metrics.markProgress();
             metrics.recordStealReason("SORT", "finalize_progress_tick");
+            finalizeClock.start();
             delegate.close();
+            if (!closeRecorded && delegate.finalMetadata().isPresent()) {
+                FinalPartMetadata metadata = delegate.finalMetadata().orElseThrow();
+                metrics.recordSortFinalizeClose(metadata.closeNanos());
+                metrics.recordSortManifestMd5(metadata.bytes(), metadata.md5Nanos());
+                // The post-close bounds scan was eliminated: its rows/bytes/time are deterministically
+                // zero. Exact first/last/row facts were captured inline by the writer instead.
+                metrics.recordSortManifestBounds(0L, 0L, 0L);
+                closeRecorded = true;
+            }
+        }
+
+        @Override
+        public java.util.Optional<FinalPartMetadata> finalMetadata() {
+            return delegate.finalMetadata();
         }
     }
 

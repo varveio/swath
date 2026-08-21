@@ -18,5 +18,6 @@ import java.util.List;
  * {@code swath.sort.merge.passes} first-class meter.
  */
 public record SortTransformResult(List<Path> finalFiles, long totalRows,
-                                  long mergePasses, long cascadedPasses, long fastPathEmissions) {
+                                  long mergePasses, long cascadedPasses, long fastPathEmissions,
+                                  int finalizationParallelism) {
 }

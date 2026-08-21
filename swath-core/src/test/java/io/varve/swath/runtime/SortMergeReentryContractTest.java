@@ -144,7 +144,8 @@ final class SortMergeReentryContractTest {
 
         // Re-run over the SAME still-durable segments: idempotent, cleans stale tmp, republishes.
         SortTransformResult result = transform.transform(segments, outputDir, stagingDir,
-                (files, rows) -> writeManifest(outputDir, files));
+                (files, rows) -> writeManifest(outputDir,
+                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
 
         Path finalFile = outputDir.resolve("part-00001.parquet");
         assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(sortedStrings(keyspace));
@@ -294,7 +295,8 @@ final class SortMergeReentryContractTest {
         // the exact sorted whole — the originals are still on disk (KWayMerge's deletion-policy fix).
         SortTransform redo = new SortTransform(new SortRun(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS)));
         SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
-                (files, rows) -> writeManifest(outputDir, files));
+                (files, rows) -> writeManifest(outputDir,
+                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
         assertThat(ParquetReads.keys(outputDir.resolve("part-00001.parquet")))
                 .containsExactlyElementsOf(sortedStrings(keyspace));
         assertThat(result.totalRows()).isEqualTo(keyspace.size());
