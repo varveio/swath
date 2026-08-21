@@ -587,11 +587,12 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 | --- | --- | --- |
 | **stdout** | **At-most-once while the one-shot process runs:** commit-before-emit may leave a committed page absent if the process stops before emission. | **No.** `auto` and `none` are ephemeral; an explicit checkpoint path is refused. |
 | **FILE-kind text** | **At-most-once while the one-shot process runs;** a successful publication atomically replaces the destination. Optional gzip/Zstandard streams are finished before publication. | **No.** FILE kind requires `--checkpoint none`. |
+| **Directory-dataset TSV/JSONL** | Bounded parallel lanes publish independent parts, an atomic manifest, and `_SUCCESS` last. A failed run has no success marker and may leave finalized parts from that attempt. | **No.** Text datasets require `--checkpoint none` in this release. |
 | **FILE-kind Parquet** | Uses the Parquet writer path, but has no durable resume ledger. | **No.** FILE kind requires `--checkpoint none`. |
 | **Managed directory-dataset Parquet** | **Exactly-once durable dataset** via the `durable_cursor` model (§4.1, I6): finalized parts are retained; an unfinalized tail is discarded and re-listed from `durable_cursor`. | **Yes.** `swath resume <dir>` opens the co-located checkpoint. |
 
   The deferred `--resume-output` journal describes a possible future text-replay
-  contract; it does not make stdout or FILE-kind output resumable in the shipped CLI.
+  contract; it does not make stdout, FILE-kind output, or directory text output resumable in the shipped CLI.
 
 - **`swath resume` preserves a stored `--sort` run (`--format parquet`)** — the
   §6 checkpoint-tracked sorted-segment design means resume keeps durable

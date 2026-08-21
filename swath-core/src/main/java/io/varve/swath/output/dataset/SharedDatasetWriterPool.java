@@ -39,13 +39,13 @@ import org.apache.commons.codec.digest.DigestUtils;
  * occupy a contiguous run of one lane's size-rotated parts (which finalize in
  * order, making the {@code durable_cursor} model sound).
  *
- * <p><b>Durability (I6).</b> A part is durable iff finalized (footer fsynced,
- * {@link PartWriter#close()}); on every finalize the atomic {@code manifest.json}
- * is rewritten to include it, so a crash mid-run never loses committed-part
- * metadata. On {@link #close()} (success) each lane finalizes its open part; on
- * {@link #abort()} (failure) each lane <b>discards</b> its open part (deleted, not
- * finalized) so a resumed run re-lists those rows exactly once — only naturally
- * rotated, finalized parts survive.
+ * <p><b>Publication.</b> A part becomes consumer-visible only after {@link
+ * DatasetPartWriter#close()} succeeds; every finalized part is added to the atomic {@code
+ * manifest.json}. On {@link #close()} (success) each lane finalizes its open part and writes
+ * {@code _SUCCESS} last. On {@link #abort()} (failure) each lane discards its open part. When a
+ * durable listener is configured (the Parquet sink), it advances the checkpoint before manifest
+ * publication so resume retains only finalized parts. Text datasets deliberately provide no
+ * resume contract in this release.
  *
  * <p>Lanes <b>always drain to the poison sentinel</b> (even after a write
  * failure), so a full lane queue can never deadlock {@link #submit} or shutdown.
@@ -345,7 +345,7 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
         Path path = w.path();
         Object finalizeSample = observer.startFinalize();
         try {
-            w.close();   // footer + fsync ⇒ finalized (I6)
+            w.close();   // format-owned close completes the part before publication
         } catch (IOException e) {
             // Finalization failed (e.g. fsync error). The part is NOT in the manifest
             // and is therefore not durable; delete the half-written file so it cannot
@@ -371,8 +371,8 @@ public class SharedDatasetWriterPool implements DatasetWriterPool {
         try (var in = Files.newInputStream(path)) {
             md5 = DigestUtils.md5Hex(in);
         }
-        // The footer is on disk; the checkpoint commit (record part + advance durable_cursor)
-        // is the exactly-once boundary, BEFORE the manifest — a crash here discards the part on resume.
+        // When the sink wires a durable listener, its checkpoint commit (record part + advance
+        // durable_cursor) is the exactly-once boundary BEFORE the manifest. Text wires NONE.
         Map<Long, byte[]> contributions = Map.copyOf(lane.partNodeMaxKey);
         lane.partNodeMaxKey.clear();
         partListener.onFinalized(new PartListener.PartFinalizedEvent(

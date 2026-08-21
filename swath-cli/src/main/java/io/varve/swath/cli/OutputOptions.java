@@ -306,9 +306,8 @@ final class OutputOptions {
      * override — the extension's implied format is a fact about the path, not something a
      * file-vs-directory override changes); any other path is a directory dataset -- {@code
      * --output-type} overrides the file-vs-directory call for a pathological name. Directory
-     * datasets are engine-supported for {@code parquet} only today (a true bare-file atomic
-     * Parquet writer and text-format dataset directories both need swath-core capabilities that
-     * don't exist yet — deferred, not this unit's to build; see the exit-2 guards below).
+     * datasets support Parquet, TSV, and JSONL; aligned table output remains a stream/file-only
+     * presentation (see the exit-2 guard below).
      */
     Resolved resolveOutput(boolean stdoutIsTerminal) throws InvalidArgsException, InvalidConfigException {
         boolean explicitFormat = formatWasExplicitlySet();
@@ -357,13 +356,8 @@ final class OutputOptions {
                     + "single-file destination without a matching extension");
         }
         if (kind == DestinationKind.DIRECTORY && resolved == OutputFormat.TABLE) {
-            // DEFERRED: text-format directory datasets need a multi-writer
-            // text framework that does not exist in swath-core today -- this guard is permanent
-            // until that framework lands, not a placeholder. No promise of future support here.
-            String correction = resolved == OutputFormat.TABLE
-                    ? "pass --output-type file, or choose a recognized-extension path "
-                            + "(.tsv/.jsonl/.parquet) with its matching --format"
-                    : "use a ." + token(resolved) + " file path, or --output-type file";
+            String correction = "pass --output-type file, or choose a recognized-extension path "
+                    + "(.tsv/.jsonl/.parquet) with its matching --format";
             throw new InvalidArgsException("directory dataset output (-o " + destination + ") does not support "
                     + "--format table; " + correction);
         }
@@ -420,12 +414,12 @@ final class OutputOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--part-rotation-interval", paramLabel = "DURATION",
-            description = "Rotate Parquet parts by age (default: 30s; 0/none disables).")
+            description = "Rotate dataset parts by age (default: 30s; 0/none disables).")
     String partRotationInterval;
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--part-rotation-max-rows", paramLabel = "N",
-            description = "Rotate Parquet parts by row count (default: 2000000; 0 disables).")
+            description = "Rotate dataset parts by row count (default: 2000000; 0 disables).")
     Long partRotationMaxRows;
 
     @Resume(ResumeClass.FREE)
