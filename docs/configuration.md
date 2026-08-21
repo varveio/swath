@@ -81,7 +81,7 @@ and similar environments.
 | `JAVA_TOOL_OPTIONS` | unset | JVM flags read by Java itself; works with the jar, launcher, and Docker image |
 | `NO_COLOR` | unset | Disables automatic color when set to any value |
 | `TERM=dumb` | environment | Disables automatic color and terminal redraws |
-| `CLICOLOR_FORCE` | unset | Forces automatic color off a terminal |
+| `CLICOLOR_FORCE` | unset | Forces automatic color on outside a terminal |
 
 An explicit `--color=always` or `--color=never` wins over terminal environment signals.
 
