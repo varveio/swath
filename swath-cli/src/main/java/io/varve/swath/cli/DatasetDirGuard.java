@@ -49,9 +49,9 @@ import org.slf4j.LoggerFactory;
  * dataset, {@link #prepareDatasetForFreshRun} clears the prior dataset so the new run never inherits
  * it — but deletes ONLY swath-owned files (the four root markers and, under {@code data/}, only
  * part files matching the reserved naming). A foreign file dropped into {@code data/} SURVIVES:
- * {@code --restart}/{@code --overwrite}'s blast radius is what a valid swath manifest records,
- * never arbitrary contents. What the guard accepts as owned is exactly what the sweep would
- * remove is the reserved part namespace, never an arbitrary directory sweep.
+ * {@code --restart}/{@code --overwrite} cleanup requires durable ownership evidence and is limited
+ * to managed markers plus the reserved part namespace, never arbitrary contents or an arbitrary
+ * directory sweep.
  */
 final class DatasetDirGuard {
 

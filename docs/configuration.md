@@ -25,10 +25,11 @@ The resolution rules are deliberately independent:
 | Input | Resolution |
 | --- | --- |
 | No `-o`, or `-o -` | stdout; `auto` is table on a terminal and TSV when redirected |
-| `-o` ending in `.tsv`, `.jsonl`, or `.parquet` | single-file destination; the suffix supplies the format when `--format` is omitted |
+| `-o` ending in `.tsv` or `.jsonl` | atomically published single file; the suffix supplies the format when `--format` is omitted |
+| `-o` ending in `.parquet` | FILE-kind, one-writer Parquet dataset directory containing one part; it is not one physical Parquet file |
 | A `.gz` or `.zst` outer suffix | stripped before format inference and implies gzip or Zstandard for text; for example, `rows.jsonl.gz` is a gzip JSONL file |
 | Any other real `-o` path | directory dataset; `--format` is required because the path supplies none |
-| `--output-type file|dir` | overrides only destination kind, never a path's implied format |
+| `--output-type file` or `--output-type dir` | overrides only destination kind, never a path's implied format |
 
 An explicit `--format` must agree with a recognized suffix. An explicit
 `--compression` must agree with `.gz`/`.zst`; Parquet rejects either form because its

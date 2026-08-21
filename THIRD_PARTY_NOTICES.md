@@ -132,69 +132,65 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
 
 ### zstd-jni wrapper — BSD 2-Clause
 
-```text
-Zstd-jni: JNI bindings to Zstd Library
+    Zstd-jni: JNI bindings to Zstd Library
 
-Copyright (c) 2015-present, Luben Karavelov/ All rights reserved.
+    Copyright (c) 2015-present, Luben Karavelov/ All rights reserved.
 
-BSD License
+    BSD License
 
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
+    Redistribution and use in source and binary forms, with or without modification,
+    are permitted provided that the following conditions are met:
 
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
+    * Redistributions of source code must retain the above copyright notice, this
+      list of conditions and the following disclaimer.
 
-* Redistributions in binary form must reproduce the above copyright notice, this
-  list of conditions and the following disclaimer in the documentation and/or
-  other materials provided with the distribution.
+    * Redistributions in binary form must reproduce the above copyright notice, this
+      list of conditions and the following disclaimer in the documentation and/or
+      other materials provided with the distribution.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+    ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### Native Zstandard library — BSD 3-Clause
 
-```text
-BSD License
+    BSD License
 
-For Zstandard software
+    For Zstandard software
 
-Copyright (c) 2016-present, Facebook, Inc. All rights reserved.
+    Copyright (c) 2016-present, Facebook, Inc. All rights reserved.
 
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
+    Redistribution and use in source and binary forms, with or without modification,
+    are permitted provided that the following conditions are met:
 
- * Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+     * Redistributions of source code must retain the above copyright notice, this
+       list of conditions and the following disclaimer.
 
- * Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+     * Redistributions in binary form must reproduce the above copyright notice,
+       this list of conditions and the following disclaimer in the documentation
+       and/or other materials provided with the distribution.
 
- * Neither the name Facebook nor the names of its contributors may be used to
-   endorse or promote products derived from this software without specific
-   prior written permission.
+     * Neither the name Facebook nor the names of its contributors may be used to
+       endorse or promote products derived from this software without specific
+       prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+    ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Embedded upstream notice resources
 
@@ -202,1660 +198,1542 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### apache-client-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### arns-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### auth-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### avro-1.9.2.jar
 
 #### META-INF/NOTICE
 
-```text
 
-Apache Avro
-Copyright 2009-2020 The Apache Software Foundation
+    Apache Avro
+    Copyright 2009-2020 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### aws-core-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### aws-query-protocol-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### aws-xml-protocol-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### checksums-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### checksums-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-beanutils-1.9.4.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons BeanUtils
-Copyright 2000-2019 The Apache Software Foundation
+    Apache Commons BeanUtils
+    Copyright 2000-2019 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### commons-cli-1.5.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons CLI
-Copyright 2002-2021 The Apache Software Foundation
+    Apache Commons CLI
+    Copyright 2002-2021 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-codec-1.17.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Codec
-Copyright 2002-2024 The Apache Software Foundation
+    Apache Commons Codec
+    Copyright 2002-2024 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-collections-3.2.2.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Collections
-Copyright 2001-2015 The Apache Software Foundation
+    Apache Commons Collections
+    Copyright 2001-2015 The Apache Software Foundation
 
-This product includes software developed by
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed by
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### commons-compress-1.26.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Compress
-Copyright 2002-2024 The Apache Software Foundation
+    Apache Commons Compress
+    Copyright 2002-2024 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-configuration2-2.10.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Configuration
-Copyright 2001-2024 The Apache Software Foundation
+    Apache Commons Configuration
+    Copyright 2001-2024 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-io-2.16.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons IO
-Copyright 2002-2024 The Apache Software Foundation
+    Apache Commons IO
+    Copyright 2002-2024 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-lang3-3.14.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Lang
-Copyright 2001-2023 The Apache Software Foundation
+    Apache Commons Lang
+    Copyright 2001-2023 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-logging-1.3.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Logging
-Copyright 2001-2023 The Apache Software Foundation
+    Apache Commons Logging
+    Copyright 2001-2023 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-net-3.9.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Net
-Copyright 2001-2022 The Apache Software Foundation
+    Apache Commons Net
+    Copyright 2001-2022 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### commons-pool-1.6.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Pool
-Copyright 2001-2012 The Apache Software Foundation
+    Apache Commons Pool
+    Copyright 2001-2012 The Apache Software Foundation
 
-This product includes software developed by
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed by
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### commons-text-1.11.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Commons Text
-Copyright 2014-2023 The Apache Software Foundation
+    Apache Commons Text
+    Copyright 2014-2023 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (https://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
 
 ### crt-core-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### endpoints-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### hadoop-annotations-3.4.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Hadoop
-Copyright 2006 and onwards The Apache Software Foundation.
+    Apache Hadoop
+    Copyright 2006 and onwards The Apache Software Foundation.
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
-Export Control Notice
----------------------
+    Export Control Notice
+    ---------------------
 
-This distribution includes cryptographic software.  The country in
-which you currently reside may have restrictions on the import,
-possession, use, and/or re-export to another country, of
-encryption software.  BEFORE using any encryption software, please
-check your country's laws, regulations and policies concerning the
-import, possession, or use, and re-export of encryption software, to
-see if this is permitted.  See <http://www.wassenaar.org/> for more
-information.
+    This distribution includes cryptographic software.  The country in
+    which you currently reside may have restrictions on the import,
+    possession, use, and/or re-export to another country, of
+    encryption software.  BEFORE using any encryption software, please
+    check your country's laws, regulations and policies concerning the
+    import, possession, or use, and re-export of encryption software, to
+    see if this is permitted.  See <http://www.wassenaar.org/> for more
+    information.
 
-The U.S. Government Department of Commerce, Bureau of Industry and
-Security (BIS), has classified this software as Export Commodity
-Control Number (ECCN) 5D002.C.1, which includes information security
-software using or performing cryptographic functions with asymmetric
-algorithms.  The form and manner of this Apache Software Foundation
-distribution makes it eligible for export under the License Exception
-ENC Technology Software Unrestricted (TSU) exception (see the BIS
-Export Administration Regulations, Section 740.13) for both object
-code and source code.
+    The U.S. Government Department of Commerce, Bureau of Industry and
+    Security (BIS), has classified this software as Export Commodity
+    Control Number (ECCN) 5D002.C.1, which includes information security
+    software using or performing cryptographic functions with asymmetric
+    algorithms.  The form and manner of this Apache Software Foundation
+    distribution makes it eligible for export under the License Exception
+    ENC Technology Software Unrestricted (TSU) exception (see the BIS
+    Export Administration Regulations, Section 740.13) for both object
+    code and source code.
 
-The following provides more details on the included cryptographic software:
+    The following provides more details on the included cryptographic software:
 
-This software uses the SSL libraries from the Jetty project written
-by mortbay.org.
-Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
-cryptography APIs written by the Legion of the Bouncy Castle Inc.
-```
+    This software uses the SSL libraries from the Jetty project written
+    by mortbay.org.
+    Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
+    cryptography APIs written by the Legion of the Bouncy Castle Inc.
 
 ### hadoop-common-3.4.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Hadoop
-Copyright 2006 and onwards The Apache Software Foundation.
+    Apache Hadoop
+    Copyright 2006 and onwards The Apache Software Foundation.
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
-Export Control Notice
----------------------
+    Export Control Notice
+    ---------------------
 
-This distribution includes cryptographic software.  The country in
-which you currently reside may have restrictions on the import,
-possession, use, and/or re-export to another country, of
-encryption software.  BEFORE using any encryption software, please
-check your country's laws, regulations and policies concerning the
-import, possession, or use, and re-export of encryption software, to
-see if this is permitted.  See <http://www.wassenaar.org/> for more
-information.
+    This distribution includes cryptographic software.  The country in
+    which you currently reside may have restrictions on the import,
+    possession, use, and/or re-export to another country, of
+    encryption software.  BEFORE using any encryption software, please
+    check your country's laws, regulations and policies concerning the
+    import, possession, or use, and re-export of encryption software, to
+    see if this is permitted.  See <http://www.wassenaar.org/> for more
+    information.
 
-The U.S. Government Department of Commerce, Bureau of Industry and
-Security (BIS), has classified this software as Export Commodity
-Control Number (ECCN) 5D002.C.1, which includes information security
-software using or performing cryptographic functions with asymmetric
-algorithms.  The form and manner of this Apache Software Foundation
-distribution makes it eligible for export under the License Exception
-ENC Technology Software Unrestricted (TSU) exception (see the BIS
-Export Administration Regulations, Section 740.13) for both object
-code and source code.
+    The U.S. Government Department of Commerce, Bureau of Industry and
+    Security (BIS), has classified this software as Export Commodity
+    Control Number (ECCN) 5D002.C.1, which includes information security
+    software using or performing cryptographic functions with asymmetric
+    algorithms.  The form and manner of this Apache Software Foundation
+    distribution makes it eligible for export under the License Exception
+    ENC Technology Software Unrestricted (TSU) exception (see the BIS
+    Export Administration Regulations, Section 740.13) for both object
+    code and source code.
 
-The following provides more details on the included cryptographic software:
+    The following provides more details on the included cryptographic software:
 
-This software uses the SSL libraries from the Jetty project written
-by mortbay.org.
-Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
-cryptography APIs written by the Legion of the Bouncy Castle Inc.
-```
+    This software uses the SSL libraries from the Jetty project written
+    by mortbay.org.
+    Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
+    cryptography APIs written by the Legion of the Bouncy Castle Inc.
 
 ### hadoop-mapreduce-client-core-3.4.1.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Hadoop
-Copyright 2006 and onwards The Apache Software Foundation.
+    Apache Hadoop
+    Copyright 2006 and onwards The Apache Software Foundation.
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
-Export Control Notice
----------------------
+    Export Control Notice
+    ---------------------
 
-This distribution includes cryptographic software.  The country in
-which you currently reside may have restrictions on the import,
-possession, use, and/or re-export to another country, of
-encryption software.  BEFORE using any encryption software, please
-check your country's laws, regulations and policies concerning the
-import, possession, or use, and re-export of encryption software, to
-see if this is permitted.  See <http://www.wassenaar.org/> for more
-information.
+    This distribution includes cryptographic software.  The country in
+    which you currently reside may have restrictions on the import,
+    possession, use, and/or re-export to another country, of
+    encryption software.  BEFORE using any encryption software, please
+    check your country's laws, regulations and policies concerning the
+    import, possession, or use, and re-export of encryption software, to
+    see if this is permitted.  See <http://www.wassenaar.org/> for more
+    information.
 
-The U.S. Government Department of Commerce, Bureau of Industry and
-Security (BIS), has classified this software as Export Commodity
-Control Number (ECCN) 5D002.C.1, which includes information security
-software using or performing cryptographic functions with asymmetric
-algorithms.  The form and manner of this Apache Software Foundation
-distribution makes it eligible for export under the License Exception
-ENC Technology Software Unrestricted (TSU) exception (see the BIS
-Export Administration Regulations, Section 740.13) for both object
-code and source code.
+    The U.S. Government Department of Commerce, Bureau of Industry and
+    Security (BIS), has classified this software as Export Commodity
+    Control Number (ECCN) 5D002.C.1, which includes information security
+    software using or performing cryptographic functions with asymmetric
+    algorithms.  The form and manner of this Apache Software Foundation
+    distribution makes it eligible for export under the License Exception
+    ENC Technology Software Unrestricted (TSU) exception (see the BIS
+    Export Administration Regulations, Section 740.13) for both object
+    code and source code.
 
-The following provides more details on the included cryptographic software:
+    The following provides more details on the included cryptographic software:
 
-This software uses the SSL libraries from the Jetty project written
-by mortbay.org.
-Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
-cryptography APIs written by the Legion of the Bouncy Castle Inc.
-```
+    This software uses the SSL libraries from the Jetty project written
+    by mortbay.org.
+    Hadoop Yarn Server Web Proxy uses the BouncyCastle Java
+    cryptography APIs written by the Legion of the Bouncy Castle Inc.
 
 ### hadoop-shaded-guava-1.3.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Hadoop Third-party Libs
-Copyright 2020 and onwards The Apache Software Foundation.
+    Apache Hadoop Third-party Libs
+    Copyright 2020 and onwards The Apache Software Foundation.
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### hadoop-shaded-protobuf_3_25-1.3.0.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-Apache Hadoop Third-party Libs
-Copyright 2020 and onwards The Apache Software Foundation.
+    Apache Hadoop Third-party Libs
+    Copyright 2020 and onwards The Apache Software Foundation.
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### http-auth-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### http-auth-aws-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### http-auth-aws-eventstream-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### http-auth-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### http-client-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### httpclient-4.5.13.jar
 
 #### META-INF/NOTICE
 
-```text
 
-Apache HttpClient
-Copyright 1999-2020 The Apache Software Foundation
+    Apache HttpClient
+    Copyright 1999-2020 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### httpcore-4.4.16.jar
 
 #### META-INF/NOTICE
 
-```text
 
-Apache HttpCore
-Copyright 2005-2022 The Apache Software Foundation
+    Apache HttpCore
+    Copyright 2005-2022 The Apache Software Foundation
 
-This product includes software developed at
-The Apache Software Foundation (http://www.apache.org/).
-```
+    This product includes software developed at
+    The Apache Software Foundation (http://www.apache.org/).
 
 ### identity-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### jackson-core-2.12.7.jar
 
 #### META-INF/NOTICE
 
-```text
-# Jackson JSON processor
+    # Jackson JSON processor
 
-Jackson is a high-performance, Free/Open Source JSON processing library.
-It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-been in development since 2007.
-It is currently developed by a community of developers.
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
 
-## Licensing
+    ## Licensing
 
-Jackson 2.x core and extension components are licensed under Apache License 2.0
-To find the details that apply to this artifact see the accompanying LICENSE file.
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
 
-## Credits
+    ## Credits
 
-A list of contributors may be found from CREDITS(-2.x) file, which is included
-in some artifacts (usually source distributions); but is always available
-from the source code management (SCM) system project uses.
-```
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
 
 ### jackson-databind-2.12.7.1.jar
 
 #### META-INF/NOTICE
 
-```text
-# Jackson JSON processor
+    # Jackson JSON processor
 
-Jackson is a high-performance, Free/Open Source JSON processing library.
-It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-been in development since 2007.
-It is currently developed by a community of developers.
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
 
-## Licensing
+    ## Licensing
 
-Jackson 2.x core and extension components are licensed under Apache License 2.0
-To find the details that apply to this artifact see the accompanying LICENSE file.
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
 
-## Credits
+    ## Credits
 
-A list of contributors may be found from CREDITS(-2.x) file, which is included
-in some artifacts (usually source distributions); but is always available
-from the source code management (SCM) system project uses.
-```
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
 
 ### jakarta.activation-api-1.2.1.jar
 
 #### META-INF/NOTICE.md
 
-```text
-# Notices for Eclipse Project for JAF
+    # Notices for Eclipse Project for JAF
 
-This content is produced and maintained by the Eclipse Project for JAF project.
+    This content is produced and maintained by the Eclipse Project for JAF project.
 
-* Project home: https://projects.eclipse.org/projects/ee4j.jaf
+    * Project home: https://projects.eclipse.org/projects/ee4j.jaf
 
-## Copyright
+    ## Copyright
 
-All content is the property of the respective authors or their employers. For
-more information regarding authorship of content, please consult the listed
-source code repository logs.
+    All content is the property of the respective authors or their employers. For
+    more information regarding authorship of content, please consult the listed
+    source code repository logs.
 
-## Declared Project Licenses
+    ## Declared Project Licenses
 
-This program and the accompanying materials are made available under the terms
-of the Eclipse Distribution License v. 1.0,
-which is available at http://www.eclipse.org/org/documents/edl-v10.php.
+    This program and the accompanying materials are made available under the terms
+    of the Eclipse Distribution License v. 1.0,
+    which is available at http://www.eclipse.org/org/documents/edl-v10.php.
 
-SPDX-License-Identifier: BSD-3-Clause
+    SPDX-License-Identifier: BSD-3-Clause
 
-## Source Code
+    ## Source Code
 
-The project maintains the following source code repositories:
+    The project maintains the following source code repositories:
 
-* https://github.com/eclipse-ee4j/jaf
+    * https://github.com/eclipse-ee4j/jaf
 
-## Third-party Content
+    ## Third-party Content
 
-This project leverages the following third party content.
+    This project leverages the following third party content.
 
-JUnit (4.12)
+    JUnit (4.12)
 
-* License: Eclipse Public License
-```
+    * License: Eclipse Public License
 
 ### json-utils-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### metrics-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### micrometer-commons-1.17.0.jar
 
 #### META-INF/NOTICE
 
-```text
-Micrometer
+    Micrometer
 
-Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
+    Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
 
-   https://www.apache.org/licenses/LICENSE-2.0
+       https://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
 
--------------------------------------------------------------------------------
+    -------------------------------------------------------------------------------
 
-This product contains a modified portion of 'io.netty.util.internal.logging',
-in the Netty/Common library distributed by The Netty Project:
+    This product contains a modified portion of 'io.netty.util.internal.logging',
+    in the Netty/Common library distributed by The Netty Project:
 
-  * Copyright 2013 The Netty Project
-  * License: Apache License v2.0
-  * Homepage: https://netty.io
+      * Copyright 2013 The Netty Project
+      * License: Apache License v2.0
+      * Homepage: https://netty.io
 
-This product contains a modified portion of 'StringUtils.isBlank()',
-in the Commons Lang library distributed by The Apache Software Foundation:
+    This product contains a modified portion of 'StringUtils.isBlank()',
+    in the Commons Lang library distributed by The Apache Software Foundation:
 
-  * Copyright 2001-2019 The Apache Software Foundation
-  * License: Apache License v2.0
-  * Homepage: https://commons.apache.org/proper/commons-lang/
+      * Copyright 2001-2019 The Apache Software Foundation
+      * License: Apache License v2.0
+      * Homepage: https://commons.apache.org/proper/commons-lang/
 
-This product contains a modified portion of 'JsonUtf8Writer',
-in the Moshi library distributed by Square, Inc:
+    This product contains a modified portion of 'JsonUtf8Writer',
+    in the Moshi library distributed by Square, Inc:
 
-  * Copyright 2010 Google Inc.
-  * License: Apache License v2.0
-  * Homepage: https://github.com/square/moshi
+      * Copyright 2010 Google Inc.
+      * License: Apache License v2.0
+      * Homepage: https://github.com/square/moshi
 
-This product contains a modified portion of the 'org.springframework.lang'
-package in the Spring Framework library, distributed by VMware, Inc:
+    This product contains a modified portion of the 'org.springframework.lang'
+    package in the Spring Framework library, distributed by VMware, Inc:
 
-  * Copyright 2002-2019 the original author or authors.
-  * License: Apache License v2.0
-  * Homepage: https://spring.io/projects/spring-framework
-```
+      * Copyright 2002-2019 the original author or authors.
+      * License: Apache License v2.0
+      * Homepage: https://spring.io/projects/spring-framework
 
 ### micrometer-core-1.17.0.jar
 
 #### META-INF/NOTICE
 
-```text
-Micrometer
+    Micrometer
 
-Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
+    Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
 
-   https://www.apache.org/licenses/LICENSE-2.0
+       https://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
 
--------------------------------------------------------------------------------
+    -------------------------------------------------------------------------------
 
-This product contains a modified portion of 'io.netty.util.internal.logging',
-in the Netty/Common library distributed by The Netty Project:
+    This product contains a modified portion of 'io.netty.util.internal.logging',
+    in the Netty/Common library distributed by The Netty Project:
 
-  * Copyright 2013 The Netty Project
-  * License: Apache License v2.0
-  * Homepage: https://netty.io
+      * Copyright 2013 The Netty Project
+      * License: Apache License v2.0
+      * Homepage: https://netty.io
 
-This product contains a modified portion of 'StringUtils.isBlank()',
-in the Commons Lang library distributed by The Apache Software Foundation:
+    This product contains a modified portion of 'StringUtils.isBlank()',
+    in the Commons Lang library distributed by The Apache Software Foundation:
 
-  * Copyright 2001-2019 The Apache Software Foundation
-  * License: Apache License v2.0
-  * Homepage: https://commons.apache.org/proper/commons-lang/
+      * Copyright 2001-2019 The Apache Software Foundation
+      * License: Apache License v2.0
+      * Homepage: https://commons.apache.org/proper/commons-lang/
 
-This product contains a modified portion of 'JsonUtf8Writer',
-in the Moshi library distributed by Square, Inc:
+    This product contains a modified portion of 'JsonUtf8Writer',
+    in the Moshi library distributed by Square, Inc:
 
-  * Copyright 2010 Google Inc.
-  * License: Apache License v2.0
-  * Homepage: https://github.com/square/moshi
+      * Copyright 2010 Google Inc.
+      * License: Apache License v2.0
+      * Homepage: https://github.com/square/moshi
 
-This product contains a modified portion of the 'org.springframework.lang'
-package in the Spring Framework library, distributed by VMware, Inc:
+    This product contains a modified portion of the 'org.springframework.lang'
+    package in the Spring Framework library, distributed by VMware, Inc:
 
-  * Copyright 2002-2019 the original author or authors.
-  * License: Apache License v2.0
-  * Homepage: https://spring.io/projects/spring-framework
-```
+      * Copyright 2002-2019 the original author or authors.
+      * License: Apache License v2.0
+      * Homepage: https://spring.io/projects/spring-framework
 
 ### micrometer-observation-1.17.0.jar
 
 #### META-INF/NOTICE
 
-```text
-Micrometer
+    Micrometer
 
-Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
+    Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
 
-   https://www.apache.org/licenses/LICENSE-2.0
+       https://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
 
--------------------------------------------------------------------------------
+    -------------------------------------------------------------------------------
 
-This product contains a modified portion of 'io.netty.util.internal.logging',
-in the Netty/Common library distributed by The Netty Project:
+    This product contains a modified portion of 'io.netty.util.internal.logging',
+    in the Netty/Common library distributed by The Netty Project:
 
-  * Copyright 2013 The Netty Project
-  * License: Apache License v2.0
-  * Homepage: https://netty.io
+      * Copyright 2013 The Netty Project
+      * License: Apache License v2.0
+      * Homepage: https://netty.io
 
-This product contains a modified portion of 'StringUtils.isBlank()',
-in the Commons Lang library distributed by The Apache Software Foundation:
+    This product contains a modified portion of 'StringUtils.isBlank()',
+    in the Commons Lang library distributed by The Apache Software Foundation:
 
-  * Copyright 2001-2019 The Apache Software Foundation
-  * License: Apache License v2.0
-  * Homepage: https://commons.apache.org/proper/commons-lang/
+      * Copyright 2001-2019 The Apache Software Foundation
+      * License: Apache License v2.0
+      * Homepage: https://commons.apache.org/proper/commons-lang/
 
-This product contains a modified portion of 'JsonUtf8Writer',
-in the Moshi library distributed by Square, Inc:
+    This product contains a modified portion of 'JsonUtf8Writer',
+    in the Moshi library distributed by Square, Inc:
 
-  * Copyright 2010 Google Inc.
-  * License: Apache License v2.0
-  * Homepage: https://github.com/square/moshi
+      * Copyright 2010 Google Inc.
+      * License: Apache License v2.0
+      * Homepage: https://github.com/square/moshi
 
-This product contains a modified portion of the 'org.springframework.lang'
-package in the Spring Framework library, distributed by VMware, Inc:
+    This product contains a modified portion of the 'org.springframework.lang'
+    package in the Spring Framework library, distributed by VMware, Inc:
 
-  * Copyright 2002-2019 the original author or authors.
-  * License: Apache License v2.0
-  * Homepage: https://spring.io/projects/spring-framework
-```
+      * Copyright 2002-2019 the original author or authors.
+      * License: Apache License v2.0
+      * Homepage: https://spring.io/projects/spring-framework
 
 ### micrometer-registry-otlp-1.17.0.jar
 
 #### META-INF/NOTICE
 
-```text
-Micrometer
+    Micrometer
 
-Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
+    Copyright (c) 2017-Present VMware, Inc. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
 
-   https://www.apache.org/licenses/LICENSE-2.0
+       https://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
 
--------------------------------------------------------------------------------
+    -------------------------------------------------------------------------------
 
-This product contains a modified portion of 'io.netty.util.internal.logging',
-in the Netty/Common library distributed by The Netty Project:
+    This product contains a modified portion of 'io.netty.util.internal.logging',
+    in the Netty/Common library distributed by The Netty Project:
 
-  * Copyright 2013 The Netty Project
-  * License: Apache License v2.0
-  * Homepage: https://netty.io
+      * Copyright 2013 The Netty Project
+      * License: Apache License v2.0
+      * Homepage: https://netty.io
 
-This product contains a modified portion of 'StringUtils.isBlank()',
-in the Commons Lang library distributed by The Apache Software Foundation:
+    This product contains a modified portion of 'StringUtils.isBlank()',
+    in the Commons Lang library distributed by The Apache Software Foundation:
 
-  * Copyright 2001-2019 The Apache Software Foundation
-  * License: Apache License v2.0
-  * Homepage: https://commons.apache.org/proper/commons-lang/
+      * Copyright 2001-2019 The Apache Software Foundation
+      * License: Apache License v2.0
+      * Homepage: https://commons.apache.org/proper/commons-lang/
 
-This product contains a modified portion of 'JsonUtf8Writer',
-in the Moshi library distributed by Square, Inc:
+    This product contains a modified portion of 'JsonUtf8Writer',
+    in the Moshi library distributed by Square, Inc:
 
-  * Copyright 2010 Google Inc.
-  * License: Apache License v2.0
-  * Homepage: https://github.com/square/moshi
+      * Copyright 2010 Google Inc.
+      * License: Apache License v2.0
+      * Homepage: https://github.com/square/moshi
 
-This product contains a modified portion of the 'org.springframework.lang'
-package in the Spring Framework library, distributed by VMware, Inc:
+    This product contains a modified portion of the 'org.springframework.lang'
+    package in the Spring Framework library, distributed by VMware, Inc:
 
-  * Copyright 2002-2019 the original author or authors.
-  * License: Apache License v2.0
-  * Homepage: https://spring.io/projects/spring-framework
-```
+      * Copyright 2002-2019 the original author or authors.
+      * License: Apache License v2.0
+      * Homepage: https://spring.io/projects/spring-framework
 
 ### netty-nio-client-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### parquet-jackson-1.15.1.jar
 
 #### META-INF/NOTICE
 
-```text
-# Jackson JSON processor
+    # Jackson JSON processor
 
-Jackson is a high-performance, Free/Open Source JSON processing library.
-It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-been in development since 2007.
-It is currently developed by a community of developers.
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
 
-## Copyright
+    ## Copyright
 
-Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
+    Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
 
-## Licensing
+    ## Licensing
 
-Jackson 2.x core and extension components are licensed under Apache License 2.0
-To find the details that apply to this artifact see the accompanying LICENSE file.
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
 
-## Credits
+    ## Credits
 
-A list of contributors may be found from CREDITS(-2.x) file, which is included
-in some artifacts (usually source distributions); but is always available
-from the source code management (SCM) system project uses.
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
 
-## FastDoubleParser
+    ## FastDoubleParser
 
-jackson-core bundles a shaded copy of FastDoubleParser <https://github.com/wrandelshofer/FastDoubleParser>.
-That code is available under an MIT license <https://github.com/wrandelshofer/FastDoubleParser/blob/main/LICENSE>
-under the following copyright.
+    jackson-core bundles a shaded copy of FastDoubleParser <https://github.com/wrandelshofer/FastDoubleParser>.
+    That code is available under an MIT license <https://github.com/wrandelshofer/FastDoubleParser/blob/main/LICENSE>
+    under the following copyright.
 
-Copyright © 2023 Werner Randelshofer, Switzerland. MIT License.
+    Copyright © 2023 Werner Randelshofer, Switzerland. MIT License.
 
-See FastDoubleParser-NOTICE for details of other source code included in FastDoubleParser
-and the licenses and copyrights that apply to that code.
-```
+    See FastDoubleParser-NOTICE for details of other source code included in FastDoubleParser
+    and the licenses and copyrights that apply to that code.
 
 ### profiles-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### protocol-core-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### regions-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### retries-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### retries-spi-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### s3-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### sdk-core-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### sts-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### third-party-jackson-core-2.31.78.jar
 
 #### META-INF/NOTICE
 
-```text
-# Jackson JSON processor
+    # Jackson JSON processor
 
-Jackson is a high-performance, Free/Open Source JSON processing library.
-It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
-been in development since 2007.
-It is currently developed by a community of developers.
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
 
-## Copyright
+    ## Copyright
 
-Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
+    Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
 
-## Licensing
+    ## Licensing
 
-Jackson 2.x core and extension components are licensed under Apache License 2.0
-To find the details that apply to this artifact see the accompanying LICENSE file.
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
 
-## Credits
+    ## Credits
 
-A list of contributors may be found from CREDITS(-2.x) file, which is included
-in some artifacts (usually source distributions); but is always available
-from the source code management (SCM) system project uses.
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
 
-## FastDoubleParser
+    ## FastDoubleParser
 
-jackson-core bundles a shaded copy of FastDoubleParser <https://github.com/wrandelshofer/FastDoubleParser>.
-That code is available under an MIT license <https://github.com/wrandelshofer/FastDoubleParser/blob/main/LICENSE>
-under the following copyright.
+    jackson-core bundles a shaded copy of FastDoubleParser <https://github.com/wrandelshofer/FastDoubleParser>.
+    That code is available under an MIT license <https://github.com/wrandelshofer/FastDoubleParser/blob/main/LICENSE>
+    under the following copyright.
 
-Copyright © 2023 Werner Randelshofer, Switzerland. MIT License.
+    Copyright © 2023 Werner Randelshofer, Switzerland. MIT License.
 
-See FastDoubleParser-NOTICE for details of other source code included in FastDoubleParser
-and the licenses and copyrights that apply to that code.
-```
+    See FastDoubleParser-NOTICE for details of other source code included in FastDoubleParser
+    and the licenses and copyrights that apply to that code.
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).
 
 ### utils-2.31.78.jar
 
 #### META-INF/NOTICE.txt
 
-```text
-AWS SDK for Java 2.0
-Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+    AWS SDK for Java 2.0
+    Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-This product includes software developed by
-Amazon Technologies, Inc (http://www.amazon.com/).
+    This product includes software developed by
+    Amazon Technologies, Inc (http://www.amazon.com/).
 
-**********************
-THIRD PARTY COMPONENTS
-**********************
-This software includes third party software subject to the following copyrights:
-- XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
-- PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
-- Apache Commons Lang - https://github.com/apache/commons-lang
-- Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
-- Jackson-core - https://github.com/FasterXML/jackson-core
-- Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
+    **********************
+    THIRD PARTY COMPONENTS
+    **********************
+    This software includes third party software subject to the following copyrights:
+    - XML parsing and utility functions from JetS3t - Copyright 2006-2009 James Murty.
+    - PKCS#1 PEM encoded private key parsing and utility functions from oauth.googlecode.com - Copyright 1998-2010 AOL Inc.
+    - Apache Commons Lang - https://github.com/apache/commons-lang
+    - Netty Reactive Streams - https://github.com/playframework/netty-reactive-streams
+    - Jackson-core - https://github.com/FasterXML/jackson-core
+    - Jackson-dataformat-cbor - https://github.com/FasterXML/jackson-dataformats-binary
 
-The licenses for these third party components are included in LICENSE.txt
+    The licenses for these third party components are included in LICENSE.txt
 
-- For Apache Commons Lang see also this required NOTICE:
-  Apache Commons Lang
-  Copyright 2001-2020 The Apache Software Foundation
+    - For Apache Commons Lang see also this required NOTICE:
+      Apache Commons Lang
+      Copyright 2001-2020 The Apache Software Foundation
 
-  This product includes software developed at
-  The Apache Software Foundation (https://www.apache.org/).
-```
+      This product includes software developed at
+      The Apache Software Foundation (https://www.apache.org/).

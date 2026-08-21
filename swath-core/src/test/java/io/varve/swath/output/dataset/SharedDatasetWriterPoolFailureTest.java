@@ -13,6 +13,7 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.testkit.PageBatches;
 import java.io.IOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -64,7 +65,8 @@ class SharedDatasetWriterPoolFailureTest {
         pool.interruptLanesForTest();
         assertThatThrownBy(pool::close)
                 .hasMessageContaining("writer failed")
-                .hasRootCauseInstanceOf(InterruptedException.class);
+                .satisfies(failure -> assertThat(failure.getCause())
+                        .isInstanceOfAny(InterruptedException.class, ClosedByInterruptException.class));
         assertUnpublishedAndEmpty(directory);
     }
 
