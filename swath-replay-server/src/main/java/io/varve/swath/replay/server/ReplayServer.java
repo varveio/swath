@@ -69,8 +69,21 @@ public final class ReplayServer implements AutoCloseable {
     public ReplayServer(String host, int port, String bucket, Path fixture, int parquetConnections,
                         ServingMode mode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
                         int maxConcurrentRequests) {
-        this(host, port, bucket, ReplayServingFactory.open(fixture, mode, parquetConnections), latency,
+        this(host, port, bucket, openValidated(fixture, mode, parquetConnections, maxConcurrentRequests), latency,
                 maxConcurrentRequests);
+    }
+
+    private static ReplayServingFactory.Result openValidated(Path fixture, ServingMode mode,
+                                                               int parquetConnections,
+                                                               int maxConcurrentRequests) {
+        validateMaxConcurrentRequests(maxConcurrentRequests);
+        return ReplayServingFactory.open(fixture, mode, parquetConnections);
+    }
+
+    static void validateMaxConcurrentRequests(int maxConcurrentRequests) {
+        if (maxConcurrentRequests < 8) {
+            throw new IllegalArgumentException("maxConcurrentRequests must be at least 8");
+        }
     }
 
     /**
@@ -119,7 +132,8 @@ public final class ReplayServer implements AutoCloseable {
                           AutoCloseable ownedFixture, ReplayMetrics metrics, int maxConcurrentReads,
                           ServingMode resolvedMode, BiFunction<S3ListRequest, S3ListResult, Duration> latency,
                           int maxConcurrentRequests) {
-        QueuedThreadPool pool = new QueuedThreadPool(Math.max(8, maxConcurrentRequests));
+        validateMaxConcurrentRequests(maxConcurrentRequests);
+        QueuedThreadPool pool = new QueuedThreadPool(maxConcurrentRequests);
         pool.setName("replay-serve");
         this.server = new Server(pool);
         this.ownedFixture = ownedFixture;

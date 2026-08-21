@@ -11,7 +11,9 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.EnumMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -48,6 +50,7 @@ public final class ReplayMetrics {
     private final Counter httpErrors;
     private final Timer httpRequestLatency;
     private final Timer fixtureListLatency;
+    private final Map<ShapeLatency.Shape, Timer> shapedRequestLatency;
     private final Counter servingPath;
     private final Timer pageReadLatency;
     private final Timer parquetQueryLatency;
@@ -84,6 +87,13 @@ public final class ReplayMetrics {
                 .publishPercentiles(0.5, 0.99).register(registry);
         fixtureListLatency = Timer.builder("swath.replay.fixture.list.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
+        shapedRequestLatency = new EnumMap<>(ShapeLatency.Shape.class);
+        for (ShapeLatency.Shape shape : ShapeLatency.Shape.values()) {
+            shapedRequestLatency.put(shape, Timer.builder("swath.replay.request.latency")
+                    .tag("shape", shape.name().toLowerCase(Locale.ROOT))
+                    .publishPercentiles(0.5, 0.99)
+                    .register(registry));
+        }
         servingPath = Counter.builder("swath.replay.serving.path").tag("mode", servingMode).register(registry);
         pageReadLatency = Timer.builder("swath.replay.page.read.latency")
                 .publishPercentiles(0.5, 0.99).register(registry);
@@ -191,10 +201,7 @@ public final class ReplayMetrics {
      * the server costs, not what it was told to pretend to cost.
      */
     public void recordShapedRequest(Timer.Sample sample, ShapeLatency.Shape shape) {
-        sample.stop(Timer.builder("swath.replay.request.latency")
-                .tag("shape", shape.name().toLowerCase(Locale.ROOT))
-                .publishPercentiles(0.5, 0.99)
-                .register(registry));
+        sample.stop(shapedRequestLatency.get(shape));
     }
 
 

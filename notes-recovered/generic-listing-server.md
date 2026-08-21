@@ -64,7 +64,7 @@ Measured verdicts that shape this (2026-07-04 experiments):
 
 ## Architecture sketch (if pursued)
 
-```
+```text
 sorted stamped parquet (+ footer routing blob)
         │
         ├── point/range/page serving: routing index → page-filtered custom reader (cold ~ms)

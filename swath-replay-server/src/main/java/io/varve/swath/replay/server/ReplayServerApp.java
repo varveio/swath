@@ -83,12 +83,17 @@ public final class ReplayServerApp implements Callable<Integer> {
                         options.host, server.port(), bucket, fixture.toAbsolutePath(),
                         server.resolvedServingMode(), server.resolvedParquetConnections(),
                         injected == null ? "off" : options.injectLatency, options.latencyScale,
-                        metrics == null ? "off" : "http://%s:%d/metrics".formatted(options.host, metrics.port()),
+                        metrics == null ? "off" : metricsEndpoint(options.host, metrics.port()),
                         options.maxConcurrentRequests);
                 server.join();
             }
         }
         return 0;
+    }
+
+    static String metricsEndpoint(String host, int port) {
+        String authorityHost = host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
+        return "http://%s:%d/metrics".formatted(authorityHost, port);
     }
 
     @Command(name = "serve",

@@ -130,10 +130,13 @@ final class ReplayHandler extends Handler.Abstract {
             throw new S3Error(404, "NoSuchBucket", "The specified bucket does not exist");
         }
         S3ListRequest listRequest = ListObjectsV2RequestParser.parse(bucket, request.getHttpURI().getQuery());
-        return S3Xml.listBucket(boundedList(listRequest));
+        ServedListing served = boundedList(listRequest);
+        String body = S3Xml.listBucket(served.result());
+        sleepToDeadline(served.latency(), System.nanoTime() - served.startedNanos(), served.shape());
+        return body;
     }
 
-    private S3ListResult boundedList(S3ListRequest listRequest) {
+    private ServedListing boundedList(S3ListRequest listRequest) {
         S3ListResult result;
         // Started before the permit wait, unlike page.read.latency: what a client experiences from a
         // saturated server includes queueing for a connection, and this timer is the one asked
@@ -161,9 +164,11 @@ final class ReplayHandler extends Handler.Abstract {
         ShapeLatency.Shape shape = ShapeLatency.classify(listRequest);
         metrics.recordShapedRequest(shaped, shape);
         logIfSlow(listRequest, result, servedNanos, shape);
-        sleepToDeadline(latency.apply(listRequest, result), servedNanos, shape);
-        return result;
+        return new ServedListing(result, startNanos, shape, latency.apply(listRequest, result));
     }
+
+    private record ServedListing(S3ListResult result, long startedNanos, ShapeLatency.Shape shape,
+                                 Duration latency) { }
 
     /**
      * Name a request the meters can only count. See {@link #SLOW_REQUEST_LOG_PROPERTY}.

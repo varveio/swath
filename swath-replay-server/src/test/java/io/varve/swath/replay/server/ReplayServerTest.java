@@ -6,6 +6,7 @@
 package io.varve.swath.replay.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.replay.protocol.ListedObject;
@@ -31,6 +32,14 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class ReplayServerTest {
+
+    @Test
+    void requestCeilingMustFitJettysMinimumThreadPool() {
+        assertThatThrownBy(() -> ReplayServer.validateMaxConcurrentRequests(7))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least 8");
+        assertThatCode(() -> ReplayServer.validateMaxConcurrentRequests(8)).doesNotThrowAnyException();
+    }
 
     @Test
     void servesPathStyleListObjectsV2Xml() throws Exception {

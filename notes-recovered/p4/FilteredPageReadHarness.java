@@ -1,4 +1,4 @@
-import dev.swath.output.parquet.ParquetSchema;
+import io.varve.swath.output.parquet.ParquetSchema;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.ParquetReadOptions;
@@ -59,10 +59,11 @@ public final class FilteredPageReadHarness {
     private static final int REPS = 20;
 
     public static void main(String[] args) throws Exception {
-        Path v1 = Path.of(args.length > 0 ? args[0]
-                : "/home/sagi/.claude/jobs/58e2b269/tmp/p1-page-index-gate/data/v1-1mb-page.parquet");
-        Path v2 = Path.of(args.length > 1 ? args[1]
-                : "/home/sagi/.claude/jobs/58e2b269/tmp/p1-page-index-gate/data/v2-64kb-page.parquet");
+        if (args.length < 2) {
+            throw new IllegalArgumentException("usage: FilteredPageReadHarness <v1-fixture> <v2-fixture> [scratch]");
+        }
+        Path v1 = Path.of(args[0]);
+        Path v2 = Path.of(args[1]);
         Path scratch = Path.of(args.length > 2 ? args[2] : "/tmp/p4-scratch");
         Files.createDirectories(scratch);
 
@@ -164,11 +165,26 @@ public final class FilteredPageReadHarness {
                              .withType(schema)
                              .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
                              .withDictionaryEncoding(false)
+                             .withRowGroupSize(1)
                              .build()) {
             var factory = new org.apache.parquet.example.data.simple.SimpleGroupFactory(schema);
             writer.write(factory.newGroup().append("k", Binary.fromConstantByteArray(new byte[] {0x01})));
             writer.write(factory.newGroup().append("k", Binary.fromConstantByteArray(new byte[] {0x7F})));
             writer.write(factory.newGroup().append("k", Binary.fromConstantByteArray(new byte[] {(byte) 0xFF})));
+        }
+
+        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
+            List<org.apache.parquet.hadoop.metadata.BlockMetaData> blocks = reader.getFooter().getBlocks();
+            if (blocks.size() != 3) {
+                throw new IllegalStateException("hazard fixture must contain three row groups, found "
+                        + blocks.size());
+            }
+            for (var block : blocks) {
+                var column = block.getColumns().getFirst();
+                if (column.getColumnIndexReference() == null || column.getOffsetIndexReference() == null) {
+                    throw new IllegalStateException("hazard fixture row group lacks column/offset index metadata");
+                }
+            }
         }
 
         Operators.BinaryColumn col = FilterApi.binaryColumn("k");
@@ -382,18 +398,21 @@ public final class FilteredPageReadHarness {
         }
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(requested, fileSchema);
 
-        // COLD: fresh reader per lookup, timed end-to-end (footer parse + row-group filter), THEN a
-        // 3-way split of the read itself: readNextFilteredRowGroup() (column-index read/parse +
-        // RowRanges computation + PageReadStore construction) vs the actual per-row materialize loop.
+        // The first lookup is the only process-cold observation. Later fresh-reader lookups still
+        // reopen and parse the footer, but run with warmed process and filesystem caches.
+        List<double[]> firstLookup = List.of(timeOnce(
+                file, columnIo, requested, sortedKeys, starts[0]));
+        report(file.getFileName() + " [" + projLabel + "] FIRST LOOKUP (reopen+filter)", firstLookup);
+
         for (int i = 0; i < WARMUPS; i++) {
             timeOnce(file, columnIo, requested, sortedKeys, starts[i % starts.length]);
         }
-        List<double[]> coldSamples = new ArrayList<>(REPS); // [openMs, filteredRowGroupMs, materializeMs]
+        List<double[]> warmSamples = new ArrayList<>(REPS); // [openMs, filteredRowGroupMs, materializeMs]
         for (int i = 0; i < REPS; i++) {
-            coldSamples.add(timeOnce(file, columnIo, requested, sortedKeys, starts[i % starts.length]));
+            warmSamples.add(timeOnce(file, columnIo, requested, sortedKeys, starts[i % starts.length]));
         }
-        report(file.getFileName() + " [" + projLabel + "] COLD (reopen+filter; columnIo/schema cached once)",
-                coldSamples);
+        report(file.getFileName() + " [" + projLabel + "] WARM CACHE (reopen+filter; columnIo/schema cached once)",
+                warmSamples);
 
         // "Footer parse only" isolation: a server-realistic footer cache would amortize exactly this
         // part to ~0 after the first request. (The (Configuration, Path, ParquetMetadata,
@@ -408,9 +427,9 @@ public final class FilteredPageReadHarness {
         for (int i = 0; i < REPS; i++) {
             footerMs.add(footerOnly(file));
         }
-        double avgOpen = avg(toList(coldSamples, 0));
+        double avgOpen = avg(toList(warmSamples, 0));
         double avgFooter = avg(footerMs);
-        System.out.printf("%-70s footer-parse-only avg=%6.3fms  (of COLD's open avg=%6.3fms; "
+        System.out.printf("%-70s footer-parse-only avg=%6.3fms  (of warm-cache open avg=%6.3fms; "
                         + "row-group-filter-only ~= %6.3fms)%n",
                 file.getFileName() + " [" + projLabel + "]", avgFooter, avgOpen, Math.max(0, avgOpen - avgFooter));
         System.out.println("  NOTE: a true 'reuse a pre-parsed footer across many lookups' measurement "
