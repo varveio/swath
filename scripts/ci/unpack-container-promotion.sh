@@ -17,5 +17,5 @@ if [[ -e "$destination" ]]; then
 fi
 
 mkdir -p "$destination"
-tar -xf "$archive" -C "$destination"
+tar -xpf "$archive" -C "$destination"
 "$(dirname "$0")/verify-container-promotion.sh" "$destination"

@@ -7,6 +7,11 @@
 FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk-noble@sha256:3eb81ed94d8c1a34422f19f8188548bdf02cae69c91d0328afdbb7abed90f617 AS build
 WORKDIR /src
 
+# The checked-in third-party notice is verified while Gradle assembles installDist.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY gradlew ./
 COPY gradle/ gradle/
 COPY build-logic/ build-logic/

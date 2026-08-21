@@ -18,7 +18,7 @@ find "$fixture" -maxdepth 1 -type f -name '*.parquet' -print -quit | grep -q . |
   exit 2
 }
 
-container_id=$(docker run --detach --rm \
+container_id=$(docker run --detach \
   -p 127.0.0.1::19090 \
   -v "$fixture:/fixtures:ro" \
   "$image" serve \

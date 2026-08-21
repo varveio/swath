@@ -1,3 +1,4 @@
+import com.github.jk1.license.LicenseReportExtension
 import java.time.Duration
 import org.gradle.jvm.application.tasks.CreateStartScripts
 
@@ -14,6 +15,14 @@ plugins {
 val conformanceSourceSet = sourceSets.create("conformance") {
     compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
     runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
+}
+
+// The application distribution also ships the conformance launcher's dependency closure.
+// Include both closures in the license allow-list gate and generated inventory.
+configure<LicenseReportExtension> {
+    configurations = arrayOf(
+            "runtimeClasspath",
+            conformanceSourceSet.runtimeClasspathConfigurationName)
 }
 
 dependencies {
@@ -79,12 +88,15 @@ val writeReplayRuntimeArtifactCoordinates by tasks.registering {
     group = "reporting"
     description = "Writes the exact external artifacts packaged in the replay distribution."
     val runtimeClasspath = configurations.named("runtimeClasspath")
-    inputs.files(runtimeClasspath)
+    val conformanceRuntimeClasspath = configurations.named(
+            conformanceSourceSet.runtimeClasspathConfigurationName)
+    inputs.files(runtimeClasspath, conformanceRuntimeClasspath)
     outputs.file(replayRuntimeArtifacts)
     doLast {
         val output = replayRuntimeArtifacts.get().asFile
         output.parentFile.mkdirs()
-        val artifacts = runtimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+        val artifacts = listOf(runtimeClasspath.get(), conformanceRuntimeClasspath.get())
+                .flatMap { it.resolvedConfiguration.resolvedArtifacts }
                 .map {
                     "${it.moduleVersion.id.group}:${it.name}:${it.moduleVersion.id.version}\t${it.file.name}"
                 }

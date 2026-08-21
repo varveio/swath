@@ -129,8 +129,9 @@ def main():
         ]
     else:
         ownership = [
-            "This file is generated from the resolved `:swath-replay` `runtimeClasspath`, the exact",
-            "dependency closure packaged in the replay application distribution. Do not edit it by hand.",
+            "This file is generated from the resolved `:swath-replay` main and conformance runtime",
+            "classpaths, the exact dependency closure packaged in the replay application distribution.",
+            "Do not edit it by hand.",
         ]
         command = "./gradlew generateReplayThirdPartyNotices verifyReplayThirdPartyNotices"
         packaging = [

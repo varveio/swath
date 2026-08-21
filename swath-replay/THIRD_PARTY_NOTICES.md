@@ -1,7 +1,8 @@
 # Third-Party Notices
 
-This file is generated from the resolved `:swath-replay` `runtimeClasspath`, the exact
-dependency closure packaged in the replay application distribution. Do not edit it by hand.
+This file is generated from the resolved `:swath-replay` main and conformance runtime
+classpaths, the exact dependency closure packaged in the replay application distribution.
+Do not edit it by hand.
 
 Regenerate and verify it with:
 
@@ -20,8 +21,11 @@ resources.
 - `ch.qos.logback:logback-core:1.5.18` — Eclipse Public License 1.0; GNU LESSER GENERAL PUBLIC LICENSE, Version 2.1
 - `com.bucket4j:bucket4j-core:8.10.1` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-annotations:2.12.7` — Apache License, Version 2.0
+- `com.fasterxml.jackson.core:jackson-annotations:2.22` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-core:2.12.7` — Apache License, Version 2.0
+- `com.fasterxml.jackson.core:jackson-core:2.22.0` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-databind:2.12.7.1` — Apache License, Version 2.0
+- `com.fasterxml.jackson.core:jackson-databind:2.22.0` — Apache License, Version 2.0
 - `com.fasterxml.woodstox:woodstox-core:5.4.0` — Apache License, Version 2.0
 - `com.github.luben:zstd-jni:1.5.6-9` — The 2-Clause BSD License
 - `com.google.code.findbugs:jsr305:3.0.2` — Apache License, Version 2.0
@@ -453,6 +457,32 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     This product includes software developed at
     The Apache Software Foundation (http://www.apache.org/).
 
+### jackson-annotations-2.22.jar
+
+#### META-INF/NOTICE
+
+    # Jackson JSON processor
+
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
+
+    ## Copyright
+
+    Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
+
+    ## Licensing
+
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
+
+    ## Credits
+
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
+
 ### jackson-core-2.12.7.jar
 
 #### META-INF/NOTICE
@@ -475,6 +505,53 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     in some artifacts (usually source distributions); but is always available
     from the source code management (SCM) system project uses.
 
+### jackson-core-2.22.0.jar
+
+#### META-INF/NOTICE
+
+    # Jackson JSON processor
+
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
+
+    ## Copyright
+
+    Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
+
+    ## Licensing
+
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
+
+    ## Credits
+
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
+
+    ## FastDoubleParser
+
+    jackson-core bundles a shaded copy of FastDoubleParser <https://github.com/wrandelshofer/FastDoubleParser>.
+    That code is available under an MIT license <https://github.com/wrandelshofer/FastDoubleParser/blob/main/LICENSE>
+    under the following copyright.
+
+    Copyright © 2023 Werner Randelshofer, Switzerland. MIT License.
+
+    See FastDoubleParser-LICENSE and also FastDoubleParser-ThirdParty-LICENSE for details of other source code
+    included in FastDoubleParser and the licenses and copyrights that apply to that code.
+
+    ## Schubfach
+
+    jackson-core bundles a copy of the Schubfach number writing code <https://github.com/c4f7fcce9cb06515/Schubfach>.
+    That code is available under an MIT license <https://github.com/c4f7fcce9cb06515/Schubfach/blob/master/todec/LICENSE>
+    under the following copyright.
+
+    Copyright 2018-2020 Raffaello Giulietti
+
+    See Schubfach-LICENSE.
+
 ### jackson-databind-2.12.7.1.jar
 
 #### META-INF/NOTICE
@@ -485,6 +562,32 @@ Zstandard code. The wrapper's BSD 2-Clause terms and the native library's BSD
     It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
     been in development since 2007.
     It is currently developed by a community of developers.
+
+    ## Licensing
+
+    Jackson 2.x core and extension components are licensed under Apache License 2.0
+    To find the details that apply to this artifact see the accompanying LICENSE file.
+
+    ## Credits
+
+    A list of contributors may be found from CREDITS(-2.x) file, which is included
+    in some artifacts (usually source distributions); but is always available
+    from the source code management (SCM) system project uses.
+
+### jackson-databind-2.22.0.jar
+
+#### META-INF/NOTICE
+
+    # Jackson JSON processor
+
+    Jackson is a high-performance, Free/Open Source JSON processing library.
+    It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+    been in development since 2007.
+    It is currently developed by a community of developers.
+
+    ## Copyright
+
+    Copyright 2007-, Tatu Saloranta (tatu.saloranta@iki.fi)
 
     ## Licensing
 
