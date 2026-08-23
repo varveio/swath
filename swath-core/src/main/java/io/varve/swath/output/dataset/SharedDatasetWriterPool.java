@@ -36,8 +36,8 @@ import java.util.function.LongSupplier;
 import org.apache.commons.codec.digest.DigestUtils;
 
 /**
- * A format-neutral, decoupled dataset writer pool: {@code numWriters} lanes
- * (2–4, default 3), each on its own platform thread draining a bounded queue, so
+ * A format-neutral, decoupled dataset writer pool: a bounded number of {@code numWriters} lanes
+ * (default 3), each on its own platform thread draining a bounded queue, so
  * sink I/O runs away from the listing workers. <b>Sticky</b> assignment — every
  * page of a node goes to {@code writer = nodeId % numWriters}, so a node's pages
  * occupy a contiguous run of one lane's size-rotated parts (which finalize in
@@ -65,6 +65,27 @@ import org.apache.commons.codec.digest.DigestUtils;
  * either trigger.
  */
 public final class SharedDatasetWriterPool implements DatasetWriterPool {
+
+    /** Defensive process-resource ceiling; format-specific policy may admit fewer lanes. */
+    public static final int MAX_WRITERS = 64;
+
+    /**
+     * Whole-pool production submission ceiling in batches. This equals the former maximum of 64
+     * slots for each of four lanes, but no longer grows when an expert requests more writers.
+     */
+    public static final int MAX_TOTAL_QUEUE_CAPACITY = 4 * 64;
+
+    /** Preserve the existing queue depth for every count in the measured 1-4 lane envelope. */
+    public static final int DEFAULT_QUEUE_CAPACITY_PER_LANE = 64;
+
+    /** Equal per-lane share whose pool-wide product never exceeds the production budget. */
+    public static int defaultQueueCapacityPerLane(int writers) {
+        if (writers < 1 || writers > MAX_WRITERS) {
+            throw new IllegalArgumentException("writers must be 1.." + MAX_WRITERS);
+        }
+        return Math.max(1, Math.min(DEFAULT_QUEUE_CAPACITY_PER_LANE,
+                MAX_TOTAL_QUEUE_CAPACITY / writers));
+    }
 
     /**
      * A bounded snapshot of one writer lane. All durations are elapsed time, not CPU
@@ -163,6 +184,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     public SharedDatasetWriterPool(Path dir, DatasetFormat format, String argsHash,
                       int numWriters, long targetBytes, int queueCapacity,
                       DatasetWriterPoolConfig config, LongSupplier nanoClock) {
+        if (numWriters < 1 || numWriters > MAX_WRITERS) {
+            throw new IllegalArgumentException(
+                    "numWriters must be 1.." + MAX_WRITERS + " (got " + numWriters + ")");
+        }
         this.dir = dir;
         this.sinkName = config.sinkName();
         this.scope = Scope.ofPlatformThreads(sinkName + "-writer");
@@ -170,7 +195,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.format = format;
         this.argsHash = argsHash;
         this.bucket = config.bucket();
-        this.numWriters = Math.max(1, numWriters);
+        this.numWriters = numWriters;
         this.targetBytes = targetBytes;
         this.rotationIntervalNanos = config.rotationIntervalNanos();
         this.rotationMaxRows = config.rotationMaxRows();
@@ -219,7 +244,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
             Lane lane = lanes[laneId];
             if (!lane.queue.offer(batch)) {
-                // Pay for the clock and the 2–4-lane scan only on the saturated path. This is the
+                // Pay for the clock and bounded cross-lane scan only on the saturated path. This is the
                 // missing middle link between consumer-side emit and worker-side channel wait.
                 lane.queueDepthPeak.getAndAccumulate(lane.queueCapacity, Math::max);
                 boolean headOfLine = anotherLaneIsWaitingForWork(laneId);

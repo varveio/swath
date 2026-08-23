@@ -58,7 +58,7 @@ class TuneOptionsTest {
         String[][] bad = {
                 {"engine.readahead=maybe", "on|off"},
                 {"seed.mode=random", "shallow|none|hints"},
-                {"parquet.writers=9", "integer 2..4"},
+                {"parquet.writers=65", "integer 2..64"},
                 {"summary.interval=zero", "positive duration"},
                 {"sort.ignore-disk-check=yes", "on|off"},
         };

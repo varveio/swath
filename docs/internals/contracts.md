@@ -385,7 +385,11 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 
 ### 4.1 Multi-writer + manifest — **own manifest, not parquet `_metadata`**
 
-- **2–4 writers**, decoupled from listing concurrency (not one per worker).
+- **2–64 writers**, default 3, decoupled from listing concurrency (not one per worker).
+  Parquet counts 2–4 are the measured release envelope; expert counts 5–64 are admitted only when
+  `-Xmx` covers the §7.2 planning allowance. Text uses the same process-resource ceiling without
+  inheriting Parquet's row-group gate. Production divides one fixed 256-batch submission ceiling
+  across the configured lanes, so increasing concurrency does not multiply queued page batches.
   Workers emit `PageBatch`es into the writer pool. **Sticky assignment:** all
   pages of a node go to writer `node_id % numWriters`, so a node's pages
   occupy a *contiguous* run of that writer's parts (which finalize in order)
@@ -804,14 +808,14 @@ published.
 | seed delimiter levels | adaptive | a shallow `delimiter=/` seed that starts at the top level and **adaptively descends narrow sub-levels** while cut-point and probe budgets permit; a truncated flat-wide level is radix-banded rather than descended (algorithms.md §8) |
 | steal probe | `max_keys=1` | one key per split attempt |
 | AIMD | ×0.7 down on 503 / +1 up per clean 10 s | the 0.7/+1 numbers are DECIDED. The 10 s clean-window cool-down is re-armed **only by a REAL reduction** (`T` actually lowered); a **floor no-op** decrease (`floor(0.7·T) >= T`, i.e. `T` already at the floor) still casts its AIMD vote, still latches congestion, and still pauses stealing, but no longer resets the clean window. The re-arm write is **monotonic** (`max` with the prior timestamp): a concurrent, stale-timestamped decrease can never shorten an already-armed window. (algorithms.md §5) |
-| Parquet writers | 3 | decoupled from `T` |
+| Parquet writers | 3 (range 2–64; 5–64 heap-admitted) | decoupled from `T`; counts above the measured four-writer envelope must pass the §7.2 `-Xmx` plan |
 | Parquet part target size | 256 MB | rotate by size |
-| `--text-writers` | 3 (range 2–4) | bounded TSV/JSONL directory writer lanes; decoupled from `T` |
+| `--text-writers` | 3 (range 2–64) | bounded TSV/JSONL directory writer lanes; decoupled from `T` and from Parquet's row-group memory policy |
 | `--text-part-size` | 256 MB | per-lane TSV/JSONL part rotation target; zero is rejected |
 | `--compression` | `none` unless a text file suffix implies gzip/Zstandard | table/TSV/JSONL streams and TSV/JSONL dataset parts only; Parquet rejects it |
 | `--part-rotation-interval` | 30 s | rotate a lane's open part by time too, even below the size target, so `durable_cursor` advances on a bounded cadence instead of only when a part happens to fill up; `0`/`none` disables; forced to `0` for a single-file `-o *.parquet` destination; a positive value below the 100 ms minimum is rejected (spin-storm guard — see below); `ParquetWriterPool` additionally floors its idle-lane poll wait at 50 ms as defense-in-depth |
 | `--part-rotation-max-rows` | 2_000_000 | rotate by row count too, for bursts fast enough to write millions of small rows well inside the time interval; `0` disables; forced to `0` for a single-file `-o *.parquet` destination |
-| `parquet.block.size` / `page.size` | 64 MB / 1 MB | **pinned**, measured in the PERF gate. block.size chosen so the §7.2 active-buffer Parquet heap budget holds for the current 100,000-key test (3 writers × 64 MB × parquet-mr uncompressed-row-group overshoot). This is not an N-independent whole-run heap claim: finalized-part metadata is `O(parts)`. Raising it toward 128 MB improves compression/scan but risks the measured budget — re-measure if you do. |
+| `parquet.block.size` / `page.size` | 64 MB / 1 MB | **pinned**, measured in the PERF gate. block.size chosen so the §7.2 active-buffer Parquet heap budget holds for the current 100,000-key test at the four-writer release ceiling. This is not an N-independent whole-run heap claim: finalized-part metadata is `O(parts)`. Raising it toward 128 MB improves compression/scan but risks the measured budget — re-measure if you do. |
 | `--request-rate` | unset | Bucket4j; cancellable acquire |
 | SDK retry attempts / initial backoff (**internal constants — not CLI flags**) | 1 / 100 ms | `S3Config.DEFAULT_MAX_ATTEMPTS = 1` disables SDK-internal retry: swath's own gauge-aware fetch loop is the sole retrier, so the AIMD `ConcurrencyGauge` sees every real 503/5xx immediately instead of after the SDK silently absorbed several behind its own backoff. There is **no** `--aws-max-attempts` / `--initial-backoff-ms` Picocli option in v1.0 (the `S3Config.maxAttempts` plumbing exists but is not CLI-wired) — exposing them is a planned follow-up |
 | page-timeout retry budget | per-fetch bounded retry, cap 8 (`MAX_TRANSIENT_RETRIES`), resets each fetch; disposition on exhaustion depends on `RetryPolicy` (see below) | `apiCallAttemptTimeout` is the per-attempt **timeout duration** (not a count; **10 s base for scan-class worker, seed, and delimiter/structure requests**, **3 s for point-class pivot/one-key probes** unless an escalation override raises it, with each class doubling from its own base per-fetch on consecutive attempt-timeouts of the SAME logical fetch — `apiCallAttemptTimeoutOverride` in §2 and [`probe-budgets.md`](probe-budgets.md)). Above the per-attempt budget the SDK client also enforces a **60 s overall `apiCallTimeout`** (`S3Config.DEFAULT_API_CALL_TIMEOUT`, the primary liveness ceiling on a wedged logical call). `WorkStealingScan.GaugedFetcher` (and, on the seed/sequential paths, `TransientRetryFetcher`) retries a **non-AIMD-voting** transient (`ThrottleException.Kind.ATTEMPT_TIMEOUT` / `NETWORK` — a client-side attempt-timeout or exhausted network fault, neither of which is genuine S3 backpressure; `NETWORK` also covers a client-local socket-closure / `IOException`-wrapper fault that escaped the SDK call as a non-`SdkException` `RuntimeException` such as `UncheckedIOException(SocketException("Socket closed"))`, reclassified transient rather than escaping raw as an exit-1 / `error_class=unknown` crash) up to `MAX_TRANSIENT_RETRIES = 8` times with jittered exponential backoff; the counter is **per invocation of `fetchPage`** (i.e. per attempted page/probe fetch), not a cross-fetch/cross-node consecutive count (it does not persist across separate `fetchPage` calls the way a per-node counter would). **What happens once the cap is crossed depends on `RetryPolicy`, resolved once at CLI wiring time from whether a real `LivenessWatchdog` is armed** — the fix for the tail-stall that killed long-running large listings, where this cap (not the watchdog) was a second liveness policy that always won the race to end the run: under **`RIDE_OUT`** (a real watchdog is armed, the default) the cap **no longer cancels the run** — the fetch keeps retrying indefinitely (raised full-jitter backoff ceiling, 5 s→15 s, recording `TRANSIENT.storm_ride_out`) and the watchdog alone owns liveness death (crash-only, resumable exit-75); under **`BOUNDED`** (both watchdog windows disabled by flags — `LivenessWatchdog.arm()` returned its no-op, so nothing else could ever stop an unbounded retry) exhaustion keeps the legacy disposition: the fetch trips the run's cancellation with `StopReason.STUCK` (attributing `CancelSource.TRANSIENT_RETRY_CAP`, recording `TRANSIENT.retry_cap_stuck`) and aborts via `CancelledException` — the **resumable exit-75 (`EX_TEMPFAIL`) disposition**, the same code as a watchdog stop — so the checkpoint stays valid and `swath resume` can safely retry the bucket later, rather than escaping as a fatal `ListingException` (exit 1) that the CLI's guarded engine dispatch would mark `run_meta.fatal_error` and thereby **poison `swath resume`**; a fetch with **no `CancellationToken` wired** (degenerate/embedded use) is unaffected by `RetryPolicy` and stays count-bounded regardless, escaping as the fatal `ListingException` contract on exhaustion. The run records `stop_source`/`error_class` marker fields that this disposition drives. Either disposition aborts (or, under `RIDE_OUT`, never aborts) the whole run, never a selective "fail the node". The thief's structure/pivot **probe** fetches (`slotGated=false`) are exempt from this policy: they use a separate small fixed cap (`PROBE_TRANSIENT_RETRY_CAP = 1`), never cancel the run, and simply return the probe to its non-productive retry flow. A genuine AIMD-voting throttle (`SLOWDOWN` / `SERVER_5XX`, real 503/5xx) is retried **unbounded** by this counter regardless of `RetryPolicy` — AIMD's own multiplicative decrease paces it instead, bounded only by cancellation/`--max-duration` (the liveness contract) |
@@ -859,13 +863,22 @@ pins the engine (and `scan → WorkStealingScan`).
 
 ### 7.2 Peak-heap budget per output format (PERF gate)
 
-The release gate asserts measured peak heap stays under these, sized to the
-**2–4-writer** Parquet model (not the retired per-worker model):
+The release gate asserts measured peak heap stays under these at the **four-writer release
+envelope** (not the retired per-worker model):
 
 | Output | Budget (default config) | Composition |
 | --- | --- | --- |
 | stdout / TSV / JSONL / table | **< 256 MB** | bounded queues + JVM baseline |
-| Parquet | **< 1 GB** (the bound PERF-2 asserts at 100,000 keys, `ParquetPerf2Test`) | `Parquet writers (3) × block.size (64 MB) × parquet-mr overshoot` + bounded queues + baseline. parquet-mr buffers the **uncompressed** row group, so real overshoot runs hotter than the ~2–3× first modeled — measure it, don't model it. The implementation has no per-object heap accumulation (I11), but the public PERF-2 measurement covers 100,000 keys, not billion-object scale. |
+| Parquet | **< 1 GB** (the bound PERF-2 asserts at 100,000 keys, `ParquetPerf2Test`) | Four active writers × 64 MB row groups + parquet-mr overshoot + the production-derived queue share + baseline. parquet-mr buffers the **uncompressed** row group, so measure the actual peak. The implementation has no per-object heap accumulation (I11), but the public PERF-2 measurement covers 100,000 keys, not billion-object scale. |
+
+The default is still three writers. Counts 2–4 are accepted as the measured compatibility
+envelope. An expert request for 5–64 writers is admitted only when `Runtime.maxMemory()` covers the
+planning floor `256 MiB + writers × 64 MiB × 4`; this conservative gate is reported in
+`dataset_writer` and prevents a high count on a small heap, but it is not a promise that an admitted
+workload will remain below that number. The process-resource ceiling of 64 also bounds platform
+threads, open parts, and the saturated-path lane scan. The whole pool retains at most 256 queued
+batches in production: counts 1–4 preserve the existing 64 slots per lane, while higher counts
+divide the fixed ceiling and may leave a few slots unused.
 
 Lower the active-buffer budget by reducing `parquet.block.size`, writer count,
 or `T`. I11 does not erase metadata growth: finalized parts contribute

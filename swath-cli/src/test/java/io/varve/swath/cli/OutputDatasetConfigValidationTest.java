@@ -40,7 +40,7 @@ final class OutputDatasetConfigValidationTest {
     }
 
     @Test
-    void textWriterRangeComesFromTheCorePoolContract() {
+    void textWriterRangeComesFromTheCorePoolContract() throws Exception {
         OutputOptions below = new OutputOptions();
         below.textWriters = TextWriterPoolConfig.MIN_WRITERS - 1;
         assertThatThrownBy(below::resolveTextWriters)
@@ -48,11 +48,28 @@ final class OutputDatasetConfigValidationTest {
                 .hasMessageContaining(String.valueOf(TextWriterPoolConfig.MIN_WRITERS))
                 .hasMessageContaining(String.valueOf(TextWriterPoolConfig.MAX_WRITERS));
 
+        OutputOptions maximum = new OutputOptions();
+        maximum.textWriters = TextWriterPoolConfig.MAX_WRITERS;
+        assertThat(maximum.resolveTextWriters()).isEqualTo(TextWriterPoolConfig.MAX_WRITERS);
+
         OutputOptions above = new OutputOptions();
         above.textWriters = TextWriterPoolConfig.MAX_WRITERS + 1;
         assertThatThrownBy(above::resolveTextWriters)
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(String.valueOf(TextWriterPoolConfig.MIN_WRITERS))
                 .hasMessageContaining(String.valueOf(TextWriterPoolConfig.MAX_WRITERS));
+    }
+
+    @Test
+    void productionWriterQueuesShareOneFixedPoolBudget() {
+        assertThat(ListCommand.datasetWriterQueueCapacityPerLane(3)).isEqualTo(64);
+        assertThat(ListCommand.datasetWriterQueueCapacityPerLane(4)).isEqualTo(64);
+        assertThat(ListCommand.datasetWriterQueueCapacityPerLane(8)).isEqualTo(32);
+        assertThat(ListCommand.datasetWriterQueueCapacityPerLane(64)).isEqualTo(4);
+
+        for (int writers = 1; writers <= 64; writers++) {
+            assertThat((long) writers * ListCommand.datasetWriterQueueCapacityPerLane(writers))
+                    .isLessThanOrEqualTo(ListCommand.DATASET_WRITER_TOTAL_QUEUE_CAPACITY);
+        }
     }
 }

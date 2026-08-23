@@ -210,6 +210,11 @@ final class TextWriterPoolTest {
         RunSummary summary = metrics.summary(Duration.ofSeconds(1), "work_stealing", 0L, 0L);
         assertThat(summary.datasetWriter()).isNotNull();
         assertThat(summary.datasetWriter().format()).isEqualTo("jsonl");
+        assertThat(summary.datasetWriter().writerCount()).isEqualTo(2);
+        assertThat(summary.datasetWriter().totalQueueCapacity()).isEqualTo(16L);
+        assertThat(summary.datasetWriter().jvmMaxHeapBytes()).isPositive();
+        assertThat(summary.datasetWriter().bufferBytesPerWriter()).isNull();
+        assertThat(summary.datasetWriter().plannedHeapBytes()).isNull();
         assertThat(summary.datasetWriter().lanes()).extracting(RunSummary.DatasetWriterLane::rowsWritten)
                 .containsExactlyInAnyOrder(1L, 0L);
     }

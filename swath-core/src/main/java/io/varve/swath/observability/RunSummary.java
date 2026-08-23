@@ -116,6 +116,11 @@ public record RunSummary(
      */
     public record DatasetWriterSummary(
             String format,
+            int writerCount,
+            long totalQueueCapacity,
+            long jvmMaxHeapBytes,
+            Long bufferBytesPerWriter,
+            Long plannedHeapBytes,
             long submitBlockedCount,
             long submitBlockedNanos,
             long headOfLineBlockedCount,
@@ -127,17 +132,27 @@ public record RunSummary(
         }
 
         public static DatasetWriterSummary from(String format, List<DatasetWriterLane> lanes) {
+            return from(format, lanes, null, null);
+        }
+
+        public static DatasetWriterSummary from(
+                String format, List<DatasetWriterLane> lanes,
+                Long bufferBytesPerWriter, Long plannedHeapBytes) {
             long submitBlockedCount = 0L;
             long submitBlockedNanos = 0L;
             long headOfLineBlockedCount = 0L;
             long headOfLineBlockedNanos = 0L;
+            long totalQueueCapacity = 0L;
             for (DatasetWriterLane lane : lanes) {
+                totalQueueCapacity += lane.queueCapacity();
                 submitBlockedCount += lane.submitBlockedCount();
                 submitBlockedNanos += lane.submitBlockedNanos();
                 headOfLineBlockedCount += lane.headOfLineBlockedCount();
                 headOfLineBlockedNanos += lane.headOfLineBlockedNanos();
             }
-            return new DatasetWriterSummary(format, submitBlockedCount, submitBlockedNanos,
+            return new DatasetWriterSummary(format, lanes.size(), totalQueueCapacity,
+                    Runtime.getRuntime().maxMemory(), bufferBytesPerWriter, plannedHeapBytes,
+                    submitBlockedCount, submitBlockedNanos,
                     headOfLineBlockedCount, headOfLineBlockedNanos, lanes);
         }
     }

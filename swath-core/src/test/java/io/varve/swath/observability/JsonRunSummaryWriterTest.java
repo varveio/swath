@@ -73,7 +73,8 @@ final class JsonRunSummaryWriterTest {
                         2L, 4_000_000L, 1L, 3_000_000L, 2L, 2L, 5_000_000L),
                 new RunSummary.DatasetWriterLane(
                         1, 8, 0, 4, true, 400L, 4000L, 4L, 8_000_000L,
-                        0L, 0L, 0L, 0L, 1L, 1L, 2_000_000L)));
+                        0L, 0L, 0L, 0L, 1L, 1L, 2_000_000L)),
+                64L * 1024 * 1024, 768L * 1024 * 1024);
     }
 
     private static RunSummary.ShapeSummary shape() {
@@ -247,6 +248,11 @@ final class JsonRunSummaryWriterTest {
 
         JsonNode datasetWriter = root.get("dataset_writer");
         assertThat(datasetWriter.get("format").asText()).isEqualTo("parquet");
+        assertThat(datasetWriter.get("writer_count").asInt()).isEqualTo(2);
+        assertThat(datasetWriter.get("total_queue_capacity").asLong()).isEqualTo(16L);
+        assertThat(datasetWriter.get("jvm_max_heap_bytes").asLong()).isPositive();
+        assertThat(datasetWriter.get("buffer_bytes_per_writer").asLong()).isEqualTo(64L * 1024 * 1024);
+        assertThat(datasetWriter.get("planned_heap_bytes").asLong()).isEqualTo(768L * 1024 * 1024);
         assertThat(datasetWriter.get("submit_blocked_count").asLong()).isEqualTo(2L);
         assertThat(datasetWriter.get("submit_blocked_ms").asDouble()).isEqualTo(4.0);
         assertThat(datasetWriter.get("head_of_line_blocked_count").asLong()).isEqualTo(1L);

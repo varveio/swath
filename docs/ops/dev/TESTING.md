@@ -46,7 +46,8 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
   - **PERF-2** (`ParquetPerf2Test`): 100k keys through the real listing→parquet pipeline —
     **measured peak heap** < the §7.2 Parquet budget (1 GB), **measured peak RSS**
     (`/proc/self/status` `VmRSS`) under a bounded budget, and **no hot-path virtual-thread
-    pinning** (`jdk.VirtualThreadPinned` JFR events == 0).
+    pinning** (`jdk.VirtualThreadPinned` JFR events == 0). Its direct pool leg activates all four
+    release-envelope writers with the production 64-slot lane queues.
 - **`-Pdeep`** `./gradlew test -Pdeep` — runs **only** the `@Tag("deep")` tier:
   schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/timeout
   timing tests, demoted off the per-commit gate because they are slow (real `Thread.sleep`)

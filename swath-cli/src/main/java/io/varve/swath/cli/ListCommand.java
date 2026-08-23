@@ -43,9 +43,11 @@ import io.varve.swath.observability.SafeInput;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.ParquetResume;
+import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -122,8 +124,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     static final String SORT_STAGING_DIR = "_staging";
 
-    /** Per-writer submission-queue depth (in batches) for {@link ListRunner.ParquetSpec#writerQueueCapacity()}. */
-    private static final int DATASET_WRITER_QUEUE_CAPACITY = 64;
+    /**
+     * Whole-pool submission ceiling in batches. The former production setting was 64 per writer
+     * with at most four writers; retaining that 256-batch maximum keeps every existing path
+     * unchanged without multiplying pending memory when expert configurations add lanes.
+     */
+    static final int DATASET_WRITER_TOTAL_QUEUE_CAPACITY =
+            SharedDatasetWriterPool.MAX_TOTAL_QUEUE_CAPACITY;
 
     private DatasetDirGuard.FreshDirectoryState freshDatasetDirectoryState;
 
@@ -1299,10 +1306,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     TextWriterPoolConfig textWriterPoolConfig(S3Uri s3uri, OutputFormat format, String argsHash)
             throws InvalidConfigException, InvalidArgsException {
         try {
+            int writers = output.resolveTextWriters();
             return new TextWriterPoolConfig(
                     Path.of(output.destination), format, output.resolvedCompression, !output.rawOutput,
-                    argsHash, s3uri.bucket(), output.resolveTextWriters(), output.textPartSizeBytes(),
-                    DATASET_WRITER_QUEUE_CAPACITY, output.resolvePartRotationInterval().toNanos(),
+                    argsHash, s3uri.bucket(), writers, output.textPartSizeBytes(),
+                    datasetWriterQueueCapacityPerLane(writers),
+                    output.resolvePartRotationInterval().toNanos(),
                     output.resolvePartRotationMaxRows());
         } catch (IllegalArgumentException e) {
             throw new InvalidConfigException(e.getMessage(), e);
@@ -1563,6 +1572,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         boolean singleFile = output.resolvedKind == OutputOptions.DestinationKind.FILE;
         long targetBytes = output.partSizeBytes();
         int writers = OutputOptions.resolveParquetWriters(output.resolvedKind, output.parquetWriters);
+        if (writers > ParquetWriterMemoryPlan.RELEASE_ENVELOPE_MAX_WRITERS) {
+            log.warn("parquet_writer_expert_count writers={} planned_heap_bytes={} jvm_max_heap_bytes={} "
+                            + "measured_release_max={}",
+                    writers, ParquetWriterMemoryPlan.plannedHeapBytes(writers),
+                    Runtime.getRuntime().maxMemory(),
+                    ParquetWriterMemoryPlan.RELEASE_ENVELOPE_MAX_WRITERS);
+        }
         long rotation = singleFile ? Long.MAX_VALUE : targetBytes;
         // A single-file destination (a .parquet extension on -o) must stay exactly
         // one part: the time/row-count cadence triggers are for the multi-part model
@@ -1571,9 +1587,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         long rotationMaxRows = singleFile ? 0L : output.resolvePartRotationMaxRows();
         return new ListRunner.ParquetSpec(
                 s3uri.prefix(), channelCapacity, pageMax, filterChain, writers, rotation,
-                DATASET_WRITER_QUEUE_CAPACITY, argsHash,
+                datasetWriterQueueCapacityPerLane(writers), argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
                 rotationIntervalNanos, rotationMaxRows, s3uri.bucket());
+    }
+
+    /** Equal per-lane share whose pool-wide product never exceeds the fixed production budget. */
+    static int datasetWriterQueueCapacityPerLane(int writers) {
+        return SharedDatasetWriterPool.defaultQueueCapacityPerLane(writers);
     }
 
     /**

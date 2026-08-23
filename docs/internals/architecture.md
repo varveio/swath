@@ -132,7 +132,9 @@ The listing engine and outer pipeline intentionally use different structures:
   artifact does not require preview features.
 
 All SQLite mutations pass through one writer thread. Parquet encode/write concurrency is a
-separate pool of 2–4 writers, so object-store concurrency does not multiply file writers.
+separate bounded pool (default 3; expert range 2–64 with heap admission above 4), so object-store
+concurrency does not multiply file writers. A fixed whole-pool submission budget likewise prevents
+additional lanes from multiplying queued page batches.
 
 ## Checkpoint and publication boundaries
 

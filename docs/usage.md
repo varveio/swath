@@ -45,7 +45,7 @@ file or stdout, and TSV/JSONL parts in a directory dataset. For files it is also
 inferred from `.gz` or `.zst`; stdout needs the explicit option. Parquet uses its own
 compression and rejects this option.
 
-TSV and JSONL directory datasets use 2–4 bounded writer lanes (`--text-writers`,
+TSV and JSONL directory datasets use 2–64 bounded writer lanes (`--text-writers`,
 default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
 Each compressed part is a complete gzip or Zstandard frame. The dataset publishes a
 manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore

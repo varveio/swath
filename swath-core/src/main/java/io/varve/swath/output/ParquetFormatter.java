@@ -24,7 +24,7 @@ import org.apache.commons.codec.digest.DigestUtils;
  *
  * <p>This is the one-instance-per-sink realization of the sealed SPI. The {@code list} CLI's
  * default Parquet path is the decoupled multi-writer {@link io.varve.swath.output.parquet.ParquetWriterPool}
- * (§4.1/§7 memory model: 2–4 writers decoupled from {@code T}); this formatter is the
+ * (§4.1/§7 memory model: bounded writers decoupled from {@code T}); this formatter is the
  * single-writer sink that the {@code EntryFormatter} contract describes. Both emit the same
  * canonical schema and the same manifest shape, so either is readable by the INT-6 readers.
  */

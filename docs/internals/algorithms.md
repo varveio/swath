@@ -1045,7 +1045,7 @@ boundary distinct from listing progress, because a part file's rows are not
 durable until its footer is fsynced:
 
 - **Sticky node→writer:** every page of a given node goes to one writer (of
-  the 2–4, by `node_id % writers`). A writer serves many nodes and rotates
+  the configured bounded pool, by `node_id % writers`). A writer serves many nodes and rotates
   its part file by target size, or, whichever fires first, by time-open or
   row count (the bounded-cadence triggers, evaluated on the
   writer's own thread — on write and on an idle-timeout wakeup); a

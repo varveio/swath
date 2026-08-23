@@ -160,7 +160,10 @@ key samples. Treat it as operational data and redact it before sharing.
 
 `dataset_writer` is present for direct Parquet and parallel directory TSV/JSONL output; its
 `format` is `parquet`, `tsv`, or `jsonl`. It is absent for stdout, single-file text, discard, and
-sorted output, which do not construct the shared pool. Its aggregate
+sorted output, which do not construct the shared pool. Its aggregate resource fields report the
+configured writer count, total lane-queue capacity, JVM maximum heap, and—for Parquet—the pinned
+row-group bytes per writer plus the conservative heap-admission plan. The Parquet-only fields are
+null for text. Its aggregate
 `submit_blocked_*` fields measure full sticky-lane admission waits;
 `head_of_line_blocked_*` is the subset where another lane thread was waiting for work on an empty
 queue when that wait began. The bounded `lanes[]` array reports lane id, queue

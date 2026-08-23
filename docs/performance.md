@@ -138,6 +138,12 @@ binding; material head-of-line blocking with idle lanes means dispatch coupling 
 neither appears, raising the writer count would only add memory and file-part overhead for that
 workload.
 
+Direct Parquet uses `--tune parquet.writers=N`; counts 2–4 are the measured release envelope and
+5–64 must pass the JVM heap-admission plan described in the contracts. Directory TSV/JSONL uses
+`--text-writers N` over the independent 2–64 text range. Both retain the same fixed 256-batch
+whole-pool submission ceiling as concurrency rises. Confirm the resolved `writer_count`,
+`total_queue_capacity`, and Parquet memory-plan fields in `dataset_writer` before comparing runs.
+
 ### Size CPU and memory empirically
 
 CPU cost per million keys is:

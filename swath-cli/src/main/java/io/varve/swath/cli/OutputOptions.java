@@ -10,6 +10,8 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.filter.SizeParser;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
+import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
 import io.varve.swath.output.text.TextCompression;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import java.io.BufferedOutputStream;
@@ -461,9 +463,9 @@ final class OutputOptions {
 
     String summaryJsonInterval;
 
-    /** Contract §4.1 / §7 memory model: 2–4 decoupled Parquet writers (default 3). */
+    /** Contract §4.1 / §7 memory model: bounded, decoupled Parquet writers (default 3). */
     static final int MIN_PARQUET_WRITERS = 2;
-    static final int MAX_PARQUET_WRITERS = 4;
+    static final int MAX_PARQUET_WRITERS = SharedDatasetWriterPool.MAX_WRITERS;
 
     /**
      * Rotation cadence defaults: bound the resume {@code durable_cursor} lag to a small
@@ -491,13 +493,19 @@ final class OutputOptions {
 
     /**
      * Resolve the Parquet writer-pool size, enforcing the contract's bounded memory model
-     * (contract §4.1 "2–4 writers", I11). A {@code -o path.parquet} single-file destination
+     * (contract §4.1 / §7, I11). A {@code -o path.parquet} single-file destination
      * -- replacing the old {@code --single-file} flag -- collapses to one lane; otherwise
-     * {@code --tune parquet.writers=N} must be in {@code [2,4]} — an out-of-range value would create that
-     * many row-group buffers and blow the heap budget, and {@code 1} for a directory dataset is the
-     * single-file model requested implicitly, which we reject so intent is explicit.
+     * the established 2-4 release envelope is always accepted. Expert counts above four are
+     * admitted only when the JVM maximum heap covers the conservative {@link
+     * ParquetWriterMemoryPlan}; {@code 1} for a directory dataset is the single-file model requested
+     * implicitly, which we reject so intent is explicit.
      */
     static int resolveParquetWriters(DestinationKind kind, int parquetWriters) throws InvalidConfigException {
+        return resolveParquetWriters(kind, parquetWriters, Runtime.getRuntime().maxMemory());
+    }
+
+    static int resolveParquetWriters(DestinationKind kind, int parquetWriters, long maxHeapBytes)
+            throws InvalidConfigException {
         if (kind == DestinationKind.FILE) {
             return 1;
         }
@@ -505,6 +513,14 @@ final class OutputOptions {
             throw new InvalidConfigException("--tune parquet.writers must be between " + MIN_PARQUET_WRITERS
                     + " and " + MAX_PARQUET_WRITERS + " (got " + parquetWriters
                     + "); use -o <path>.parquet for a single output part");
+        }
+        int heapLimit = ParquetWriterMemoryPlan.maxWritersForHeap(maxHeapBytes);
+        if (parquetWriters > heapLimit) {
+            long planned = ParquetWriterMemoryPlan.plannedHeapBytes(parquetWriters);
+            throw new InvalidConfigException("--tune parquet.writers=" + parquetWriters
+                    + " needs a conservative heap plan of " + planned + " bytes, but this JVM's -Xmx is "
+                    + maxHeapBytes + " bytes; use at most " + heapLimit + " writers, raise -Xmx, or use "
+                    + "--text-writers for a text dataset");
         }
         return parquetWriters;
     }

@@ -844,6 +844,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private static void writeDatasetWriter(
             ObjectNode node, RunSummary.DatasetWriterSummary writer) {
         node.put("format", writer.format());
+        node.put("writer_count", writer.writerCount());
+        node.put("total_queue_capacity", writer.totalQueueCapacity());
+        node.put("jvm_max_heap_bytes", writer.jvmMaxHeapBytes());
+        putLongOrNullBoxed(node, "buffer_bytes_per_writer", writer.bufferBytesPerWriter());
+        putLongOrNullBoxed(node, "planned_heap_bytes", writer.plannedHeapBytes());
         node.put("submit_blocked_count", writer.submitBlockedCount());
         node.put("submit_blocked_ms", nanosToMillis(writer.submitBlockedNanos()));
         node.put("head_of_line_blocked_count", writer.headOfLineBlockedCount());
@@ -973,6 +978,14 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             node.putNull(field);
         } else {
             node.put(field, value.doubleValue());
+        }
+    }
+
+    private static void putLongOrNullBoxed(ObjectNode node, String field, Long value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value.longValue());
         }
     }
 
