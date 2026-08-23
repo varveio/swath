@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.PartInfo;
@@ -158,6 +159,32 @@ class DatasetPublicationTest {
 
         assertThat(manifestPaths(dir)).containsExactly(part(0).path(), part(1).path());
         assertThat(resumed.manifestWriteCount()).isEqualTo(1L);
+    }
+
+    @Test
+    void fatalErrorDuringPublicationIsRethrownUnchanged(@TempDir Path dir) {
+        AssertionError failure = new AssertionError("injected fatal publication failure");
+        DatasetPublication publication = new DatasetPublication(
+                dir, "bucket", FORMAT, "args-hash", List.of(), () -> {
+                    throw failure;
+                });
+
+        assertThatThrownBy(publication::publishSuccess).isSameAs(failure);
+        assertThatThrownBy(publication::publishSuccess).isSameAs(failure);
+    }
+
+    @Test
+    void unexpectedRuntimeFailureDuringPublicationIsNotRetryable(@TempDir Path dir) {
+        IllegalStateException failure = new IllegalStateException("injected publication bug");
+        DatasetPublication publication = new DatasetPublication(
+                dir, "bucket", FORMAT, "args-hash", List.of(), () -> {
+                    throw failure;
+                });
+
+        assertThatThrownBy(publication::publishSuccess)
+                .isExactlyInstanceOf(OutputException.class)
+                .hasMessage("failed to publish dataset")
+                .hasCause(failure);
     }
 
     @Test

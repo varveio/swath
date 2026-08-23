@@ -9,6 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.varve.swath.checkpoint.Node;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.checkpoint.PartRef;
@@ -48,6 +50,8 @@ import org.junit.jupiter.api.io.TempDir;
  */
 final class ResumeParquetTest {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private static List<byte[]> keys(int n) {
         List<byte[]> ks = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
@@ -71,6 +75,23 @@ final class ResumeParquetTest {
         List<String> keys = new ArrayList<>();
         for (Path part : DatasetLayout.of(dir).dataParts()) {
             keys.addAll(ParquetReads.keys(part));
+        }
+        return keys;
+    }
+
+    private static List<String> manifestPartKeys(Path dir) throws IOException {
+        JsonNode files = MAPPER.readTree(DatasetLayout.of(dir).manifest().toFile()).path("files");
+        List<String> keys = new ArrayList<>();
+        for (JsonNode file : files) {
+            keys.add(file.path("key").textValue());
+        }
+        return keys;
+    }
+
+    private static List<String> retainedPartKeys(Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        for (Path part : DatasetLayout.of(dir).dataParts()) {
+            keys.add(DatasetLayout.key(part.getFileName().toString()));
         }
         return keys;
     }
@@ -203,9 +224,9 @@ final class ResumeParquetTest {
             Node resumed = store.loadResumable(run.id(), true).getFirst();
             new ListRunner().runToParquetCheckpointed(
                     ctx, clean2, dir, spec(256), store, run.id(), resumed, existing);
-            assertThat(DatasetLayout.of(dir).manifest())
-                    .as("resume publishes one complete manifest after the durable tail finishes")
-                    .exists();
+            assertThat(manifestPartKeys(dir))
+                    .as("resume publishes every retained part in the consumer snapshot")
+                    .containsExactlyInAnyOrderElementsOf(retainedPartKeys(dir));
         }
 
         List<String> union = allPartKeys(dir);

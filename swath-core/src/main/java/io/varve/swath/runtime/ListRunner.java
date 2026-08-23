@@ -1701,7 +1701,7 @@ public final class ListRunner {
         return new DrainStep() {
             @Override
             public void onDrained() throws OutputException {
-                pool.close();   // checkpoint finalized parts, publish manifest, then _SUCCESS last
+                pool.close();   // finalize parts, publish manifest, then _SUCCESS last
             }
 
             @Override

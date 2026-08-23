@@ -129,6 +129,12 @@ final class DatasetPublication {
     }
 
     private static OutputException publicationFailure(Throwable failure) {
-        return new PublicationPendingException("failed to publish dataset", failure);
+        if (failure instanceof Error error) {
+            throw error;
+        }
+        if (failure instanceof IOException) {
+            return new PublicationPendingException("failed to publish dataset", failure);
+        }
+        return new OutputException("failed to publish dataset", failure);
     }
 }
