@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class ParquetWriterPoolTest {
         int writers = 8;
         var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", writers,
                 Long.MAX_VALUE, SharedDatasetWriterPool.defaultQueueCapacityPerLane(writers));
-        TreeSet<String> expected = new TreeSet<>();
+        List<String> expected = new ArrayList<>();
         for (int lane = 0; lane < writers; lane++) {
             PageBatch submitted = batch(lane, 0, lane * 10, lane * 10 + 10);
             submitted.entries().forEach(entry -> expected.add(entry.key().asString()));
@@ -48,11 +49,11 @@ class ParquetWriterPoolTest {
                 .doesNotHaveDuplicates()
                 .allMatch(name -> name.matches("part-w[0-7]-00000\\.parquet"));
 
-        TreeSet<String> actual = new TreeSet<>();
+        List<String> actual = new ArrayList<>();
         for (Path part : dataParts) {
             actual.addAll(ParquetReads.keys(part));
         }
-        assertThat(actual).isEqualTo(expected);
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
         JsonNode files = new ObjectMapper().readTree(DatasetLayout.of(dir).manifest().toFile())
                 .path("files");
         assertThat(files).hasSize(writers);

@@ -388,9 +388,10 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 - **2–64 writers**, default 3, decoupled from listing concurrency (not one per worker).
   Parquet counts 2–4 are the measured release envelope; expert counts 5–64 are admitted only when
   the JVM maximum heap covers the §7.2 planning allowance. Text uses the same process-resource ceiling without
-  inheriting Parquet's row-group gate. Production gives each lane `floor(256 / writers)` queue
-  slots, so aggregate queued batches are bounded by 256 (exactly 256 when the count divides it;
-  255 at the default three writers). Increasing concurrency therefore does not multiply queued page batches.
+  inheriting Parquet's row-group gate. Production gives each lane
+  `min(64, floor(256 / writers))` queue slots, preserving the 64-slot-per-lane compatibility
+  behavior through four writers while bounding aggregate queued batches by 256 (192 at the
+  default three writers). Increasing concurrency therefore does not multiply queued page batches.
   This is a memory bound, not a throughput promise: above four writers each lane gets fewer slots,
   so the sole sticky dispatcher can encounter head-of-line blocking sooner while another lane is
   idle. `submit_blocked_ms`, `head_of_line_blocked_ms`, and the lane queue peaks decide whether a
