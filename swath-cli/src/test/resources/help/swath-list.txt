@@ -56,7 +56,7 @@ Output:
       --text-part-size=SIZE  Target uncompressed text part size (default:
                                256mb).
       --text-writers=N       Parallel writers for a TSV/JSONL directory dataset
-                               (default: 3; range: 2-4).
+                               (default: 3; range: 2-64).
 
 Connection:
       --bearer-token-command=CMD

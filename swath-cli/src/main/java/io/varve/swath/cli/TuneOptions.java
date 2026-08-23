@@ -24,7 +24,7 @@ final class TuneOptions {
                     "experimental", ResumeClass.FREE, "fresh list"),
             new KeySpec("seed.mode", "enum", "shallow|none|hints", "shallow",
                     "stable (hints reserved)", ResumeClass.IDENTITY, "fresh list"),
-            new KeySpec("parquet.writers", "integer", "2..4", "3",
+            new KeySpec("parquet.writers", "integer", "2..64 (heap-admitted above 4)", "3",
                     "stable", ResumeClass.FREE, "fresh list"),
             new KeySpec("summary.interval", "duration",
                     "positive duration (for example 2s, 500ms, or PT2S)", "--progress-interval",

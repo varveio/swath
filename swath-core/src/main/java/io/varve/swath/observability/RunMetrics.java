@@ -2482,7 +2482,7 @@ public final class RunMetrics {
                 // Per-page client-service-cost spans -- same shape and same cheapness (an empty
                 // list when no page was ever serviced); never null.
                 buildClientCostSummary(),
-                // Parallel directory datasets only. The supplier reads a fixed 1–4 lane array; no
+                // Parallel directory datasets only. The supplier reads a bounded lane array; no
                 // lane-id metric tags and no unbounded state. Null when no shared pool was constructed.
                 datasetWriterSummary(),
                 // Demand-gate T-vs-Tmax visibility -- null when OWNER_SPLIT.demand_gated never

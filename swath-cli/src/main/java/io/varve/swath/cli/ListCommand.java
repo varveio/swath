@@ -43,9 +43,11 @@ import io.varve.swath.observability.SafeInput;
 import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.ParquetResume;
+import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.runtime.ArgsHashFields;
@@ -122,8 +124,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     static final String SORT_STAGING_DIR = "_staging";
 
-    /** Per-writer submission-queue depth (in batches) for {@link ListRunner.ParquetSpec#writerQueueCapacity()}. */
-    private static final int DATASET_WRITER_QUEUE_CAPACITY = 64;
+    /**
+     * Whole-pool submission ceiling in batches. The former production setting was 64 per writer
+     * with at most four writers; retaining that 256-batch maximum keeps every existing path
+     * unchanged without multiplying pending memory when expert configurations add lanes.
+     */
+    static final int DATASET_WRITER_TOTAL_QUEUE_CAPACITY =
+            SharedDatasetWriterPool.MAX_TOTAL_QUEUE_CAPACITY;
 
     private DatasetDirGuard.FreshDirectoryState freshDatasetDirectoryState;
 
@@ -189,6 +196,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * client is still opened (offline-cheap) so the production path is unchanged.
      */
     PageFetcher fetcherOverride;
+
+    /** Test-only deterministic maximum-heap seam for writer-admission ordering checks. */
+    Long maxHeapBytesOverride;
 
     /**
      * Test-only seam (package-private, null in production): when set, {@code call()} uses this
@@ -368,6 +378,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // exit 2 on --sort with a non-parquet EFFECTIVE format — for every case except a bare
         // swath resume with no explicit --format, BEFORE any checkpoint is opened.
         validateSortFlags(resolved);
+        // Fresh output is fully resolved here, so reject an impossible writer plan before the
+        // directory guard, checkpoint, metrics registry, or S3 client can have side effects. A
+        // resume whose effective output comes from the checkpoint is validated after restore below.
+        if (!checkpoint.resume) {
+            validateDatasetWriterConfiguration(resolved);
+        }
         // Directory-lifecycle safety: before a FRESH (non-resume) directory-dataset run touches
         // the -o dir at all — no checkpoint row, no seed probe, no file write — refuse a FOREIGN
         // non-empty dir or a DAMAGED manifest so we never write into / delete unowned files. A dir
@@ -739,6 +755,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             + "are non-resumable in this release; start a fresh run with "
                             + "--checkpoint none");
                 }
+            }
+            if (checkpoint.resume) {
+                // A resume can learn its effective format/destination only from the opened
+                // checkpoint. Keep the complementary admission check here, after any restore but
+                // before config/S3 construction, rather than coupling it to RunMeta's state shape.
+                validateDatasetWriterConfiguration(resolved);
             }
             // Build config AFTER any resume-context restore (region/profile/no-sign), and BEFORE the
             // resume-safety summary + the S3Client below are built from it.
@@ -1299,10 +1321,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     TextWriterPoolConfig textWriterPoolConfig(S3Uri s3uri, OutputFormat format, String argsHash)
             throws InvalidConfigException, InvalidArgsException {
         try {
+            int writers = output.resolveTextWriters();
             return new TextWriterPoolConfig(
                     Path.of(output.destination), format, output.resolvedCompression, !output.rawOutput,
-                    argsHash, s3uri.bucket(), output.resolveTextWriters(), output.textPartSizeBytes(),
-                    DATASET_WRITER_QUEUE_CAPACITY, output.resolvePartRotationInterval().toNanos(),
+                    argsHash, s3uri.bucket(), writers, output.textPartSizeBytes(),
+                    datasetWriterQueueCapacityPerLane(writers),
+                    output.resolvePartRotationInterval().toNanos(),
                     output.resolvePartRotationMaxRows());
         } catch (IllegalArgumentException e) {
             throw new InvalidConfigException(e.getMessage(), e);
@@ -1562,7 +1586,11 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             throws InvalidConfigException, InvalidArgsException {
         boolean singleFile = output.resolvedKind == OutputOptions.DestinationKind.FILE;
         long targetBytes = output.partSizeBytes();
-        int writers = OutputOptions.resolveParquetWriters(output.resolvedKind, output.parquetWriters);
+        // Sorted output stages through SortLane and publishes through SortedParquetWriterFactory;
+        // it never constructs the direct dataset writer pool. Keep the otherwise-unused writer
+        // fields inert so an expert direct-sink setting cannot reject or warn on a sorted run.
+        int writers = sorting.sort ? 1 : OutputOptions.resolveParquetWriters(
+                output.resolvedKind, output.parquetWriters, maximumHeapBytes());
         long rotation = singleFile ? Long.MAX_VALUE : targetBytes;
         // A single-file destination (a .parquet extension on -o) must stay exactly
         // one part: the time/row-count cadence triggers are for the multi-part model
@@ -1571,9 +1599,64 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         long rotationMaxRows = singleFile ? 0L : output.resolvePartRotationMaxRows();
         return new ListRunner.ParquetSpec(
                 s3uri.prefix(), channelCapacity, pageMax, filterChain, writers, rotation,
-                DATASET_WRITER_QUEUE_CAPACITY, argsHash,
+                datasetWriterQueueCapacityPerLane(writers), argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
                 rotationIntervalNanos, rotationMaxRows, s3uri.bucket());
+    }
+
+    /** Equal per-lane share whose pool-wide product never exceeds the fixed production budget. */
+    static int datasetWriterQueueCapacityPerLane(int writers) {
+        return SharedDatasetWriterPool.defaultQueueCapacityPerLane(writers);
+    }
+
+    /**
+     * Validate the effective dataset-writer plan at the earliest point where format and destination
+     * kind are authoritative. Counts above the measured envelope remain available, but the warning
+     * names both bounded resources this knob can stress: heap and per-finalize publication work.
+     */
+    private void validateDatasetWriterConfiguration(OutputFormat format)
+            throws InvalidConfigException {
+        if (sorting.sort) {
+            return;
+        }
+        if (output.resolvedKind == OutputOptions.DestinationKind.FILE) {
+            if (format == OutputFormat.PARQUET) {
+                OutputOptions.resolveParquetWriters(
+                        output.resolvedKind, output.parquetWriters, maximumHeapBytes());
+            }
+            return;
+        }
+
+        int writers;
+        Long plannedHeapBytes = null;
+        if (format == OutputFormat.PARQUET) {
+            writers = OutputOptions.resolveParquetWriters(
+                    output.resolvedKind, output.parquetWriters, maximumHeapBytes());
+            plannedHeapBytes = ParquetWriterMemoryPlan.plannedHeapBytes(writers);
+        } else if (output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY
+                && (format == OutputFormat.TSV || format == OutputFormat.JSONL)) {
+            writers = output.resolveTextWriters();
+        } else {
+            return;
+        }
+
+        if (writers > ParquetWriterMemoryPlan.RELEASE_ENVELOPE_MAX_WRITERS) {
+            Duration rotationInterval = output.resolvePartRotationInterval();
+            log.warn("dataset_writer_expert_count format={} writers={} queue_capacity_per_lane={} "
+                            + "part_rotation_interval_ms={} planned_heap_bytes={} jvm_max_heap_bytes={} "
+                            + "measured_release_max={} (more active lanes can create more time-rotated "
+                            + "small parts and amplify O(parts^2) manifest rewrites; benchmark "
+                            + "submit_blocked_ms, head_of_line_blocked_ms, manifest_write_ms, and part count)",
+                    format.name().toLowerCase(Locale.ROOT), writers,
+                    datasetWriterQueueCapacityPerLane(writers), rotationInterval.toMillis(),
+                    plannedHeapBytes, maximumHeapBytes(),
+                    ParquetWriterMemoryPlan.RELEASE_ENVELOPE_MAX_WRITERS);
+        }
+    }
+
+    private long maximumHeapBytes() {
+        return maxHeapBytesOverride != null
+                ? maxHeapBytesOverride : Runtime.getRuntime().maxMemory();
     }
 
     /**

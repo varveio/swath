@@ -46,7 +46,16 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
   - **PERF-2** (`ParquetPerf2Test`): 100k keys through the real listing→parquet pipeline —
     **measured peak heap** < the §7.2 Parquet budget (1 GB), **measured peak RSS**
     (`/proc/self/status` `VmRSS`) under a bounded budget, and **no hot-path virtual-thread
-    pinning** (`jdk.VirtualThreadPinned` JFR events == 0).
+    pinning** (`jdk.VirtualThreadPinned` JFR events == 0). Its direct pool leg activates all four
+    release-envelope writers with the production 64-slot lane queues.
+  - Fast writer-pool coverage separately constructs eight active Parquet lanes and a resume that
+    shrinks from eight lanes to three, asserting exact row union, unique part names, complete
+    manifests, sequence continuation for surviving lanes, and clean shutdown under the fixed queue
+    budget. This is correctness coverage, not evidence that eight writers improve throughput.
+  - `DatasetWriterScalingBenchmark` is an opt-in 4/8/16 diagnostic (`-PonlyPerf
+    -Dswath.bench=on`, filtered to that class). It prints `WRITER_BENCH_RESULT` rows for an encode/dispatch arm and a
+    row-rotation arm, including submit/HOL blocking plus digest/manifest time. Results are host and
+    workload evidence, never a relative-throughput assertion in CI.
 - **`-Pdeep`** `./gradlew test -Pdeep` — runs **only** the `@Tag("deep")` tier:
   schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/timeout
   timing tests, demoted off the per-commit gate because they are slow (real `Thread.sleep`)

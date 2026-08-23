@@ -8,17 +8,20 @@ package io.varve.swath.output.parquet;
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.batch;
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.parts;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.varve.swath.model.PageBatch;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.testkit.ParquetReads;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
@@ -26,6 +29,91 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** Writer-pool unit checks: sticky routing, size rotation, manifest, exact-once parts. */
 class ParquetWriterPoolTest {
+
+    @Test
+    void eightLanePoolPublishesEveryRowAndUniquePart(@TempDir Path dir) throws Exception {
+        int writers = 8;
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", writers,
+                Long.MAX_VALUE, SharedDatasetWriterPool.defaultQueueCapacityPerLane(writers));
+        List<String> expected = new ArrayList<>();
+        for (int lane = 0; lane < writers; lane++) {
+            PageBatch submitted = batch(lane, 0, lane * 10, lane * 10 + 10);
+            submitted.entries().forEach(entry -> expected.add(entry.key().asString()));
+            pool.submit(submitted);
+        }
+        pool.close();
+
+        List<Path> dataParts = parts(dir);
+        assertThat(dataParts).hasSize(writers);
+        assertThat(dataParts.stream().map(path -> path.getFileName().toString()))
+                .doesNotHaveDuplicates()
+                .allMatch(name -> name.matches("part-w[0-7]-00000\\.parquet"));
+
+        List<String> actual = new ArrayList<>();
+        for (Path part : dataParts) {
+            actual.addAll(ParquetReads.keys(part));
+        }
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+        JsonNode files = new ObjectMapper().readTree(DatasetLayout.of(dir).manifest().toFile())
+                .path("files");
+        assertThat(files).hasSize(writers);
+    }
+
+    @Test
+    void resumeWithFewerWritersContinuesLiveLaneSequencesWithoutOverwritingCarriedParts(
+            @TempDir Path dir) throws Exception {
+        int initialWriters = 8;
+        var rotateEveryBatch = ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(1);
+        try (var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash",
+                initialWriters, Long.MAX_VALUE,
+                SharedDatasetWriterPool.defaultQueueCapacityPerLane(initialWriters),
+                rotateEveryBatch)) {
+            for (int lane = 0; lane < initialWriters; lane++) {
+                pool.submit(batch(lane, 0, lane, lane + 1));
+            }
+        }
+
+        List<PartInfo> carried = parts(dir).stream().map(path -> {
+            String name = path.getFileName().toString();
+            int writerId = Integer.parseInt(name.substring("part-w".length(), name.indexOf('-', 6)));
+            try {
+                return new PartInfo(DatasetLayout.key(name), writerId, 1L, Files.size(path), "");
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
+        }).toList();
+        assertThat(carried).hasSize(initialWriters);
+
+        int resumedWriters = 3;
+        var resumedConfig = rotateEveryBatch.withExistingParts(carried);
+        try (var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash",
+                resumedWriters, Long.MAX_VALUE,
+                SharedDatasetWriterPool.defaultQueueCapacityPerLane(resumedWriters), resumedConfig)) {
+            for (int lane = 0; lane < resumedWriters; lane++) {
+                pool.submit(batch(lane, 1, 100 + lane, 101 + lane));
+            }
+        }
+
+        List<String> names = parts(dir).stream().map(path -> path.getFileName().toString()).toList();
+        assertThat(names).hasSize(initialWriters + resumedWriters);
+        assertThat(names).doesNotHaveDuplicates();
+        for (int lane = 0; lane < resumedWriters; lane++) {
+            assertThat(names).contains("part-w" + lane + "-00000.parquet",
+                    "part-w" + lane + "-00001.parquet");
+        }
+        for (int lane = resumedWriters; lane < initialWriters; lane++) {
+            assertThat(names).contains("part-w" + lane + "-00000.parquet");
+        }
+    }
+
+    @Test
+    void rejectsQueueCapacityThatExceedsWholePoolBudget(@TempDir Path dir) {
+        assertThatThrownBy(() -> new ParquetWriterPool(
+                dir, ParquetSchema.canonical(), "hash", 64, Long.MAX_VALUE, 5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("aggregate writer queue capacity <= 256")
+                .hasMessageContaining("aggregate=320");
+    }
 
     @Test
     void rotatesBySizeAndUnionEqualsInput(@TempDir Path dir) throws Exception {

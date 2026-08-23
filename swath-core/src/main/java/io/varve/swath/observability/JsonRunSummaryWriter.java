@@ -844,6 +844,21 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
     private static void writeDatasetWriter(
             ObjectNode node, RunSummary.DatasetWriterSummary writer) {
         node.put("format", writer.format());
+        node.put("writer_count", writer.writerCount());
+        node.put("total_queue_capacity", writer.totalQueueCapacity());
+        node.put("part_rotation_interval_ms", nanosToMillis(writer.partRotationIntervalNanos()));
+        node.put("part_rotation_max_rows", writer.partRotationMaxRows());
+        node.put("jvm_max_heap_bytes", writer.jvmMaxHeapBytes());
+        putLongOrNullBoxed(node, "row_group_target_bytes_per_writer",
+                writer.rowGroupTargetBytesPerWriter());
+        putIntegerOrNull(node, "row_group_allowance_multiplier",
+                writer.rowGroupAllowanceMultiplier());
+        putLongOrNullBoxed(node, "planned_heap_bytes", writer.plannedHeapBytes());
+        putBooleanOrNull(node, "heap_admission_applied", writer.heapAdmissionApplied());
+        node.put("part_digest_count", writer.partDigestCount());
+        node.put("part_digest_ms", nanosToMillis(writer.partDigestNanos()));
+        node.put("manifest_write_count", writer.manifestWriteCount());
+        node.put("manifest_write_ms", nanosToMillis(writer.manifestWriteNanos()));
         node.put("submit_blocked_count", writer.submitBlockedCount());
         node.put("submit_blocked_ms", nanosToMillis(writer.submitBlockedNanos()));
         node.put("head_of_line_blocked_count", writer.headOfLineBlockedCount());
@@ -973,6 +988,30 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             node.putNull(field);
         } else {
             node.put(field, value.doubleValue());
+        }
+    }
+
+    private static void putLongOrNullBoxed(ObjectNode node, String field, Long value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value.longValue());
+        }
+    }
+
+    private static void putIntegerOrNull(ObjectNode node, String field, Integer value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value);
+        }
+    }
+
+    private static void putBooleanOrNull(ObjectNode node, String field, Boolean value) {
+        if (value == null) {
+            node.putNull(field);
+        } else {
+            node.put(field, value);
         }
     }
 

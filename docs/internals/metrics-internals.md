@@ -349,7 +349,22 @@ admissions where at least one *other* lane was waiting for work with an empty qu
 began. Requiring an actually idle writer distinguishes sticky-routing head-of-line blocking from
 the ordinary case where all writers are busy, without changing routing.
 
-`lanes[]` contains one row per configured writer (1–4):
+The top level also reports `writer_count`, the sum of lane capacities as
+`total_queue_capacity`, `part_rotation_interval_ms`, `part_rotation_max_rows`, and
+`jvm_max_heap_bytes`. Parquet adds `row_group_target_bytes_per_writer`,
+`row_group_allowance_multiplier`, `planned_heap_bytes`, and `heap_admission_applied`; these are JSON
+null for text because its encoders do not own a comparable fixed row-group allocation. The target is
+the pinned 64 MiB uncompressed row-group threshold, while the multiplier exposes the conservative
+overshoot allowance used by the plan—multiplying only writer count by the target is not a heap
+estimate.
+
+`part_digest_count`/`part_digest_ms` measure the full-part checksum read after close.
+`manifest_write_count`/`manifest_write_ms` measure atomic complete-manifest rewrites, including time
+queued behind another lane on the global manifest lock. The count includes the final ensure-write at
+successful publication. These fields isolate the two per-part costs that grow when more active lanes
+produce more time/row-rotated parts; both durations remain elapsed time, not CPU.
+
+`lanes[]` contains one row per configured writer (1–64):
 
 | field | meaning |
 |---|---|
@@ -358,7 +373,7 @@ the ordinary case where all writers are busy, without changing routing.
 | `finalized_bytes`, `parts_finalized` | Actual file sizes and part count after successful finalize/durability handling. |
 | `active_elapsed_ms` | Sum of lane-thread stretches between queue waits. It includes encoding, file/checkpoint I/O, fsync, MD5/manifest work, and any internal waits; it is not CPU and can overlap other lanes. |
 | `submit_blocked_count`, `submit_blocked_ms` | This sticky lane's full-queue encounters and elapsed admission waits. Interrupted waits are still evidence and remain counted. |
-| `head_of_line_blocked_count`, `head_of_line_blocked_ms` | The subset whose wait began while another lane thread was waiting for work with an empty queue. The check scans at most four lanes and runs only after the selected lane is already full. Material time is strong evidence that sticky routing stranded an idle writer; zero only means that condition was not present at blocked-admission start. |
+| `head_of_line_blocked_count`, `head_of_line_blocked_ms` | The subset whose wait began while another lane thread was waiting for work with an empty queue. The bounded cross-lane scan runs only after the selected lane is already full. Material time is strong evidence that sticky routing stranded an idle writer; zero only means that condition was not present at blocked-admission start. |
 | `finalize_count`, `finalize_elapsed_ms` | `DatasetPartWriter.close()` attempts and elapsed close time, including failed attempts. Broader post-close MD5/checkpoint/manifest work remains in `active_elapsed_ms`. |
 
 Read the causal chain in order: lane `submit_blocked_ms` is contained in the consumer's `emit`
@@ -374,14 +389,15 @@ sink service is insufficient. Material `head_of_line_blocked_ms` instead shows t
 stranded an idle writer and calls for removing cross-lane dispatch coupling before adding buffers.
 Near-zero blocking means more lanes would not improve that run. Interpret lane active time as elapsed
 service, not as sustained capacity or CPU: short bursts can exclude later finalization, filesystem
-writeback, and GC costs.
+writeback, and GC costs. Rising `manifest_write_ms` and part count as writers increase identifies the
+serialized publication/small-file path; adding lanes cannot parallelize that lock.
 
 **Instrumentation cost.** The normal submit path performs one non-blocking `offer`, the same single
 queue-lock acquisition the former uncontended `put` required. It does not sample queue size, read
 the clock, scan other lanes, or update blocked counters. The encode path updates single-writer
 volatile counters once per batch/lane stretch, not once per row. Only a failed `offer` reads the
-monotonic clock, scans the fixed 1–4 lane array, and updates blocked counters. Queue depth is sampled
-by the periodic/terminal reporter, which also copies that fixed lane array. Benchmark both arms with
+monotonic clock, scans the bounded lane array, and updates blocked counters. Queue depth is sampled
+by the periodic/terminal reporter, which also copies that bounded lane array. Benchmark both arms with
 identical instrumentation and JFR settings; the repository does not claim a universal measured
 overhead percentage for this workload.
 

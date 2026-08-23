@@ -116,6 +116,19 @@ public record RunSummary(
      */
     public record DatasetWriterSummary(
             String format,
+            int writerCount,
+            long totalQueueCapacity,
+            long partRotationIntervalNanos,
+            long partRotationMaxRows,
+            long jvmMaxHeapBytes,
+            Long rowGroupTargetBytesPerWriter,
+            Integer rowGroupAllowanceMultiplier,
+            Long plannedHeapBytes,
+            Boolean heapAdmissionApplied,
+            long partDigestCount,
+            long partDigestNanos,
+            long manifestWriteCount,
+            long manifestWriteNanos,
             long submitBlockedCount,
             long submitBlockedNanos,
             long headOfLineBlockedCount,
@@ -126,18 +139,31 @@ public record RunSummary(
             lanes = List.copyOf(lanes);
         }
 
-        public static DatasetWriterSummary from(String format, List<DatasetWriterLane> lanes) {
+        public static DatasetWriterSummary from(
+                String format, List<DatasetWriterLane> lanes,
+                long partRotationIntervalNanos, long partRotationMaxRows,
+                long partDigestCount, long partDigestNanos,
+                long manifestWriteCount, long manifestWriteNanos,
+                Long rowGroupTargetBytesPerWriter, Integer rowGroupAllowanceMultiplier,
+                Long plannedHeapBytes, Boolean heapAdmissionApplied) {
             long submitBlockedCount = 0L;
             long submitBlockedNanos = 0L;
             long headOfLineBlockedCount = 0L;
             long headOfLineBlockedNanos = 0L;
+            long totalQueueCapacity = 0L;
             for (DatasetWriterLane lane : lanes) {
+                totalQueueCapacity += lane.queueCapacity();
                 submitBlockedCount += lane.submitBlockedCount();
                 submitBlockedNanos += lane.submitBlockedNanos();
                 headOfLineBlockedCount += lane.headOfLineBlockedCount();
                 headOfLineBlockedNanos += lane.headOfLineBlockedNanos();
             }
-            return new DatasetWriterSummary(format, submitBlockedCount, submitBlockedNanos,
+            return new DatasetWriterSummary(format, lanes.size(), totalQueueCapacity,
+                    partRotationIntervalNanos, partRotationMaxRows, Runtime.getRuntime().maxMemory(),
+                    rowGroupTargetBytesPerWriter, rowGroupAllowanceMultiplier, plannedHeapBytes,
+                    heapAdmissionApplied, partDigestCount, partDigestNanos,
+                    manifestWriteCount, manifestWriteNanos,
+                    submitBlockedCount, submitBlockedNanos,
                     headOfLineBlockedCount, headOfLineBlockedNanos, lanes);
         }
     }

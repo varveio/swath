@@ -7,6 +7,7 @@ package io.varve.swath.output.text;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import java.nio.file.Path;
 
 /** Complete, validated construction input for a partitioned text dataset sink. */
@@ -15,7 +16,7 @@ public record TextWriterPoolConfig(
         String argsHash, String bucket, int writers, long targetBytes, int queueCapacity,
         long rotationIntervalNanos, long rotationMaxRows, RunMetrics metrics) {
     public static final int MIN_WRITERS = 2;
-    public static final int MAX_WRITERS = 4;
+    public static final int MAX_WRITERS = SharedDatasetWriterPool.MAX_WRITERS;
 
     public TextWriterPoolConfig(
             Path directory, OutputFormat format, TextCompression compression, boolean escape,

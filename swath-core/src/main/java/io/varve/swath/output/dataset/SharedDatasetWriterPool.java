@@ -30,14 +30,15 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.LongSupplier;
 import org.apache.commons.codec.digest.DigestUtils;
 
 /**
- * A format-neutral, decoupled dataset writer pool: {@code numWriters} lanes
- * (2–4, default 3), each on its own platform thread draining a bounded queue, so
+ * A format-neutral, decoupled dataset writer pool: a bounded number of {@code numWriters} lanes
+ * (default 3), each on its own platform thread draining a bounded queue, so
  * sink I/O runs away from the listing workers. <b>Sticky</b> assignment — every
  * page of a node goes to {@code writer = nodeId % numWriters}, so a node's pages
  * occupy a contiguous run of one lane's size-rotated parts (which finalize in
@@ -65,6 +66,27 @@ import org.apache.commons.codec.digest.DigestUtils;
  * either trigger.
  */
 public final class SharedDatasetWriterPool implements DatasetWriterPool {
+
+    /** Defensive process-resource ceiling; format-specific policy may admit fewer lanes. */
+    public static final int MAX_WRITERS = 64;
+
+    /**
+     * Whole-pool production submission ceiling in batches. This equals the former maximum of 64
+     * slots for each of four lanes, but no longer grows when an expert requests more writers.
+     */
+    public static final int MAX_TOTAL_QUEUE_CAPACITY = 4 * 64;
+
+    /** Preserve the existing queue depth for every count in the measured 1-4 lane envelope. */
+    public static final int DEFAULT_QUEUE_CAPACITY_PER_LANE = 64;
+
+    /** Equal per-lane share whose pool-wide product never exceeds the production budget. */
+    public static int defaultQueueCapacityPerLane(int writers) {
+        if (writers < 1 || writers > MAX_WRITERS) {
+            throw new IllegalArgumentException("writers must be 1.." + MAX_WRITERS);
+        }
+        return Math.max(1, Math.min(DEFAULT_QUEUE_CAPACITY_PER_LANE,
+                MAX_TOTAL_QUEUE_CAPACITY / writers));
+    }
 
     /**
      * A bounded snapshot of one writer lane. All durations are elapsed time, not CPU
@@ -136,6 +158,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     private final Scope scope;
     private final List<Future<?>> laneFutures = new ArrayList<>();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
+    private final AtomicLong partDigestCount = new AtomicLong();
+    private final AtomicLong partDigestNanos = new AtomicLong();
+    private final AtomicLong manifestWriteCount = new AtomicLong();
+    private final AtomicLong manifestWriteNanos = new AtomicLong();
 
     private final List<PartInfo> committedParts = Collections.synchronizedList(new ArrayList<>());
     private final Object manifestLock = new Object();
@@ -163,6 +189,17 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     public SharedDatasetWriterPool(Path dir, DatasetFormat format, String argsHash,
                       int numWriters, long targetBytes, int queueCapacity,
                       DatasetWriterPoolConfig config, LongSupplier nanoClock) {
+        if (numWriters < 1 || numWriters > MAX_WRITERS) {
+            throw new IllegalArgumentException(
+                    "numWriters must be 1.." + MAX_WRITERS + " (got " + numWriters + ")");
+        }
+        if (queueCapacity < 1
+                || (long) numWriters * queueCapacity > MAX_TOTAL_QUEUE_CAPACITY) {
+            throw new IllegalArgumentException("queueCapacity must be at least 1 and keep aggregate "
+                    + "writer queue capacity <= " + MAX_TOTAL_QUEUE_CAPACITY + " batches (writers="
+                    + numWriters + ", queueCapacity=" + queueCapacity + ", aggregate="
+                    + (long) numWriters * queueCapacity + ")");
+        }
         this.dir = dir;
         this.sinkName = config.sinkName();
         this.scope = Scope.ofPlatformThreads(sinkName + "-writer");
@@ -170,7 +207,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.format = format;
         this.argsHash = argsHash;
         this.bucket = config.bucket();
-        this.numWriters = Math.max(1, numWriters);
+        this.numWriters = numWriters;
         this.targetBytes = targetBytes;
         this.rotationIntervalNanos = config.rotationIntervalNanos();
         this.rotationMaxRows = config.rotationMaxRows();
@@ -180,8 +217,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.committedParts.addAll(config.existingParts());
         this.lanes = new Lane[this.numWriters];
         for (int i = 0; i < this.numWriters; i++) {
-            int capacity = Math.max(1, queueCapacity);
-            lanes[i] = new Lane(i, capacity, new ArrayBlockingQueue<>(capacity));
+            lanes[i] = new Lane(i, queueCapacity, new ArrayBlockingQueue<>(queueCapacity));
         }
         // Resume: continue each lane's part sequence PAST any carried-over part so a
         // resumed run never reuses (and so overwrites) a prior finalized part's filename.
@@ -219,7 +255,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
             Lane lane = lanes[laneId];
             if (!lane.queue.offer(batch)) {
-                // Pay for the clock and the 2–4-lane scan only on the saturated path. This is the
+                // Pay for the clock and bounded cross-lane scan only on the saturated path. This is the
                 // missing middle link between consumer-side emit and worker-side channel wait.
                 lane.queueDepthPeak.getAndAccumulate(lane.queueCapacity, Math::max);
                 boolean headOfLine = anotherLaneIsWaitingForWork(laneId);
@@ -268,6 +304,13 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             return committedParts.stream().mapToLong(PartInfo::bytes).sum();
         }
     }
+
+    long rotationIntervalNanos() { return rotationIntervalNanos; }
+    long rotationMaxRows() { return rotationMaxRows; }
+    long partDigestCount() { return partDigestCount.get(); }
+    long partDigestNanos() { return partDigestNanos.get(); }
+    long manifestWriteCount() { return manifestWriteCount.get(); }
+    long manifestWriteNanos() { return manifestWriteNanos.get(); }
 
     private void checkFailure() throws OutputException {
         Throwable t = failure.get();
@@ -502,8 +545,12 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         // manifest rewrite (which would be O(n²)).
         String relPath = DatasetLayout.key(path.getFileName().toString());
         String md5;
+        long digestStartedAt = nanoClock.getAsLong();
         try (var in = Files.newInputStream(path)) {
             md5 = DigestUtils.md5Hex(in);
+        } finally {
+            partDigestCount.incrementAndGet();
+            partDigestNanos.addAndGet(Math.max(0L, nanoClock.getAsLong() - digestStartedAt));
         }
         // When the sink wires a durable listener, its checkpoint commit (record part + advance
         // durable_cursor) is the exactly-once boundary BEFORE the manifest. Text wires NONE.
@@ -557,10 +604,39 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     }
 
     private void writeManifest() throws IOException {
-        synchronized (manifestLock) {
-            Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
-                    snapshotParts(), false, null);
+        long startedAt = nanoClock.getAsLong();
+        try {
+            synchronized (manifestLock) {
+                // Snapshot under the publication lock. Otherwise lane A can snapshot an older
+                // part set, lane B can publish a newer set, and A can then overwrite it after
+                // finally acquiring this lock.
+                writeManifestLocked(snapshotParts());
+            }
+        } finally {
+            recordManifestWrite(startedAt);
         }
+    }
+
+    /** Includes time queued behind another lane on {@link #manifestLock}. */
+    private void writeManifest(List<PartInfo> parts) throws IOException {
+        long startedAt = nanoClock.getAsLong();
+        try {
+            synchronized (manifestLock) {
+                writeManifestLocked(parts);
+            }
+        } finally {
+            recordManifestWrite(startedAt);
+        }
+    }
+
+    private void writeManifestLocked(List<PartInfo> parts) throws IOException {
+        Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
+                parts, false, null);
+    }
+
+    private void recordManifestWrite(long startedAt) {
+        manifestWriteCount.incrementAndGet();
+        manifestWriteNanos.addAndGet(Math.max(0L, nanoClock.getAsLong() - startedAt));
     }
 
     private List<PartInfo> snapshotParts() {
@@ -609,14 +685,11 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     private void publishSuccess() throws OutputException {
         if (publicationInitiated.compareAndSet(false, true)) {
             try {
-                synchronized (manifestLock) {
-                    List<PartInfo> snapshot = snapshotParts();
-                    Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
-                            snapshot, false, null);   // ensure a manifest exists
-                    Manifest.writeState(dir, argsHash, null);
-                    Manifest.writeSymlink(dir, snapshot);
-                    Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker
-                }
+                List<PartInfo> snapshot = snapshotParts();
+                writeManifest(snapshot);   // ensure a manifest exists
+                Manifest.writeState(dir, argsHash, null);
+                Manifest.writeSymlink(dir, snapshot);
+                Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker
                 published.complete(null);
             } catch (Throwable t) {
                 published.completeExceptionally(t);

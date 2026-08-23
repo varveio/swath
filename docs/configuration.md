@@ -37,7 +37,7 @@ compression is internal. Table, TSV, and JSONL support optional compression as s
 or single-file streams. Only TSV and JSONL support bounded directory datasets; those
 datasets are non-resumable and require `--checkpoint none` in this release.
 
-Text directory datasets use `--text-writers` (default `3`, range `2..4`) and
+Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). At startup, unless stdout or `-q` suppresses it,
 swath echoes the resolved format, destination kind, compression, and destination so the
 effective choice is visible before listing begins.
@@ -102,7 +102,7 @@ The following table is machine-checked against the code registry.
 | --- | --- | --- | --- | --- | --- | --- |
 | `engine.readahead` | `on or off` | `off` | experimental | free | fresh list | Speculatively fetch ahead on sustained dense tails; can trade API calls and memory for lower wall time. |
 | `seed.mode` | `shallow, none, or hints` | `shallow` | stable (`hints` reserved) | identity | fresh list | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
-| `parquet.writers` | `integer 2..4` | `3` | stable | free | fresh list | Set the bounded Parquet writer pool; FILE-kind Parquet still resolves to one writer. |
+| `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the bounded direct (unsorted) Parquet writer pool. Counts 2–4 retain the measured release envelope; 5–64 require the JVM maximum heap to cover the conservative writer-memory plan. Higher counts are an expert experiment: they shrink each lane's share of the fixed queue budget and can multiply time-rotated parts plus manifest work. FILE-kind Parquet still resolves to one writer. Sorted staging/finalization does not construct this pool, so this setting is inert under `--sort`. |
 | `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass sorted-output free-space checks. Size the staging volume independently first. |
 

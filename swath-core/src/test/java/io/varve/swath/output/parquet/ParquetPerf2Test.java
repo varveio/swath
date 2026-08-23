@@ -12,6 +12,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.PageBatch;
+import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.testkit.Keyspaces;
@@ -151,17 +152,17 @@ class ParquetPerf2Test {
     }
 
     /**
-     * The 3-writer memory model with <b>all lanes active</b> (2–4 writers
-     * decoupled from {@code T}). The sequential {@code ScanProducer} emits a single
+     * The measured four-writer release envelope with <b>all lanes active</b>. The sequential
+     * {@code ScanProducer} emits a single
      * {@code nodeId=0}, so the real pipeline above drives only one lane; the multi-lane heap
      * budget is exercised here by submitting batches across distinct node ids (routing is
      * {@code nodeId % numWriters}). Heap stays a function of {@code writers × row-group}, not
      * object count (I11).
      */
     @Test
-    void threeWriterLanesStayUnderHeapBudget(@TempDir Path dir) throws Exception {
+    void maximumReleaseEnvelopeStaysUnderHeapBudget(@TempDir Path dir) throws Exception {
         int n = 100_000;
-        int writers = 3;
+        int writers = 4;
 
         AtomicBoolean done = new AtomicBoolean(false);
         AtomicLong peakHeap = new AtomicLong(0);
@@ -179,7 +180,8 @@ class ParquetPerf2Test {
 
         long written;
         try (ParquetWriterPool pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "perf",
-                writers, PartWriter.ROW_GROUP_BYTES * 4, 32)) {
+                writers, PartWriter.ROW_GROUP_BYTES * 4,
+                SharedDatasetWriterPool.defaultQueueCapacityPerLane(writers))) {
             long seq = 0;
             int batchSize = 1000;
             for (int i = 0; i < n; i += batchSize) {
@@ -193,7 +195,7 @@ class ParquetPerf2Test {
         sampler.join(1000);
 
         assertThat(peakHeap.get())
-                .as("3-lane measured peak heap (%d MB) under §7.2 budget", peakHeap.get() / (1024 * 1024))
+                .as("4-lane measured peak heap (%d MB) under §7.2 budget", peakHeap.get() / (1024 * 1024))
                 .isLessThan(HEAP_BUDGET_BYTES);
 
         long rows = 0;
