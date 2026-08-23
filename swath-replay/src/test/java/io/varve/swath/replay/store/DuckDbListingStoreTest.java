@@ -20,9 +20,12 @@ import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.TimeZone;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Isolated;
 
+@Isolated // The legacy-timestamp regression test changes java.util.TimeZone's JVM-global default.
 class DuckDbListingStoreTest {
 
     @Test
@@ -71,32 +74,39 @@ class DuckDbListingStoreTest {
 
     @Test
     void loadsLegacyParquetWithoutOwnerDisplayNameOrChecksumType(@TempDir Path dir) throws Exception {
-        Path parquet = dir.resolve("legacy.parquet");
-        try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
-             var st = connection.createStatement()) {
-            st.execute("""
-                    COPY (
-                        SELECT
-                            'OBJECT'::VARCHAR AS row_type,
-                            'legacy/1'::BLOB AS key,
-                            10::BIGINT AS size,
-                            TIMESTAMP '2026-01-01 00:00:00' AS last_modified,
-                            'etag-10'::VARCHAR AS etag,
-                            'STANDARD'::VARCHAR AS storage_class,
-                            'owner-10'::VARCHAR AS owner_id,
-                            'CRC32'::VARCHAR AS checksum_algorithm
-                    ) TO %s (FORMAT PARQUET)
-                    """.formatted(sqlString(parquet)));
-        }
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles"));
+        try {
+            Path parquet = dir.resolve("legacy.parquet");
+            try (Connection connection = DriverManager.getConnection("jdbc:duckdb:");
+                 var st = connection.createStatement()) {
+                st.execute("""
+                        COPY (
+                            SELECT
+                                'OBJECT'::VARCHAR AS row_type,
+                                'legacy/1'::BLOB AS key,
+                                10::BIGINT AS size,
+                                TIMESTAMP '2026-01-01 00:00:00' AS last_modified,
+                                'etag-10'::VARCHAR AS etag,
+                                'STANDARD'::VARCHAR AS storage_class,
+                                'owner-10'::VARCHAR AS owner_id,
+                                'CRC32'::VARCHAR AS checksum_algorithm
+                        ) TO %s (FORMAT PARQUET)
+                        """.formatted(sqlString(parquet)));
+            }
 
-        try (DuckDbListingStore store = new DuckDbListingStore(parquet)) {
-            List<ListedObject> rows = store.rows(null, true, null, 1000, Projection.WITH_OWNER);
-            ListedObject object = rows.getFirst();
-            assertThat(ByteKeys.utf8(object.key())).isEqualTo("legacy/1");
-            assertThat(object.ownerId()).isEqualTo("owner-10");
-            assertThat(object.ownerDisplayName()).isNull();
-            assertThat(object.checksumAlgorithm()).isEqualTo("CRC32");
-            assertThat(object.checksumType()).isEqualTo("FULL_OBJECT");
+            try (DuckDbListingStore store = new DuckDbListingStore(parquet)) {
+                List<ListedObject> rows = store.rows(null, true, null, 1000, Projection.WITH_OWNER);
+                ListedObject object = rows.getFirst();
+                assertThat(ByteKeys.utf8(object.key())).isEqualTo("legacy/1");
+                assertThat(object.lastModifiedEpochMicros()).isEqualTo(1_767_225_600_000_000L);
+                assertThat(object.ownerId()).isEqualTo("owner-10");
+                assertThat(object.ownerDisplayName()).isNull();
+                assertThat(object.checksumAlgorithm()).isEqualTo("CRC32");
+                assertThat(object.checksumType()).isEqualTo("FULL_OBJECT");
+            }
+        } finally {
+            TimeZone.setDefault(original);
         }
     }
 

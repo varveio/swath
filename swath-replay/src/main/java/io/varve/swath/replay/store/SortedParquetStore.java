@@ -16,10 +16,6 @@ import io.varve.swath.sort.SortedRangeReader;
 import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -191,9 +187,7 @@ public final class SortedParquetStore implements ListingStore {
                 for (SortedRowGroupReader.ObjectRow row :
                         rangeReader(file).range(startBlock, lower, inclusive, upper,
                                 limit - out.size(), projection.owner())) {
-                    out.add(new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
-                            row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
-                            row.checksumAlgorithm(), row.checksumType()));
+                    out.add(toListedObject(row));
                 }
                 lower = null;
                 inclusive = true;
@@ -578,34 +572,9 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     private static ListedObject toListedObject(SortedRowGroupReader.ObjectRow row) {
-        return new ListedObject(row.key(), row.size(), rowMapperCompatibleMicros(row.lastModifiedEpochMicros()),
+        return new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
                 row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
                 row.checksumAlgorithm(), row.checksumType());
-    }
-
-    /**
-     * Reproduces, bit for bit, what {@link RowMapper#read} derives for {@code last_modified} — not
-     * the true UTC instant the row actually stores. DuckDB's JDBC driver, for a Parquet-sourced
-     * {@code TIMESTAMPTZ} column, does not honor the {@link java.util.Calendar} passed to {@code
-     * ResultSet.getTimestamp(column, calendar)}: it takes the value's own UTC wall-clock digits and
-     * re-interprets them as wall-clock digits in the <b>JVM's default zone</b> instead — a shift by
-     * that zone's offset at the instant in question, a no-op only when the JVM default zone is UTC.
-     * {@link RowMapper} unavoidably inherits this because it explicitly requests a UTC calendar (to
-     * defend against a different, legitimate shift on a plain un-zoned {@code TIMESTAMP} column, which
-     * {@link DuckDbListingStore}'s materialized table can produce for an older capture). Both existing
-     * stores go through {@link RowMapper}, so they already agree with each other on the shifted value;
-     * this store's native decode must reproduce the very same shift, not the true instant, to stay
-     * byte-identical to the DuckDB-backed range walk the differential suite compares it against.
-     */
-    private static long rowMapperCompatibleMicros(long trueEpochMicros) {
-        if (trueEpochMicros == 0L) {
-            return 0L;   // RowMapper's own sentinel for "no timestamp" (a null column)
-        }
-        Instant trueInstant = Instant.ofEpochSecond(
-                Math.floorDiv(trueEpochMicros, 1_000_000L), Math.floorMod(trueEpochMicros, 1_000_000L) * 1_000L);
-        LocalDateTime utcWallClock = LocalDateTime.ofInstant(trueInstant, ZoneOffset.UTC);
-        Instant shifted = utcWallClock.atZone(ZoneId.systemDefault()).toInstant();
-        return shifted.getEpochSecond() * 1_000_000L + shifted.getNano() / 1_000L;
     }
 
     private static void validateIndexWithinFiles(List<IndexEntry> index, List<Path> files) {
