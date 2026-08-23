@@ -103,7 +103,9 @@ The output consumer determines the delivery contract:
 
 - stdout and file text are one-shot streams;
 - direct managed Parquet routes each node consistently to one of a small fixed number of
-  writers, finalizes parts, advances durable cursors, and atomically replaces the manifest;
+  writers. Each lane owns encoding and durable close; after its checkpoint callback commits, one
+  synchronous publication coordinator owns the monotone part set and atomically replaces the
+  manifest. The coordinator is a serialized object, not another queued worker or shutdown path;
 - sorted Parquet packs pages into bounded segments and performs a resource-bounded external
   merge before publication.
 
