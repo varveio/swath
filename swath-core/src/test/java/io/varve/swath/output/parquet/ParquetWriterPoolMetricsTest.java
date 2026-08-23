@@ -76,6 +76,32 @@ class ParquetWriterPoolMetricsTest {
     }
 
     @Test
+    void liveSummaryCountsFinalizedPartsBeforeCompletionManifestExists(@TempDir Path dir)
+            throws Exception {
+        RunContext ctx = RunContext.create();
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 8,
+                ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(5L).withMetrics(ctx.metrics()));
+
+        pool.submit(batch(0, 0, 0, 10));
+        await().atMost(Duration.ofSeconds(5)).until(() -> pool.committedPartCount() == 1L);
+
+        RunSummary live = ctx.metrics().summary(Duration.ofSeconds(1), "work_stealing",
+                pool.committedPartCount(), pool.committedBytes());
+        assertThat(live.outputFiles()).isEqualTo(1L);
+        assertThat(live.compressedBytes()).isPositive();
+        assertThat(live.datasetWriter().manifestWriteCount()).isZero();
+        assertThat(DatasetLayout.of(dir).manifest()).doesNotExist();
+
+        pool.close();
+
+        RunSummary terminal = ctx.metrics().summary(Duration.ofSeconds(1), "work_stealing",
+                pool.committedPartCount(), pool.committedBytes());
+        assertThat(terminal.outputFiles()).isEqualTo(1L);
+        assertThat(terminal.datasetWriter().manifestWriteCount()).isEqualTo(1L);
+        assertThat(DatasetLayout.of(dir).manifest()).exists();
+    }
+
+    @Test
     void timeTriggerRotationRecordsTimeReason(@TempDir Path dir) throws Exception {
         RunContext ctx = RunContext.create();
         AtomicLong clock = new AtomicLong(0);
@@ -248,7 +274,7 @@ class ParquetWriterPoolMetricsTest {
         assertThat(summary.datasetWriter().heapAdmissionApplied()).isFalse();
         assertThat(summary.datasetWriter().partDigestCount()).isEqualTo(1L);
         assertThat(summary.datasetWriter().partDigestNanos()).isPositive();
-        assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(2L);
+        assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(1L);
         assertThat(summary.datasetWriter().manifestWriteNanos()).isPositive();
         assertThat(summary.datasetWriter().lanes()).singleElement().satisfies(lane -> {
             assertThat(lane.rowsWritten()).isEqualTo(3_000L);

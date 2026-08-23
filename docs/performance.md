@@ -148,10 +148,11 @@ comparing runs.
 Higher counts are not monotonic throughput scaling. Dividing the fixed budget gives each lane fewer
 queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
 rotation is also per lane: more active lanes can create more sub-target parts, each of which maintains
-a streamed full-part digest and rewrites the complete manifest under one lock. Compare `part_digest_ms`,
+a streamed full-part digest and incurs its own close/checkpoint work. The complete manifest is written
+once after all lanes join. Compare `part_digest_ms`, finalize/checkpoint time, terminal
 `manifest_write_ms`, part count, `submit_blocked_ms`, and `head_of_line_blocked_ms` at 4/8/16 before
-adopting an expert count. If manifest time or HOL blocking rises faster than throughput, more writers
-are making the sink worse.
+adopting an expert count. If small-file overhead or HOL blocking rises faster than throughput, more
+writers are making the sink worse.
 
 ### Size CPU and memory empirically
 
@@ -271,8 +272,9 @@ pages, or resume overhead.
   concurrency ceiling under-filled.
 - Aggressive concurrency can increase scheduling, allocation, and connection churn while
   producing no more work.
-- Direct Parquet with very small part targets grows manifest and part metadata; manifest
-  rewrites are cumulative `O(parts²)` serialization work.
+- Direct Parquet with very small part targets grows retained part metadata and makes the one
+  terminal `O(parts)` manifest larger; per-part finalization/checkpoint/digest overhead can still
+  dominate even though the manifest is no longer rewritten per part.
 - Sorted output depends on staging disk, heap, and descriptor headroom. Small or constrained
   runs fall back to serial merge.
 - Remote throttling reduces the AIMD target and may dominate a run even when the engine can

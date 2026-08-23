@@ -82,8 +82,7 @@ class MultiLaneIdleRotationCadenceTest {
                     .containsKey(node);
         }
 
-        // The manifest, written under the shared lock across three concurrent finalizes,
-        // is valid JSON recording all three parts with no corruption/interleaving.
+        // The one terminal manifest includes all three parts that finalized concurrently.
         String manifest = Files.readString(DatasetLayout.of(dir).manifest());
         long partEntries = manifest.lines().filter(l -> l.contains("\"key\":")).count();
         assertThat(partEntries).as("the manifest records all %d idle-finalized parts", NUM_WRITERS)

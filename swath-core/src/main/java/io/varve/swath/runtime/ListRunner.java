@@ -290,7 +290,7 @@ public final class ListRunner {
      * exactly-once durable-cursor model (I6). On each part finalize the
      * {@link PartListener} records the part + advances {@code durable_cursor} in one
      * checkpoint transaction (the commit point, after the footer fsync).
-     * {@code existingParts} are carried into the manifest on resume; non-finalized
+     * {@code existingParts} are carried into completion publication on resume; non-finalized
      * parts must already have been discarded by the caller.
      */
     public ListingStatistics runToParquetCheckpointed(RunContext ctx, PageFetcher fetcher, Path outputDir,
@@ -1696,12 +1696,12 @@ public final class ListRunner {
         };
     }
 
-    /** Drain for a parquet sink: finalize the pool (footer fsync + manifest, I6) on success, abort on failure. */
+    /** Drain for a dataset sink: finalize parts, then publish the one completion manifest. */
     private static DrainStep poolDrain(DatasetWriterPool pool) {
         return new DrainStep() {
             @Override
             public void onDrained() throws OutputException {
-                pool.close();   // finalize each lane's open part (footer fsync) + commit manifest (I6)
+                pool.close();   // finalize parts, publish manifest, then _SUCCESS last
             }
 
             @Override

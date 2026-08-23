@@ -29,6 +29,7 @@ import io.varve.swath.error.InvalidUriException;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.error.ProtocolViolationException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.error.UnsupportedBucketException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
@@ -810,8 +811,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             + "destination for checkpointed output" + fileKindPhysicalLayoutNote(resolved));
                 }
                 // A run recorded FAILED with the fatal-error flag set (a deterministic
-                // in-process failure — e.g. a fatal ListingException/OutputException/
-                // CheckpointException, or a fatal seed-probe failure) must not be blindly
+                // in-process failure — e.g. a fatal ListingException, non-retryable
+                // OutputException, CheckpointException, or fatal seed-probe failure) must not be blindly
                 // re-attempted — it would just re-fail the same way. Refuse (like every other
                 // resume-safety refusal below); --restart discards the prior run and starts fresh.
                 //
@@ -1035,7 +1036,38 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 }
 
                 if (nodes.isEmpty()) {
-                    // A resume with nothing left genuinely finished — a completed summary.
+                    if (fileSink) {
+                        Path outputDir = output.openParquetDir();
+                        if (isPublishedUnsortedByArgsHash(outputDir, argsHash)) {
+                            // Publication committed and only the checkpoint's terminal status lagged
+                            // (for example, kill-9 after _SUCCESS). Do not reread every part merely
+                            // to reproduce the same manifest; close the run row idempotently.
+                            store.markRunFinished(run.id(), RunStatus.COMPLETED);
+                            writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(),
+                                    runStartedNs, true, StopReason.COMPLETED,
+                                    STRATEGY_WORK_STEALING);
+                            return ExitCodes.SUCCESS;
+                        }
+                        // Listing is output-complete, but direct Parquet publication may still be
+                        // pending: the prior process can fail after every part + durable_cursor is
+                        // checkpointed and before manifest.json/_SUCCESS is written. Re-enter the
+                        // normal Parquet lifecycle with an empty worklist. WorkStealingScan reaches
+                        // immediate quiescence, while the pool is seeded from finalizedParts below
+                        // and close() republishes the complete terminal snapshot before the run is
+                        // marked finished. This is the unsorted counterpart of runSortedParquet's
+                        // empty-worklist merge/publish-pending branch.
+                        if (run.resumed()) {
+                            ctx.metrics().recordStealReason("RESUME", "publication_only");
+                        }
+                        ListRunner.ParquetSpec writer = parquetSpec(
+                                s3uri, channelCapacity, pageMax, filterChain, argsHash, config);
+                        try (TraceSink traceSink = engine.openTraceSink()) {
+                            return runEngineGuarded(store, run.id(), () -> runEngineParquet(
+                                    s3uri, channelCapacity, pageMax, filterChain, ctx, argsHash,
+                                    store, run, nodes, fetcher, config, traceSink, writer));
+                        }
+                    }
+                    // A non-dataset resume with nothing left genuinely finished — a completed summary.
                     writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
                             true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
                     return ExitCodes.SUCCESS;   // resume of an already-complete run: nothing to do
@@ -1108,9 +1140,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * that has not finished, so it never rewrites a disposition the run already chose: neither a
      * durable {@code COMPLETED} (a post-completion failure inside the guarded region, already past
      * its own {@code markRunFinished(COMPLETED)}) nor the flag-unset {@code FAILED} {@link
-     * ListRunner} records for a failed output publish before rethrowing through here — a publish
-     * failure is typically an external, transient one (a full disk, a stalled mount) and its run
-     * must stay resumable rather than force a whole-bucket {@code --restart}.
+     * ListRunner} records for a failed single-file output publish before rethrowing through here.
+     * A {@link PublicationPendingException} from terminal dataset publication is likewise passed
+     * through without the generic fatal mark: its checkpoint-finalized parts are sufficient to
+     * retry publication after an external failure without re-listing the bucket.
      *
      * <p>Deliberately scoped to {@link ListCommand} rather than {@link ListRunner} itself: several
      * engine-level crash-resume tests (e.g. {@code HardCrashResumeExactlyOnceTest}) inject a
@@ -1131,9 +1164,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * with no explicit {@code -o}, {@code output} is only known after the post-{@code openRun}
      * checkpoint-context restore ({@code restoreRunContext}), so the check cannot always run
      * before the checkpoint is opened. These three types pass through un-marked exactly like
-     * {@code CancelledException}/{@code InterruptedException} above.
+     * {@code CancelledException}/{@code InterruptedException} and {@code
+     * PublicationPendingException} above.
      *
-     * <p>All five pass through un-marked with one exception: a run that carries a protocol violation
+     * <p>All six pass through un-marked with one exception: a run that carries a protocol violation
      * is fatal whatever ended it, and is marked with the stronger {@link
      * io.varve.swath.checkpoint.CheckpointStore#markRunUnresumable} — see
      * {@link #markUnresumableIfProtocolViolation}.
@@ -1142,6 +1176,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                   CheckedSupplier<T> body) throws Exception {
         try {
             return body.get();
+        } catch (PublicationPendingException e) {
+            // Every part is already checkpoint-authoritative. Leave managed Parquet RUNNING so an
+            // operator can fix the local publication failure (for example free disk space) and
+            // resume into the empty-worklist publication-pending branch. One-shot sinks have no
+            // persistent checkpoint, so the same classification changes nothing for them.
+            markUnresumableIfProtocolViolation(store, runId, e);
+            throw e;
         } catch (CancelledException | InterruptedException | InvalidUriException
                 | InvalidConfigException | InvalidArgsException e) {
             markUnresumableIfProtocolViolation(store, runId, e);
@@ -1259,7 +1300,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             DatasetDirGuard.prepareDatasetForFreshRun(
                     dir, argsHash, run.id(), freshDatasetDirectoryState);
         }
-        // Resume reconciliation (I6): finalized parts are carried into the manifest;
+        // Resume reconciliation (I6): finalized parts are retained for completion publication;
         // every other part-*.parquet on disk is discarded (its rows are not durable).
         List<PartRef> finalized = store.finalizedParts(run.id());
         Set<String> finalizedNames = finalized.stream()
@@ -1270,7 +1311,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // this fresh RunMetrics never saw: without the backfill the summary's objects (and the
             // ratios derived from it) describe only the relisted tail, while output_files/
             // compressed_size_bytes — computed from the very same carried-over parts — already
-            // describe the whole dataset, so the summary contradicts the manifest it just published.
+            // describe the whole dataset, so the summary would contradict the completion manifest.
             // The same backfill the --sort reattach resume does with its durable segments; the
             // session/recovered split is what keeps live rates measuring THIS process's work.
             ctx.metrics().recordRecoveredObjects(finalized.stream().mapToLong(PartRef::rows).sum());
@@ -1278,7 +1319,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // The consumer manifest needs an MD5 per part. The checkpoint doesn't persist it, so a
         // resumed run recomputes the MD5 of each carried-over finalized part ONCE here (finalized
         // parts are never rewritten, so the checksum is stable) — the pool then caches it and never
-        // recomputes on subsequent manifest rewrites. Parts live under <root>/data/, so the
+        // recomputes at terminal publication. Parts live under <root>/data/, so the
         // stored data/-prefixed path resolves directly against the output dir.
         List<PartInfo> existing =
                 new ArrayList<>(finalized.size());
@@ -1534,6 +1575,23 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
+     * Direct (unsorted) publication identity gate for empty-worklist re-entry. Unlike sorted
+     * publication, the shared writer pool has no checkpoint run id and records an explicit null in
+     * {@code .swath-state.json}; matching {@code args_hash} plus a valid manifest and last-written
+     * {@code _SUCCESS} therefore identifies the completed direct dataset.
+     */
+    private boolean isPublishedUnsortedByArgsHash(Path outputDir, String argsHash) {
+        if (!DatasetDirGuard.isCompletedDataset(outputDir)) {
+            return false;
+        }
+        return Manifest.readIdentity(outputDir)
+                .filter(identity -> identity.runId() == null)
+                .map(Manifest.Identity::argsHash)
+                .filter(argsHash::equals)
+                .isPresent();
+    }
+
+    /**
      * Unlink every immediate entry in the sorter-owned staging directory. A fresh/--restart run
      * calls this before any deterministic segment name can be opened; a PUBLISHED re-entry uses it
      * to remove the prior run's durable segments. Resume-mid-listing does not call it because its
@@ -1645,8 +1703,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             log.warn("dataset_writer_expert_count format={} writers={} queue_capacity_per_lane={} "
                             + "part_rotation_interval_ms={} planned_heap_bytes={} jvm_max_heap_bytes={} "
                             + "measured_release_max={} (more active lanes can create more time-rotated "
-                            + "small parts and amplify O(parts^2) manifest rewrites; benchmark "
-                            + "submit_blocked_ms, head_of_line_blocked_ms, manifest_write_ms, and part count)",
+                            + "small parts and amplify per-part finalize/checkpoint/digest work plus "
+                            + "final-manifest metadata; benchmark submit_blocked_ms, "
+                            + "head_of_line_blocked_ms, finalize_elapsed_ms, and part count)",
                     format.name().toLowerCase(Locale.ROOT), writers,
                     datasetWriterQueueCapacityPerLane(writers), rotationInterval.toMillis(),
                     plannedHeapBytes, maximumHeapBytes(),

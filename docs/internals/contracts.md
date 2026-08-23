@@ -457,19 +457,19 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   last key (never derived from Parquet footer min/max statistics, for the
   same truncation reason as `SortedFileIndex`) — a consumer can verify
   `files[i].maxKey < files[i+1].minKey` (unsigned byte, strict) across the
-  whole dataset without opening a single Parquet file. Committed atomically
-  (`manifest.json.tmp`, fsync, rename) on each finalize and at run end. The
-  retained file list and each manifest rewrite are `O(parts)` in memory/work;
-  rewriting the complete list at every finalize makes cumulative manifest
-  serialization `O(parts²)` over the run. Part-count metadata is therefore
-  outside the active-buffer bound in I11. Because the time/row cadence is per lane, more active
-  writers can also create more sub-target parts and amplify this publication path. Counts above the
-  measured envelope emit an operator warning, and `part_digest_*` / `manifest_write_*` in
-  `dataset_writer` measure the resulting streamed byte-exact digest work and serialized manifest
-  work directly.
+  whole dataset without opening a single Parquet file. Committed atomically exactly once at
+  successful consumer publication (`manifest.json.tmp`, fsync, rename), after every writer lane
+  has joined. A finalized part updates the publication owner's live counters for periodic JSON
+  summaries but does not emit an incomplete consumer manifest. The retained file list and terminal
+  manifest serialization are each `O(parts)` in memory/work; part-count metadata is therefore
+  outside the active-buffer bound in I11, but cumulative manifest serialization is no longer
+  `O(parts²)`. Counts above the measured envelope still emit an operator warning, and
+  `part_digest_*` / `manifest_write_*` in `dataset_writer` distinguish per-part streamed digest work
+  from the one terminal manifest attempt.
   The same publication owner writes the final state and symlink artifacts and `_SUCCESS` last,
   after every lane has joined; its terminal state rejects any later part publication.
-  **Resume bookkeeping stays out of the consumer manifest**: `args_hash` and
+  **Resume bookkeeping stays out of the consumer manifest**: finalized parts and per-node
+  `durable_cursor` live in the checkpoint, while `args_hash` and
   the checkpoint `run_id` live in the internal `.swath-state.json` (same
   atomic write). For every directory format, swath creates and fsyncs that
   identity before the first part or staging segment; a fresh-run cleanup may
@@ -518,10 +518,16 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   mandatory; directory fsync is attempted for durable directory entries and
   atomic renames, but filesystems/OSes that do not support directory fsync
   degrade to a debug-logged no-op.
-- **On resume:** discard every non-finalized part; finalized parts are never
-  rewritten. Each node re-lists from its `durable_cursor` (the not-yet-durable
-  tail), so finalized rows are neither lost nor duplicated ⇒ **exactly-once**
-  (I6).
+- **On resume:** load finalized parts from checkpoint `part_file`, discard every non-finalized
+  part, and never rewrite finalized parts. Neither a consumer manifest nor the periodic JSON
+  summary is a resume input. Each node re-lists from its `durable_cursor` (the not-yet-durable
+  tail), so finalized rows are neither lost nor duplicated ⇒ **exactly-once** (I6). A legacy
+  incomplete manifest from an older writer remains non-authoritative without `_SUCCESS` and is
+  atomically replaced by the completed snapshot when the resumed run succeeds. If every node is
+  already output-complete but the prior process stopped during direct (unsorted) terminal
+  publication, resume issues zero LIST requests and republishes directly from `part_file`; a direct
+  terminal-publication I/O failure leaves this state resumable rather than marking it fatal. Sorted
+  re-entry instead follows §6's checkpointed staging/merge state machine.
 
 ---
 
@@ -581,7 +587,7 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
     the cause is external and typically transient, so the run stays resumable
     rather than costing the operator every completed node.
   - A genuinely unrecoverable, deterministic in-process error (an
-    unrecoverable `ListingException`/`OutputException`/`CheckpointException`,
+    unrecoverable `ListingException`/plain `OutputException`/`CheckpointException`,
     or a fatal seed-probe failure) escaping the CLI's engine dispatch marks
     `FAILED` **with `fatal_error=1`** (`markRunFatalUnlessFinished`). This is
     deliberately **not** the same as the `RUNNING` a raw SIGKILL or a graceful
@@ -592,6 +598,11 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
     failure in a post-completion step inside the same guarded region), and not
     a flag-unset `FAILED` a caller chose above — a publish failure rethrown
     into that guard stays resumable.
+    Direct-dataset terminal publication is the other explicit exception: it throws
+    `PublicationPendingException`, leaves the run `RUNNING`, and can be retried from finalized
+    checkpoint parts. Sorted merge/publication currently remains a plain `OutputException` and
+    therefore follows this fatal-error rule; its checkpointed merge-pending re-entry covers raw
+    process death, not a caught in-process publication failure.
   - A **protocol violation** (a response no conforming store may produce, e.g.
     `oversized_page`) is the one failure the run must never resume into, so it
     marks `FAILED` with `fatal_error=1` whatever ended the scan — including an
@@ -620,9 +631,9 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 | --- | --- | --- |
 | **stdout** | **At-most-once while the one-shot process runs:** commit-before-emit may leave a committed page absent if the process stops before emission. | **No.** `auto` and `none` are ephemeral; an explicit checkpoint path is refused. |
 | **FILE-kind text** | **At-most-once while the one-shot process runs;** a successful publication atomically replaces the destination. Optional gzip/Zstandard streams are finished before publication. | **No.** FILE kind requires `--checkpoint none`. |
-| **Directory-dataset TSV/JSONL** | Bounded parallel lanes publish independent parts, an atomic manifest, and `_SUCCESS` last. A failed run has no success marker and may leave finalized parts from that attempt. | **No.** Text datasets require `--checkpoint none` in this release. |
+| **Directory-dataset TSV/JSONL** | Bounded parallel lanes write independent parts; successful completion publishes one atomic manifest and `_SUCCESS` last. A failed run has no `_SUCCESS` and may leave a manifest plus finalized parts from that attempt. | **No.** Text datasets require `--checkpoint none` in this release. |
 | **FILE-kind Parquet** | Uses the Parquet writer path, but has no durable resume ledger. | **No.** FILE kind requires `--checkpoint none`. |
-| **Managed directory-dataset Parquet** | **Exactly-once durable dataset** via the `durable_cursor` model (§4.1, I6): finalized parts are retained; an unfinalized tail is discarded and re-listed from `durable_cursor`. | **Yes.** `swath resume <dir>` opens the co-located checkpoint. |
+| **Managed directory-dataset Parquet** | **Exactly-once durable dataset** via the `durable_cursor` model (§4.1, I6): finalized parts are retained; an unfinalized tail is discarded and re-listed from `durable_cursor`. For direct/unsorted output, a failure after all parts finalize but before `_SUCCESS` leaves publication pending, not fatal. | **Yes.** `swath resume <dir>` opens the co-located checkpoint; a direct publication-only resume issues no LIST requests. |
 
   The deferred `--resume-output` journal describes a possible future text-replay
   contract; it does not make stdout, FILE-kind output, or directory text output resumable in the shipped CLI.

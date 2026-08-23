@@ -167,7 +167,8 @@ class ParquetWriterPoolTest {
     }
 
     @Test
-    void abortKeepsRotatedPartsButDropsTheOpenTail(@TempDir Path dir) throws Exception {
+    void abortKeepsRotatedPartsButDropsTheOpenTailWithoutPublishingManifest(@TempDir Path dir)
+            throws Exception {
         // Make the durable part and open tail explicit so abort cannot race the lane before the
         // first rotation or after every submitted row has already rotated.
         var config = ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(1000);
@@ -182,7 +183,9 @@ class ParquetWriterPoolTest {
         pool.abort();
 
         assertThat(parts(dir)).isNotEmpty();                      // rotated parts survive
-        assertThat(DatasetLayout.of(dir).manifest()).exists();
+        assertThat(DatasetLayout.of(dir).manifest())
+                .as("a failed dataset retains resume-durable parts but publishes no consumer snapshot")
+                .doesNotExist();
         long durableRows = 0;
         for (Path part : parts(dir)) {
             durableRows += ParquetReads.keys(part).size();

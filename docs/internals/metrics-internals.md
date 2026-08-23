@@ -295,8 +295,8 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 | `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
 | `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
 | `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
-| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, manifest rewrite), timed on the lane's own thread between two waits on its queue. Part MD5 is incrementally maintained on this write path, not reread after close. **Elapsed time, not CPU time**: it can include filesystem/checkpoint I/O and manifest-lock waits. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
-| `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync and manifest rewrite it triggers. The byte-exact part MD5 is incrementally maintained below the compressor, not reread after close. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
+| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any part finalize it triggered (footer fsync + checkpoint callback), timed on the lane's own thread between two waits on its queue. Part MD5 is incrementally maintained on this write path, not reread after close. The one completion-manifest write runs after all lanes join and is therefore outside this span. **Elapsed time, not CPU time**: lane work can include filesystem/checkpoint I/O. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
+| `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync it triggers. The byte-exact part MD5 is incrementally maintained below the compressor, not reread after close; the one completion-manifest write runs after all lanes join. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
 
 **Reading it.** The spans are percentile-bearing precisely because a per-page cost read as a MEAN
 cannot distinguish an iid per-page cost from a queue behind a shared single writer — whose tail grows
@@ -361,10 +361,11 @@ estimate.
 `part_digest_count` counts finalized parts with byte-exact streamed MD5 metadata.
 `part_digest_ms` is CPU time spent incrementally maintaining/finalizing those digests on the
 physical-write path; it is not elapsed time and does not include a post-close file reread.
-`manifest_write_count`/`manifest_write_ms` measure atomic complete-manifest rewrites, including time
-queued behind another lane on the global manifest lock. The count includes the final ensure-write at
-successful publication. These fields isolate the two per-part costs that grow when more active lanes
-produce more time/row-rotated parts; both durations remain elapsed time, not CPU.
+`manifest_write_count`/`manifest_write_ms` measure the atomic complete-manifest attempt at terminal
+consumer publication. During listing—and on a failed/aborted run that never attempts
+publication—the count is zero; after a successful run it is normally one. A failed terminal attempt
+is still measured. Manifest work is elapsed time, not CPU, and is independent of the periodic JSON
+summary, which reads live committed-part counters without parsing or writing the consumer manifest.
 
 `lanes[]` contains one row per configured writer (1–64):
 
@@ -373,10 +374,10 @@ produce more time/row-rotated parts; both durations remain elapsed time, not CPU
 | `lane`, `queue_capacity`, `queue_depth`, `queue_depth_peak`, `waiting_for_work` | Sticky lane identity, report-time bounded-queue sample/high-water mark, and whether the lane thread is currently waiting on an empty queue. A full admission records capacity exactly; other peak observations occur at periodic/terminal report cadence. After a clean drain, terminal current depth is normally zero and terminal waiting state is false because the lane threads have exited; waiting state is useful in periodic snapshots. |
 | `rows_written`, `batches_written` | Completely encoded batches/rows. A format failure partway through a batch does not present the partial row count as successful work. |
 | `finalized_bytes`, `parts_finalized` | Actual file sizes and part count after successful finalize/durability handling. |
-| `active_elapsed_ms` | Sum of lane-thread stretches between queue waits. It includes encoding, file/checkpoint I/O, fsync, MD5/manifest work, and any internal waits; it is not CPU and can overlap other lanes. |
+| `active_elapsed_ms` | Sum of lane-thread stretches between queue waits. It includes encoding, file/checkpoint I/O, fsync, streamed MD5 work, and any internal waits; terminal manifest publication runs after lane join and is excluded. It is not CPU and can overlap other lanes. |
 | `submit_blocked_count`, `submit_blocked_ms` | This sticky lane's full-queue encounters and elapsed admission waits. Interrupted waits are still evidence and remain counted. |
 | `head_of_line_blocked_count`, `head_of_line_blocked_ms` | The subset whose wait began while another lane thread was waiting for work with an empty queue. The bounded cross-lane scan runs only after the selected lane is already full. Material time is strong evidence that sticky routing stranded an idle writer; zero only means that condition was not present at blocked-admission start. |
-| `finalize_count`, `finalize_elapsed_ms` | `DatasetPartWriter.close()` attempts and elapsed close time, including failed attempts. Broader post-close MD5/checkpoint/manifest work remains in `active_elapsed_ms`. |
+| `finalize_count`, `finalize_elapsed_ms` | `DatasetPartWriter.close()` attempts and elapsed close time, including failed attempts. Broader post-close digest/checkpoint work remains in `active_elapsed_ms`; terminal manifest publication is separate. |
 
 Read the causal chain in order: lane `submit_blocked_ms` is contained in the consumer's `emit`
 span; if it is sustained, the sole consumer stops draining the shared channel; fetch workers then
@@ -391,8 +392,9 @@ sink service is insufficient. Material `head_of_line_blocked_ms` instead shows t
 stranded an idle writer and calls for removing cross-lane dispatch coupling before adding buffers.
 Near-zero blocking means more lanes would not improve that run. Interpret lane active time as elapsed
 service, not as sustained capacity or CPU: short bursts can exclude later finalization, filesystem
-writeback, and GC costs. Rising `manifest_write_ms` and part count as writers increase identifies the
-serialized publication/small-file path; adding lanes cannot parallelize that lock.
+writeback, and GC costs. Rising part count, finalize/checkpoint time, and `part_digest_ms` as writers
+increase identifies the small-file path. `manifest_write_ms` measures the one terminal snapshot and
+can reveal final-metadata cost, but it is no longer a per-part serialized lane bottleneck.
 
 **Instrumentation cost.** The normal submit path performs one non-blocking `offer`, the same single
 queue-lock acquisition the former uncontended `put` required. It does not sample queue size, read
@@ -868,6 +870,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `RESUME` | `nodes_reopened` | count of checkpointed nodes reopened on a genuine `swath resume` | |
 | `RESUME` | `durable_cursor_lag` | count of reopened nodes whose `durable_cursor` lagged `cursor` (a non-durable tail re-listed) | |
 | `RESUME` | `args_hash_refused` | a `swath resume` was refused because `args_hash` changed since the checkpointed run | |
+| `RESUME` | `publication_only` | the checkpoint had no listing tail, but terminal direct-Parquet publication was (re)run from finalized `part_file` rows with zero LIST requests | |
 | `PIVOT_BYTE` | `hex_digit` | a committed split's pivot diverges at a hex-digit byte (`0x30`-`0x39`) | |
 | `PIVOT_BYTE` | `dead_zone` | ...diverges in the `0x3A`-`0x60` dead zone between hex digits and hex letters | |
 | `PIVOT_BYTE` | `hex_alpha` | ...diverges at a hex-letter byte (`0x61`-`0x66`) | |

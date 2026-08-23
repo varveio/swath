@@ -1053,9 +1053,10 @@ durable until its footer is fsynced:
   which finalize in creation order.
 - **`durable_cursor`** (a second per-node column): the highest key all of
   whose pages are in **finalized** (footer-fsynced) parts. When a writer
-  closes a part, one transaction marks it `finalized`, records it in the
-  manifest, and advances `durable_cursor` for each node whose pages it held
-  (safe because earlier parts of those nodes already finalized).
+  closes a part, one transaction marks it `finalized`, records it in checkpoint
+  `part_file`, and advances `durable_cursor` for each node whose pages it held
+  (safe because earlier parts of those nodes already finalized). The consumer
+  manifest is written once, after every lane drains successfully.
 - A node is **output-complete** iff `status = COMPLETED` *and*
   `durable_cursor == cursor`.
 - **Resume (Parquet):** discard every non-finalized part; for each node
