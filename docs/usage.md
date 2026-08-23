@@ -49,7 +49,9 @@ TSV and JSONL directory datasets use 2–64 bounded writer lanes (`--text-writer
 default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
 Each compressed part is a complete gzip or Zstandard frame. The dataset publishes a
 manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore
-requires `--checkpoint none`.
+requires `--checkpoint none`. Counts above four are an expert tuning surface: per-lane queue shares
+shrink and per-lane rotation can multiply small parts and serialized manifest rewrites, so benchmark
+the `dataset_writer` blocked-time, part, digest, and manifest fields before adopting them.
 
 Use a managed Parquet directory when checkpoint/resume matters. Text file destinations
 are published atomically but are not resumable; compressed files are published only

@@ -13,9 +13,11 @@ import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
+import io.varve.swath.output.dataset.DatasetWriterResourcePlan;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.PartListener;
 import java.util.List;
+import java.util.Locale;
 
 /** Text facade over the shared dataset writer implementation. */
 public final class TextWriterPool implements DatasetWriterPool {
@@ -29,7 +31,9 @@ public final class TextWriterPool implements DatasetWriterPool {
                 config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config.metrics()));
         delegate = new SharedDatasetWriterPool(config.directory(), format, config.argsHash(),
                 config.writers(), config.targetBytes(), config.queueCapacity(), poolConfig);
-        DatasetWriterMetrics.registerSummary(config.metrics(), config.format(), delegate);
+        DatasetWriterMetrics.registerSummary(config.metrics(),
+                config.format().name().toLowerCase(Locale.ROOT), delegate,
+                DatasetWriterResourcePlan.NONE);
     }
 
     private static DatasetWriterObserver observer(RunMetrics metrics) {

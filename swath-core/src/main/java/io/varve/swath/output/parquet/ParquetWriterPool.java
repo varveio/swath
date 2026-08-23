@@ -14,6 +14,7 @@ import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
+import io.varve.swath.output.dataset.DatasetWriterResourcePlan;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import java.nio.file.Path;
 import java.util.function.LongSupplier;
@@ -33,7 +34,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                              ParquetWriterPoolConfig config) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config));
-        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
+        registerSummary(config.metrics(), writers);
     }
 
     ParquetWriterPool(Path dir, MessageType schema, String argsHash,
@@ -41,7 +42,17 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                       ParquetWriterPoolConfig config, LongSupplier nanoClock) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config), nanoClock);
-        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
+        registerSummary(config.metrics(), writers);
+    }
+
+    private void registerSummary(RunMetrics metrics, int writers) {
+        var resourcePlan = new DatasetWriterResourcePlan(
+                PartWriter.ROW_GROUP_BYTES,
+                ParquetWriterMemoryPlan.ROW_GROUP_ALLOWANCE_MULTIPLIER,
+                ParquetWriterMemoryPlan.plannedHeapBytes(writers),
+                writers > ParquetWriterMemoryPlan.RELEASE_ENVELOPE_MAX_WRITERS);
+        DatasetWriterMetrics.registerSummary(metrics, OutputFormat.PARQUET.name().toLowerCase(),
+                delegate, resourcePlan);
     }
 
     private static DatasetWriterPoolConfig sharedConfig(ParquetWriterPoolConfig config) {

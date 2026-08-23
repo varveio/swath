@@ -39,7 +39,8 @@ class ParquetWritersValidationTest {
                 writers, ParquetWriterMemoryPlan.plannedHeapBytes(writers) - 1))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("needs a conservative heap plan")
-                .hasMessageContaining("raise -Xmx");
+                .hasMessageContaining("maximum heap")
+                .hasMessageContaining("JVM/container memory limit");
     }
 
     @Test

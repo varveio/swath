@@ -387,9 +387,14 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 
 - **2–64 writers**, default 3, decoupled from listing concurrency (not one per worker).
   Parquet counts 2–4 are the measured release envelope; expert counts 5–64 are admitted only when
-  `-Xmx` covers the §7.2 planning allowance. Text uses the same process-resource ceiling without
-  inheriting Parquet's row-group gate. Production divides one fixed 256-batch submission ceiling
-  across the configured lanes, so increasing concurrency does not multiply queued page batches.
+  the JVM maximum heap covers the §7.2 planning allowance. Text uses the same process-resource ceiling without
+  inheriting Parquet's row-group gate. Production gives each lane `floor(256 / writers)` queue
+  slots, so aggregate queued batches are bounded by 256 (exactly 256 when the count divides it;
+  255 at the default three writers). Increasing concurrency therefore does not multiply queued page batches.
+  This is a memory bound, not a throughput promise: above four writers each lane gets fewer slots,
+  so the sole sticky dispatcher can encounter head-of-line blocking sooner while another lane is
+  idle. `submit_blocked_ms`, `head_of_line_blocked_ms`, and the lane queue peaks decide whether a
+  higher count helped on a real run.
   Workers emit `PageBatch`es into the writer pool. **Sticky assignment:** all
   pages of a node go to writer `node_id % numWriters`, so a node's pages
   occupy a *contiguous* run of that writer's parts (which finalize in order)
@@ -446,7 +451,10 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   retained file list and each manifest rewrite are `O(parts)` in memory/work;
   rewriting the complete list at every finalize makes cumulative manifest
   serialization `O(parts²)` over the run. Part-count metadata is therefore
-  outside the active-buffer bound in I11.
+  outside the active-buffer bound in I11. Because the time/row cadence is per lane, more active
+  writers can also create more sub-target parts and amplify this publication path. Counts above the
+  measured envelope emit an operator warning, and `part_digest_*` / `manifest_write_*` in
+  `dataset_writer` measure the resulting full-part reads and serialized manifest work directly.
   **Resume bookkeeping stays out of the consumer manifest**: `args_hash` and
   the checkpoint `run_id` live in the internal `.swath-state.json` (same
   atomic write). For every directory format, swath creates and fsyncs that
@@ -808,7 +816,7 @@ published.
 | seed delimiter levels | adaptive | a shallow `delimiter=/` seed that starts at the top level and **adaptively descends narrow sub-levels** while cut-point and probe budgets permit; a truncated flat-wide level is radix-banded rather than descended (algorithms.md §8) |
 | steal probe | `max_keys=1` | one key per split attempt |
 | AIMD | ×0.7 down on 503 / +1 up per clean 10 s | the 0.7/+1 numbers are DECIDED. The 10 s clean-window cool-down is re-armed **only by a REAL reduction** (`T` actually lowered); a **floor no-op** decrease (`floor(0.7·T) >= T`, i.e. `T` already at the floor) still casts its AIMD vote, still latches congestion, and still pauses stealing, but no longer resets the clean window. The re-arm write is **monotonic** (`max` with the prior timestamp): a concurrent, stale-timestamped decrease can never shorten an already-armed window. (algorithms.md §5) |
-| Parquet writers | 3 (range 2–64; 5–64 heap-admitted) | decoupled from `T`; counts above the measured four-writer envelope must pass the §7.2 `-Xmx` plan |
+| Parquet writers | 3 (range 2–64; 5–64 heap-admitted) | decoupled from `T`; counts above the measured four-writer envelope must pass the §7.2 maximum-heap plan |
 | Parquet part target size | 256 MB | rotate by size |
 | `--text-writers` | 3 (range 2–64) | bounded TSV/JSONL directory writer lanes; decoupled from `T` and from Parquet's row-group memory policy |
 | `--text-part-size` | 256 MB | per-lane TSV/JSONL part rotation target; zero is rejected |
@@ -863,12 +871,12 @@ pins the engine (and `scan → WorkStealingScan`).
 
 ### 7.2 Peak-heap budget per output format (PERF gate)
 
-The release gate asserts measured peak heap stays under these at the **four-writer release
-envelope** (not the retired per-worker model):
+The Parquet release gate measures the **four-writer release envelope** (not the retired per-worker
+model). The non-Parquet row describes its default configuration:
 
 | Output | Budget (default config) | Composition |
 | --- | --- | --- |
-| stdout / TSV / JSONL / table | **< 256 MB** | bounded queues + JVM baseline |
+| stdout / TSV / JSONL / table | **< 256 MB** | default writer count, bounded queues + JVM baseline; expert text counts also add platform-thread stacks, compression state, parts, and manifest work and must be measured separately |
 | Parquet | **< 1 GB** (the bound PERF-2 asserts at 100,000 keys, `ParquetPerf2Test`) | Four active writers × 64 MB row groups + parquet-mr overshoot + the production-derived queue share + baseline. parquet-mr buffers the **uncompressed** row group, so measure the actual peak. The implementation has no per-object heap accumulation (I11), but the public PERF-2 measurement covers 100,000 keys, not billion-object scale. |
 
 The default is still three writers. Counts 2–4 are accepted as the measured compatibility
@@ -878,7 +886,9 @@ planning floor `256 MiB + writers × 64 MiB × 4`; this conservative gate is rep
 workload will remain below that number. The process-resource ceiling of 64 also bounds platform
 threads, open parts, and the saturated-path lane scan. The whole pool retains at most 256 queued
 batches in production: counts 1–4 preserve the existing 64 slots per lane, while higher counts
-divide the fixed ceiling and may leave a few slots unused.
+divide the fixed ceiling and may leave a few slots unused. `Runtime.maxMemory()` is a heap ceiling,
+not a process-RSS or CPU admission model; an explicit JVM heap must still fit inside the container or
+host limit, and the operator must measure CPU, RSS, part count, queue blocking, and manifest time.
 
 Lower the active-buffer budget by reducing `parquet.block.size`, writer count,
 or `T`. I11 does not erase metadata growth: finalized parts contribute

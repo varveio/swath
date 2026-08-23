@@ -74,7 +74,9 @@ final class JsonRunSummaryWriterTest {
                 new RunSummary.DatasetWriterLane(
                         1, 8, 0, 4, true, 400L, 4000L, 4L, 8_000_000L,
                         0L, 0L, 0L, 0L, 1L, 1L, 2_000_000L)),
-                64L * 1024 * 1024, 768L * 1024 * 1024);
+                30_000_000_000L, 2_000_000L,
+                3L, 6_000_000L, 4L, 10_000_000L,
+                64L * 1024 * 1024, 4, 768L * 1024 * 1024, false);
     }
 
     private static RunSummary.ShapeSummary shape() {
@@ -250,9 +252,18 @@ final class JsonRunSummaryWriterTest {
         assertThat(datasetWriter.get("format").asText()).isEqualTo("parquet");
         assertThat(datasetWriter.get("writer_count").asInt()).isEqualTo(2);
         assertThat(datasetWriter.get("total_queue_capacity").asLong()).isEqualTo(16L);
+        assertThat(datasetWriter.get("part_rotation_interval_ms").asDouble()).isEqualTo(30_000.0);
+        assertThat(datasetWriter.get("part_rotation_max_rows").asLong()).isEqualTo(2_000_000L);
         assertThat(datasetWriter.get("jvm_max_heap_bytes").asLong()).isPositive();
-        assertThat(datasetWriter.get("buffer_bytes_per_writer").asLong()).isEqualTo(64L * 1024 * 1024);
+        assertThat(datasetWriter.get("row_group_target_bytes_per_writer").asLong())
+                .isEqualTo(64L * 1024 * 1024);
+        assertThat(datasetWriter.get("row_group_allowance_multiplier").asInt()).isEqualTo(4);
         assertThat(datasetWriter.get("planned_heap_bytes").asLong()).isEqualTo(768L * 1024 * 1024);
+        assertThat(datasetWriter.get("heap_admission_applied").asBoolean()).isFalse();
+        assertThat(datasetWriter.get("part_digest_count").asLong()).isEqualTo(3L);
+        assertThat(datasetWriter.get("part_digest_ms").asDouble()).isEqualTo(6.0);
+        assertThat(datasetWriter.get("manifest_write_count").asLong()).isEqualTo(4L);
+        assertThat(datasetWriter.get("manifest_write_ms").asDouble()).isEqualTo(10.0);
         assertThat(datasetWriter.get("submit_blocked_count").asLong()).isEqualTo(2L);
         assertThat(datasetWriter.get("submit_blocked_ms").asDouble()).isEqualTo(4.0);
         assertThat(datasetWriter.get("head_of_line_blocked_count").asLong()).isEqualTo(1L);

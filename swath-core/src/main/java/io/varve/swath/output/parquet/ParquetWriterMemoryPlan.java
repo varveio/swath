@@ -11,7 +11,7 @@ import io.varve.swath.output.dataset.SharedDatasetWriterPool;
  * Conservative admission plan for Parquet writer concurrency above the measured release envelope.
  *
  * <p>The first four lanes retain the compatibility contract established by PERF-2. Counts above
- * four are expert configuration: they are admitted only when {@code -Xmx} can cover a deliberately
+ * four are expert configuration: they are admitted only when the JVM maximum heap can cover a deliberately
  * conservative planning allowance for every row-group buffer plus a fixed JVM/pipeline reserve.
  * This is an admission guard, not a claim about actual peak heap; parquet-mr, compression, key
  * shape, and the JVM still require measurement on the target workload.
@@ -36,7 +36,11 @@ public final class ParquetWriterMemoryPlan {
                 + (long) writers * PartWriter.ROW_GROUP_BYTES * ROW_GROUP_ALLOWANCE_MULTIPLIER;
     }
 
-    /** Largest expert count this heap admits, always preserving the established 2-4 envelope. */
+    /**
+     * Largest count this heap admits above the release envelope. The established 2-4 envelope is
+     * returned even when this planning formula would admit fewer, because compatibility counts are
+     * deliberately not subject to the expert gate.
+     */
     public static int maxWritersForHeap(long maxHeapBytes) {
         if (maxHeapBytes <= BASE_HEAP_RESERVE_BYTES) {
             return RELEASE_ENVELOPE_MAX_WRITERS;

@@ -7,10 +7,6 @@ package io.varve.swath.output.dataset;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunSummary;
-import io.varve.swath.output.OutputFormat;
-import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
-import io.varve.swath.output.parquet.PartWriter;
-import java.util.Locale;
 
 /** Shared bounded-summary wiring for every parallel directory-dataset writer. */
 public final class DatasetWriterMetrics {
@@ -18,14 +14,11 @@ public final class DatasetWriterMetrics {
     }
 
     public static void registerSummary(
-            RunMetrics metrics, OutputFormat format, SharedDatasetWriterPool writerPool) {
+            RunMetrics metrics, String format, SharedDatasetWriterPool writerPool,
+            DatasetWriterResourcePlan resourcePlan) {
         if (metrics == null) {
             return;
         }
-        String summaryFormat = switch (format) {
-            case PARQUET, TSV, JSONL -> format.name().toLowerCase(Locale.ROOT);
-            case TABLE -> throw new IllegalArgumentException("parallel dataset format required");
-        };
         metrics.registerDatasetWriterSummary(() -> {
             var lanes = writerPool.laneStatistics().stream()
                         .map(s -> new RunSummary.DatasetWriterLane(
@@ -35,12 +28,14 @@ public final class DatasetWriterMetrics {
                                 s.headOfLineBlockedCount(), s.headOfLineBlockedNanos(),
                                 s.partsFinalized(), s.finalizeCount(), s.finalizeElapsedNanos()))
                         .toList();
-            Long bufferBytesPerWriter = format == OutputFormat.PARQUET
-                    ? PartWriter.ROW_GROUP_BYTES : null;
-            Long plannedHeapBytes = format == OutputFormat.PARQUET
-                    ? ParquetWriterMemoryPlan.plannedHeapBytes(lanes.size()) : null;
             return RunSummary.DatasetWriterSummary.from(
-                    summaryFormat, lanes, bufferBytesPerWriter, plannedHeapBytes);
+                    format, lanes,
+                    writerPool.rotationIntervalNanos(), writerPool.rotationMaxRows(),
+                    writerPool.partDigestCount(), writerPool.partDigestNanos(),
+                    writerPool.manifestWriteCount(), writerPool.manifestWriteNanos(),
+                    resourcePlan.rowGroupTargetBytesPerWriter(),
+                    resourcePlan.rowGroupAllowanceMultiplier(),
+                    resourcePlan.plannedHeapBytes(), resourcePlan.heapAdmissionApplied());
         });
     }
 }

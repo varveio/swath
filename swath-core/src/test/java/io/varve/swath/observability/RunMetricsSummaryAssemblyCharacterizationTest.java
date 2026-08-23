@@ -86,12 +86,18 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
     void latestDatasetPoolRegistrationOwnsTheSummary() {
         RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
         metrics.registerDatasetWriterSummary(
-                () -> RunSummary.DatasetWriterSummary.from("parquet", List.of()));
+                () -> emptyDatasetWriter("parquet"));
         metrics.registerDatasetWriterSummary(
-                () -> RunSummary.DatasetWriterSummary.from("tsv", List.of()));
+                () -> emptyDatasetWriter("tsv"));
 
         assertThat(metrics.summary(Duration.ZERO, "work_stealing", 0L, 0L)
                 .datasetWriter().format()).isEqualTo("tsv");
+    }
+
+    private static RunSummary.DatasetWriterSummary emptyDatasetWriter(String format) {
+        return RunSummary.DatasetWriterSummary.from(
+                format, List.of(), 0L, 0L, 0L, 0L, 0L, 0L,
+                null, null, null, null);
     }
 
     @Test

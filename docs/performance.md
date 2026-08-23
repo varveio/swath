@@ -140,9 +140,18 @@ workload.
 
 Direct Parquet uses `--tune parquet.writers=N`; counts 2–4 are the measured release envelope and
 5–64 must pass the JVM heap-admission plan described in the contracts. Directory TSV/JSONL uses
-`--text-writers N` over the independent 2–64 text range. Both retain the same fixed 256-batch
+`--text-writers N` over the independent 2–64 text range. Both retain the same 256-batch aggregate
 whole-pool submission ceiling as concurrency rises. Confirm the resolved `writer_count`,
-`total_queue_capacity`, and Parquet memory-plan fields in `dataset_writer` before comparing runs.
+`total_queue_capacity`, rotation settings, and Parquet memory-plan fields in `dataset_writer` before
+comparing runs.
+
+Higher counts are not monotonic throughput scaling. Dividing the fixed budget gives each lane fewer
+queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
+rotation is also per lane: more active lanes can create more sub-target parts, each of which performs
+a full-part digest and rewrites the complete manifest under one lock. Compare `part_digest_ms`,
+`manifest_write_ms`, part count, `submit_blocked_ms`, and `head_of_line_blocked_ms` at 4/8/16 before
+adopting an expert count. If manifest time or HOL blocking rises faster than throughput, more writers
+are making the sink worse.
 
 ### Size CPU and memory empirically
 

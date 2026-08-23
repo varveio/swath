@@ -118,9 +118,17 @@ public record RunSummary(
             String format,
             int writerCount,
             long totalQueueCapacity,
+            long partRotationIntervalNanos,
+            long partRotationMaxRows,
             long jvmMaxHeapBytes,
-            Long bufferBytesPerWriter,
+            Long rowGroupTargetBytesPerWriter,
+            Integer rowGroupAllowanceMultiplier,
             Long plannedHeapBytes,
+            Boolean heapAdmissionApplied,
+            long partDigestCount,
+            long partDigestNanos,
+            long manifestWriteCount,
+            long manifestWriteNanos,
             long submitBlockedCount,
             long submitBlockedNanos,
             long headOfLineBlockedCount,
@@ -131,13 +139,13 @@ public record RunSummary(
             lanes = List.copyOf(lanes);
         }
 
-        public static DatasetWriterSummary from(String format, List<DatasetWriterLane> lanes) {
-            return from(format, lanes, null, null);
-        }
-
         public static DatasetWriterSummary from(
                 String format, List<DatasetWriterLane> lanes,
-                Long bufferBytesPerWriter, Long plannedHeapBytes) {
+                long partRotationIntervalNanos, long partRotationMaxRows,
+                long partDigestCount, long partDigestNanos,
+                long manifestWriteCount, long manifestWriteNanos,
+                Long rowGroupTargetBytesPerWriter, Integer rowGroupAllowanceMultiplier,
+                Long plannedHeapBytes, Boolean heapAdmissionApplied) {
             long submitBlockedCount = 0L;
             long submitBlockedNanos = 0L;
             long headOfLineBlockedCount = 0L;
@@ -151,7 +159,10 @@ public record RunSummary(
                 headOfLineBlockedNanos += lane.headOfLineBlockedNanos();
             }
             return new DatasetWriterSummary(format, lanes.size(), totalQueueCapacity,
-                    Runtime.getRuntime().maxMemory(), bufferBytesPerWriter, plannedHeapBytes,
+                    partRotationIntervalNanos, partRotationMaxRows, Runtime.getRuntime().maxMemory(),
+                    rowGroupTargetBytesPerWriter, rowGroupAllowanceMultiplier, plannedHeapBytes,
+                    heapAdmissionApplied, partDigestCount, partDigestNanos,
+                    manifestWriteCount, manifestWriteNanos,
                     submitBlockedCount, submitBlockedNanos,
                     headOfLineBlockedCount, headOfLineBlockedNanos, lanes);
         }

@@ -239,9 +239,17 @@ class ParquetWriterPoolMetricsTest {
         assertThat(summary.datasetWriter().writerCount()).isEqualTo(1);
         assertThat(summary.datasetWriter().totalQueueCapacity()).isEqualTo(8L);
         assertThat(summary.datasetWriter().jvmMaxHeapBytes()).isPositive();
-        assertThat(summary.datasetWriter().bufferBytesPerWriter()).isEqualTo(PartWriter.ROW_GROUP_BYTES);
+        assertThat(summary.datasetWriter().rowGroupTargetBytesPerWriter())
+                .isEqualTo(PartWriter.ROW_GROUP_BYTES);
+        assertThat(summary.datasetWriter().rowGroupAllowanceMultiplier())
+                .isEqualTo(ParquetWriterMemoryPlan.ROW_GROUP_ALLOWANCE_MULTIPLIER);
         assertThat(summary.datasetWriter().plannedHeapBytes())
                 .isEqualTo(ParquetWriterMemoryPlan.plannedHeapBytes(1));
+        assertThat(summary.datasetWriter().heapAdmissionApplied()).isFalse();
+        assertThat(summary.datasetWriter().partDigestCount()).isEqualTo(1L);
+        assertThat(summary.datasetWriter().partDigestNanos()).isPositive();
+        assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(2L);
+        assertThat(summary.datasetWriter().manifestWriteNanos()).isPositive();
         assertThat(summary.datasetWriter().lanes()).singleElement().satisfies(lane -> {
             assertThat(lane.rowsWritten()).isEqualTo(3_000L);
             assertThat(lane.batchesWritten()).isEqualTo(3L);

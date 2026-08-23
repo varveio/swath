@@ -350,9 +350,19 @@ began. Requiring an actually idle writer distinguishes sticky-routing head-of-li
 the ordinary case where all writers are busy, without changing routing.
 
 The top level also reports `writer_count`, the sum of lane capacities as
-`total_queue_capacity`, and `jvm_max_heap_bytes`. Parquet adds `buffer_bytes_per_writer` (the pinned
-64 MiB row group) and `planned_heap_bytes` (the conservative admission plan); both are JSON null for
-text because its encoders do not own a comparable fixed row-group allocation.
+`total_queue_capacity`, `part_rotation_interval_ms`, `part_rotation_max_rows`, and
+`jvm_max_heap_bytes`. Parquet adds `row_group_target_bytes_per_writer`,
+`row_group_allowance_multiplier`, `planned_heap_bytes`, and `heap_admission_applied`; these are JSON
+null for text because its encoders do not own a comparable fixed row-group allocation. The target is
+the pinned 64 MiB uncompressed row-group threshold, while the multiplier exposes the conservative
+overshoot allowance used by the plan—multiplying only writer count by the target is not a heap
+estimate.
+
+`part_digest_count`/`part_digest_ms` measure the full-part checksum read after close.
+`manifest_write_count`/`manifest_write_ms` measure atomic complete-manifest rewrites, including time
+queued behind another lane on the global manifest lock. The count includes the final ensure-write at
+successful publication. These fields isolate the two per-part costs that grow when more active lanes
+produce more time/row-rotated parts; both durations remain elapsed time, not CPU.
 
 `lanes[]` contains one row per configured writer (1–64):
 
@@ -379,7 +389,8 @@ sink service is insufficient. Material `head_of_line_blocked_ms` instead shows t
 stranded an idle writer and calls for removing cross-lane dispatch coupling before adding buffers.
 Near-zero blocking means more lanes would not improve that run. Interpret lane active time as elapsed
 service, not as sustained capacity or CPU: short bursts can exclude later finalization, filesystem
-writeback, and GC costs.
+writeback, and GC costs. Rising `manifest_write_ms` and part count as writers increase identifies the
+serialized publication/small-file path; adding lanes cannot parallelize that lock.
 
 **Instrumentation cost.** The normal submit path performs one non-blocking `offer`, the same single
 queue-lock acquisition the former uncontended `put` required. It does not sample queue size, read

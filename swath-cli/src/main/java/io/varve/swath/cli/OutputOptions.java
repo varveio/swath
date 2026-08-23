@@ -518,9 +518,9 @@ final class OutputOptions {
         if (parquetWriters > heapLimit) {
             long planned = ParquetWriterMemoryPlan.plannedHeapBytes(parquetWriters);
             throw new InvalidConfigException("--tune parquet.writers=" + parquetWriters
-                    + " needs a conservative heap plan of " + planned + " bytes, but this JVM's -Xmx is "
-                    + maxHeapBytes + " bytes; use at most " + heapLimit + " writers, raise -Xmx, or use "
-                    + "--text-writers for a text dataset");
+                    + " needs a conservative heap plan of " + planned + " bytes, but this JVM's maximum heap is "
+                    + maxHeapBytes + " bytes; use at most " + heapLimit + " writers, increase the JVM/container "
+                    + "memory limit, or use --text-writers for a text dataset");
         }
         return parquetWriters;
     }
