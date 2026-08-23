@@ -17,4 +17,10 @@ public interface DatasetPartWriter {
     void write(ListEntry entry) throws IOException;
     void close() throws IOException;
     void discard() throws IOException;
+
+    /** Byte-exact MD5 of the physical part, available only after {@link #close()} returns. */
+    String md5();
+
+    /** CPU time spent maintaining {@link #md5()} on the physical-write path. */
+    long digestNanos();
 }

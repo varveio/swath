@@ -16,7 +16,9 @@ import io.varve.swath.testkit.PageBatches;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -373,6 +375,16 @@ class SharedDatasetWriterPoolFailureTest {
                         throw new IOException("discard failed");
                     }
                 }
+
+                @Override public String md5() {
+                    try {
+                        return HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest());
+                    } catch (Exception e) {
+                        throw new AssertionError(e);
+                    }
+                }
+
+                @Override public long digestNanos() { return 0L; }
 
                 private void awaitRelease() throws IOException {
                     try {

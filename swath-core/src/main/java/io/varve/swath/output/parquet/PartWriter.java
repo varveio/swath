@@ -35,13 +35,15 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
 
     private final Path path;
     private final ParquetWriter<ListEntry> writer;
+    private final DigestingOutputFile output;
     private long rows;
 
     public PartWriter(Path path, MessageType schema) throws IOException {
         this.path = path;
         Configuration conf = new Configuration(false);
         conf.setInt("parquet.compression.codec.zstd.level", ZSTD_LEVEL);
-        this.writer = new Builder(new LocalOutputFile(path), schema)
+        output = new DigestingOutputFile(new LocalOutputFile(path));
+        this.writer = new Builder(output, schema)
                 .withConf(conf)
                 .withCompressionCodec(CompressionCodecName.ZSTD)
                 .withRowGroupSize(ROW_GROUP_BYTES)
@@ -79,6 +81,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     public void close() throws IOException {
         writer.close();
         DurableFiles.fileAndParent(path);
+        output.markDurable();
     }
 
     /**
@@ -99,6 +102,16 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
         } catch (IOException ignored) {
             // about to be deleted — releasing the handle is all that matters
         }
+    }
+
+    @Override
+    public String md5() {
+        return output.md5();
+    }
+
+    @Override
+    public long digestNanos() {
+        return output.digestNanos();
     }
 
     private static final class Builder extends ParquetWriter.Builder<ListEntry, Builder> {
