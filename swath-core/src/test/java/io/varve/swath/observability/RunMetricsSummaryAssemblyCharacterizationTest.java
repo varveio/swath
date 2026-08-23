@@ -95,6 +95,17 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
     }
 
     @Test
+    void failingDatasetWriterSnapshotOmitsTheBestEffortBlock() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.registerDatasetWriterSummary(() -> {
+            throw new IllegalStateException("lane snapshot unavailable");
+        });
+
+        assertThat(metrics.summary(Duration.ZERO, "work_stealing", 0L, 0L)
+                .datasetWriter()).isNull();
+    }
+
+    @Test
     void summaryDerivesEveryScalarFromTheSameCountersItDoesToday(@TempDir Path scratchDir) {
         RunMetrics m = RunMetricsCharacterizationWorkload.drive(new SimpleMeterRegistry(), scratchDir);
 

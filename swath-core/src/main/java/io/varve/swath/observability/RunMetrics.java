@@ -1684,7 +1684,14 @@ public final class RunMetrics {
 
     private RunSummary.DatasetWriterSummary datasetWriterSummary() {
         Supplier<RunSummary.DatasetWriterSummary> supplier = datasetWriterSummary.get();
-        return supplier == null ? null : supplier.get();
+        if (supplier == null) {
+            return null;
+        }
+        try {
+            return supplier.get();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     // ---- Partitioned text dataset writer pool -----------------------
