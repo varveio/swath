@@ -29,6 +29,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.LongSupplier;
@@ -36,7 +37,7 @@ import org.apache.commons.codec.digest.DigestUtils;
 
 /**
  * A format-neutral, decoupled dataset writer pool: {@code numWriters} lanes
- * (2–4, default 3), each on its own virtual thread draining a bounded queue, so
+ * (2–4, default 3), each on its own platform thread draining a bounded queue, so
  * sink I/O runs away from the listing workers. <b>Sticky</b> assignment — every
  * page of a node goes to {@code writer = nodeId % numWriters}, so a node's pages
  * occupy a contiguous run of one lane's size-rotated parts (which finalize in
@@ -64,6 +65,30 @@ import org.apache.commons.codec.digest.DigestUtils;
  * either trigger.
  */
 public final class SharedDatasetWriterPool implements DatasetWriterPool {
+
+    /**
+     * A bounded snapshot of one writer lane. All durations are elapsed time, not CPU
+     * time: lane work can include encoding, filesystem I/O, checkpoint work, and manifest
+     * serialization. JFR is the authority for sampled CPU attribution.
+     */
+    public record LaneStatistics(
+            int lane,
+            int queueCapacity,
+            int queueDepth,
+            int queueDepthPeak,
+            boolean waitingForWork,
+            long rowsWritten,
+            long finalizedBytes,
+            long batchesWritten,
+            long activeElapsedNanos,
+            long submitBlockedCount,
+            long submitBlockedNanos,
+            long headOfLineBlockedCount,
+            long headOfLineBlockedNanos,
+            long partsFinalized,
+            long finalizeCount,
+            long finalizeElapsedNanos) {
+    }
 
     private static final PageBatch POISON = new PageBatch(-1, -1, List.of());
 
@@ -155,7 +180,8 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.committedParts.addAll(config.existingParts());
         this.lanes = new Lane[this.numWriters];
         for (int i = 0; i < this.numWriters; i++) {
-            lanes[i] = new Lane(i, new ArrayBlockingQueue<>(Math.max(1, queueCapacity)));
+            int capacity = Math.max(1, queueCapacity);
+            lanes[i] = new Lane(i, capacity, new ArrayBlockingQueue<>(capacity));
         }
         // Resume: continue each lane's part sequence PAST any carried-over part so a
         // resumed run never reuses (and so overwrites) a prior finalized part's filename.
@@ -190,12 +216,45 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                 throw new OutputException(sinkName + " writer pool is shutting down");
             }
             checkFailure();
-            int lane = (int) Math.floorMod(batch.nodeId(), numWriters);
-            lanes[lane].queue.put(batch);
+            int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
+            Lane lane = lanes[laneId];
+            if (!lane.queue.offer(batch)) {
+                // Pay for the clock and the 2–4-lane scan only on the saturated path. This is the
+                // missing middle link between consumer-side emit and worker-side channel wait.
+                lane.queueDepthPeak.getAndAccumulate(lane.queueCapacity, Math::max);
+                boolean headOfLine = anotherLaneIsWaitingForWork(laneId);
+                long startedAt = nanoClock.getAsLong();
+                lane.startSubmitBlock(startedAt, headOfLine);
+                try {
+                    lane.queue.put(batch);
+                } finally {
+                    long blockedNanos = Math.max(0L, nanoClock.getAsLong() - startedAt);
+                    lane.finishSubmitBlock(startedAt, blockedNanos, headOfLine);
+                }
+            }
             checkFailure();
         } finally {
             lifecycleLock.readLock().unlock();
         }
+    }
+
+    /** Whether this blocked sticky lane stranded another writer that had no queued work. */
+    private boolean anotherLaneIsWaitingForWork(int selectedLane) {
+        for (Lane lane : lanes) {
+            if (lane.id != selectedLane && lane.waitingForWork && lane.queue.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Bounded per-lane state for periodic and terminal structured summaries. */
+    public List<LaneStatistics> laneStatistics() {
+        List<LaneStatistics> snapshots = new ArrayList<>(lanes.length);
+        for (Lane lane : lanes) {
+            snapshots.add(lane.statistics());
+        }
+        return List.copyOf(snapshots);
     }
 
     public long committedPartCount() {
@@ -233,10 +292,20 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             while (true) {
                 // Floor the poll WAIT (never the staleness check in rotationReason()) so a tiny
                 // positive rotationIntervalNanos can't spin this thread — see ROTATION_POLL_FLOOR_NANOS.
-                PageBatch batch = rotationIntervalNanos > 0
-                        ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS),
-                                TimeUnit.NANOSECONDS)
-                        : lane.queue.take();
+                PageBatch batch = lane.queue.poll();
+                if (batch == null) {
+                    // The busy path still pays for one queue operation and no waiting-state
+                    // writes. Publish idleness only after an immediate poll finds no work.
+                    lane.waitingForWork = true;
+                    try {
+                        batch = rotationIntervalNanos > 0
+                                ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS),
+                                        TimeUnit.NANOSECONDS)
+                                : lane.queue.take();
+                    } finally {
+                        lane.waitingForWork = false;
+                    }
+                }
                 if (batch == null) {
                     // Timed out — no new batch arrived. Re-evaluate the SAME rotation
                     // check; rotationReason() short-circuits on rows==0 so an idle EMPTY
@@ -253,7 +322,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                             } catch (Throwable t) {
                                 recordFailure(t);
                             } finally {
-                                recordLaneWork(startedAt);
+                                recordLaneWork(lane, startedAt);
                             }
                         }
                     }
@@ -271,7 +340,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                 } catch (Throwable t) {
                     recordFailure(t);
                 } finally {
-                    recordLaneWork(startedAt);
+                    recordLaneWork(lane, startedAt);
                 }
             }
         } catch (InterruptedException e) {
@@ -297,7 +366,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             recordFailure(t);
         } finally {
             if (hasOpenPart) {   // no open part ⇒ both paths no-op; don't record a fabricated zero
-                recordLaneWork(startedAt);
+                recordLaneWork(lane, startedAt);
             }
         }
     }
@@ -316,18 +385,21 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     /**
      * Reports one stretch of lane-thread work through the format-owned observer. Called from the
      * three places a lane does work between waits on its queue (batch write, idle-cadence rotation,
-     * drain-time finalize/discard), so summing the span accounts for the pool's CPU rather than the
-     * dispatch that {@code emit} sees. Measured on {@link #nanoClock}, the same monotonic clock the
-     * rotation triggers read.
+     * drain-time finalize/discard), so summing the span accounts for the pool's active elapsed time
+     * rather than the dispatch that {@code emit} sees. It is not CPU attribution: file I/O, fsync,
+     * checkpoint work, and manifest-lock waits can contribute. Measured on {@link #nanoClock}, the
+     * same monotonic clock the rotation triggers read.
      *
      * <p>Swallows anything thrown while recording. This is the only work in the lane loop that is
      * NOT already inside a catch-all, and it is pure observation: letting a metrics/clock failure
      * escape would kill the lane thread before it consumes the poison sentinel, which is exactly the
      * lane-failure deadlock the "always drain to POISON" rule exists to prevent.
      */
-    private void recordLaneWork(long startedAtNanos) {
+    private void recordLaneWork(Lane lane, long startedAtNanos) {
         try {
-            observer.recordLaneWork(nanoClock.getAsLong() - startedAtNanos);
+            long elapsedNanos = Math.max(0L, nanoClock.getAsLong() - startedAtNanos);
+            lane.activeElapsedNanos += elapsedNanos;
+            observer.recordLaneWork(elapsedNanos);
         } catch (Throwable ignored) {
             // observation only — never take the lane down with it
         }
@@ -340,6 +412,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         for (ListEntry e : batch.entries()) {
             lane.current.write(e);
         }
+        // Count only a completely encoded batch. A mid-batch format failure leaves an unknown
+        // partial row count, which is deliberately not presented as successfully written work.
+        lane.rowsWritten += batch.entryCount();
+        lane.batchesWritten++;
         // Track the highest key this node contributed to the open part — the
         // durable_cursor it makes durable when the part finalizes (§4.5). Listing is
         // ascending per node, so the latest batch's last key is the max.
@@ -390,6 +466,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         long rows = w.rows();
         Path path = w.path();
         Object finalizeSample = observer.startFinalize();
+        long finalizeStartedAt = nanoClock.getAsLong();
         try {
             w.close();   // format-owned close completes the part before publication
         } catch (IOException e) {
@@ -410,6 +487,9 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                 e.addSuppressed(observationFailure);
             }
             throw e;
+        } finally {
+            lane.finalizeCount++;
+            lane.finalizeElapsedNanos += Math.max(0L, nanoClock.getAsLong() - finalizeStartedAt);
         }
         if (finalizeSample != null) {
             observer.recordFinalize(finalizeSample);
@@ -433,6 +513,8 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                 lane.id, relPath, rows, bytes, contributions));
         committedParts.add(new PartInfo(relPath, lane.id, rows, bytes, md5));
         observer.recordPart("finalized");
+        lane.finalizedBytes += bytes;
+        lane.partsFinalized++;
         // A part finalize (footer fsync + manifest commit) is real forward progress that no
         // LISTING page/object counter reflects — a large multi-part non-sort finalize tail
         // (close()'s drainAndJoin() below) can otherwise sit with progressSignal() frozen for
@@ -617,7 +699,28 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
 
     private final class Lane {
         final int id;
+        final int queueCapacity;
         final BlockingQueue<PageBatch> queue;
+        final AtomicInteger queueDepthPeak = new AtomicInteger();
+        volatile boolean waitingForWork;
+        // The lane thread is the sole writer for service/finalize counters; volatile makes
+        // periodic summary reads visible without paying for atomic RMW on every encoded batch.
+        volatile long rowsWritten;
+        volatile long finalizedBytes;
+        volatile long batchesWritten;
+        volatile long activeElapsedNanos;
+        final Object submitStatisticsLock = new Object();
+        long submitBlockedCount;
+        long submitBlockedNanos;
+        long inFlightSubmitBlockedCount;
+        long inFlightSubmitStartedAtSum;
+        long headOfLineBlockedCount;
+        long headOfLineBlockedNanos;
+        long inFlightHeadOfLineCount;
+        long inFlightHeadOfLineStartedAtSum;
+        volatile long partsFinalized;
+        volatile long finalizeCount;
+        volatile long finalizeElapsedNanos;
         // Per node id, the highest key written to the open part — flushed to the
         // listener (durable_cursor advance) when the part finalizes; cleared per part.
         final Map<Long, byte[]> partNodeMaxKey = new HashMap<>();
@@ -626,9 +729,66 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         // When the open part was created, on the injected clock — the time-trigger baseline.
         long partOpenedAtNanos;
 
-        Lane(int id, BlockingQueue<PageBatch> queue) {
+        Lane(int id, int queueCapacity, BlockingQueue<PageBatch> queue) {
             this.id = id;
+            this.queueCapacity = queueCapacity;
             this.queue = queue;
+        }
+
+        void startSubmitBlock(long startedAtNanos, boolean headOfLine) {
+            synchronized (submitStatisticsLock) {
+                submitBlockedCount++;
+                inFlightSubmitBlockedCount++;
+                inFlightSubmitStartedAtSum += startedAtNanos;
+                if (headOfLine) {
+                    headOfLineBlockedCount++;
+                    inFlightHeadOfLineCount++;
+                    inFlightHeadOfLineStartedAtSum += startedAtNanos;
+                }
+            }
+        }
+
+        void finishSubmitBlock(long startedAtNanos, long blockedNanos, boolean headOfLine) {
+            synchronized (submitStatisticsLock) {
+                inFlightSubmitBlockedCount--;
+                inFlightSubmitStartedAtSum -= startedAtNanos;
+                submitBlockedNanos += blockedNanos;
+                if (headOfLine) {
+                    inFlightHeadOfLineCount--;
+                    inFlightHeadOfLineStartedAtSum -= startedAtNanos;
+                    headOfLineBlockedNanos += blockedNanos;
+                }
+            }
+        }
+
+        LaneStatistics statistics() {
+            // Sampling happens on the periodic/terminal reporter, never on the sole dispatcher.
+            // A saturated admission records capacity exactly in submit(); otherwise this is a
+            // best-effort high-water mark at report cadence.
+            int queueDepth = queue.size();
+            queueDepthPeak.getAndAccumulate(queueDepth, Math::max);
+            long blockedCount;
+            long blockedNanos;
+            long headOfLineCount;
+            long headOfLineNanos;
+            synchronized (submitStatisticsLock) {
+                long now = inFlightSubmitBlockedCount == 0 ? 0L : nanoClock.getAsLong();
+                blockedCount = submitBlockedCount;
+                blockedNanos = submitBlockedNanos + inFlightElapsed(
+                        now, inFlightSubmitBlockedCount, inFlightSubmitStartedAtSum);
+                headOfLineCount = headOfLineBlockedCount;
+                headOfLineNanos = headOfLineBlockedNanos + inFlightElapsed(
+                        now, inFlightHeadOfLineCount, inFlightHeadOfLineStartedAtSum);
+            }
+            return new LaneStatistics(id, queueCapacity, queueDepth, queueDepthPeak.get(),
+                    waitingForWork, rowsWritten, finalizedBytes, batchesWritten,
+                    activeElapsedNanos, blockedCount, blockedNanos,
+                    headOfLineCount, headOfLineNanos,
+                    partsFinalized, finalizeCount, finalizeElapsedNanos);
+        }
+
+        private long inFlightElapsed(long now, long count, long startedAtSum) {
+            return count == 0 ? 0L : Math.max(0L, now * count - startedAtSum);
         }
 
         void openPart() throws IOException {

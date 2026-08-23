@@ -9,6 +9,8 @@ import io.micrometer.core.instrument.Timer;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
@@ -31,6 +33,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                              ParquetWriterPoolConfig config) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config));
+        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
     }
 
     ParquetWriterPool(Path dir, MessageType schema, String argsHash,
@@ -38,6 +41,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                       ParquetWriterPoolConfig config, LongSupplier nanoClock) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config), nanoClock);
+        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
     }
 
     private static DatasetWriterPoolConfig sharedConfig(ParquetWriterPoolConfig config) {

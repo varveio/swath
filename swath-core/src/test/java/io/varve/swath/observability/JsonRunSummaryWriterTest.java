@@ -57,13 +57,23 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), List.of(), clientCost(), null);
+                shape(), null, List.of(), List.of(), clientCost(), datasetWriter(), null);
     }
 
     /** One populated client-service-cost span, enough to pin the {@code client_cost[]} row shape. */
     private static List<RunSummary.ClientCostSpan> clientCost() {
         return List.of(new RunSummary.ClientCostSpan(RunMetrics.CLIENT_COST_SPAN_EMIT, 1000L,
                 0.4, 1.2, 4.8, 9.1));
+    }
+
+    private static RunSummary.DatasetWriterSummary datasetWriter() {
+        return RunSummary.DatasetWriterSummary.from("parquet", List.of(
+                new RunSummary.DatasetWriterLane(
+                        0, 8, 0, 8, false, 600L, 6000L, 6L, 12_000_000L,
+                        2L, 4_000_000L, 1L, 3_000_000L, 2L, 2L, 5_000_000L),
+                new RunSummary.DatasetWriterLane(
+                        1, 8, 0, 4, true, 400L, 4000L, 4L, 8_000_000L,
+                        0L, 0L, 0L, 0L, 1L, 1L, 2_000_000L)));
     }
 
     private static RunSummary.ShapeSummary shape() {
@@ -234,6 +244,20 @@ final class JsonRunSummaryWriterTest {
         assertThat(emitSpan.get("p90_ms").asDouble()).isEqualTo(1.2);
         assertThat(emitSpan.get("p99_ms").asDouble()).isEqualTo(4.8);
         assertThat(emitSpan.get("max_ms").asDouble()).isEqualTo(9.1);
+
+        JsonNode datasetWriter = root.get("dataset_writer");
+        assertThat(datasetWriter.get("format").asText()).isEqualTo("parquet");
+        assertThat(datasetWriter.get("submit_blocked_count").asLong()).isEqualTo(2L);
+        assertThat(datasetWriter.get("submit_blocked_ms").asDouble()).isEqualTo(4.0);
+        assertThat(datasetWriter.get("head_of_line_blocked_count").asLong()).isEqualTo(1L);
+        assertThat(datasetWriter.get("head_of_line_blocked_ms").asDouble()).isEqualTo(3.0);
+        assertThat(datasetWriter.get("lanes")).hasSize(2);
+        JsonNode lane0 = datasetWriter.get("lanes").get(0);
+        assertThat(lane0.get("queue_depth_peak").asInt()).isEqualTo(8);
+        assertThat(lane0.get("waiting_for_work").asBoolean()).isFalse();
+        assertThat(lane0.get("rows_written").asLong()).isEqualTo(600L);
+        assertThat(lane0.get("active_elapsed_ms").asDouble()).isEqualTo(12.0);
+        assertThat(lane0.get("finalize_elapsed_ms").asDouble()).isEqualTo(5.0);
 
         JsonNode meters = root.get("meters");
         assertThat(meters.isArray()).isTrue();
@@ -585,7 +609,8 @@ final class JsonRunSummaryWriterTest {
                 "WORK_STEALING", 118L, 0.00059,
                 4L, 1234567L, 1000L, 112L, 61L, 16.5, 180L, 4200L, 232602L, 98L, 0L,
                 4269.5, 1.07, -1L, -1L, -1.0, -1.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                null, null, null, List.of(), List.of(), List.of(), null, null);
         JsonRunSummaryWriter writer = JsonRunSummaryWriter.start(
                 config(path, Duration.ofMinutes(10)), registry, Instant.now(), () -> summary);
         try {
@@ -605,6 +630,7 @@ final class JsonRunSummaryWriterTest {
         assertThat(root.has("seed")).isFalse();
         // A null ShapeSummary likewise omits the "shape" block entirely (null-safe).
         assertThat(root.has("shape")).isFalse();
+        assertThat(root.has("dataset_writer")).isFalse();
     }
 
     @Test
@@ -1096,7 +1122,7 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), List.of(), List.of(), null);
+                shape(), null, List.of(), List.of(), List.of(), null, null);
     }
 
     /** A clean run (target never driven by the engine) renders min_effective_t as null, not 0. */
@@ -1192,7 +1218,7 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), callClassLatency, clientCost(), null);
+                shape(), null, List.of(), callClassLatency, clientCost(), null, null);
     }
 
     /**

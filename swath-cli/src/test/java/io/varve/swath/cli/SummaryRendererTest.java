@@ -478,7 +478,8 @@ final class SummaryRendererTest {
                 1L, 1_500L, 0L, run, session, listing, WORK_STEALING, 0L, 0.0,
                 0L, 0L, 1_500L, 0L, 0L, 0.0, -1L, -1L, 0L, 0L, 0L,
                 50.0, 0.0, -1L, -1L, -1.0, -1.0,
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, null, null, null, List.of(), List.of(), List.of(), null);
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                null, null, null, List.of(), List.of(), List.of(), null, null);
     }
 
     /** A clean, zero-fault diagnostics snapshot — the faults line stays absent either way. */

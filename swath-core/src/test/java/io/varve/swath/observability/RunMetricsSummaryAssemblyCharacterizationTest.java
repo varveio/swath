@@ -60,7 +60,12 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
             "cpuSeconds", "cpuEfficiency", "overfetchRatio", "pageFillRatio", "emptySplitRatio",
             "wastedProbeRatio", "stealSuccessRate", "compressionRatio", "seed", "shape",
-            "trajectory", "slowRanges", "callClassLatency", "clientCost", "demandGate");
+            "trajectory",
+            "slowRanges",
+            "callClassLatency",
+            "clientCost",
+            "datasetWriter",
+            "demandGate");
 
     /** {@link RunMetrics.RunDiagnostics}'s record components, in declaration order. FROZEN. */
     private static final List<String> EXPECTED_DIAGNOSTICS_FIELDS = List.of(
@@ -75,6 +80,29 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(components(RunSummary.class)).containsExactlyElementsOf(EXPECTED_SUMMARY_FIELDS);
         assertThat(components(RunMetrics.RunDiagnostics.class))
                 .containsExactlyElementsOf(EXPECTED_DIAGNOSTICS_FIELDS);
+    }
+
+    @Test
+    void latestDatasetPoolRegistrationOwnsTheSummary() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.registerDatasetWriterSummary(
+                () -> RunSummary.DatasetWriterSummary.from("parquet", List.of()));
+        metrics.registerDatasetWriterSummary(
+                () -> RunSummary.DatasetWriterSummary.from("tsv", List.of()));
+
+        assertThat(metrics.summary(Duration.ZERO, "work_stealing", 0L, 0L)
+                .datasetWriter().format()).isEqualTo("tsv");
+    }
+
+    @Test
+    void failingDatasetWriterSnapshotOmitsTheBestEffortBlock() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.registerDatasetWriterSummary(() -> {
+            throw new IllegalStateException("lane snapshot unavailable");
+        });
+
+        assertThat(metrics.summary(Duration.ZERO, "work_stealing", 0L, 0L)
+                .datasetWriter()).isNull();
     }
 
     @Test

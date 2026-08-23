@@ -201,8 +201,8 @@ class ParquetWriterPoolMetricsTest {
      * The lanes' own encode/write work is a client-service-cost span in its own right
      * ({@code swath.parquet.write.latency} → {@code client_cost[].parquet_write}). Without it a
      * Parquet run's measured client cost is the pool DISPATCH alone — what the consumer stage's
-     * {@code emit} span sees, a rounding error next to the encode the lanes then do — so summed
-     * spans cannot account for the process CPU a Parquet run actually burns.
+     * {@code emit} span sees, a rounding error next to the encode/write stretch the lanes then do.
+     * The elapsed span reveals active lane service; JFR, not this timer, attributes actual CPU.
      */
     @Test
     void laneEncodeWorkIsRecordedAsItsOwnClientCostSpan(@TempDir Path dir) throws Exception {
@@ -229,10 +229,21 @@ class ParquetWriterPoolMetricsTest {
         // record more, shorter, unrelated stretches.
         assertThat(laneWork.max(TimeUnit.NANOSECONDS)).isGreaterThanOrEqualTo(
                 registry.get("swath.parquet.finalize.latency").timer().max(TimeUnit.NANOSECONDS));
-        assertThat(ctx.metrics().summary(Duration.ofSeconds(1), "work_stealing", 0L, 0L).clientCost())
+        RunSummary summary = ctx.metrics().summary(Duration.ofSeconds(1), "work_stealing", 0L, 0L);
+        assertThat(summary.clientCost())
                 .as("readable from the run summary's client_cost[], where the accounting is done")
                 .extracting(RunSummary.ClientCostSpan::span)
                 .contains(RunMetrics.CLIENT_COST_SPAN_PARQUET_WRITE);
+        assertThat(summary.datasetWriter()).isNotNull();
+        assertThat(summary.datasetWriter().format()).isEqualTo("parquet");
+        assertThat(summary.datasetWriter().lanes()).singleElement().satisfies(lane -> {
+            assertThat(lane.rowsWritten()).isEqualTo(3_000L);
+            assertThat(lane.batchesWritten()).isEqualTo(3L);
+            assertThat(lane.finalizedBytes()).isPositive();
+            assertThat(lane.partsFinalized()).isEqualTo(1L);
+            assertThat(lane.finalizeCount()).isEqualTo(1L);
+            assertThat(lane.activeElapsedNanos()).isPositive();
+        });
     }
 
     @Test

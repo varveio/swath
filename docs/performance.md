@@ -21,6 +21,56 @@ Bucket shape, client location, output disk, filters, CPU architecture, and servi
 all affect the result. Absolute numbers from another bucket are rarely useful; the
 relationships among your own report fields are.
 
+### Retain a JFR CPU profile
+
+Elapsed timers cannot attribute CPU: a Parquet lane's active stretch can contain encoding,
+filesystem writes, fsync, checkpoint work, and time waiting to serialize a manifest update.
+For CPU attribution on Linux/JDK 25, derive a profile that explicitly enables the CPU-time
+sampler. The stock `profile.jfc` enables execution sampling but leaves `jdk.CPUTimeSample`
+disabled, so `cpu-time-hot-methods` would otherwise have no events:
+
+```bash
+jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output swath-cpu-profile.jfc \
+  jdk.CPUTimeSample#enabled=true
+JAVA_OPTS="-XX:StartFlightRecording=filename=$PWD/swath.jfr,settings=$PWD/swath-cpu-profile.jfc,disk=true,dumponexit=true,maxsize=2g" \
+  swath list s3://bucket/prefix/ --format parquet -o out/ --report run.json
+```
+
+The Gradle/application launcher honors `JAVA_OPTS`. For the runnable jar or container use the
+same option on `java` directly or through `JAVA_TOOL_OPTIONS`. `dumponexit=true` retains the
+recording on a normal exit, a handled signal, or an uncaught Java failure. `SIGKILL`, host loss,
+and swath's deliberate `Runtime.halt()` safety paths (the terminal liveness-watchdog escalation and
+sort disk guard) cannot run the exit dump. For a suspected hard wedge, use an external `jcmd
+<pid> JFR.dump filename=...` before the halt deadline. Give each arm a different filename and keep
+its JFR beside its JSON report.
+
+JDK 25's `jfr` tool provides useful first passes:
+
+```bash
+jfr summary swath.jfr
+jfr view cpu-time-hot-methods swath.jfr
+jfr view thread-cpu-load swath.jfr
+jfr view gc-cpu-time swath.jfr
+jfr view file-writes-by-path swath.jfr
+jfr view jdk.CPUTimeSamplesLost swath.jfr
+```
+
+`cpu-time-hot-methods` uses `jdk.CPUTimeSample` for CPU-time attribution. On a platform where that
+event is unavailable, retain the stock `profile` configuration and use `jfr view hot-methods` for
+execution samples instead; do not describe those elapsed execution samples as measured CPU time.
+Check `jdk.CPUTimeSamplesLost` before comparing attribution between arms. If losses are material,
+adjust `jdk.CPUTimeSample#throttle` in the generated configuration and rerun both arms identically;
+more frequent sampling can increase profiler overhead.
+
+Attribute execution samples by both thread and stack. Direct Parquet lanes are named
+`parquet-writer-*`; the checkpoint writer is `swath-checkpoint-writer`. Listing workers are
+virtual threads, so group their samples by `io.varve.swath.engine`, `io.varve.swath.store`, and
+AWS SDK frames rather than expecting a stable platform-thread name. Sorted staging/merge work is
+recognizable from `io.varve.swath.sort` frames and `*-encoder-*` platform threads. The
+[JDK 25 troubleshooting guide](https://docs.oracle.com/en/java/javase/25/troubleshoot/troubleshooting-guide.pdf)
+reports less than 2% overhead for most profiling recordings, but overhead is application-specific:
+measure it on the fixture, and use the same JFR settings and recording size limit in every arm.
+
 ### In-flight utilisation
 
 `--concurrency N` is a ceiling. The achieved request concurrency is
@@ -66,6 +116,27 @@ Across a concurrency sweep:
 
 Treat `shape.divergence_depth_histogram`, `mass_skew_gini`, and `delimiter_fanout` as clues,
 not diagnoses. Direct engagement and wait counters show what actually constrained the run.
+
+For direct Parquet or a parallel TSV/JSONL directory dataset, read the report's
+format-labelled `dataset_writer` block with `client_cost`:
+
+- `submit_blocked_ms` is the consumer's time waiting for sticky lane admission; it is contained
+  in `client_cost[].emit`, not additional time to add to it.
+- `head_of_line_blocked_ms` is the subset that began while another lane was waiting for work with
+  an empty queue. Material time confirms that sticky routing stranded an idle writer; zero means
+  that stronger condition was not observed at the start of a blocked admission, not that every
+  possible transient imbalance is ruled out.
+- Per-lane rows, finalized bytes, batches, active elapsed time, queue peak, and finalize activity
+  show load imbalance. `active_elapsed_ms` is elapsed service time and can overlap across lanes.
+- Rising lane-submit blocking followed by rising `client_cost[].writer_backpressure` confirms the
+  full causal chain into listing workers. A full queue peak without blocked time is not a
+  bottleneck by itself.
+
+Do not infer writer capacity from an I/O-bound run whose lanes are mostly idle. Validate a writer
+count against the fastest expected listing regime: sustained submit blocking means the sink is
+binding; material head-of-line blocking with idle lanes means dispatch coupling is binding. If
+neither appears, raising the writer count would only add memory and file-part overhead for that
+workload.
 
 ### Size CPU and memory empirically
 

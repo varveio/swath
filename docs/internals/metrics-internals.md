@@ -295,7 +295,7 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 | `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
 | `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
 | `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
-| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, part MD5, manifest rewrite), timed on the lane's own thread between two waits on its queue. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
+| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, part MD5, manifest rewrite), timed on the lane's own thread between two waits on its queue. **Elapsed time, not CPU time**: it can include filesystem/checkpoint I/O and manifest-lock waits. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
 | `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync, MD5, and manifest rewrite it triggers. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
 
 **Reading it.** The spans are percentile-bearing precisely because a per-page cost read as a MEAN
@@ -311,14 +311,14 @@ rows — and `sdk_unmarshal` is by far the larger of the two, so a client-cost r
 nothing to wait for, which is a real client cost of zero, not a missing measurement.
 
 **Why the dataset-writer spans exist.** For ordinary single-stream text sinks `emit` is the whole
-sink write, so summing the spans of a run brackets its process CPU. For Parquet and partitioned-text
-datasets it is not: `emit` ends at the handoff to the writer pool (dispatch — a rounding error per
-page), and the encode/compress/write that follows happens on the pool's own lane threads. Without a
-format-side lane span, that work shows up in the process's CPU with nothing attributing it. This was
-measured for Parquet as roughly
-2 ms/page of pool CPU at low concurrency, of which `swath.parquet.finalize.latency` caught only the
-footer-fsync sliver. `parquet_write` and `text_dataset_write` are those missing terms, each measured
-around its format's lane work. Their bounded lifecycle meters are
+sink write. For Parquet and partitioned-text datasets it is not: `emit` ends at the handoff to the
+writer pool (dispatch), and the encode/compress/write that follows happens on the pool's own lane
+threads. Without a format-side lane span, the active sink work is invisible. This was measured for
+Parquet as roughly 2 ms/page of active lane elapsed time at low concurrency, of which
+`swath.parquet.finalize.latency` caught only the footer-fsync sliver. That observation did not
+separate encoding CPU from file I/O or waits. `parquet_write` and `text_dataset_write` are the
+missing elapsed-time terms, each measured around its format's lane work; retained JFR execution
+samples remain the authority for CPU. Their bounded lifecycle meters are
 `swath.<format>.rotation{trigger}`, `swath.<format>.parts{outcome}`, and
 `swath.<format>.finalize.latency`; partitioned text uses the `text_dataset` namespace.
 
@@ -335,9 +335,55 @@ precisely because the consumer stage is still inside that page's (or an earlier 
 so the two are two ends of the same handoff, not sequential costs. And (3) each dataset-writer span is
 measured on the pool's lane threads, which run concurrently with the fetch workers and the consumer
 stage, so it overlaps *every* span above in wall-clock and is never part of a page's serial
-latency — while for CPU accounting it is genuinely additive to them
-(different threads, disjoint CPU). It also strictly CONTAINS its format's finalize-latency sample of
+latency. JFR execution samples, not these elapsed spans, are what can be aggregated across threads
+for CPU accounting. A lane span also strictly CONTAINS its format's finalize-latency sample of
 any rotation that fired inside the stretch, so those two must never be added together.
+
+**`dataset_writer`**: a bounded structured snapshot, present when the shared parallel
+directory-dataset pool was constructed: direct Parquet and directory TSV/JSONL. It is absent for
+stdout, single-file text, discard output, and sorted output, which use different sink paths. Lane ids
+deliberately do not become Micrometer tags. `format` is `parquet`, `tsv`, or `jsonl`; the remaining
+top-level fields are `submit_blocked_count`/`submit_blocked_ms` and
+`head_of_line_blocked_count`/`head_of_line_blocked_ms`; the latter pair is the subset of full-lane
+admissions where at least one *other* lane was waiting for work with an empty queue when blocking
+began. Requiring an actually idle writer distinguishes sticky-routing head-of-line blocking from
+the ordinary case where all writers are busy, without changing routing.
+
+`lanes[]` contains one row per configured writer (1–4):
+
+| field | meaning |
+|---|---|
+| `lane`, `queue_capacity`, `queue_depth`, `queue_depth_peak`, `waiting_for_work` | Sticky lane identity, report-time bounded-queue sample/high-water mark, and whether the lane thread is currently waiting on an empty queue. A full admission records capacity exactly; other peak observations occur at periodic/terminal report cadence. After a clean drain, terminal current depth is normally zero and terminal waiting state is false because the lane threads have exited; waiting state is useful in periodic snapshots. |
+| `rows_written`, `batches_written` | Completely encoded batches/rows. A format failure partway through a batch does not present the partial row count as successful work. |
+| `finalized_bytes`, `parts_finalized` | Actual file sizes and part count after successful finalize/durability handling. |
+| `active_elapsed_ms` | Sum of lane-thread stretches between queue waits. It includes encoding, file/checkpoint I/O, fsync, MD5/manifest work, and any internal waits; it is not CPU and can overlap other lanes. |
+| `submit_blocked_count`, `submit_blocked_ms` | This sticky lane's full-queue encounters and elapsed admission waits. Interrupted waits are still evidence and remain counted. |
+| `head_of_line_blocked_count`, `head_of_line_blocked_ms` | The subset whose wait began while another lane thread was waiting for work with an empty queue. The check scans at most four lanes and runs only after the selected lane is already full. Material time is strong evidence that sticky routing stranded an idle writer; zero only means that condition was not present at blocked-admission start. |
+| `finalize_count`, `finalize_elapsed_ms` | `DatasetPartWriter.close()` attempts and elapsed close time, including failed attempts. Broader post-close MD5/checkpoint/manifest work remains in `active_elapsed_ms`. |
+
+Read the causal chain in order: lane `submit_blocked_ms` is contained in the consumer's `emit`
+span; if it is sustained, the sole consumer stops draining the shared channel; fetch workers then
+accumulate `writer_backpressure` (`swath.queue.wait`). A queue peak at capacity without submit-blocked
+time is not enough to call the sink a throughput bottleneck. Material head-of-line time confirms
+that the dispatcher waited on one sticky lane while another writer was idle; zero means that
+stronger condition did not occur at the start of a blocked admission in the observed run.
+
+**Capacity decision.** A low-throughput run cannot validate the writer-count ceiling. On a matched
+high-throughput run, sustained `submit_blocked_ms` with lane peaks at capacity shows that aggregate
+sink service is insufficient. Material `head_of_line_blocked_ms` instead shows that sticky routing
+stranded an idle writer and calls for removing cross-lane dispatch coupling before adding buffers.
+Near-zero blocking means more lanes would not improve that run. Interpret lane active time as elapsed
+service, not as sustained capacity or CPU: short bursts can exclude later finalization, filesystem
+writeback, and GC costs.
+
+**Instrumentation cost.** The normal submit path performs one non-blocking `offer`, the same single
+queue-lock acquisition the former uncontended `put` required. It does not sample queue size, read
+the clock, scan other lanes, or update blocked counters. The encode path updates single-writer
+volatile counters once per batch/lane stretch, not once per row. Only a failed `offer` reads the
+monotonic clock, scans the fixed 1–4 lane array, and updates blocked counters. Queue depth is sampled
+by the periodic/terminal reporter, which also copies that fixed lane array. Benchmark both arms with
+identical instrumentation and JFR settings; the repository does not claim a universal measured
+overhead percentage for this workload.
 
 **`demand_gate`**: the `OWNER_SPLIT.demand_gated` fixed-threshold/effective-T snapshot — `{events, last_t, min_t,
 t_max}`. `events` is the total count of demand-gate suppressions this run; `last_t`/`min_t` are the
