@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.LongSupplier;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -46,8 +48,10 @@ import org.apache.commons.codec.digest.DigestUtils;
  *
  * <p><b>Publication.</b> A part becomes consumer-visible only after {@link
  * DatasetPartWriter#close()} succeeds; every finalized part is added to the atomic {@code
- * manifest.json}. On {@link #close()} (success) each lane finalizes its open part and writes
- * {@code _SUCCESS} last. On {@link #abort()} (failure) each lane discards its open part. When a
+ * manifest.json}. On {@link #close()} (success) each already-admitted lane batch drains, each
+ * lane finalizes its open part, and {@code _SUCCESS} is written last. A concurrent submitter
+ * still waiting for a full lane when close begins is rejected rather than admitted into that
+ * successful close. On {@link #abort()} (failure) each lane discards its open part. When a
  * durable listener is configured (the Parquet sink), it advances the checkpoint before manifest
  * publication so resume retains only finalized parts. Text datasets deliberately provide no
  * resume contract in this release.
@@ -246,38 +250,15 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
 
     /** Route a batch to its sticky lane (blocking on a full lane queue — backpressure). */
     public void submit(PageBatch batch) throws OutputException, InterruptedException {
-        lifecycleLock.readLock().lockInterruptibly();
-        try {
-            if (shutdownMode.get() != ShutdownMode.OPEN) {
-                throw new OutputException(sinkName + " writer pool is shutting down");
-            }
-            checkFailure();
-            int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
-            Lane lane = lanes[laneId];
-            if (!lane.queue.offer(batch)) {
-                // Pay for the clock and bounded cross-lane scan only on the saturated path. This is the
-                // missing middle link between consumer-side emit and worker-side channel wait.
-                lane.queueDepthPeak.getAndAccumulate(lane.queueCapacity, Math::max);
-                boolean headOfLine = anotherLaneIsWaitingForWork(laneId);
-                long startedAt = nanoClock.getAsLong();
-                lane.startSubmitBlock(startedAt, headOfLine);
-                try {
-                    lane.queue.put(batch);
-                } finally {
-                    long blockedNanos = Math.max(0L, nanoClock.getAsLong() - startedAt);
-                    lane.finishSubmitBlock(startedAt, blockedNanos, headOfLine);
-                }
-            }
-            checkFailure();
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
+        int laneId = (int) Math.floorMod(batch.nodeId(), numWriters);
+        lanes[laneId].admit(batch);
+        checkFailure();
     }
 
     /** Whether this blocked sticky lane stranded another writer that had no queued work. */
     private boolean anotherLaneIsWaitingForWork(int selectedLane) {
         for (Lane lane : lanes) {
-            if (lane.id != selectedLane && lane.waitingForWork && lane.queue.isEmpty()) {
+            if (lane.id != selectedLane && lane.waitingForWork && lane.isEmpty()) {
                 return true;
             }
         }
@@ -335,16 +316,16 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             while (true) {
                 // Floor the poll WAIT (never the staleness check in rotationReason()) so a tiny
                 // positive rotationIntervalNanos can't spin this thread — see ROTATION_POLL_FLOOR_NANOS.
-                PageBatch batch = lane.queue.poll();
+                PageBatch batch = lane.dequeueNow();
                 if (batch == null) {
                     // The busy path still pays for one queue operation and no waiting-state
                     // writes. Publish idleness only after an immediate poll finds no work.
                     lane.waitingForWork = true;
                     try {
                         batch = rotationIntervalNanos > 0
-                                ? lane.queue.poll(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS),
+                                ? lane.dequeueWithin(Math.max(rotationIntervalNanos, ROTATION_POLL_FLOOR_NANOS),
                                         TimeUnit.NANOSECONDS)
-                                : lane.queue.take();
+                                : lane.dequeue();
                     } finally {
                         lane.waitingForWork = false;
                     }
@@ -673,11 +654,23 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
 
     /** Close admission atomically; the first close/abort request owns the terminal mode. */
     private void beginShutdown(ShutdownMode requested) {
+        boolean changed;
         lifecycleLock.writeLock().lock();
         try {
-            shutdownMode.compareAndSet(ShutdownMode.OPEN, requested);
+            changed = shutdownMode.compareAndSet(ShutdownMode.OPEN, requested);
         } finally {
             lifecycleLock.writeLock().unlock();
+        }
+        if (changed) {
+            // A submitter never holds lifecycleLock while waiting for a saturated lane: that
+            // would stop this transition from starting. Do not take a lane admission lock until
+            // AFTER releasing the lifecycle write lock — submitters take them in the opposite
+            // order around their guarded offer. Signal after OPEN has been revoked so a waiter
+            // retries its guarded offer, observes the terminal mode, and cannot enqueue behind
+            // the poison sentinel that drainAndJoin() will install.
+            for (Lane lane : lanes) {
+                lane.signalAdmissionWaiters();
+            }
         }
     }
 
@@ -710,7 +703,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             Throwable terminal = null;
             try {
                 for (Lane lane : lanes) {
-                    lane.queue.put(POISON);
+                    lane.enqueuePoison();
                 }
                 for (Future<?> f : laneFutures) {
                     f.get();
@@ -773,7 +766,13 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     private final class Lane {
         final int id;
         final int queueCapacity;
-        final BlockingQueue<PageBatch> queue;
+        private final BlockingQueue<PageBatch> queue;
+        // Serializes admission to this queue. A full submitter waits on notFullOrShutdown
+        // without holding lifecycleLock; dequeue and shutdown both signal it to retry the
+        // lifecycle-guarded offer. Keeping the two locks distinct is what lets abort begin even
+        // when the lane's writer is wedged.
+        final ReentrantLock admissionLock = new ReentrantLock();
+        final Condition notFullOrShutdown = admissionLock.newCondition();
         final AtomicInteger queueDepthPeak = new AtomicInteger();
         volatile boolean waitingForWork;
         // The lane thread is the sole writer for service/finalize counters; volatile makes
@@ -808,6 +807,96 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             this.queue = queue;
         }
 
+        /**
+         * Enqueue only while the lifecycle read lock proves admission remains open. On a full
+         * queue, wait on the lane-local condition instead of retaining that read lock: shutdown
+         * can then revoke OPEN, wake us, and install poison without waiting for the writer.
+         */
+        void admit(PageBatch batch) throws OutputException, InterruptedException {
+            admissionLock.lockInterruptibly();
+            boolean blocked = false;
+            boolean headOfLine = false;
+            long startedAt = 0L;
+            try {
+                while (true) {
+                    lifecycleLock.readLock().lockInterruptibly();
+                    try {
+                        if (shutdownMode.get() != ShutdownMode.OPEN) {
+                            throw new OutputException(sinkName + " writer pool is shutting down");
+                        }
+                        checkFailure();
+                        if (queue.offer(batch)) {
+                            return;
+                        }
+                    } finally {
+                        lifecycleLock.readLock().unlock();
+                    }
+                    if (!blocked) {
+                        // Pay for the clock and bounded cross-lane scan only on the saturated path. This is the
+                        // missing middle link between consumer-side emit and worker-side channel wait.
+                        queueDepthPeak.getAndAccumulate(queueCapacity, Math::max);
+                        headOfLine = anotherLaneIsWaitingForWork(id);
+                        startedAt = nanoClock.getAsLong();
+                        startSubmitBlock(startedAt, headOfLine);
+                        blocked = true;
+                    }
+                    notFullOrShutdown.await();
+                }
+            } finally {
+                if (blocked) {
+                    long blockedNanos = Math.max(0L, nanoClock.getAsLong() - startedAt);
+                    finishSubmitBlock(startedAt, blockedNanos, headOfLine);
+                }
+                admissionLock.unlock();
+            }
+        }
+
+        /** Notify one or more saturated submitters after space becomes available or OPEN closes. */
+        void signalAdmissionWaiters() {
+            admissionLock.lock();
+            try {
+                notFullOrShutdown.signalAll();
+            } finally {
+                admissionLock.unlock();
+            }
+        }
+
+        /** Remove work and wake a potentially blocked submitter after every successful dequeue. */
+        PageBatch dequeueNow() {
+            PageBatch batch = queue.poll();
+            if (batch != null) {
+                signalAdmissionWaiters();
+            }
+            return batch;
+        }
+
+        PageBatch dequeueWithin(long timeout, TimeUnit unit) throws InterruptedException {
+            PageBatch batch = queue.poll(timeout, unit);
+            if (batch != null) {
+                signalAdmissionWaiters();
+            }
+            return batch;
+        }
+
+        PageBatch dequeue() throws InterruptedException {
+            PageBatch batch = queue.take();
+            signalAdmissionWaiters();
+            return batch;
+        }
+
+        /** Shutdown has already revoked admission, so poison is the one permitted terminal enqueue. */
+        void enqueuePoison() throws InterruptedException {
+            queue.put(POISON);
+        }
+
+        boolean isEmpty() {
+            return queue.isEmpty();
+        }
+
+        int queueDepth() {
+            return queue.size();
+        }
+
         void startSubmitBlock(long startedAtNanos, boolean headOfLine) {
             synchronized (submitStatisticsLock) {
                 submitBlockedCount++;
@@ -838,7 +927,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             // Sampling happens on the periodic/terminal reporter, never on the sole dispatcher.
             // A saturated admission records capacity exactly in submit(); otherwise this is a
             // best-effort high-water mark at report cadence.
-            int queueDepth = queue.size();
+            int queueDepth = queueDepth();
             queueDepthPeak.getAndAccumulate(queueDepth, Math::max);
             long blockedCount;
             long blockedNanos;

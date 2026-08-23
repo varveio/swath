@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
+import io.varve.swath.error.OutputException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.PartListener;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -134,6 +136,50 @@ class SharedDatasetWriterPoolFailureTest {
             blockedProducer.get();
             pool.abort();
         }
+        assertUnpublishedAndEmpty(directory);
+    }
+
+    @Test
+    void abortRevokesAdmissionWhileASaturatedLaneWriterIsStillBlocked(@TempDir Path directory)
+            throws Exception {
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        Fixture fixture = fixture(directory, Mode.BLOCK_FIRST_WRITE, releaseWriter);
+        SharedDatasetWriterPool pool = fixture.pool();
+        pool.submit(PageBatches.batch(0, 0, 0, 1));
+        fixture.format().writerEntered.await();
+        pool.submit(PageBatches.batch(0, 1, 1, 2));   // fill the only queue slot
+
+        AtomicReference<Throwable> submitResult = new AtomicReference<>();
+        Thread blockedSubmitter = Thread.ofPlatform().start(() -> {
+            try {
+                pool.submit(PageBatches.batch(0, 2, 2, 3));
+                submitResult.set(new AssertionError("submit behind a saturated lane unexpectedly completed"));
+            } catch (Throwable failure) {
+                submitResult.set(failure);
+            }
+        });
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() ->
+                assertThat(pool.laneStatistics().get(0).submitBlockedCount()).isEqualTo(1L));
+
+        Thread aborter = Thread.ofPlatform().start(pool::abort);
+
+        assertThat(blockedSubmitter.join(Duration.ofSeconds(2)))
+                .as("abort must revoke OPEN and release a saturated submit without waiting for the writer")
+                .isTrue();
+        assertThat(submitResult.get()).isInstanceOf(OutputException.class)
+                .hasMessageContaining("shutting down");
+        assertThat(aborter.join(Duration.ofMillis(200)))
+                .as("the abort is draining the wedged lane after it has changed admission")
+                .isFalse();
+        assertThatThrownBy(() -> pool.submit(PageBatches.batch(0, 3, 3, 4)))
+                .isInstanceOf(OutputException.class)
+                .hasMessageContaining("shutting down");
+
+        releaseWriter.countDown();
+        assertThat(aborter.join(Duration.ofSeconds(2))).isTrue();
+        assertThat(fixture.format().writeCount())
+                .as("the already queued batch is discarded after abort; the rejected batch was never admitted")
+                .isEqualTo(1);
         assertUnpublishedAndEmpty(directory);
     }
 
@@ -323,6 +369,7 @@ class SharedDatasetWriterPoolFailureTest {
         private final Mode mode;
         private final CountDownLatch releaseWriter;
         private final CountDownLatch writerEntered;
+        private final AtomicInteger writes = new AtomicInteger();
 
         BlockingFormat(Mode mode, CountDownLatch releaseWriter) {
             this.mode = mode;
@@ -344,6 +391,7 @@ class SharedDatasetWriterPoolFailureTest {
                 @Override public long bufferedDataSize() { return rows; }
 
                 @Override public void write(ListEntry entry) throws IOException {
+                    writes.incrementAndGet();
                     if (mode == Mode.WRITE_FAIL || mode == Mode.WRITE_AND_DISCARD_FAIL) {
                         writerEntered.countDown();
                         awaitRelease();
@@ -383,6 +431,10 @@ class SharedDatasetWriterPoolFailureTest {
                     }
                 }
             };
+        }
+
+        int writeCount() {
+            return writes.get();
         }
     }
 }
