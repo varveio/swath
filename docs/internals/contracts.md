@@ -401,7 +401,15 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   occupy a *contiguous* run of that writer's parts (which finalize in order)
   — this is what makes the `durable_cursor` advance (algorithms.md §4.5)
   sound. A part file holds pages from many nodes and a node's pages may span
-  several parts; **there is no one-part-per-node rule.**
+  several parts; **there is no one-part-per-node rule.** Admission is closed
+  atomically before shutdown queues each lane's poison sentinel. A submitter
+  blocked by a full sticky lane waits only on that lane's bounded-space
+  condition, never while holding the lifecycle admission barrier: close or abort can
+  therefore revoke admission and wake it even if the lane's writer is wedged.
+  On wake, the submitter rechecks the barrier before enqueueing, so no batch
+  can land behind poison. Already-admitted batches drain before a graceful
+  close publishes; a submitter still waiting for a full lane when close starts
+  is rejected rather than becoming an implicit part of that successful close.
 - Each writer rotates its open part by **target size** (default 256 MB), or,
   whichever fires first, by **time-open** or **row count** (`--part-rotation-
   interval` / `--part-rotation-max-rows`, default 30 s / 2M rows) —
