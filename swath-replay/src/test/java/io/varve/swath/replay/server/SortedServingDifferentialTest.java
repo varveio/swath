@@ -21,8 +21,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TimeZone;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Isolated;
 
 /**
  * A mini-differential (the full adversarial matrix is SortedServingFullDifferentialTest):
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.io.TempDir;
  * HTTP with identical requests, asserting byte-identical XML page-for-page in both the flat and the
  * delimiter (seek-to-successor) paths.
  */
+@Isolated // One test changes java.util.TimeZone's JVM-global default.
 class SortedServingDifferentialTest {
 
     @Test
@@ -50,6 +53,39 @@ class SortedServingDifferentialTest {
             assertThat(walk(sortedServer, null, 25)).isEqualTo(walk(duckServer, null, 25));
             // Delimiter listing exercises the seek-to-successor hybrid + CommonPrefixes rollup.
             assertThat(walk(sortedServer, "/", 4)).isEqualTo(walk(duckServer, "/", 4));
+        }
+    }
+
+    /**
+     * A non-UTC default zone used to make the DuckDB JDBC timestamp conversion disagree with the
+     * native sorted readers. Keep this in-process (rather than relying on a CI runner's zone) so a
+     * UTC-only runner cannot mask that regression.
+    */
+    @Test
+    void sortedAndDuckDbServeTheTrueUtcTimestampOutsideUtcDefaultZone(@TempDir Path dir) throws Exception {
+        TimeZone original = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles"));
+        try {
+            Path sorted = sortedFixture(dir);
+
+            try (ReplayServer sortedServer = new ReplayServer(
+                    "127.0.0.1", 0, "bucket", sorted, 2, ServingMode.SORTED);
+                 ReplayServer duckServer = new ReplayServer(
+                         "127.0.0.1", 0, "bucket", sorted, 2, ServingMode.DUCKDB)) {
+                sortedServer.start();
+                duckServer.start();
+
+                List<String> sortedFlat = walk(sortedServer, null, 25);
+                List<String> duckFlat = walk(duckServer, null, 25);
+                assertThat(sortedFlat).isEqualTo(duckFlat);
+                // ObjectEntries.withOwner fixes this fixture's mtime at 1_700_000_000_000_000 µs.
+                assertThat(HttpProbe.extractTag(sortedFlat.getFirst(), "LastModified"))
+                        .isEqualTo("2023-11-14T22:13:20.000Z");
+
+                assertThat(walk(sortedServer, "/", 4)).isEqualTo(walk(duckServer, "/", 4));
+            }
+        } finally {
+            TimeZone.setDefault(original);
         }
     }
 

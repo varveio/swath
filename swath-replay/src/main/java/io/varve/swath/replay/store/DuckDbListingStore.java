@@ -149,7 +149,8 @@ public final class DuckDbListingStore implements ListingStore {
 
     private static Query buildQuery(ByteKey from, boolean fromInclusive, ByteKey toExclusive) {
         StringBuilder sql = new StringBuilder("""
-                SELECT hex(key) AS key_hex, size, last_modified, etag, storage_class, owner_id,
+                SELECT hex(key) AS key_hex, size, epoch_us(last_modified) AS last_modified_epoch_micros,
+                       etag, storage_class, owner_id,
                        owner_display_name, checksum_algorithm, checksum_type
                 FROM listing_objects
                 WHERE 1 = 1
