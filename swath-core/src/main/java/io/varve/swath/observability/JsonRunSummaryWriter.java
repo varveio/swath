@@ -513,6 +513,12 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // omitted), same idiom and same dedicated-percentile-readback reason as probe_latency above.
         writeClientCost(root.putArray("client_cost"), summary.clientCost());
 
+        // Direct-Parquet only: bounded lane statistics without lane-id metric tags. These are
+        // elapsed-time and queueing signals; JFR remains the CPU authority.
+        if (summary.parquetWriter() != null) {
+            writeParquetWriter(root.putObject("parquet_writer"), summary.parquetWriter());
+        }
+
         // OWNER_SPLIT.demand_gated T-vs-Tmax visibility. Omitted entirely (not a null-valued
         // block) when the demand gate never fired this run -- same idiom as seed/shape/trajectory.
         if (summary.demandGate() != null) {
@@ -833,6 +839,38 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             putDoubleOrNullBoxed(sn, "p99_ms", s.p99Ms());
             sn.put("max_ms", s.maxMs());
         }
+    }
+
+    private static void writeParquetWriter(
+            ObjectNode node, RunSummary.ParquetWriterSummary writer) {
+        node.put("submit_blocked_count", writer.submitBlockedCount());
+        node.put("submit_blocked_ms", nanosToMillis(writer.submitBlockedNanos()));
+        node.put("head_of_line_blocked_count", writer.headOfLineBlockedCount());
+        node.put("head_of_line_blocked_ms", nanosToMillis(writer.headOfLineBlockedNanos()));
+        ArrayNode lanes = node.putArray("lanes");
+        for (RunSummary.ParquetWriterLane lane : writer.lanes()) {
+            ObjectNode ln = lanes.addObject();
+            ln.put("lane", lane.lane());
+            ln.put("queue_capacity", lane.queueCapacity());
+            ln.put("queue_depth", lane.queueDepth());
+            ln.put("queue_depth_peak", lane.queueDepthPeak());
+            ln.put("waiting_for_work", lane.waitingForWork());
+            ln.put("rows_written", lane.rowsWritten());
+            ln.put("finalized_bytes", lane.finalizedBytes());
+            ln.put("batches_written", lane.batchesWritten());
+            ln.put("active_elapsed_ms", nanosToMillis(lane.activeElapsedNanos()));
+            ln.put("submit_blocked_count", lane.submitBlockedCount());
+            ln.put("submit_blocked_ms", nanosToMillis(lane.submitBlockedNanos()));
+            ln.put("head_of_line_blocked_count", lane.headOfLineBlockedCount());
+            ln.put("head_of_line_blocked_ms", nanosToMillis(lane.headOfLineBlockedNanos()));
+            ln.put("parts_finalized", lane.partsFinalized());
+            ln.put("finalize_count", lane.finalizeCount());
+            ln.put("finalize_elapsed_ms", nanosToMillis(lane.finalizeElapsedNanos()));
+        }
+    }
+
+    private static double nanosToMillis(long nanos) {
+        return nanos / 1_000_000.0;
     }
 
     private void writeDemandGate(ObjectNode dg, RunSummary.DemandGateSummary demandGate) {

@@ -59,9 +59,10 @@ import java.util.List;
  * {@code peakInFlight} saturates once the concurrency ceiling is hit, so {@code avgInFlight} is the
  * one that distinguishes sustained parallelism from a brief spike.
  *
- * <p>{@code seed}, {@code shape}, {@code trajectory}, and {@code demandGate} are {@code null}
- * when their mechanism never engaged this run — no seeding (resumed, or a sequential/
- * no-checkpoint run), no page ever fetched, or the demand gate never fired, respectively.
+ * <p>{@code seed}, {@code shape}, {@code trajectory}, {@code parquetWriter}, and {@code demandGate}
+ * are {@code null} when their mechanism never engaged this run — no seeding (resumed, or a
+ * sequential/no-checkpoint run), no page ever fetched, no direct-Parquet pool constructed, or the
+ * demand gate never fired, respectively.
  * {@code slowRanges} and {@code callClassLatency} are empty (never {@code null}) in the
  * equivalent no-data case.
  */
@@ -104,7 +105,60 @@ public record RunSummary(
         List<SlowRange> slowRanges,
         List<CallClassLatencySummary> callClassLatency,
         List<ClientCostSpan> clientCost,
+        ParquetWriterSummary parquetWriter,
         DemandGateSummary demandGate) {
+
+    /**
+     * Bounded direct-Parquet writer-pool evidence. The aggregate blocked fields are sums across
+     * lanes; {@code headOfLineBlocked*} is the subset where the sticky selected lane was full while
+     * at least one other lane was waiting for work with an empty queue.
+     */
+    public record ParquetWriterSummary(
+            long submitBlockedCount,
+            long submitBlockedNanos,
+            long headOfLineBlockedCount,
+            long headOfLineBlockedNanos,
+            List<ParquetWriterLane> lanes) {
+
+        public ParquetWriterSummary {
+            lanes = List.copyOf(lanes);
+        }
+
+        public static ParquetWriterSummary from(List<ParquetWriterLane> lanes) {
+            long submitBlockedCount = 0L;
+            long submitBlockedNanos = 0L;
+            long headOfLineBlockedCount = 0L;
+            long headOfLineBlockedNanos = 0L;
+            for (ParquetWriterLane lane : lanes) {
+                submitBlockedCount += lane.submitBlockedCount();
+                submitBlockedNanos += lane.submitBlockedNanos();
+                headOfLineBlockedCount += lane.headOfLineBlockedCount();
+                headOfLineBlockedNanos += lane.headOfLineBlockedNanos();
+            }
+            return new ParquetWriterSummary(submitBlockedCount, submitBlockedNanos,
+                    headOfLineBlockedCount, headOfLineBlockedNanos, lanes);
+        }
+    }
+
+    /** One direct-Parquet writer lane; all durations are elapsed time, never CPU time. */
+    public record ParquetWriterLane(
+            int lane,
+            int queueCapacity,
+            int queueDepth,
+            int queueDepthPeak,
+            boolean waitingForWork,
+            long rowsWritten,
+            long finalizedBytes,
+            long batchesWritten,
+            long activeElapsedNanos,
+            long submitBlockedCount,
+            long submitBlockedNanos,
+            long headOfLineBlockedCount,
+            long headOfLineBlockedNanos,
+            long partsFinalized,
+            long finalizeCount,
+            long finalizeElapsedNanos) {
+    }
 
     /**
      * One {@code call_class}/{@code phase} latency-percentile summary row — {@code callClass} is

@@ -60,7 +60,12 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
             "errors", "keysPerSecond", "apiCallsPer1kObjects", "peakRssBytes", "peakHeapBytes",
             "cpuSeconds", "cpuEfficiency", "overfetchRatio", "pageFillRatio", "emptySplitRatio",
             "wastedProbeRatio", "stealSuccessRate", "compressionRatio", "seed", "shape",
-            "trajectory", "slowRanges", "callClassLatency", "clientCost", "demandGate");
+            "trajectory",
+            "slowRanges",
+            "callClassLatency",
+            "clientCost",
+            "parquetWriter",
+            "demandGate");
 
     /** {@link RunMetrics.RunDiagnostics}'s record components, in declaration order. FROZEN. */
     private static final List<String> EXPECTED_DIAGNOSTICS_FIELDS = List.of(

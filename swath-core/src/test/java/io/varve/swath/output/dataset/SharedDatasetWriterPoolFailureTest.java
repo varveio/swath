@@ -7,6 +7,7 @@ package io.varve.swath.output.dataset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.parquet.DatasetLayout;
@@ -137,6 +138,104 @@ class SharedDatasetWriterPoolFailureTest {
     }
 
     @Test
+    void globallyBusyLanesDoNotMasqueradeAsHeadOfLineBlocking(
+            @TempDir Path directory) throws Exception {
+        CountDownLatch releaseWriters = new CountDownLatch(1);
+        Fixture fixture = fixture(directory, Mode.BLOCK_EVERY_FIRST_WRITE, releaseWriters, 2, 1);
+        SharedDatasetWriterPool pool = fixture.pool();
+        pool.submit(PageBatches.batch(0, 0, 0, 1));
+        pool.submit(PageBatches.batch(1, 0, 1, 2));
+        fixture.format().writerEntered.await();
+        pool.submit(PageBatches.batch(0, 1, 2, 3));
+        pool.submit(PageBatches.batch(1, 1, 3, 4));
+
+        CountDownLatch producerStarted = new CountDownLatch(1);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var blockedProducer = executor.submit(() -> {
+                producerStarted.countDown();
+                pool.submit(PageBatches.batch(0, 2, 4, 5));
+                return null;
+            });
+            producerStarted.await();
+            await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+                SharedDatasetWriterPool.LaneStatistics lane = pool.laneStatistics().get(0);
+                assertThat(lane.submitBlockedCount()).isEqualTo(1L);
+                assertThat(lane.headOfLineBlockedCount()).isZero();
+            });
+
+            releaseWriters.countDown();
+            blockedProducer.get();
+            pool.abort();
+        }
+
+        assertUnpublishedAndEmpty(directory);
+    }
+
+    @Test
+    void saturatedStickyLaneRecordsHeadOfLineBlockingWhileAnotherLaneWaitsForWork(
+            @TempDir Path directory) throws Exception {
+        CountDownLatch releaseWriter = new CountDownLatch(1);
+        Fixture fixture = fixture(directory, Mode.BLOCK_FIRST_WRITE, releaseWriter, 2, 1);
+        SharedDatasetWriterPool pool = fixture.pool();
+        pool.submit(PageBatches.batch(0, 0, 0, 1));
+        fixture.format().writerEntered.await();
+        pool.submit(PageBatches.batch(0, 1, 1, 2));
+        await().atMost(Duration.ofSeconds(2))
+                .until(() -> pool.laneStatistics().get(1).waitingForWork());
+
+        CountDownLatch producerStarted = new CountDownLatch(1);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var blockedProducer = executor.submit(() -> {
+                producerStarted.countDown();
+                pool.submit(PageBatches.batch(0, 2, 2, 3));
+                return null;
+            });
+            producerStarted.await();
+            await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+                List<SharedDatasetWriterPool.LaneStatistics> lanes = pool.laneStatistics();
+                assertThat(lanes.get(0).submitBlockedCount()).isEqualTo(1L);
+                assertThat(lanes.get(0).submitBlockedNanos()).isPositive();
+                assertThat(lanes.get(0).headOfLineBlockedCount()).isEqualTo(1L);
+                assertThat(lanes.get(0).headOfLineBlockedNanos()).isPositive();
+                assertThat(lanes.get(1).queueDepth()).isZero();
+            });
+
+            releaseWriter.countDown();
+            blockedProducer.get();
+            pool.abort();
+        }
+
+        List<SharedDatasetWriterPool.LaneStatistics> lanes = pool.laneStatistics();
+        assertThat(lanes.get(0).queueDepthPeak()).isEqualTo(1);
+        assertThat(lanes.get(0).submitBlockedNanos()).isPositive();
+        assertThat(lanes.get(0).headOfLineBlockedNanos()).isPositive();
+        assertThat(lanes.get(1).submitBlockedCount()).isZero();
+        assertUnpublishedAndEmpty(directory);
+    }
+
+    @Test
+    void laneStatisticsAttributeSuccessfulRowsBatchesAndFinalization(
+            @TempDir Path directory) throws Exception {
+        SharedDatasetWriterPool pool = fixture(
+                directory, Mode.PASS_THROUGH, new CountDownLatch(0), 2, 8).pool();
+        pool.submit(PageBatches.batch(0, 0, 0, 3));
+        pool.submit(PageBatches.batch(1, 0, 3, 8));
+        pool.close();
+
+        List<SharedDatasetWriterPool.LaneStatistics> lanes = pool.laneStatistics();
+        assertThat(lanes).extracting(SharedDatasetWriterPool.LaneStatistics::rowsWritten)
+                .containsExactly(3L, 5L);
+        assertThat(lanes).extracting(SharedDatasetWriterPool.LaneStatistics::batchesWritten)
+                .containsExactly(1L, 1L);
+        assertThat(lanes).extracting(SharedDatasetWriterPool.LaneStatistics::partsFinalized)
+                .containsExactly(1L, 1L);
+        assertThat(lanes).extracting(SharedDatasetWriterPool.LaneStatistics::finalizeCount)
+                .containsExactly(1L, 1L);
+        assertThat(lanes).extracting(SharedDatasetWriterPool.LaneStatistics::queueDepth)
+                .containsOnly(0);
+    }
+
+    @Test
     void interruptPromptlyCancelsSubmitBlockedOnSaturatedQueueAndCallerCanRestoreStatus(
             @TempDir Path directory) throws Exception {
         CountDownLatch releaseWriter = new CountDownLatch(1);
@@ -174,6 +273,9 @@ class SharedDatasetWriterPoolFailureTest {
         assertThat(promptlyReleased).as("interrupt releases the saturated put promptly").isTrue();
         assertThat(result.get()).isInstanceOf(InterruptedException.class);
         assertThat(restoredInterrupt.get()).isTrue();
+        SharedDatasetWriterPool.LaneStatistics lane = pool.laneStatistics().get(0);
+        assertThat(lane.submitBlockedCount()).isEqualTo(1L);
+        assertThat(lane.submitBlockedNanos()).isPositive();
         assertUnpublishedAndEmpty(directory);
     }
 
@@ -187,12 +289,17 @@ class SharedDatasetWriterPoolFailureTest {
 
     private static Fixture fixture(Path directory, Mode mode, CountDownLatch releaseWriter)
             throws IOException {
+        return fixture(directory, mode, releaseWriter, 1, 1);
+    }
+
+    private static Fixture fixture(Path directory, Mode mode, CountDownLatch releaseWriter,
+            int writers, int queueCapacity) throws IOException {
         Files.createDirectories(directory);
         BlockingFormat format = new BlockingFormat(mode, releaseWriter);
         DatasetWriterPoolConfig config = new DatasetWriterPoolConfig(
                 "test", "bucket", PartListener.NONE, List.of(), 0, 0, null);
-        SharedDatasetWriterPool pool = new SharedDatasetWriterPool(directory, format, "hash", 1,
-                Long.MAX_VALUE, 1, config);
+        SharedDatasetWriterPool pool = new SharedDatasetWriterPool(directory, format, "hash", writers,
+                Long.MAX_VALUE, queueCapacity, config);
         return new Fixture(pool, format);
     }
 
@@ -205,8 +312,8 @@ class SharedDatasetWriterPoolFailureTest {
     }
 
     private enum Mode {
-        WRITE_FAIL, WRITE_AND_DISCARD_FAIL, FINALIZE_FAIL, BLOCK_FIRST_WRITE,
-        OPEN_THEN_DISCARD_FAIL
+        PASS_THROUGH, WRITE_FAIL, WRITE_AND_DISCARD_FAIL, FINALIZE_FAIL, BLOCK_FIRST_WRITE,
+        BLOCK_EVERY_FIRST_WRITE, OPEN_THEN_DISCARD_FAIL
     }
 
     private record Fixture(SharedDatasetWriterPool pool, BlockingFormat format) {
@@ -215,11 +322,12 @@ class SharedDatasetWriterPoolFailureTest {
     private static final class BlockingFormat implements DatasetFormat {
         private final Mode mode;
         private final CountDownLatch releaseWriter;
-        private final CountDownLatch writerEntered = new CountDownLatch(1);
+        private final CountDownLatch writerEntered;
 
         BlockingFormat(Mode mode, CountDownLatch releaseWriter) {
             this.mode = mode;
             this.releaseWriter = releaseWriter;
+            this.writerEntered = new CountDownLatch(mode == Mode.BLOCK_EVERY_FIRST_WRITE ? 2 : 1);
         }
 
         @Override public String partSuffix() { return ".test"; }
@@ -241,7 +349,9 @@ class SharedDatasetWriterPoolFailureTest {
                         awaitRelease();
                         throw new IOException("write failed");
                     }
-                    if (mode == Mode.BLOCK_FIRST_WRITE && rows == 0) {
+                    if (rows == 0 && (mode == Mode.BLOCK_EVERY_FIRST_WRITE
+                            || (mode == Mode.BLOCK_FIRST_WRITE
+                                    && path.getFileName().toString().startsWith("part-w0-")))) {
                         writerEntered.countDown();
                         awaitRelease();
                     }

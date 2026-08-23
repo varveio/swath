@@ -27,6 +27,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -205,6 +206,8 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> parquetParts = new ConcurrentHashMap<>();
     private final Timer parquetFinalizeLatency;
     private final Timer parquetWriteLatency;
+    private final AtomicReference<Supplier<RunSummary.ParquetWriterSummary>> parquetWriterSummary =
+            new AtomicReference<>();
     private final ConcurrentMap<String, Counter> textDatasetRotations = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> textDatasetParts = new ConcurrentHashMap<>();
     private final AtomicReference<Timer> textDatasetFinalizeLatency = new AtomicReference<>();
@@ -1655,9 +1658,11 @@ public final class RunMetrics {
      * One stretch of writer-LANE work: the encode+write of a batch's rows into the open part, plus
      * whatever part finalize (footer fsync, part MD5, manifest rewrite) or drain-time discard that
      * stretch performed — measured on the lane's own thread, between two waits on its queue, so
-     * summing this span over a run accounts for the pool's CPU (an aborted run's lanes drain their
-     * queued batches without writing them, and those record nothing). A client-service-cost span
-     * (see {@link #buildClientCostSummary}),
+     * summing this span over a run accounts for the pool's active elapsed time (an aborted run's
+     * lanes drain their queued batches without writing them, and those record nothing). It is not
+     * CPU attribution: encoding, file I/O, fsync, checkpoint work, and manifest-lock waits can all
+     * contribute; use JFR execution samples for CPU. A client-service-cost span (see {@link
+     * #buildClientCostSummary}),
      * but the ONE that is not on the page's critical path: the lanes run concurrently with fetch and
      * {@link #recordEmit emit} (for Parquet, {@code emit} is the pool DISPATCH only), so this span
      * overlaps them in wall-clock and must never be added to a page's serial cost. It also strictly
@@ -1665,6 +1670,20 @@ public final class RunMetrics {
      */
     public void recordParquetWrite(long nanos) {
         parquetWriteLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * Attach the direct-Parquet pool's bounded, low-contention lane snapshot. Registration happens once
+     * when the pool is constructed; periodic reports call the supplier without creating Micrometer
+     * lane tags, so cardinality stays fixed.
+     */
+    public void registerParquetWriterSummary(Supplier<RunSummary.ParquetWriterSummary> supplier) {
+        parquetWriterSummary.compareAndSet(null, Objects.requireNonNull(supplier, "supplier"));
+    }
+
+    private RunSummary.ParquetWriterSummary parquetWriterSummary() {
+        Supplier<RunSummary.ParquetWriterSummary> supplier = parquetWriterSummary.get();
+        return supplier == null ? null : supplier.get();
     }
 
     // ---- Partitioned text dataset writer pool -----------------------
@@ -2455,6 +2474,9 @@ public final class RunMetrics {
                 // Per-page client-service-cost spans -- same shape and same cheapness (an empty
                 // list when no page was ever serviced); never null.
                 buildClientCostSummary(),
+                // Direct-Parquet only. The supplier reads a fixed 1–4 lane array; no lane-id metric
+                // tags and no unbounded state. Null when this run did not construct that pool.
+                parquetWriterSummary(),
                 // Demand-gate T-vs-Tmax visibility -- null when OWNER_SPLIT.demand_gated never
                 // fired this run (the writer omits the whole block, same idiom as seed/shape/trajectory).
                 demandGatedEvents.get() > 0
