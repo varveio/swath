@@ -147,8 +147,8 @@ comparing runs.
 
 Higher counts are not monotonic throughput scaling. Dividing the fixed budget gives each lane fewer
 queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
-rotation is also per lane: more active lanes can create more sub-target parts, each of which performs
-a full-part digest and rewrites the complete manifest under one lock. Compare `part_digest_ms`,
+rotation is also per lane: more active lanes can create more sub-target parts, each of which maintains
+a streamed full-part digest and rewrites the complete manifest under one lock. Compare `part_digest_ms`,
 `manifest_write_ms`, part count, `submit_blocked_ms`, and `head_of_line_blocked_ms` at 4/8/16 before
 adopting an expert count. If manifest time or HOL blocking rises faster than throughput, more writers
 are making the sink worse.

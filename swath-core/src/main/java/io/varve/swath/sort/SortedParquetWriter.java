@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.output.parquet.DigestingOutputFile;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
 import java.io.IOException;
@@ -77,7 +78,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
 
     private final Path path;
     private final ParquetWriter<ListEntry> writer;
-    private final ListEntryParquetWriters.DigestingOutputFile output;
+    private final DigestingOutputFile output;
     private long rows;
     private long boundsBytes;
     private byte[] firstKey;
@@ -175,6 +176,7 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // publishing a part with no stamp at all.
         long closeStart = System.nanoTime();
         ListEntryParquetWriters.closeWithDurability(path, writer);
+        output.markDurable();
         long closeNanos = System.nanoTime() - closeStart;
         finalMetadata = new FinalPartMetadata(rows, output.bytes(), output.md5(),
                 firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),

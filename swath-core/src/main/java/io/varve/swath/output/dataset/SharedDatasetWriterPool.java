@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.LongSupplier;
-import org.apache.commons.codec.digest.DigestUtils;
 
 /**
  * A format-neutral, decoupled dataset writer pool: a bounded number of {@code numWriters} lanes
@@ -541,17 +540,12 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         long bytes = Files.size(path);
         // Canonical relative form: data/<filename>, shared verbatim by the consumer
         // manifest files[].key, the checkpoint part_file.path (via the event's fileName), and the
-        // resume disk-sweep. MD5 is computed ONCE here, at finalize — never on every
-        // manifest rewrite (which would be O(n²)).
+        // resume disk-sweep. The format writer captured the exact physical-byte MD5 as it wrote
+        // this part; close-before-publication makes that immutable metadata safe to consume here.
         String relPath = DatasetLayout.key(path.getFileName().toString());
-        String md5;
-        long digestStartedAt = nanoClock.getAsLong();
-        try (var in = Files.newInputStream(path)) {
-            md5 = DigestUtils.md5Hex(in);
-        } finally {
-            partDigestCount.incrementAndGet();
-            partDigestNanos.addAndGet(Math.max(0L, nanoClock.getAsLong() - digestStartedAt));
-        }
+        String md5 = w.md5();
+        partDigestCount.incrementAndGet();
+        partDigestNanos.addAndGet(w.digestNanos());
         // When the sink wires a durable listener, its checkpoint commit (record part + advance
         // durable_cursor) is the exactly-once boundary BEFORE the manifest. Text wires NONE.
         Map<Long, byte[]> contributions = Map.copyOf(lane.partNodeMaxKey);

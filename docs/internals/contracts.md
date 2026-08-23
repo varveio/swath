@@ -455,7 +455,8 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   outside the active-buffer bound in I11. Because the time/row cadence is per lane, more active
   writers can also create more sub-target parts and amplify this publication path. Counts above the
   measured envelope emit an operator warning, and `part_digest_*` / `manifest_write_*` in
-  `dataset_writer` measure the resulting full-part reads and serialized manifest work directly.
+  `dataset_writer` measure the resulting streamed byte-exact digest work and serialized manifest
+  work directly.
   **Resume bookkeeping stays out of the consumer manifest**: `args_hash` and
   the checkpoint `run_id` live in the internal `.swath-state.json` (same
   atomic write). For every directory format, swath creates and fsyncs that

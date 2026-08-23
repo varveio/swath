@@ -295,8 +295,8 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 | `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
 | `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
 | `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
-| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, part MD5, manifest rewrite), timed on the lane's own thread between two waits on its queue. **Elapsed time, not CPU time**: it can include filesystem/checkpoint I/O and manifest-lock waits. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
-| `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync, MD5, and manifest rewrite it triggers. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
+| `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any finalize it triggered (footer fsync, manifest rewrite), timed on the lane's own thread between two waits on its queue. Part MD5 is incrementally maintained on this write path, not reread after close. **Elapsed time, not CPU time**: it can include filesystem/checkpoint I/O and manifest-lock waits. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
+| `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync and manifest rewrite it triggers. The byte-exact part MD5 is incrementally maintained below the compressor, not reread after close. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
 
 **Reading it.** The spans are percentile-bearing precisely because a per-page cost read as a MEAN
 cannot distinguish an iid per-page cost from a queue behind a shared single writer — whose tail grows
@@ -358,7 +358,9 @@ the pinned 64 MiB uncompressed row-group threshold, while the multiplier exposes
 overshoot allowance used by the plan—multiplying only writer count by the target is not a heap
 estimate.
 
-`part_digest_count`/`part_digest_ms` measure the full-part checksum read after close.
+`part_digest_count` counts finalized parts with byte-exact streamed MD5 metadata.
+`part_digest_ms` is CPU time spent incrementally maintaining/finalizing those digests on the
+physical-write path; it is not elapsed time and does not include a post-close file reread.
 `manifest_write_count`/`manifest_write_ms` measure atomic complete-manifest rewrites, including time
 queued behind another lane on the global manifest lock. The count includes the final ensure-write at
 successful publication. These fields isolate the two per-part costs that grow when more active lanes

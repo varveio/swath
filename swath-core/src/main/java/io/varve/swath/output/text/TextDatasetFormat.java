@@ -13,7 +13,9 @@ import io.varve.swath.output.Formatters;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.dataset.DatasetFormat;
 import io.varve.swath.output.dataset.DatasetPartWriter;
+import io.varve.swath.output.dataset.DigestingOutputStream;
 import io.varve.swath.output.dataset.DurableFiles;
+import io.varve.swath.output.dataset.PartDigest;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -63,11 +65,13 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         private final Path path;
         private final CountingWriter counting;
         private final EntryFormatter formatter;
+        private final PartDigest digest;
         private long rows;
 
         TextPartWriter(Path path, EncoderFactory encoderFactory) throws IOException {
             this.path = path;
-            OpenedTextPart opened = open(path, encoderFactory);
+            digest = new PartDigest();
+            OpenedTextPart opened = open(path, encoderFactory, digest);
             counting = opened.counting();
             formatter = opened.formatter();
         }
@@ -91,6 +95,7 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
             if (failure == null) {
                 try {
                     DurableFiles.fileAndParent(path);
+                    digest.markDurable();
                 } catch (IOException e) {
                     failure = e;
                 }
@@ -103,14 +108,17 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         @Override public void discard() throws IOException {
             counting.close();
         }
+
+        @Override public String md5() { return digest.md5(); }
+        @Override public long digestNanos() { return digest.digestNanos(); }
     }
 
     /** Open the whole encoder stack transactionally so constructor failure cannot leak the file. */
-    private OpenedTextPart open(Path path, EncoderFactory encoderFactory) throws IOException {
+    private OpenedTextPart open(Path path, EncoderFactory encoderFactory, PartDigest digest) throws IOException {
         OutputStream stream = null;
         CountingWriter counting = null;
         try {
-            stream = new BufferedOutputStream(Files.newOutputStream(path));
+            stream = new BufferedOutputStream(new DigestingOutputStream(Files.newOutputStream(path), digest));
             counting = encoderFactory.open(stream, compression);
             EntryFormatter formatter = Formatters.text(format, counting, escape);
             formatter.writeHeader();

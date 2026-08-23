@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.zip.GZIPInputStream;
+import org.apache.commons.codec.digest.DigestUtils;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -78,6 +79,36 @@ final class TextWriterPoolTest {
         try (InputStream in = new ZstdInputStream(Files.newInputStream(part))) {
             assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8).lines()).hasSize(4);
         }
+    }
+
+    @Test
+    void streamingDigestMatchesExactPhysicalPartBytesForEveryTextCompression(@TempDir Path dir)
+            throws Exception {
+        for (TextCompression compression : TextCompression.values()) {
+            Path part = dir.resolve("part-" + compression + ".jsonl");
+            TextDatasetFormat format = new TextDatasetFormat(OutputFormat.JSONL, compression, true);
+            var writer = format.openPart(part);
+            writer.write(PageBatches.batch(0, 0, 0, 1).entries().getFirst());
+
+            assertThatThrownBy(writer::md5).isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("before durable close");
+            writer.close();
+
+            assertThat(writer.md5()).isEqualTo(DigestUtils.md5Hex(Files.readAllBytes(part)));
+            assertThat(writer.digestNanos()).isGreaterThanOrEqualTo(0L);
+        }
+    }
+
+    @Test
+    void textAbortCannotExposeADigest(@TempDir Path dir) throws Exception {
+        TextDatasetFormat format = new TextDatasetFormat(OutputFormat.JSONL, TextCompression.GZIP, true);
+        var writer = format.openPart(dir.resolve("part.jsonl.gz"));
+        writer.write(PageBatches.batch(0, 0, 0, 1).entries().getFirst());
+
+        writer.discard();
+
+        assertThatThrownBy(writer::md5).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("before durable close");
     }
 
     @Test
