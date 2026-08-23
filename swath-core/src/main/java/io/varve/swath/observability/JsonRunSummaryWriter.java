@@ -513,10 +513,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         // omitted), same idiom and same dedicated-percentile-readback reason as probe_latency above.
         writeClientCost(root.putArray("client_cost"), summary.clientCost());
 
-        // Direct-Parquet only: bounded lane statistics without lane-id metric tags. These are
-        // elapsed-time and queueing signals; JFR remains the CPU authority.
-        if (summary.parquetWriter() != null) {
-            writeParquetWriter(root.putObject("parquet_writer"), summary.parquetWriter());
+        // Parallel directory datasets only: bounded lane statistics without lane-id metric tags.
+        // These are elapsed-time and queueing signals; JFR remains the CPU authority.
+        if (summary.datasetWriter() != null) {
+            writeDatasetWriter(root.putObject("dataset_writer"), summary.datasetWriter());
         }
 
         // OWNER_SPLIT.demand_gated T-vs-Tmax visibility. Omitted entirely (not a null-valued
@@ -841,14 +841,15 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         }
     }
 
-    private static void writeParquetWriter(
-            ObjectNode node, RunSummary.ParquetWriterSummary writer) {
+    private static void writeDatasetWriter(
+            ObjectNode node, RunSummary.DatasetWriterSummary writer) {
+        node.put("format", writer.format());
         node.put("submit_blocked_count", writer.submitBlockedCount());
         node.put("submit_blocked_ms", nanosToMillis(writer.submitBlockedNanos()));
         node.put("head_of_line_blocked_count", writer.headOfLineBlockedCount());
         node.put("head_of_line_blocked_ms", nanosToMillis(writer.headOfLineBlockedNanos()));
         ArrayNode lanes = node.putArray("lanes");
-        for (RunSummary.ParquetWriterLane lane : writer.lanes()) {
+        for (RunSummary.DatasetWriterLane lane : writer.lanes()) {
             ObjectNode ln = lanes.addObject();
             ln.put("lane", lane.lane());
             ln.put("queue_capacity", lane.queueCapacity());

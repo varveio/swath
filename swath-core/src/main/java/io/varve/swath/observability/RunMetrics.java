@@ -206,7 +206,7 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> parquetParts = new ConcurrentHashMap<>();
     private final Timer parquetFinalizeLatency;
     private final Timer parquetWriteLatency;
-    private final AtomicReference<Supplier<RunSummary.ParquetWriterSummary>> parquetWriterSummary =
+    private final AtomicReference<Supplier<RunSummary.DatasetWriterSummary>> datasetWriterSummary =
             new AtomicReference<>();
     private final ConcurrentMap<String, Counter> textDatasetRotations = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Counter> textDatasetParts = new ConcurrentHashMap<>();
@@ -1673,16 +1673,17 @@ public final class RunMetrics {
     }
 
     /**
-     * Attach the direct-Parquet pool's bounded, low-contention lane snapshot. Registration happens once
-     * when the pool is constructed; periodic reports call the supplier without creating Micrometer
+     * Attach the current parallel directory-dataset pool's bounded, low-contention lane snapshot.
+     * A run constructs one such pool; last registration wins so the live pool owns the block if
+     * that invariant ever changes. Periodic reports call the supplier without creating Micrometer
      * lane tags, so cardinality stays fixed.
      */
-    public void registerParquetWriterSummary(Supplier<RunSummary.ParquetWriterSummary> supplier) {
-        parquetWriterSummary.compareAndSet(null, Objects.requireNonNull(supplier, "supplier"));
+    public void registerDatasetWriterSummary(Supplier<RunSummary.DatasetWriterSummary> supplier) {
+        datasetWriterSummary.set(Objects.requireNonNull(supplier, "supplier"));
     }
 
-    private RunSummary.ParquetWriterSummary parquetWriterSummary() {
-        Supplier<RunSummary.ParquetWriterSummary> supplier = parquetWriterSummary.get();
+    private RunSummary.DatasetWriterSummary datasetWriterSummary() {
+        Supplier<RunSummary.DatasetWriterSummary> supplier = datasetWriterSummary.get();
         return supplier == null ? null : supplier.get();
     }
 
@@ -2474,9 +2475,9 @@ public final class RunMetrics {
                 // Per-page client-service-cost spans -- same shape and same cheapness (an empty
                 // list when no page was ever serviced); never null.
                 buildClientCostSummary(),
-                // Direct-Parquet only. The supplier reads a fixed 1–4 lane array; no lane-id metric
-                // tags and no unbounded state. Null when this run did not construct that pool.
-                parquetWriterSummary(),
+                // Parallel directory datasets only. The supplier reads a fixed 1–4 lane array; no
+                // lane-id metric tags and no unbounded state. Null when no shared pool was constructed.
+                datasetWriterSummary(),
                 // Demand-gate T-vs-Tmax visibility -- null when OWNER_SPLIT.demand_gated never
                 // fired this run (the writer omits the whole block, same idiom as seed/shape/trajectory).
                 demandGatedEvents.get() > 0

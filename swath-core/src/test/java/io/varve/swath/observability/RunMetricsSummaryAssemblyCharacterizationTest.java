@@ -64,7 +64,7 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
             "slowRanges",
             "callClassLatency",
             "clientCost",
-            "parquetWriter",
+            "datasetWriter",
             "demandGate");
 
     /** {@link RunMetrics.RunDiagnostics}'s record components, in declaration order. FROZEN. */
@@ -80,6 +80,18 @@ final class RunMetricsSummaryAssemblyCharacterizationTest {
         assertThat(components(RunSummary.class)).containsExactlyElementsOf(EXPECTED_SUMMARY_FIELDS);
         assertThat(components(RunMetrics.RunDiagnostics.class))
                 .containsExactlyElementsOf(EXPECTED_DIAGNOSTICS_FIELDS);
+    }
+
+    @Test
+    void latestDatasetPoolRegistrationOwnsTheSummary() {
+        RunMetrics metrics = new RunMetrics(new SimpleMeterRegistry());
+        metrics.registerDatasetWriterSummary(
+                () -> RunSummary.DatasetWriterSummary.from("parquet", List.of()));
+        metrics.registerDatasetWriterSummary(
+                () -> RunSummary.DatasetWriterSummary.from("tsv", List.of()));
+
+        assertThat(metrics.summary(Duration.ZERO, "work_stealing", 0L, 0L)
+                .datasetWriter().format()).isEqualTo("tsv");
     }
 
     @Test

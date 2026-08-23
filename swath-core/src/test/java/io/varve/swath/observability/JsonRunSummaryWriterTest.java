@@ -57,7 +57,7 @@ final class JsonRunSummaryWriterTest {
                 4269.5, 1.07, 268435456L, 134217728L, 26.4, 1.03,
                 2.0, 0.95, 0.1, 0.3, 0.6, 1.9,
                 new RunSummary.SeedSummary("shallow", 5L, 12L, 4L, 13L),
-                shape(), null, List.of(), List.of(), clientCost(), parquetWriter(), null);
+                shape(), null, List.of(), List.of(), clientCost(), datasetWriter(), null);
     }
 
     /** One populated client-service-cost span, enough to pin the {@code client_cost[]} row shape. */
@@ -66,12 +66,12 @@ final class JsonRunSummaryWriterTest {
                 0.4, 1.2, 4.8, 9.1));
     }
 
-    private static RunSummary.ParquetWriterSummary parquetWriter() {
-        return RunSummary.ParquetWriterSummary.from(List.of(
-                new RunSummary.ParquetWriterLane(
+    private static RunSummary.DatasetWriterSummary datasetWriter() {
+        return RunSummary.DatasetWriterSummary.from("parquet", List.of(
+                new RunSummary.DatasetWriterLane(
                         0, 8, 0, 8, false, 600L, 6000L, 6L, 12_000_000L,
                         2L, 4_000_000L, 1L, 3_000_000L, 2L, 2L, 5_000_000L),
-                new RunSummary.ParquetWriterLane(
+                new RunSummary.DatasetWriterLane(
                         1, 8, 0, 4, true, 400L, 4000L, 4L, 8_000_000L,
                         0L, 0L, 0L, 0L, 1L, 1L, 2_000_000L)));
     }
@@ -245,13 +245,14 @@ final class JsonRunSummaryWriterTest {
         assertThat(emitSpan.get("p99_ms").asDouble()).isEqualTo(4.8);
         assertThat(emitSpan.get("max_ms").asDouble()).isEqualTo(9.1);
 
-        JsonNode parquetWriter = root.get("parquet_writer");
-        assertThat(parquetWriter.get("submit_blocked_count").asLong()).isEqualTo(2L);
-        assertThat(parquetWriter.get("submit_blocked_ms").asDouble()).isEqualTo(4.0);
-        assertThat(parquetWriter.get("head_of_line_blocked_count").asLong()).isEqualTo(1L);
-        assertThat(parquetWriter.get("head_of_line_blocked_ms").asDouble()).isEqualTo(3.0);
-        assertThat(parquetWriter.get("lanes")).hasSize(2);
-        JsonNode lane0 = parquetWriter.get("lanes").get(0);
+        JsonNode datasetWriter = root.get("dataset_writer");
+        assertThat(datasetWriter.get("format").asText()).isEqualTo("parquet");
+        assertThat(datasetWriter.get("submit_blocked_count").asLong()).isEqualTo(2L);
+        assertThat(datasetWriter.get("submit_blocked_ms").asDouble()).isEqualTo(4.0);
+        assertThat(datasetWriter.get("head_of_line_blocked_count").asLong()).isEqualTo(1L);
+        assertThat(datasetWriter.get("head_of_line_blocked_ms").asDouble()).isEqualTo(3.0);
+        assertThat(datasetWriter.get("lanes")).hasSize(2);
+        JsonNode lane0 = datasetWriter.get("lanes").get(0);
         assertThat(lane0.get("queue_depth_peak").asInt()).isEqualTo(8);
         assertThat(lane0.get("waiting_for_work").asBoolean()).isFalse();
         assertThat(lane0.get("rows_written").asLong()).isEqualTo(600L);
@@ -629,7 +630,7 @@ final class JsonRunSummaryWriterTest {
         assertThat(root.has("seed")).isFalse();
         // A null ShapeSummary likewise omits the "shape" block entirely (null-safe).
         assertThat(root.has("shape")).isFalse();
-        assertThat(root.has("parquet_writer")).isFalse();
+        assertThat(root.has("dataset_writer")).isFalse();
     }
 
     @Test

@@ -234,8 +234,9 @@ class ParquetWriterPoolMetricsTest {
                 .as("readable from the run summary's client_cost[], where the accounting is done")
                 .extracting(RunSummary.ClientCostSpan::span)
                 .contains(RunMetrics.CLIENT_COST_SPAN_PARQUET_WRITE);
-        assertThat(summary.parquetWriter()).isNotNull();
-        assertThat(summary.parquetWriter().lanes()).singleElement().satisfies(lane -> {
+        assertThat(summary.datasetWriter()).isNotNull();
+        assertThat(summary.datasetWriter().format()).isEqualTo("parquet");
+        assertThat(summary.datasetWriter().lanes()).singleElement().satisfies(lane -> {
             assertThat(lane.rowsWritten()).isEqualTo(3_000L);
             assertThat(lane.batchesWritten()).isEqualTo(3L);
             assertThat(lane.finalizedBytes()).isPositive();

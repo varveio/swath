@@ -59,10 +59,10 @@ import java.util.List;
  * {@code peakInFlight} saturates once the concurrency ceiling is hit, so {@code avgInFlight} is the
  * one that distinguishes sustained parallelism from a brief spike.
  *
- * <p>{@code seed}, {@code shape}, {@code trajectory}, {@code parquetWriter}, and {@code demandGate}
+ * <p>{@code seed}, {@code shape}, {@code trajectory}, {@code datasetWriter}, and {@code demandGate}
  * are {@code null} when their mechanism never engaged this run — no seeding (resumed, or a
- * sequential/no-checkpoint run), no page ever fetched, no direct-Parquet pool constructed, or the
- * demand gate never fired, respectively.
+ * sequential/no-checkpoint run), no page ever fetched, no parallel directory-dataset pool
+ * constructed, or the demand gate never fired, respectively.
  * {@code slowRanges} and {@code callClassLatency} are empty (never {@code null}) in the
  * equivalent no-data case.
  */
@@ -105,43 +105,45 @@ public record RunSummary(
         List<SlowRange> slowRanges,
         List<CallClassLatencySummary> callClassLatency,
         List<ClientCostSpan> clientCost,
-        ParquetWriterSummary parquetWriter,
+        DatasetWriterSummary datasetWriter,
         DemandGateSummary demandGate) {
 
     /**
-     * Bounded direct-Parquet writer-pool evidence. The aggregate blocked fields are sums across
-     * lanes; {@code headOfLineBlocked*} is the subset where the sticky selected lane was full while
-     * at least one other lane was waiting for work with an empty queue.
+     * Bounded parallel directory-dataset writer-pool evidence. {@code format} is one of {@code
+     * parquet}, {@code tsv}, or {@code jsonl}. The aggregate blocked fields are sums across lanes;
+     * {@code headOfLineBlocked*} is the subset where the sticky selected lane was full while at
+     * least one other lane was waiting for work with an empty queue.
      */
-    public record ParquetWriterSummary(
+    public record DatasetWriterSummary(
+            String format,
             long submitBlockedCount,
             long submitBlockedNanos,
             long headOfLineBlockedCount,
             long headOfLineBlockedNanos,
-            List<ParquetWriterLane> lanes) {
+            List<DatasetWriterLane> lanes) {
 
-        public ParquetWriterSummary {
+        public DatasetWriterSummary {
             lanes = List.copyOf(lanes);
         }
 
-        public static ParquetWriterSummary from(List<ParquetWriterLane> lanes) {
+        public static DatasetWriterSummary from(String format, List<DatasetWriterLane> lanes) {
             long submitBlockedCount = 0L;
             long submitBlockedNanos = 0L;
             long headOfLineBlockedCount = 0L;
             long headOfLineBlockedNanos = 0L;
-            for (ParquetWriterLane lane : lanes) {
+            for (DatasetWriterLane lane : lanes) {
                 submitBlockedCount += lane.submitBlockedCount();
                 submitBlockedNanos += lane.submitBlockedNanos();
                 headOfLineBlockedCount += lane.headOfLineBlockedCount();
                 headOfLineBlockedNanos += lane.headOfLineBlockedNanos();
             }
-            return new ParquetWriterSummary(submitBlockedCount, submitBlockedNanos,
+            return new DatasetWriterSummary(format, submitBlockedCount, submitBlockedNanos,
                     headOfLineBlockedCount, headOfLineBlockedNanos, lanes);
         }
     }
 
-    /** One direct-Parquet writer lane; all durations are elapsed time, never CPU time. */
-    public record ParquetWriterLane(
+    /** One parallel directory-dataset writer lane; all durations are elapsed time, never CPU time. */
+    public record DatasetWriterLane(
             int lane,
             int queueCapacity,
             int queueDepth,

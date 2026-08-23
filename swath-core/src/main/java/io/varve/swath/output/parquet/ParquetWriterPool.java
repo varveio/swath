@@ -9,7 +9,8 @@ import io.micrometer.core.instrument.Timer;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
-import io.varve.swath.observability.RunSummary;
+import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
@@ -32,7 +33,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                              ParquetWriterPoolConfig config) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config));
-        registerLaneSummary(config.metrics(), delegate);
+        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
     }
 
     ParquetWriterPool(Path dir, MessageType schema, String argsHash,
@@ -40,7 +41,7 @@ public final class ParquetWriterPool implements DatasetWriterPool {
                       ParquetWriterPoolConfig config, LongSupplier nanoClock) {
         delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
                 writers, targetBytes, queueCapacity, sharedConfig(config), nanoClock);
-        registerLaneSummary(config.metrics(), delegate);
+        DatasetWriterMetrics.registerSummary(config.metrics(), OutputFormat.PARQUET, delegate);
     }
 
     private static DatasetWriterPoolConfig sharedConfig(ParquetWriterPoolConfig config) {
@@ -63,21 +64,6 @@ public final class ParquetWriterPool implements DatasetWriterPool {
             @Override public void recordPart(String result) { metrics.recordParquetPart(result); }
             @Override public void markProgress() { metrics.markProgress(); }
         };
-    }
-
-    private static void registerLaneSummary(RunMetrics metrics, SharedDatasetWriterPool writerPool) {
-        if (metrics == null) {
-            return;
-        }
-        metrics.registerParquetWriterSummary(() -> RunSummary.ParquetWriterSummary.from(
-                writerPool.laneStatistics().stream()
-                        .map(s -> new RunSummary.ParquetWriterLane(
-                                s.lane(), s.queueCapacity(), s.queueDepth(), s.queueDepthPeak(),
-                                s.waitingForWork(), s.rowsWritten(), s.finalizedBytes(), s.batchesWritten(),
-                                s.activeElapsedNanos(), s.submitBlockedCount(), s.submitBlockedNanos(),
-                                s.headOfLineBlockedCount(), s.headOfLineBlockedNanos(),
-                                s.partsFinalized(), s.finalizeCount(), s.finalizeElapsedNanos()))
-                        .toList()));
     }
 
     @Override public void submit(PageBatch batch) throws OutputException, InterruptedException {

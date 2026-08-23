@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.luben.zstd.ZstdInputStream;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.observability.RunSummary;
 import io.varve.swath.output.CountingWriter;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
@@ -22,6 +23,7 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -205,6 +207,11 @@ final class TextWriterPoolTest {
         assertThat(registry.timer("swath.text_dataset.finalize.latency").count()).isEqualTo(1);
         assertThat(registry.timer("swath.text_dataset.write.latency").count()).isGreaterThanOrEqualTo(1);
         assertThat(metrics.progressSignal()).isGreaterThan(progressBefore);
+        RunSummary summary = metrics.summary(Duration.ofSeconds(1), "work_stealing", 0L, 0L);
+        assertThat(summary.datasetWriter()).isNotNull();
+        assertThat(summary.datasetWriter().format()).isEqualTo("jsonl");
+        assertThat(summary.datasetWriter().lanes()).extracting(RunSummary.DatasetWriterLane::rowsWritten)
+                .containsExactlyInAnyOrder(1L, 0L);
     }
 
     private static TextWriterPool pool(Path dir, TextCompression compression, int writers)

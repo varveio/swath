@@ -117,7 +117,8 @@ Across a concurrency sweep:
 Treat `shape.divergence_depth_histogram`, `mass_skew_gini`, and `delimiter_fanout` as clues,
 not diagnoses. Direct engagement and wait counters show what actually constrained the run.
 
-For direct Parquet, read the report's `parquet_writer` block with `client_cost`:
+For direct Parquet or a parallel TSV/JSONL directory dataset, read the report's
+format-labelled `dataset_writer` block with `client_cost`:
 
 - `submit_blocked_ms` is the consumer's time waiting for sticky lane admission; it is contained
   in `client_cost[].emit`, not additional time to add to it.
@@ -130,6 +131,12 @@ For direct Parquet, read the report's `parquet_writer` block with `client_cost`:
 - Rising lane-submit blocking followed by rising `client_cost[].writer_backpressure` confirms the
   full causal chain into listing workers. A full queue peak without blocked time is not a
   bottleneck by itself.
+
+Do not infer writer capacity from an I/O-bound run whose lanes are mostly idle. Validate a writer
+count against the fastest expected listing regime: sustained submit blocking means the sink is
+binding; material head-of-line blocking with idle lanes means dispatch coupling is binding. If
+neither appears, raising the writer count would only add memory and file-part overhead for that
+workload.
 
 ### Size CPU and memory empirically
 

@@ -339,9 +339,11 @@ latency. JFR execution samples, not these elapsed spans, are what can be aggrega
 for CPU accounting. A lane span also strictly CONTAINS its format's finalize-latency sample of
 any rotation that fired inside the stretch, so those two must never be added together.
 
-**`parquet_writer`**: a bounded structured snapshot, present only when the direct Parquet
-pool was constructed. Lane ids deliberately do not become Micrometer tags. The top-level fields are
-`submit_blocked_count`/`submit_blocked_ms` and
+**`dataset_writer`**: a bounded structured snapshot, present when the shared parallel
+directory-dataset pool was constructed: direct Parquet and directory TSV/JSONL. It is absent for
+stdout, single-file text, discard output, and sorted output, which use different sink paths. Lane ids
+deliberately do not become Micrometer tags. `format` is `parquet`, `tsv`, or `jsonl`; the remaining
+top-level fields are `submit_blocked_count`/`submit_blocked_ms` and
 `head_of_line_blocked_count`/`head_of_line_blocked_ms`; the latter pair is the subset of full-lane
 admissions where at least one *other* lane was waiting for work with an empty queue when blocking
 began. Requiring an actually idle writer distinguishes sticky-routing head-of-line blocking from
@@ -365,6 +367,14 @@ accumulate `writer_backpressure` (`swath.queue.wait`). A queue peak at capacity 
 time is not enough to call the sink a throughput bottleneck. Material head-of-line time confirms
 that the dispatcher waited on one sticky lane while another writer was idle; zero means that
 stronger condition did not occur at the start of a blocked admission in the observed run.
+
+**Capacity decision.** A low-throughput run cannot validate the writer-count ceiling. On a matched
+high-throughput run, sustained `submit_blocked_ms` with lane peaks at capacity shows that aggregate
+sink service is insufficient. Material `head_of_line_blocked_ms` instead shows that sticky routing
+stranded an idle writer and calls for removing cross-lane dispatch coupling before adding buffers.
+Near-zero blocking means more lanes would not improve that run. Interpret lane active time as elapsed
+service, not as sustained capacity or CPU: short bursts can exclude later finalization, filesystem
+writeback, and GC costs.
 
 **Instrumentation cost.** The normal submit path performs one non-blocking `offer`, the same single
 queue-lock acquisition the former uncontended `put` required. It does not sample queue size, read

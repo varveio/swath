@@ -130,7 +130,7 @@ The stable top-level result is organized as follows:
 | `config`, `engine_flags` | Effective user configuration and engine state. |
 | `cost`, `output`, `efficiency`, `sort` | API-cost estimate, sink results, efficiency, and sorted-output details. |
 | `recovered_errors` | Transient faults swath handled without failing the run. |
-| `engine`, `seed`, `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `parquet_writer`, `demand_gate`, `shape` | Deeper scheduling, keyspace, sink, and latency evidence. |
+| `engine`, `seed`, `trajectory`, `slow_ranges`, `probe_latency`, `client_cost`, `dataset_writer`, `demand_gate`, `shape` | Deeper scheduling, keyspace, sink, and latency evidence. |
 | `meters` | Final generic meter snapshot. |
 
 `complete=true` means the requested dataset was published. On an unsuccessful run,
@@ -158,7 +158,9 @@ metrics identify the compatibility path that reopened a carried part.
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.
 
-`parquet_writer` is present only for direct Parquet output. Its aggregate
+`dataset_writer` is present for direct Parquet and parallel directory TSV/JSONL output; its
+`format` is `parquet`, `tsv`, or `jsonl`. It is absent for stdout, single-file text, discard, and
+sorted output, which do not construct the shared pool. Its aggregate
 `submit_blocked_*` fields measure full sticky-lane admission waits;
 `head_of_line_blocked_*` is the subset where another lane thread was waiting for work on an empty
 queue when that wait began. The bounded `lanes[]` array reports lane id, queue
@@ -190,7 +192,7 @@ short investigations rather than routine high-volume runs.
 | --- | --- | --- |
 | High API latency, high in-flight work | Store or network service time | `fetch.latency.phase`, throttles, pool pending, recovered errors |
 | Low API rate and low in-flight work while listing | Work supply or a long tail | steal reasons, probes, tail occupancy, open-frontier share |
-| High `queue.wait` or `emit.latency` | Output admission or sink | `parquet_writer` blocked/HOL time, lane balance, Parquet write/finalize latency, output filesystem |
+| High `queue.wait` or `emit.latency` | Output admission or sink | `dataset_writer` blocked/HOL time, lane balance, format write/finalize latency, output filesystem |
 | High checkpoint queue or commit waits | SQLite durability | checkpoint volume latency and queue depth |
 | High sort backpressure or many merge passes | Sort memory/disk/FD limits | `sort` report block, staging peak, effective fan-in |
 | `progress.units` flat for more than five minutes | Potential stall | phase, thread dump, last error, disk and pool state |

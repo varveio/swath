@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.Timer;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
 import io.varve.swath.output.dataset.DatasetWriterPoolConfig;
@@ -28,6 +29,7 @@ public final class TextWriterPool implements DatasetWriterPool {
                 config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config.metrics()));
         delegate = new SharedDatasetWriterPool(config.directory(), format, config.argsHash(),
                 config.writers(), config.targetBytes(), config.queueCapacity(), poolConfig);
+        DatasetWriterMetrics.registerSummary(config.metrics(), config.format(), delegate);
     }
 
     private static DatasetWriterObserver observer(RunMetrics metrics) {
