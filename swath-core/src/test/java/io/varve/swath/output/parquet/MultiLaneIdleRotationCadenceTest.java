@@ -25,8 +25,8 @@ import org.junit.jupiter.api.io.TempDir;
  * lane; this drives {@code numWriters=3} with one node sticky-routed to each lane, all
  * three lanes holding a non-empty open part and going idle at once, so the idle-timeout
  * fires concurrently on three independent lane threads — exercising per-lane poll
- * wakeups, {@code writeManifest()}'s shared {@code manifestLock}, and the {@link
- * PartListener} callback all firing concurrently without corrupting the manifest or
+ * wakeups, the shared publication coordinator, and the {@link PartListener} callback all
+ * firing concurrently without corrupting the manifest or
  * dropping/duplicating a lane's contribution.
  */
 class MultiLaneIdleRotationCadenceTest {

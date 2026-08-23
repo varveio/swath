@@ -10,14 +10,12 @@ import io.varve.swath.error.OutputException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.output.parquet.DatasetLayout;
-import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.PartInfo;
 import io.varve.swath.output.parquet.PartListener;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -131,12 +129,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
      */
     private static final long ROTATION_POLL_FLOOR_NANOS = 50_000_000L;   // 50 ms
 
-    private final Path dir;
     private final String sinkName;
     private final DatasetLayout layout;
     private final DatasetFormat format;
-    private final String argsHash;
-    private final String bucket;
+    private final DatasetPublication publication;
     private final int numWriters;
     private final long targetBytes;
     private final long rotationIntervalNanos;
@@ -163,11 +159,6 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private final AtomicLong partDigestCount = new AtomicLong();
     private final AtomicLong partDigestNanos = new AtomicLong();
-    private final AtomicLong manifestWriteCount = new AtomicLong();
-    private final AtomicLong manifestWriteNanos = new AtomicLong();
-
-    private final List<PartInfo> committedParts = Collections.synchronizedList(new ArrayList<>());
-    private final Object manifestLock = new Object();
     private enum ShutdownMode { OPEN, CLOSE, ABORT }
 
     /**
@@ -179,8 +170,6 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             new AtomicReference<>(ShutdownMode.OPEN);
     private final AtomicBoolean joinInitiated = new AtomicBoolean();
     private final CompletableFuture<Void> joined = new CompletableFuture<>();
-    private final AtomicBoolean publicationInitiated = new AtomicBoolean();
-    private final CompletableFuture<Void> published = new CompletableFuture<>();
 
     /** The pool owns scheduling and publication; the adapter owns encoding. */
     public SharedDatasetWriterPool(Path dir, DatasetFormat format, String argsHash,
@@ -203,13 +192,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
                     + numWriters + ", queueCapacity=" + queueCapacity + ", aggregate="
                     + (long) numWriters * queueCapacity + ")");
         }
-        this.dir = dir;
         this.sinkName = config.sinkName();
         this.scope = Scope.ofPlatformThreads(sinkName + "-writer");
         this.layout = DatasetLayout.of(dir);
         this.format = format;
-        this.argsHash = argsHash;
-        this.bucket = config.bucket();
         this.numWriters = numWriters;
         this.targetBytes = targetBytes;
         this.rotationIntervalNanos = config.rotationIntervalNanos();
@@ -217,7 +203,8 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         this.nanoClock = nanoClock;
         this.partListener = config.partListener();
         this.observer = config.observer();
-        this.committedParts.addAll(config.existingParts());
+        this.publication = new DatasetPublication(dir, config.bucket(), format, argsHash,
+                config.existingParts(), nanoClock);
         this.lanes = new Lane[this.numWriters];
         for (int i = 0; i < this.numWriters; i++) {
             lanes[i] = new Lane(i, queueCapacity, new ArrayBlockingQueue<>(queueCapacity));
@@ -274,23 +261,19 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
     }
 
     public long committedPartCount() {
-        synchronized (committedParts) {
-            return committedParts.size();
-        }
+        return publication.committedPartCount();
     }
 
     public long committedBytes() {
-        synchronized (committedParts) {
-            return committedParts.stream().mapToLong(PartInfo::bytes).sum();
-        }
+        return publication.committedBytes();
     }
 
     long rotationIntervalNanos() { return rotationIntervalNanos; }
     long rotationMaxRows() { return rotationMaxRows; }
     long partDigestCount() { return partDigestCount.get(); }
     long partDigestNanos() { return partDigestNanos.get(); }
-    long manifestWriteCount() { return manifestWriteCount.get(); }
-    long manifestWriteNanos() { return manifestWriteNanos.get(); }
+    long manifestWriteCount() { return publication.manifestWriteCount(); }
+    long manifestWriteNanos() { return publication.manifestWriteNanos(); }
 
     private void checkFailure() throws OutputException {
         Throwable t = failure.get();
@@ -533,7 +516,9 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         lane.partNodeMaxKey.clear();
         partListener.onFinalized(new PartListener.PartFinalizedEvent(
                 lane.id, relPath, rows, bytes, contributions));
-        committedParts.add(new PartInfo(relPath, lane.id, rows, bytes, md5));
+        // Account the durable part before manifest I/O, preserving failure-run statistics even if
+        // the atomic manifest replacement fails. The checkpoint callback above is still the
+        // exactly-once boundary; the publication owner below retains the part on such a failure.
         observer.recordPart("finalized");
         lane.finalizedBytes += bytes;
         lane.partsFinalized++;
@@ -543,7 +528,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         // longer than the stall window and get falsely aborted (worse: it could force the STUCK
         // exit 75 over what should have been a clean --max-duration exit 0).
         observer.markProgress();
-        writeManifest();   // atomic, on each finalize
+        publication.publishFinalizedPart(new PartInfo(relPath, lane.id, rows, bytes, md5));
     }
 
     private void discardCurrent(Lane lane) throws IOException {
@@ -578,48 +563,6 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         }
     }
 
-    private void writeManifest() throws IOException {
-        long startedAt = nanoClock.getAsLong();
-        try {
-            synchronized (manifestLock) {
-                // Snapshot under the publication lock. Otherwise lane A can snapshot an older
-                // part set, lane B can publish a newer set, and A can then overwrite it after
-                // finally acquiring this lock.
-                writeManifestLocked(snapshotParts());
-            }
-        } finally {
-            recordManifestWrite(startedAt);
-        }
-    }
-
-    /** Includes time queued behind another lane on {@link #manifestLock}. */
-    private void writeManifest(List<PartInfo> parts) throws IOException {
-        long startedAt = nanoClock.getAsLong();
-        try {
-            synchronized (manifestLock) {
-                writeManifestLocked(parts);
-            }
-        } finally {
-            recordManifestWrite(startedAt);
-        }
-    }
-
-    private void writeManifestLocked(List<PartInfo> parts) throws IOException {
-        Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
-                parts, false, null);
-    }
-
-    private void recordManifestWrite(long startedAt) {
-        manifestWriteCount.incrementAndGet();
-        manifestWriteNanos.addAndGet(Math.max(0L, nanoClock.getAsLong() - startedAt));
-    }
-
-    private List<PartInfo> snapshotParts() {
-        synchronized (committedParts) {
-            return new ArrayList<>(committedParts);
-        }
-    }
-
     /**
      * Graceful completion: finalize every lane's open part, commit the consumer manifest, then write
      * the final-commit artifacts: {@code .swath-state.json} (with a null run id — the
@@ -633,7 +576,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             throw new OutputException(sinkName + " writer pool was aborted");
         }
         checkFailure();
-        publishSuccess();
+        publication.publishSuccess();
     }
 
     /** Failure path: discard open (non-finalized) parts; finalized parts + their manifest remain. */
@@ -665,30 +608,6 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             for (Lane lane : lanes) {
                 lane.signalAdmissionWaiters();
             }
-        }
-    }
-
-    /** Publish final metadata once; idempotent concurrent {@link #close()} callers await it. */
-    private void publishSuccess() throws OutputException {
-        if (publicationInitiated.compareAndSet(false, true)) {
-            try {
-                List<PartInfo> snapshot = snapshotParts();
-                writeManifest(snapshot);   // ensure a manifest exists
-                Manifest.writeState(dir, argsHash, null);
-                Manifest.writeSymlink(dir, snapshot);
-                Manifest.writeSuccess(dir);   // LAST — the whole-snapshot completion marker
-                published.complete(null);
-            } catch (Throwable t) {
-                published.completeExceptionally(t);
-            }
-        }
-        try {
-            published.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new OutputException("interrupted publishing " + sinkName + " dataset", e);
-        } catch (ExecutionException e) {
-            throw new OutputException("failed to write manifest", e.getCause());
         }
     }
 

@@ -419,8 +419,10 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   RPO gap). The time/row triggers never fire on an empty (0-row) open part, so
   an idle lane never produces empty parts; both are disabled (`0`) for a
   single-file `-o *.parquet` destination, which must stay exactly one part. On `close()` (footer
-  fsynced) the part is marked `finalized` and added to the manifest, and
-  `durable_cursor` advances for every node whose pages it held. The cadence
+  fsynced), the lane commits its checkpoint callback first; one synchronous publication owner then
+  adds the part to its monotone set and atomically replaces the manifest. It has no queue or thread
+  of its own, so lane failures remain synchronous and shutdown has no second drain protocol.
+  `durable_cursor` advances for every node whose pages the part held. The cadence
   is evaluated on the lane's **own writer thread** — both on write (inside
   `writeBatch`) and, when a rotation interval is set, on an **idle-timeout
   wakeup** (the thread polls its queue with the interval as the timeout, so
@@ -465,6 +467,8 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
   measured envelope emit an operator warning, and `part_digest_*` / `manifest_write_*` in
   `dataset_writer` measure the resulting streamed byte-exact digest work and serialized manifest
   work directly.
+  The same publication owner writes the final state and symlink artifacts and `_SUCCESS` last,
+  after every lane has joined; its terminal state rejects any later part publication.
   **Resume bookkeeping stays out of the consumer manifest**: `args_hash` and
   the checkpoint `run_id` live in the internal `.swath-state.json` (same
   atomic write). For every directory format, swath creates and fsyncs that
