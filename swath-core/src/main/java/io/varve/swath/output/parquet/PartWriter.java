@@ -24,7 +24,7 @@ import org.apache.parquet.schema.MessageType;
  * One rotating Parquet part file (I6): pinned writer settings
  * (ZSTD-3, 64 MB row group, 1 MB page, dictionary on). A part's rows are durable
  * <b>iff</b> it is finalized — {@link #close()} writes the footer and fsyncs the
- * file before the part is recorded in the manifest.
+ * file before the part is recorded in the checkpoint and retained for completion publication.
  */
 public final class PartWriter implements AutoCloseable, DatasetPartWriter {
 
@@ -75,7 +75,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     /**
      * Write the footer, then fsync the file <b>and its parent directory</b> so the part is
      * durable (I6): the bytes and the directory entry that names the new part must both reach
-     * disk before the part can be recorded in the manifest.
+     * disk before the part can be recorded in the checkpoint.
      */
     @Override
     public void close() throws IOException {
@@ -91,8 +91,8 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
      * its open file handle) but deliberately <b>skip the {@code fsync}</b> that
      * {@link #close()} performs: an un-fsynced part is not promised to survive a
      * crash, so we never produce a durably-finalized file that we then intend to
-     * throw away. The part is also never recorded in {@code manifest.json} (the
-     * durability source of truth), so resume ignores any byte that does linger.
+     * throw away. The part is also never recorded in checkpoint {@code part_file}, the resume
+     * durability authority, so resume ignores any byte that does linger.
      * Best-effort: an {@link IOException} from the writer close is swallowed since
      * the file is about to be deleted.
      */

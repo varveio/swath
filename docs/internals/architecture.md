@@ -145,7 +145,7 @@ additional lanes from multiplying queued page batches.
 | `commitPage` acknowledged | Range cursor/status transaction committed. |
 | `splitNode` acknowledged | Parent bound and child insertion committed together under CAS. |
 | Parquet part finalized | Footer fsynced, part recorded, covered node cursors may advance durably. |
-| Manifest replaced | Readers can discover the complete set of finalized parts. |
+| Completion manifest replaced | Readers can discover the complete finalized dataset; `_SUCCESS` follows last. |
 | Sorted publish completes | Final ordered parts and metadata replace the staging result. |
 
 A crash between boundaries may repeat work but must not break the keyspace partition or

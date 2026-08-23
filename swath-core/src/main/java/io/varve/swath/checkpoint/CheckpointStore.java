@@ -131,7 +131,7 @@ public interface CheckpointStore extends AutoCloseable {
     /** I6 (algorithms.md §4.5): record a finalized part + advance {@code durable_cursor}, one txn. */
     void partFinalized(PartFinalize f) throws CheckpointException;
 
-    /** All finalized parts for a run (resume: seed the manifest, discard the rest). */
+    /** All finalized parts for a run (resume: retain these for completion publication, discard the rest). */
     List<PartRef> finalizedParts(long runId) throws CheckpointException;
 
     /**

@@ -99,7 +99,7 @@ final class ResumeParquetCadenceTest {
         return keys;
     }
 
-    /** Mirror the CLI's resume reconciliation: discard non-finalized parts; carry finalized into the manifest. */
+    /** Mirror the CLI's resume reconciliation: discard non-finalized parts; retain finalized for publication. */
     private static List<PartInfo> reconcileResume(SqliteCheckpointStore store, long runId, Path dir)
             throws Exception {
         List<PartRef> finalized = store.finalizedParts(runId);

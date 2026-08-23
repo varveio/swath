@@ -43,15 +43,17 @@ import java.util.function.LongSupplier;
  * occupy a contiguous run of one lane's size-rotated parts (which finalize in
  * order, making the {@code durable_cursor} model sound).
  *
- * <p><b>Publication.</b> A part becomes consumer-visible only after {@link
- * DatasetPartWriter#close()} succeeds; every finalized part is added to the atomic {@code
- * manifest.json}. On {@link #close()} (success) each already-admitted lane batch drains, each
- * lane finalizes its open part, and {@code _SUCCESS} is written last. A concurrent submitter
+ * <p><b>Publication.</b> A part becomes finalized only after {@link DatasetPartWriter#close()} and
+ * the optional checkpoint listener succeed. It is then retained in the publication owner's live
+ * counters for periodic summaries, but no incomplete consumer manifest is emitted. On {@link
+ * #close()} (success) each already-admitted lane batch drains, each lane finalizes its open part,
+ * the complete {@code manifest.json} is written once, and {@code _SUCCESS} is written last. A
+ * concurrent submitter
  * still waiting for a full lane when close begins is rejected rather than admitted into that
  * successful close. On {@link #abort()} (failure) each lane discards its open part. When a
- * durable listener is configured (the Parquet sink), it advances the checkpoint before manifest
- * publication so resume retains only finalized parts. Text datasets deliberately provide no
- * resume contract in this release.
+ * durable listener is configured (the Parquet sink), it advances the checkpoint before the part
+ * enters the completion snapshot, so resume retains only finalized parts. Text datasets
+ * deliberately provide no resume contract in this release.
  *
  * <p>Lanes <b>always drain to the poison sentinel</b> (even after a write
  * failure), so a full lane queue can never deadlock {@link #submit} or shutdown.
@@ -91,8 +93,9 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
 
     /**
      * A bounded snapshot of one writer lane. All durations are elapsed time, not CPU
-     * time: lane work can include encoding, filesystem I/O, checkpoint work, and manifest
-     * serialization. JFR is the authority for sampled CPU attribution.
+     * time: lane work can include encoding, filesystem I/O, and checkpoint work. The one terminal
+     * consumer-manifest write runs after the lanes join. JFR is the authority for sampled CPU
+     * attribution.
      */
     public record LaneStatistics(
             int lane,
@@ -393,8 +396,9 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
      * three places a lane does work between waits on its queue (batch write, idle-cadence rotation,
      * drain-time finalize/discard), so summing the span accounts for the pool's active elapsed time
      * rather than the dispatch that {@code emit} sees. It is not CPU attribution: file I/O, fsync,
-     * checkpoint work, and manifest-lock waits can contribute. Measured on {@link #nanoClock}, the
-     * same monotonic clock the rotation triggers read.
+     * checkpoint work, and other internal waits can contribute. Terminal manifest publication runs
+     * after the lanes join. Measured on {@link #nanoClock}, the same monotonic clock the rotation
+     * triggers read.
      *
      * <p>Swallows anything thrown while recording. This is the only work in the lane loop that is
      * NOT already inside a catch-all, and it is pure observation: letting a metrics/clock failure
@@ -476,10 +480,10 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         try {
             w.close();   // format-owned close completes the part before publication
         } catch (IOException e) {
-            // Finalization failed (e.g. fsync error). The part is NOT in the manifest
-            // and is therefore not durable; delete the half-written file so it cannot
-            // be mistaken for a finalized part and so abort()'s later cleanup isn't
-            // needed (the `joined` latch would skip it). Then surface the failure.
+            // Finalization failed (e.g. fsync error). The part is neither checkpointed nor eligible
+            // for the completion manifest; delete the half-written file so it cannot be mistaken
+            // for a finalized part and so abort()'s later cleanup isn't needed (the `joined` latch
+            // would skip it). Then surface the failure.
             lane.current = null;
             lane.partNodeMaxKey.clear();
             try {
@@ -516,19 +520,18 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         lane.partNodeMaxKey.clear();
         partListener.onFinalized(new PartListener.PartFinalizedEvent(
                 lane.id, relPath, rows, bytes, contributions));
-        // Account the durable part before manifest I/O, preserving failure-run statistics even if
-        // the atomic manifest replacement fails. The checkpoint callback above is still the
-        // exactly-once boundary; the publication owner below retains the part on such a failure.
+        // Account the durable part after the checkpoint callback (the exactly-once boundary).
+        // Periodic JSON summaries read these live counters; consumer publication waits for close().
         observer.recordPart("finalized");
         lane.finalizedBytes += bytes;
         lane.partsFinalized++;
-        // A part finalize (footer fsync + manifest commit) is real forward progress that no
+        // A part finalize (footer fsync + checkpoint commit) is real forward progress that no
         // LISTING page/object counter reflects — a large multi-part non-sort finalize tail
         // (close()'s drainAndJoin() below) can otherwise sit with progressSignal() frozen for
         // longer than the stall window and get falsely aborted (worse: it could force the STUCK
         // exit 75 over what should have been a clean --max-duration exit 0).
         observer.markProgress();
-        publication.publishFinalizedPart(new PartInfo(relPath, lane.id, rows, bytes, md5));
+        publication.recordFinalizedPart(new PartInfo(relPath, lane.id, rows, bytes, md5));
     }
 
     private void discardCurrent(Lane lane) throws IOException {
@@ -579,7 +582,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         publication.publishSuccess();
     }
 
-    /** Failure path: discard open (non-finalized) parts; finalized parts + their manifest remain. */
+    /** Failure path: discard open parts; checkpoint-finalized parts remain unpublished for resume. */
     public void abort() {
         beginShutdown(ShutdownMode.ABORT);
         try {

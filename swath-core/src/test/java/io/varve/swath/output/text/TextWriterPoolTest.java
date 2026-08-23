@@ -249,7 +249,7 @@ final class TextWriterPoolTest {
         assertThat(summary.datasetWriter().plannedHeapBytes()).isNull();
         assertThat(summary.datasetWriter().heapAdmissionApplied()).isNull();
         assertThat(summary.datasetWriter().partDigestCount()).isEqualTo(1L);
-        assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(2L);
+        assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(1L);
         assertThat(summary.datasetWriter().lanes()).extracting(RunSummary.DatasetWriterLane::rowsWritten)
                 .containsExactlyInAnyOrder(1L, 0L);
     }

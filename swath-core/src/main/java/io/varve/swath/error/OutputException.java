@@ -9,9 +9,10 @@ import io.varve.swath.output.DiskFull;
 
 /**
  * Sink write / Parquet failure. The wrapped cause chain classifies a full disk as exit 74;
- * otherwise this exits 1.
+ * otherwise this exits 1. {@link PublicationPendingException} identifies the narrower terminal
+ * dataset-publication failure whose already-durable parts permit a publication-only retry.
  */
-public final class OutputException extends SwathException {
+public sealed class OutputException extends SwathException permits PublicationPendingException {
 
     /**
      * {@code EX_IOERR} (sysexits.h) for the out-of-space case. It is repeated literally because

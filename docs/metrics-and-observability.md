@@ -163,8 +163,10 @@ key samples. Treat it as operational data and redact it before sharing.
 sorted output, which do not construct the shared pool. Its aggregate resource fields report the
 configured writer count, total lane-queue capacity, JVM maximum heap, and—for Parquet—the pinned
 row-group target, its conservative allowance multiplier, and the heap-admission plan. It also reports
-the part-rotation configuration, streamed full-part digest work, and complete-manifest rewrite count/time; the
-manifest duration includes lock wait. The Parquet-only fields are null for text. Its aggregate
+the part-rotation configuration, streamed full-part digest work, and terminal complete-manifest
+write count/time. During listing the manifest count remains zero while periodic JSON summaries read
+the live part/byte counters directly; after successful publication it is normally one. The
+Parquet-only fields are null for text. Its aggregate
 `submit_blocked_*` fields measure full sticky-lane admission waits;
 `head_of_line_blocked_*` is the subset where another lane thread was waiting for work on an empty
 queue when that wait began. The bounded `lanes[]` array reports lane id, queue

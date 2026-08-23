@@ -28,6 +28,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.ProtocolViolationException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.observability.JsonRunSummaryWriter;
@@ -51,7 +52,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * A fatal, non-cancellation error escaping the CLI's engine dispatch (a real {@code
- * ListingException}/{@code OutputException}/{@code CheckpointException}/{@code
+ * ListingException}/{@code OutputException} other than retryable terminal publication/{@code
+ * CheckpointException}/{@code
  * RegionRedirectException}, exhausted retries, etc.) must (a) mark {@code run_meta.status
  * =FAILED} — distinct from the {@code RUNNING} a SIGKILL/interrupt or a graceful {@code
  * --max-duration}/signal cancel leaves behind — and (b) still land a terminal {@code
@@ -176,6 +178,21 @@ final class FatalErrorMarksRunFailedTest {
         })).isInstanceOf(InterruptedException.class);
 
         assertThat(markedFailed).as("an interrupt must leave the run RUNNING, not FAILED").isFalse();
+    }
+
+    /** A retryable terminal-publication failure keeps its checkpoint eligible for publication-only resume. */
+    @Test
+    void publicationPendingExceptionDoesNotMarkTheRunFailed() throws Exception {
+        AtomicBoolean markedFailed = new AtomicBoolean();
+        CheckpointStore store = failingMarkTracker(markedFailed);
+
+        assertThatThrownBy(() -> ListCommand.runEngineGuarded(store, 1L, () -> {
+            throw new PublicationPendingException("manifest write failed", new IOException("disk full"));
+        })).isInstanceOf(PublicationPendingException.class);
+
+        assertThat(markedFailed)
+                .as("durable parts must remain resumable for a publication-only retry")
+                .isFalse();
     }
 
     /**

@@ -6,6 +6,7 @@
 package io.varve.swath.output.dataset;
 
 import io.varve.swath.error.OutputException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.PartInfo;
 import java.io.IOException;
@@ -16,18 +17,17 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
- * Single owner of an unsorted dataset's published part set and root artifacts.
+ * Single owner of an unsorted dataset's finalized part set and root artifacts.
  *
  * <p>Lane threads close and fsync their own parts, compute immutable metadata, and commit the
- * checkpoint before calling {@link #publishFinalizedPart}. This object then serializes the
- * consumer-visible transition: add the part to its monotone in-memory set and atomically replace
- * {@code manifest.json}. It deliberately owns no thread or queue; adding either would create a
- * second failure and shutdown protocol merely to serialize work that already occurs only at part
- * boundaries.
+ * checkpoint before calling {@link #recordFinalizedPart}. This object then adds the part to its
+ * monotone in-memory set. The checkpoint ({@code part_file} + {@code durable_cursor}) is the resume
+ * authority; the consumer manifest is not. Keeping those roles separate lets periodic run-summary
+ * snapshots report the live counters below without publishing an incomplete consumer snapshot.
  *
- * <p>{@link #publishSuccess} is the terminal transition. It rewrites the full manifest, writes the
- * state and symlink artifacts, and writes {@code _SUCCESS} last. Once that transition succeeds or
- * fails, no later part can be published.
+ * <p>{@link #publishSuccess} is the only consumer-publication transition. It writes the full
+ * manifest once, writes the state and symlink artifacts, and writes {@code _SUCCESS} last. Once
+ * that transition succeeds or fails, no later part can be recorded.
  */
 final class DatasetPublication {
     private final Path dir;
@@ -57,31 +57,12 @@ final class DatasetPublication {
                 existingParts.stream().mapToLong(PartInfo::bytes).sum());
     }
 
-    /**
-     * Publish one already-durable, already-checkpointed part.
-     *
-     * <p>The part stays in the owned set if the manifest replacement fails. Its checkpoint record
-     * is already authoritative, so rolling it back here would make a later full publication omit a
-     * committed part. Another lane's later replacement may therefore make this part visible even
-     * though this call failed; the pool still records and surfaces the original failure.
-     */
-    void publishFinalizedPart(PartInfo part) throws IOException {
-        long startedAt = nanoClock.getAsLong();
-        boolean attemptedWrite = false;
-        try {
-            synchronized (this) {
-                ensureAcceptingParts();
-                committedParts.add(part);
-                committedPartCount.incrementAndGet();
-                committedBytes.addAndGet(part.bytes());
-                attemptedWrite = true;
-                writeManifestLocked();
-            }
-        } finally {
-            if (attemptedWrite) {
-                recordManifestWrite(startedAt);
-            }
-        }
+    /** Record one already-durable, already-checkpointed part without publishing an incomplete manifest. */
+    synchronized void recordFinalizedPart(PartInfo part) {
+        ensureAcceptingParts();
+        committedParts.add(part);
+        committedPartCount.incrementAndGet();
+        committedBytes.addAndGet(part.bytes());
     }
 
     /** Publish the whole-snapshot artifacts exactly once; concurrent callers serialize here. */
@@ -136,7 +117,7 @@ final class DatasetPublication {
         }
     }
 
-    /** Caller holds this object's monitor, making every emitted manifest a monotone snapshot. */
+    /** Caller holds this object's monitor; the emitted manifest is the complete committed snapshot. */
     private void writeManifestLocked() throws IOException {
         Manifest.write(dir, bucket, format.manifestFormat(), format.manifestSchema(),
                 committedParts, false, null);
@@ -148,6 +129,6 @@ final class DatasetPublication {
     }
 
     private static OutputException publicationFailure(Throwable failure) {
-        return new OutputException("failed to write manifest", failure);
+        return new PublicationPendingException("failed to publish dataset", failure);
     }
 }

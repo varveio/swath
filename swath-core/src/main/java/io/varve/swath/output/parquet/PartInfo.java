@@ -6,7 +6,7 @@
 package io.varve.swath.output.parquet;
 
 /**
- * A finalized (footer-fsynced) part file recorded in the manifest (I6).
+ * Immutable metadata for a finalized (footer-fsynced) part retained for completion publication (I6).
  *
  * @param path   {@code data/}-prefixed relative path (relative to the dataset root), the canonical
  *               form shared by the consumer manifest {@code files[].key}, the checkpoint

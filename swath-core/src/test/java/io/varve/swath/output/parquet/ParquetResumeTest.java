@@ -25,7 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
  * <p>The leftover is produced exactly as a kill-9 would leave one: a {@link
  * PartWriter} that wrote real rows and was {@link PartWriter#discard() discard}ed —
  * the writer handle is released <b>without</b> the finalizing fsync and the part is
- * never recorded in the manifest, so its rows are not durable and resume must throw
+ * never recorded in the checkpoint, so its rows are not durable and resume must throw
  * it away.
  */
 final class ParquetResumeTest {

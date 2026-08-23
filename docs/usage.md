@@ -49,14 +49,20 @@ TSV and JSONL directory datasets use 2–64 bounded writer lanes (`--text-writer
 default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
 Each compressed part is a complete gzip or Zstandard frame. The dataset publishes a
 manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore
-requires `--checkpoint none`. Counts above four are an expert tuning surface: per-lane queue shares
-shrink and per-lane rotation can multiply small parts and serialized manifest rewrites, so benchmark
-the `dataset_writer` blocked-time, part, digest, and manifest fields before adopting them.
+requires `--checkpoint none`. A failed or timed-out text-dataset run therefore has no manifest or
+`_SUCCESS`; its already-finalized part files are diagnostic leftovers, not a resumable dataset.
+Counts above four are an expert tuning surface: per-lane queue shares
+shrink and per-lane rotation can multiply small parts and final-manifest metadata, so benchmark the
+`dataset_writer` blocked-time, part, digest, and manifest fields before adopting them.
 
 Use a managed Parquet directory when checkpoint/resume matters. Text file destinations
 are published atomically but are not resumable; compressed files are published only
 after their gzip or Zstandard frame finishes. TSV/JSONL directories are bounded,
 parallel, one-shot datasets.
+
+An interrupted or timed-out managed Parquet run has no consumer manifest or `_SUCCESS` until a
+successful resume completes it. Its finalized parts and live/terminal summary metrics may already
+exist, but SQLite remains the resume authority; do not treat those parts as a published dataset.
 
 Do not use `-o inventory.parquet` when you expect one physical Parquet file. In the
 current release that FILE-kind path creates a one-writer, non-resumable dataset directory

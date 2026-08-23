@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.varve.swath.error.OutputException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.output.parquet.PartInfo;
 import java.io.IOException;
@@ -21,23 +21,19 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Concurrency guards for the one owner of consumer-facing dataset publication. These deliberately
- * exercise the coordinator directly, apart from lane scheduling, because a lost manifest update
- * would silently make finalized data unreachable to a consumer.
+ * exercise the coordinator directly, apart from lane scheduling, because the completion manifest
+ * must include every concurrently finalized part while no incomplete manifest leaks mid-run.
  */
 class DatasetPublicationTest {
 
@@ -52,67 +48,48 @@ class DatasetPublicationTest {
     };
 
     @Test
-    void concurrentFinalizesNeverLoseOrRegressPublishedParts(@TempDir Path dir) throws Exception {
+    void concurrentFinalizesAreCountedWithoutPublishingAnIncompleteManifest(@TempDir Path dir)
+            throws Exception {
         int partCount = 24;
         DatasetPublication publication = publication(dir, List.of());
-        publication.publishFinalizedPart(part(0));
 
         CountDownLatch startingLine = new CountDownLatch(1);
-        AtomicBoolean watch = new AtomicBoolean(true);
-        AtomicReference<Throwable> watcherFailure = new AtomicReference<>();
         try (ExecutorService executor = Executors.newFixedThreadPool(partCount)) {
-            Future<?> watcher = executor.submit(() -> {
-                Set<String> lastSeen = Set.of();
-                try {
-                    while (watch.get()) {
-                        Set<String> current = new LinkedHashSet<>(manifestPaths(dir));
-                        if (!current.containsAll(lastSeen)) {
-                            throw new AssertionError("manifest regressed from " + lastSeen + " to " + current);
-                        }
-                        lastSeen = current;
-                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
-                    }
-                } catch (Throwable failure) {
-                    watcherFailure.compareAndSet(null, failure);
-                }
-            });
-
             List<Future<?>> finalizers = new ArrayList<>();
-            for (int i = 1; i < partCount; i++) {
+            for (int i = 0; i < partCount; i++) {
                 int part = i;
                 finalizers.add(executor.submit(() -> {
                     startingLine.await();
-                    publication.publishFinalizedPart(part(part));
+                    publication.recordFinalizedPart(part(part));
                     return null;
                 }));
             }
-            try {
-                startingLine.countDown();
-                for (Future<?> finalizer : finalizers) {
-                    finalizer.get(10, TimeUnit.SECONDS);
-                }
-            } finally {
-                watch.set(false);
+            startingLine.countDown();
+            for (Future<?> finalizer : finalizers) {
+                finalizer.get(10, TimeUnit.SECONDS);
             }
-            watcher.get(10, TimeUnit.SECONDS);
         }
 
-        assertThat(watcherFailure.get()).isNull();
-        assertThat(manifestPaths(dir)).containsExactlyInAnyOrderElementsOf(partPaths(partCount));
+        assertThat(dir.resolve(Manifest.FILE_NAME)).doesNotExist();
         assertThat(publication.committedPartCount()).isEqualTo(partCount);
         assertThat(publication.committedBytes()).isEqualTo(bytesFor(partCount));
-        assertThat(publication.manifestWriteCount()).isEqualTo(partCount);
+        assertThat(publication.manifestWriteCount()).isZero();
+
+        publication.publishSuccess();
+
+        assertThat(manifestPaths(dir)).containsExactlyInAnyOrderElementsOf(partPaths(partCount));
+        assertThat(publication.manifestWriteCount()).isEqualTo(1L);
     }
 
     @Test
     void finalizedPartIsRejectedAfterSuccessWithoutMutatingPublishedArtifacts(@TempDir Path dir)
             throws Exception {
         DatasetPublication publication = publication(dir, List.of());
-        publication.publishFinalizedPart(part(0));
+        publication.recordFinalizedPart(part(0));
         publication.publishSuccess();
         Map<String, byte[]> before = artifacts(dir);
 
-        assertThatThrownBy(() -> publication.publishFinalizedPart(part(1)))
+        assertThatThrownBy(() -> publication.recordFinalizedPart(part(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("after _SUCCESS");
 
@@ -123,14 +100,20 @@ class DatasetPublicationTest {
     }
 
     @Test
-    void existingPartsSeedCountersAndRemainUniqueInFinalManifest(@TempDir Path dir) throws Exception {
+    void existingPartsSeedCountersAndReplaceLegacyPartialManifestAtSuccess(@TempDir Path dir)
+            throws Exception {
         List<PartInfo> existing = List.of(part(2), part(5));
+        Manifest.write(dir, "bucket", FORMAT.manifestFormat(), FORMAT.manifestSchema(),
+                List.of(part(2)), false, null);
         DatasetPublication publication = publication(dir, existing);
 
         assertThat(publication.committedPartCount()).isEqualTo(existing.size());
         assertThat(publication.committedBytes()).isEqualTo(existing.stream().mapToLong(PartInfo::bytes).sum());
 
-        publication.publishFinalizedPart(part(9));
+        publication.recordFinalizedPart(part(9));
+        assertThat(manifestPaths(dir))
+                .as("a legacy incomplete manifest is non-authoritative and is not refreshed mid-run")
+                .containsExactly(part(2).path());
         publication.publishSuccess();
 
         List<String> paths = manifestPaths(dir);
@@ -145,38 +128,42 @@ class DatasetPublicationTest {
         Path notADirectory = dir.resolve("not-a-directory");
         Files.writeString(notADirectory, "not a directory");
         DatasetPublication publication = publication(notADirectory, List.of());
+        publication.recordFinalizedPart(part(0));
 
-        assertThatThrownBy(publication::publishSuccess).isInstanceOf(OutputException.class);
-        assertThatThrownBy(() -> publication.publishFinalizedPart(part(0)))
+        assertThatThrownBy(publication::publishSuccess).isInstanceOf(PublicationPendingException.class);
+        assertThat(publication.committedPartCount()).isEqualTo(1L);
+        assertThatThrownBy(() -> publication.recordFinalizedPart(part(1)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("publication failed");
     }
 
     @Test
-    void failedPartManifestWriteRetainsThePartAndAllowsALaterMonotoneRewrite(@TempDir Path dir)
+    void failedCompletionManifestRetainsPartsForANewResumePublication(@TempDir Path dir)
             throws Exception {
         DatasetPublication publication = publication(dir, List.of());
+        publication.recordFinalizedPart(part(0));
+        publication.recordFinalizedPart(part(1));
         Path blockedTempFile = dir.resolve(Manifest.FILE_NAME + ".tmp");
         Files.createDirectory(blockedTempFile);
 
-        assertThatThrownBy(() -> publication.publishFinalizedPart(part(0)))
-                .isInstanceOf(IOException.class);
-        assertThat(publication.committedPartCount()).isEqualTo(1);
-        assertThat(publication.committedBytes()).isEqualTo(part(0).bytes());
+        assertThatThrownBy(publication::publishSuccess).isInstanceOf(PublicationPendingException.class);
+        assertThat(publication.committedPartCount()).isEqualTo(2L);
+        assertThat(publication.committedBytes()).isEqualTo(part(0).bytes() + part(1).bytes());
+        assertThat(publication.manifestWriteCount()).isEqualTo(1L);
+        assertThat(dir.resolve(Manifest.FILE_NAME)).doesNotExist();
 
         Files.delete(blockedTempFile);
-        publication.publishFinalizedPart(part(1));
+        DatasetPublication resumed = publication(dir, List.of(part(0), part(1)));
+        resumed.publishSuccess();
 
         assertThat(manifestPaths(dir)).containsExactly(part(0).path(), part(1).path());
-        assertThat(publication.manifestWriteCount())
-                .as("the failed replacement and its successful retry are both measured")
-                .isEqualTo(2);
+        assertThat(resumed.manifestWriteCount()).isEqualTo(1L);
     }
 
     @Test
     void concurrentSuccessPublishesOneTerminalSnapshot(@TempDir Path dir) throws Exception {
         DatasetPublication publication = publication(dir, List.of());
-        publication.publishFinalizedPart(part(0));
+        publication.recordFinalizedPart(part(0));
         CountDownLatch startingLine = new CountDownLatch(1);
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
@@ -198,8 +185,8 @@ class DatasetPublicationTest {
         assertThat(dir.resolve(Manifest.SUCCESS_FILE_NAME)).exists();
         assertThat(manifestPaths(dir)).containsExactly(part(0).path());
         assertThat(publication.manifestWriteCount())
-                .as("one finalize and exactly one terminal snapshot write")
-                .isEqualTo(2);
+                .as("concurrent success calls still emit exactly one terminal snapshot")
+                .isEqualTo(1L);
     }
 
     private static DatasetPublication publication(Path dir, List<PartInfo> existing) {

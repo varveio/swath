@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  *       (bool) + {@code sortKey} (non-null iff {@code sorted}), {@code files[{key, size,
  *       MD5checksum, rowCount, minKey?, maxKey?}]} — {@code minKey}/{@code maxKey} (plain UTF-8 key
  *       text, not base64/hex) present only when {@code sorted}), written atomically ({@code .tmp},
- *       fsync, rename) on each finalize and at run end;</li>
+ *       fsync, rename) exactly once at successful consumer publication;</li>
  *   <li>{@code .swath-state.json} — the INTERNAL resume identity ({@code args_hash}, {@code run_id}),
  *       NOT consumer-facing;</li>
  *   <li>{@code _SUCCESS} — an empty whole-snapshot completion marker written LAST, only on success;</li>

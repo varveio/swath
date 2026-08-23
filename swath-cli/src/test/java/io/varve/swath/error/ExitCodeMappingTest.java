@@ -27,6 +27,7 @@ class ExitCodeMappingTest {
         assertThat(new ListingException("x").exitCode()).isEqualTo(1);
         assertThat(ThrottleException.slowDown("x").exitCode()).isEqualTo(1);
         assertThat(new OutputException("x").exitCode()).isEqualTo(1);
+        assertThat(new PublicationPendingException("x", new IOException("x")).exitCode()).isEqualTo(1);
         assertThat(new CheckpointException("x").exitCode()).isEqualTo(1);
     }
 
@@ -40,6 +41,7 @@ class ExitCodeMappingTest {
                 new ListingException("x"),
                 ThrottleException.slowDown("x"),
                 new OutputException("x"),
+                new PublicationPendingException("x", new IOException("x")),
                 new CheckpointException("x"));
         for (SwathException e : all) {
             assertThat(ExitCodes.forThrowable(e)).isEqualTo(e.exitCode());

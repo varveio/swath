@@ -75,7 +75,7 @@ final class ResumeParquetTest {
         return keys;
     }
 
-    /** Mirror the CLI's resume reconciliation: discard non-finalized parts; carry finalized into the manifest. */
+    /** Mirror the CLI's resume reconciliation: discard non-finalized parts; carry finalized to publication. */
     private static List<PartInfo> reconcileResume(SqliteCheckpointStore store, long runId, Path dir)
             throws Exception {
         List<PartRef> finalized = store.finalizedParts(runId);
@@ -90,7 +90,7 @@ final class ResumeParquetTest {
      * Drop a real {@code part-*.parquet} on disk the way a kill-9 leaves one: a
      * {@link PartWriter} that wrote rows and was {@link PartWriter#discard() discard}ed,
      * so the handle is released <b>without</b> the finalizing fsync and the part is never
-     * recorded in the manifest. Models the open part the graceful {@code pool.abort()}
+     * recorded in the checkpoint. Models the open part the graceful {@code pool.abort()}
      * never got to delete.
      */
     private static void dropNonFinalizedPart(Path path, List<byte[]> keys) throws Exception {
@@ -193,6 +193,9 @@ final class ResumeParquetTest {
             // At least one part finalized before the crash ⇒ durable_cursor advanced.
             List<PartRef> finalized = store.finalizedParts(run.id());
             assertThat(finalized).as("a part rotated + finalized before the kill").isNotEmpty();
+            assertThat(DatasetLayout.of(dir).manifest())
+                    .as("a crash can retain checkpoint-finalized parts without publishing a consumer snapshot")
+                    .doesNotExist();
             Node before = store.loadResumable(run.id(), true).getFirst();
             assertThat(before.durableCursor()).as("durable_cursor advanced").isNotNull();
 
@@ -200,6 +203,9 @@ final class ResumeParquetTest {
             Node resumed = store.loadResumable(run.id(), true).getFirst();
             new ListRunner().runToParquetCheckpointed(
                     ctx, clean2, dir, spec(256), store, run.id(), resumed, existing);
+            assertThat(DatasetLayout.of(dir).manifest())
+                    .as("resume publishes one complete manifest after the durable tail finishes")
+                    .exists();
         }
 
         List<String> union = allPartKeys(dir);
