@@ -18,9 +18,11 @@ property of MinIO or S3-compatible servers in general.
 **Why real S3 is safe.** The AWS SDK for Java always installs a service response interceptor
 (`DecodeUrlEncodedResponseInterceptor`) that strict-decodes those echoed fields with
 `java.net.URLDecoder` in its response-interceptor chain (this happens regardless of
-`encoding-type`, since registration is unconditional, not driven by the request). It runs after
-swath's client-level streaming response interceptor, which therefore preserves the wire-encoded
-fields for this one canonical decoding pass. Against real S3, the echoed value is always correctly
+`encoding-type`, since registration is unconditional, not driven by the request). Public SDK
+responses still use that ordering. Production `S3PageFetcher` attaches a request-scoped direct-page
+carrier; that path applies the SDK's own `SdkHttpUtils.urlDecode` to key/common-prefix fields before
+creating `KeyBytes`, preserving the same `URLDecoder` semantics without routing the page through the
+SDK response model. Against real S3, the echoed value is always correctly
 percent-encoded, so a well-formed request value
 (including one containing `%`) round-trips through encode-on-the-way-out /
 decode-on-the-way-back losslessly.

@@ -11,7 +11,10 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.store.ListPage;
+import io.varve.swath.store.PageRequest;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -187,6 +190,57 @@ class S3ClientFactoryTest {
                         .counter()
                         .count())
                 .isEqualTo(1.0);
+    }
+
+    @Test
+    void productionFetcherUsesTheDirectPageAndPreservesLastModifiedText() throws Exception {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+                  <EncodingType>url</EncodingType>
+                  <IsTruncated>false</IsTruncated>
+                  <KeyCount>1</KeyCount>
+                  <Contents>
+                    <Key>folder%2Braw%2525%2Fkey%20one</Key>
+                    <LastModified>2026-08-24T12:34:56+0000</LastModified>
+                    <ETag>&quot;etag-value&quot;</ETag>
+                    <Size>123</Size>
+                    <StorageClass>STANDARD</StorageClass>
+                  </Contents>
+                </ListBucketResult>
+                """;
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        try {
+            server.createContext("/", exchange -> respond(exchange, 200, xml, "x-amz-request-id", "request-id"));
+            server.start();
+
+            URI endpoint = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
+            try (S3Client client = S3ClientFactory.create(testConfig(Region.US_EAST_1, endpoint), metrics)) {
+                S3PageFetcher fetcher = new S3PageFetcher(
+                        client, "bucket", S3PageFetcherConfig.DEFAULT.withMetrics(metrics));
+                ListPage page = fetcher.fetchPage(PageRequest.objects(null, null, 1000));
+
+                assertThat(page.entries()).singleElement().isInstanceOfSatisfying(ObjectEntry.class, object -> {
+                    assertThat(object.key().asString()).isEqualTo("folder+raw%25/key one");
+                    assertThat(object.lastModifiedText()).isEqualTo("2026-08-24T12:34:56+0000");
+                });
+            }
+        } finally {
+            server.stop(0);
+            registry.close();
+        }
+
+        assertThat(registry.get("swath.steal_reason")
+                        .tags("outcome", "S3_RESPONSE", "reason", "direct_page")
+                        .counter()
+                        .count())
+                .isEqualTo(1.0);
+        assertThat(registry.find("swath.steal_reason")
+                        .tags("outcome", "S3_RESPONSE", "reason", "streaming_xml")
+                        .counters())
+                .isEmpty();
     }
 
     @Test

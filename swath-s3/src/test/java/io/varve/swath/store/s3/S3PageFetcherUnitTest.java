@@ -129,7 +129,8 @@ class S3PageFetcherUnitTest {
 
         new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("no override set on the request by default").isEmpty();
+                .as("the direct-page carrier does not change the default attempt timeout")
+                .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout()).isEmpty());
 
         // Level 1 on a scan-class call (worker page, 10s base) -> 10s * 2^1 = 20s.
         PageRequest escalated = PageRequest.objects(null, null, 1000)

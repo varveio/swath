@@ -55,7 +55,7 @@ public final class Utf8TsvFormatter {
             case ObjectEntry object -> {
                 appendNonNegativeLong(object.size());
                 appendByte('\t');
-                appendAscii(Fields.isoMicros(object.lastModifiedEpochMicros()));
+                appendText(object.lastModifiedText());
                 appendByte('\t');
                 appendText(Fields.orEmpty(object.etag()));
                 appendByte('\t');
@@ -65,7 +65,7 @@ public final class Utf8TsvFormatter {
             }
             case DeleteMarkerEntry marker -> {
                 appendByte('\t');
-                appendAscii(Fields.isoMicros(marker.lastModifiedEpochMicros()));
+                appendText(marker.lastModifiedText());
                 appendByte('\t');
                 appendByte('\t');
                 appendByte('\t');

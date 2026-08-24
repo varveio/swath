@@ -87,8 +87,8 @@ class S3PageFetcherProbeAttemptTimeoutTest {
         assertThat(S3PageFetcher.callClass(structureProbe)).isEqualTo(RunMetrics.CALL_CLASS_STRUCTURE_PROBE);
         assertThat(client.lastRequest().overrideConfiguration())
                 .as("a delimiter=/ structure probe is scan-class: it keeps the 10 s client-level budget "
-                        + "with NO per-request override, exactly like a worker page")
-                .isEmpty();
+                        + "with no per-request TIMEOUT override, exactly like a worker page")
+                .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout()).isEmpty());
     }
 
     @Test
@@ -101,9 +101,9 @@ class S3PageFetcherProbeAttemptTimeoutTest {
 
         assertThat(S3PageFetcher.callClass(workerPage)).isEqualTo(RunMetrics.CALL_CLASS_WORKER_PAGE);
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("a worker page keeps the 10 s client-level budget -- no per-request override "
-                        + "(unchanged from today; the probe knob must not touch worker pages)")
-                .isEmpty();
+                .as("a worker page keeps the 10 s client-level budget -- the direct-page carrier "
+                        + "must not add a per-request timeout")
+                .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout()).isEmpty());
     }
 
     /**

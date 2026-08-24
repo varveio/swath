@@ -5,6 +5,9 @@
  */
 package io.varve.swath.store.s3;
 
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -31,22 +34,25 @@ import software.amazon.awssdk.core.interceptor.ExecutionAttribute;
 import software.amazon.awssdk.core.interceptor.ExecutionAttributes;
 import software.amazon.awssdk.core.interceptor.ExecutionInterceptor;
 import software.amazon.awssdk.services.s3.model.CommonPrefix;
+import software.amazon.awssdk.services.s3.model.EncodingType;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.Owner;
 import software.amazon.awssdk.services.s3.model.RestoreStatus;
 import software.amazon.awssdk.services.s3.model.S3Object;
 import software.amazon.awssdk.utils.DateUtils;
+import software.amazon.awssdk.utils.http.SdkHttpUtils;
 
 /**
- * Streams successful {@code ListObjectsV2} XML into the SDK response model instead of letting the
- * SDK first materialize its generic {@code XmlElement} tree.
+ * Streams successful {@code ListObjectsV2} XML without letting the SDK first materialize its
+ * generic {@code XmlElement} tree.
  *
  * <p>The SDK still owns request marshalling, HTTP, authentication, timeouts, retry decisions,
- * headers, error-body unmarshalling and the public response model. Only a successful
- * {@code ListObjectsV2} body takes this path. The original body is replaced with a minimal valid
- * result for the generated unmarshaller; {@link #modifyResponse} then overlays the values parsed
- * here on that response, preserving its HTTP metadata and header-derived fields.
+ * headers and error-body unmarshalling. Production {@link S3PageFetcher} calls attach a
+ * request-owned carrier populated directly with swath's page model; other callers receive the
+ * complete public SDK response model through {@link #modifyResponse}. In both cases the original
+ * body is replaced with a minimal valid result for the generated unmarshaller, preserving HTTP
+ * metadata and header-derived fields without a response sidecar map.
  */
 final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
 
@@ -55,6 +61,8 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
             .getBytes(StandardCharsets.UTF_8);
     private static final ExecutionAttribute<ParsedResponse> PARSED_RESPONSE =
             new ExecutionAttribute<>(StreamingListObjectsV2Interceptor.class.getName() + ".parsedResponse");
+    static final ExecutionAttribute<DirectPageCarrier> DIRECT_PAGE_CARRIER =
+            new ExecutionAttribute<>(StreamingListObjectsV2Interceptor.class.getName() + ".directPageCarrier");
     private static final ThreadLocal<XMLInputFactory> XML_FACTORIES =
             ThreadLocal.withInitial(StreamingListObjectsV2Interceptor::newXmlInputFactory);
     private static final ThreadLocal<XMLOutputFactory> XML_OUTPUT_FACTORIES =
@@ -77,22 +85,31 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
         // ExecutionAttributes live for the whole SDK call, including attempts. Never let a parsed
         // response from an earlier attempt overlay a later response that bypasses this path.
         executionAttributes.putAttribute(PARSED_RESPONSE, null);
+        DirectPageCarrier directCarrier = executionAttributes.getAttribute(DIRECT_PAGE_CARRIER);
+        if (directCarrier != null) {
+            directCarrier.clear();
+        }
         if (!isSuccessful(context.httpResponse().statusCode())
                 || responseBody.isEmpty()) {
             return responseBody;
         }
 
         try (InputStream body = responseBody.orElseThrow()) {
-            ParsedResponse parsed = parse(body, listRequest.maxKeys());
+            ParsedResponse parsed = parse(body, listRequest.maxKeys(), directCarrier == null);
             if (parsed.sdkErrorBody != null) {
                 if (metrics != null) {
                     metrics.recordStealReason("S3_RESPONSE", "sdk_error_in_success");
                 }
                 return Optional.of(new ByteArrayInputStream(parsed.sdkErrorBody));
             }
-            executionAttributes.putAttribute(PARSED_RESPONSE, parsed);
+            if (directCarrier == null) {
+                executionAttributes.putAttribute(PARSED_RESPONSE, parsed);
+            } else {
+                directCarrier.complete(parsed.toDirectPage());
+            }
             if (metrics != null) {
-                metrics.recordStealReason("S3_RESPONSE", "streaming_xml");
+                metrics.recordStealReason("S3_RESPONSE",
+                        directCarrier == null ? "streaming_xml" : "direct_page");
             }
             return Optional.of(new ByteArrayInputStream(EMPTY_RESULT));
         } catch (IOException | XMLStreamException | RuntimeException e) {
@@ -116,6 +133,12 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
     }
 
     static ParsedResponse parse(InputStream input, Integer requestedMaxKeys) throws XMLStreamException {
+        return parse(input, requestedMaxKeys, true);
+    }
+
+    private static ParsedResponse parse(
+            InputStream input, Integer requestedMaxKeys, boolean buildSdkTimestamps)
+            throws XMLStreamException {
         int expectedEntries = requestedMaxKeys == null ? 0 : Math.clamp(requestedMaxKeys, 0, 1_000);
         XMLStreamReader reader = XML_FACTORIES.get().createXMLStreamReader(input);
         try {
@@ -139,7 +162,7 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 }
                 switch (reader.getLocalName()) {
                     case "IsTruncated" -> parsed.isTruncated = parseBoolean(reader);
-                    case "Contents" -> parsed.addContent(parseObject(reader));
+                    case "Contents" -> parsed.addContent(parseObject(reader, buildSdkTimestamps));
                     case "Name" -> parsed.name = reader.getElementText();
                     case "Prefix" -> parsed.prefix = reader.getElementText();
                     case "Delimiter" -> parsed.delimiter = reader.getElementText();
@@ -162,23 +185,30 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
         }
     }
 
-    private static S3Object parseObject(XMLStreamReader reader) throws XMLStreamException {
+    private static ParsedObject parseObject(XMLStreamReader reader, boolean buildSdkTimestamps)
+            throws XMLStreamException {
         S3Object.Builder object = S3Object.builder();
         List<String> checksums = null;
+        String lastModified = null;
         while (reader.hasNext()) {
             int event = reader.next();
             if (event == XMLStreamConstants.END_ELEMENT && "Contents".equals(reader.getLocalName())) {
                 if (checksums != null) {
                     object.checksumAlgorithmWithStrings(checksums);
                 }
-                return object.build();
+                return new ParsedObject(object.build(), lastModified);
             }
             if (event != XMLStreamConstants.START_ELEMENT) {
                 continue;
             }
             switch (reader.getLocalName()) {
                 case "Key" -> object.key(reader.getElementText());
-                case "LastModified" -> object.lastModified(parseInstant(reader));
+                case "LastModified" -> {
+                    lastModified = reader.getElementText();
+                    if (buildSdkTimestamps) {
+                        object.lastModified(parseInstantValue(lastModified));
+                    }
+                }
                 case "ETag" -> object.eTag(reader.getElementText());
                 case "ChecksumAlgorithm" -> {
                     if (checksums == null) {
@@ -190,7 +220,13 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 case "Size" -> object.size(parseLong(reader));
                 case "StorageClass" -> object.storageClass(reader.getElementText());
                 case "Owner" -> object.owner(parseOwner(reader));
-                case "RestoreStatus" -> object.restoreStatus(parseRestoreStatus(reader));
+                case "RestoreStatus" -> {
+                    if (buildSdkTimestamps) {
+                        object.restoreStatus(parseRestoreStatus(reader));
+                    } else {
+                        skipElement(reader);
+                    }
+                }
                 default -> skipElement(reader);
             }
         }
@@ -444,16 +480,19 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
         private String nextContinuationToken;
         private String startAfter;
         private byte[] sdkErrorBody;
+        private List<String> rawLastModified;
 
         private ParsedResponse(int expectedEntries) {
             this.expectedEntries = expectedEntries;
         }
 
-        private void addContent(S3Object object) {
+        private void addContent(ParsedObject parsedObject) {
             if (contents == null) {
                 contents = new ArrayList<>(expectedEntries);
+                rawLastModified = new ArrayList<>(expectedEntries);
             }
-            contents.add(object);
+            contents.add(parsedObject.object());
+            rawLastModified.add(parsedObject.lastModified());
         }
 
         private void addCommonPrefix(CommonPrefix commonPrefix) {
@@ -486,6 +525,75 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 builder.commonPrefixes(commonPrefixes);
             }
             return builder.build();
+        }
+
+        private DirectPage toDirectPage() {
+            boolean decode = EncodingType.URL.toString().equals(encodingType);
+            List<ListEntry> entries = contents == null
+                    ? List.of()
+                    : new ArrayList<>(contents.size());
+            if (contents != null) {
+                for (int i = 0; i < contents.size(); i++) {
+                    S3Object object = contents.get(i);
+                    String key = decode ? SdkHttpUtils.urlDecode(object.key()) : object.key();
+                    String checksumAlgorithm = object.hasChecksumAlgorithm()
+                            && !object.checksumAlgorithmAsStrings().isEmpty()
+                            ? object.checksumAlgorithmAsStrings().getFirst()
+                            : null;
+                    String checksumType = object.checksumTypeAsString();
+                    entries.add(new ObjectEntry(
+                            KeyBytes.of(key.getBytes(StandardCharsets.UTF_8)),
+                            object.size() != null ? object.size() : 0L,
+                            rawLastModified.get(i),
+                            S3PageFetcher.stripEtagQuotes(object.eTag()),
+                            object.storageClassAsString(),
+                            null,
+                            true,
+                            object.owner() == null ? null : object.owner().id(),
+                            object.owner() == null ? null : object.owner().displayName(),
+                            checksumAlgorithm,
+                            checksumType == null || checksumType.isBlank() ? null : checksumType));
+                }
+            }
+            List<KeyBytes> prefixes = commonPrefixes == null
+                    ? List.of()
+                    : new ArrayList<>(commonPrefixes.size());
+            if (commonPrefixes != null) {
+                for (CommonPrefix commonPrefix : commonPrefixes) {
+                    String prefix = decode
+                            ? SdkHttpUtils.urlDecode(commonPrefix.prefix())
+                            : commonPrefix.prefix();
+                    prefixes.add(KeyBytes.of(prefix.getBytes(StandardCharsets.UTF_8)));
+                }
+            }
+            return new DirectPage(entries, prefixes, Boolean.TRUE.equals(isTruncated), nextContinuationToken);
+        }
+    }
+
+    private record ParsedObject(S3Object object, String lastModified) {
+    }
+
+    record DirectPage(
+            List<ListEntry> entries,
+            List<KeyBytes> commonPrefixes,
+            boolean truncated,
+            String nextContinuationToken
+    ) {
+    }
+
+    static final class DirectPageCarrier {
+        private volatile DirectPage page;
+
+        private void clear() {
+            page = null;
+        }
+
+        private void complete(DirectPage page) {
+            this.page = page;
+        }
+
+        DirectPage page() {
+            return page;
         }
     }
 }

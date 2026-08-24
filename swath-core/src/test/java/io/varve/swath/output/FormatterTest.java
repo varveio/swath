@@ -125,6 +125,39 @@ class FormatterTest {
     }
 
     @Test
+    void textFormatsPreserveTheObjectStoreTimestampInsteadOfCanonicalizingIt() throws IOException {
+        ObjectEntry entry = new ObjectEntry(
+                KeyBytes.ofUtf8("key"), 1L, "2026-08-24T12:34:56+0000",
+                null, "STANDARD", null, true, null, null, null, null);
+
+        StringWriter tsv = new StringWriter();
+        try (TsvFormatter formatter = new TsvFormatter(tsv, true)) {
+            formatter.write(entry);
+        }
+        assertThat(tsv.toString()).contains("\t2026-08-24T12:34:56+0000\t");
+
+        StringWriter jsonl = new StringWriter();
+        try (JsonlFormatter formatter = new JsonlFormatter(jsonl)) {
+            formatter.write(entry);
+        }
+        assertThat(jsonl.toString()).contains("\"last_modified\":\"2026-08-24T12:34:56+0000\"");
+    }
+
+    @Test
+    void alignedEscapesControlCharactersInRawObjectStoreTimestamp() throws IOException {
+        ObjectEntry entry = new ObjectEntry(
+                KeyBytes.ofUtf8("key"), 1L, "2026-08-24T12:34:56\u001b[31mZ",
+                null, "STANDARD", null, true, null, null, null, null);
+
+        StringWriter output = new StringWriter();
+        try (AlignedFormatter formatter = new AlignedFormatter(output, true)) {
+            formatter.write(entry);
+        }
+
+        assertThat(output.toString()).contains("\\x1b[31mZ").doesNotContain("\u001b");
+    }
+
+    @Test
     void alignedRightJustifiesSizeAndShowsKey() throws IOException {
         StringWriter sw = new StringWriter();
         try (AlignedFormatter f = new AlignedFormatter(sw, true)) {

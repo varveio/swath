@@ -70,7 +70,7 @@ public final class KeyBytes implements Comparable<KeyBytes> {
 public sealed interface ListEntry permits ObjectEntry, CommonPrefixEntry, DeleteMarkerEntry {
     KeyBytes key();
 }
-public record ObjectEntry(KeyBytes key, long size, long lastModifiedEpochMicros,
+public record ObjectEntry(KeyBytes key, long size, String lastModifiedText,
                           String etag, String storageClass, String versionId /*nullable*/,
                           boolean isLatest, String ownerId /*nullable*/,
                           String ownerDisplayName /*nullable*/,
@@ -78,8 +78,18 @@ public record ObjectEntry(KeyBytes key, long size, long lastModifiedEpochMicros,
                           String checksumType /*nullable*/) implements ListEntry {}
 public record CommonPrefixEntry(KeyBytes key) implements ListEntry {}   // key = the prefix
 public record DeleteMarkerEntry(KeyBytes key, String versionId, boolean isLatest,
-                                long lastModifiedEpochMicros, String ownerId) implements ListEntry {}
+                                String lastModifiedText, String ownerId) implements ListEntry {}
 ```
+
+`lastModifiedText` preserves the object store's XML text as the primary representation. Direct,
+unsorted text sinks write that value without parsing or canonicalizing it. Typed consumers call
+`lastModifiedEpochMicros()` explicitly: the mtime filter, the current Parquet timestamp writer,
+and sorted spill encoding. The current sorted spill format therefore canonicalizes timestamp text;
+preserving it through sorted output requires a separately versioned spill change. Entries supplied
+by typed stores/fixtures retain the compatibility
+constructor that starts from epoch microseconds. Thus an ordinary unsorted TSV/JSONL listing does
+not pay a timestamp parse-and-format round trip, while the shipped Parquet schema below remains
+unchanged until the separately benchmarked string-schema decision is made.
 
 Emission rules:
 - **Objects** are always emitted.
@@ -361,7 +371,9 @@ State machine: `PENDING → IN_PROGRESS` (lease, bump generation) `→ COMPLETED
 ## 4. Parquet output schema — **canonical superset + ETag rule**
 
 One `MessageType`, used by every parallel writer. Logical types per Parquet
-spec; timestamps `INT64` `TIMESTAMP(MICROS, UTC)`.
+spec; timestamps `INT64` `TIMESTAMP(MICROS, UTC)`. The source listing model preserves raw
+last-modified text, so this sink performs the timestamp parse lazily while writing; text sinks do
+not parse it.
 
 | Column | Physical / logical | Null? | Notes |
 | --- | --- | --- | --- |

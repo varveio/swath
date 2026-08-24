@@ -42,11 +42,11 @@ public final class TsvFormatter implements EntryFormatter {
         sb.append(text(e.key().asString())).append('\t');
         switch (e) {
             case ObjectEntry o -> sb.append(o.size()).append('\t')
-                    .append(Fields.isoMicros(o.lastModifiedEpochMicros())).append('\t')
+                    .append(text(o.lastModifiedText())).append('\t')
                     .append(text(Fields.orEmpty(o.etag()))).append('\t')
                     .append(text(Fields.orEmpty(o.storageClass())));
             case DeleteMarkerEntry d -> sb.append('\t')
-                    .append(Fields.isoMicros(d.lastModifiedEpochMicros())).append('\t')
+                    .append(text(d.lastModifiedText())).append('\t')
                     .append('\t');
             case CommonPrefixEntry ignored -> sb.append('\t').append('\t').append('\t');
         }
