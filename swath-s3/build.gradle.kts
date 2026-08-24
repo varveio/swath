@@ -21,6 +21,10 @@ dependencies {
     // awssdk.s3, above); `ApacheHttpClient` is only the factory-body implementation, not exposed.
     // Runtime consumers still get it via runtimeElements.
     implementation(libs.awssdk.apache.client)
+    // Hadoop contributes an old Woodstox transitively. The S3 response interceptor uses the
+    // process StAX provider, so pin the maintained parser explicitly on this module's runtime
+    // surface instead of letting an unrelated Parquet dependency select it.
+    runtimeOnly(libs.woodstox.core)
     // Bundle aws-sdk `sts` so the default credential chain's reflectively-loaded
     // WebIdentityTokenFileCredentialsProvider resolves AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE
     // (OIDC / GKE/EKS workload identity). runtimeOnly: no compile-time reference (loaded reflectively).

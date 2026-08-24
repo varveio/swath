@@ -22,7 +22,7 @@ resources.
 - `com.fasterxml.jackson.core:jackson-annotations:2.12.7` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-core:2.12.7` — Apache License, Version 2.0
 - `com.fasterxml.jackson.core:jackson-databind:2.12.7.1` — Apache License, Version 2.0
-- `com.fasterxml.woodstox:woodstox-core:5.4.0` — Apache License, Version 2.0
+- `com.fasterxml.woodstox:woodstox-core:7.2.2` — Apache License, Version 2.0
 - `com.github.luben:zstd-jni:1.5.6-9` — The 2-Clause BSD License
 - `com.google.code.findbugs:jsr305:3.0.2` — Apache License, Version 2.0
 - `com.google.code.gson:gson:2.9.0` — Apache License, Version 2.0
@@ -83,7 +83,7 @@ resources.
 - `org.checkerframework:checker-qual:2.5.2` — MIT License
 - `org.codehaus.jettison:jettison:1.5.4` — Apache License, Version 2.0
 - `org.codehaus.mojo:animal-sniffer-annotations:1.17` — Apache License, Version 2.0; MIT License
-- `org.codehaus.woodstox:stax2-api:4.2.1` — Apache License, Version 2.0; The 2-Clause BSD License
+- `org.codehaus.woodstox:stax2-api:4.3.0` — Apache License, Version 2.0; The 2-Clause BSD License
 - `org.hdrhistogram:HdrHistogram:2.2.2` — Creative Commons Legal Code; PUBLIC DOMAIN; The 2-Clause BSD License
 - `org.jline:jline-terminal:3.30.16` — Apache License, Version 2.0; The 3-Clause BSD License
 - `org.jline:jline-terminal-ffm:3.30.16` — The 3-Clause BSD License
