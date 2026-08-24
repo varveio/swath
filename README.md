@@ -67,7 +67,8 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
 
 The recorded run made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around
 1.7 GB RSS. Read the [request-cost guidance](docs/operating.md#request-cost) before
-reproducing it.
+reproducing it. `--concurrency` is an adaptive ceiling rather than a fixed request count;
+see [Choosing concurrency](docs/configuration.md#choosing-concurrency) before raising it.
 
 For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
 credentials into the container. Docker does not automatically inherit a host AWS profile;

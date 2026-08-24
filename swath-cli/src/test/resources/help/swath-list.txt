@@ -70,7 +70,8 @@ Connection:
                              How often to re-run --bearer-token-command for a
                                fresh token (default: 45m). Size it comfortably
                                under the token source's real expiry.
-      --concurrency=N        Maximum concurrent listing requests (default: 64).
+      --concurrency=N        AIMD ceiling for concurrent listing requests
+                               (default: 64).
       --endpoint-url=URL     Custom S3 endpoint (LocalStack/MinIO).
       --fetch-owner          Request object owner fields from S3.
       --[no-]force-path-style

@@ -47,6 +47,30 @@ Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 swath echoes the resolved format, destination kind, compression, and destination so the
 effective choice is visible before listing begins.
 
+<a id="choosing-concurrency"></a>
+
+## Choosing `--concurrency`
+
+`--concurrency` is the maximum listing width (`Tmax`), not a fixed request count and not
+a throughput target. The live AIMD target starts at 4, grows while the endpoint is healthy,
+and reduces on explicit store backpressure (503/5xx) or a sustained, progress-starved worker
+timeout storm. Successful-request latency inflation damps further growth but does not reduce
+an already-high target.
+
+That distinction matters on low-latency or replay endpoints: a very high ceiling can create
+queueing and consume more CPU, heap, connections, and server resources without increasing
+keys per second. Start with the default 64 (or a measured 128 for a known large workload), then
+increase in repeated matched runs. Compare `listing_duration_ms` and the report trajectory's
+`worker_keys_fetched_per_sec`, `worker_pages_per_sec`, `worker_latency_mean_ms`, `in_flight`,
+and `aimd_target_*` fields. Choose the smallest ceiling on the throughput plateau; do not use
+one short prefix or one replay latency as a universal S3 setting. Real S3's higher latency may
+need a larger ceiling than a local replay, and AIMD will still adapt downward when S3 emits an
+actual stress signal.
+
+Output can be the bottleneck independently of listing width. Use `--format discard` only for
+diagnostic listing-engine measurements; validate the chosen ceiling again with the production
+output format and destination.
+
 ## Precedence
 
 An explicit CLI option wins over an environment value. AWS SDK environment values win
