@@ -166,6 +166,21 @@ class S3PageFetcherUnitTest {
         assertThat(entry.checksumType()).isEqualTo("FULL_OBJECT");
     }
 
+    @Test
+    void preservesAnUnknownChecksumAlgorithmAsTheRawSdkString() throws Exception {
+        S3Object object = S3Object.builder()
+                .key("k")
+                .checksumAlgorithmWithStrings("FUTURE_CHECKSUM")
+                .build();
+        S3Client client = FakeS3Client.respondingWith(
+                ListObjectsV2Response.builder().isTruncated(false).contents(object).build());
+
+        ListPage page = new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
+
+        ObjectEntry entry = (ObjectEntry) page.entries().getFirst();
+        assertThat(entry.checksumAlgorithm()).isEqualTo("FUTURE_CHECKSUM");
+    }
+
     // ---- throttle classification (algorithms.md §5; THR-1 wiring) -------------------
 
     @Test

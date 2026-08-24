@@ -379,8 +379,8 @@ public final class S3PageFetcher implements PageFetcher {
         String storageClass = o.storageClassAsString();
         String ownerId = o.owner() != null ? o.owner().id() : null;
         String ownerDisplayName = o.owner() != null ? o.owner().displayName() : null;
-        String checksumAlgorithm = (o.checksumAlgorithm() != null && !o.checksumAlgorithm().isEmpty())
-                ? o.checksumAlgorithm().getFirst().toString()
+        String checksumAlgorithm = o.hasChecksumAlgorithm()
+                ? o.checksumAlgorithmAsStrings().getFirst()
                 : null;
         String checksumType = (o.checksumTypeAsString() != null && !o.checksumTypeAsString().isBlank())
                 ? o.checksumTypeAsString()
