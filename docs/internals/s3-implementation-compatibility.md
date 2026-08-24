@@ -15,11 +15,13 @@ sequence was sent on the wire, unmodified — rather than re-encoding. The teste
 percent-encodes the echo conformantly; this is an endpoint-specific compatibility gap, not a
 property of MinIO or S3-compatible servers in general.
 
-**Why real S3 is safe.** The AWS SDK for Java always installs a response interceptor
+**Why real S3 is safe.** The AWS SDK for Java always installs a service response interceptor
 (`DecodeUrlEncodedResponseInterceptor`) that strict-decodes those echoed fields with
-`java.net.URLDecoder` while unmarshalling the response (this happens regardless of
-`encoding-type`, since it is unconditional in the SDK, not driven by the request). Against real
-S3, the echoed value is always correctly percent-encoded, so a well-formed request value
+`java.net.URLDecoder` in its response-interceptor chain (this happens regardless of
+`encoding-type`, since registration is unconditional, not driven by the request). It runs after
+swath's client-level streaming response interceptor, which therefore preserves the wire-encoded
+fields for this one canonical decoding pass. Against real S3, the echoed value is always correctly
+percent-encoded, so a well-formed request value
 (including one containing `%`) round-trips through encode-on-the-way-out /
 decode-on-the-way-back losslessly.
 

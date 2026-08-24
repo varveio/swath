@@ -235,8 +235,11 @@ decomposition. Two of the five phases now sit inside it:
   protocol response handler returning. Bridged in by `S3CallClassLatencyPublisher` from the SDK's own
   per-attempt stamps, not measured by swath. On the sync `ApacheHttpClient` path the body is still a
   live socket stream when that handler runs, so it spans draining the remaining response bytes off the
-  wire **plus** the XML parse and POJO construction. It is the DOMINANT term of the residual on a full
-  1000-key page.
+  wire **plus** the XML parse and POJO construction. Successful `ListObjectsV2` calls take
+  `StreamingListObjectsV2Interceptor` here: it constructs the SDK model directly with StAX and gives
+  the generated generic unmarshaller a minimal empty result, avoiding the SDK's intermediate
+  `XmlElement` tree. Error bodies stay entirely on the SDK handler. This phase remains the complete
+  response-body handling bound, not a parser-specific timer.
 
   **Why it is derived rather than read.** `CoreMetric.UNMARSHALLING_DURATION` is the exact boundary and
   was this phase's first implementation — but it is never published for an S3 `ListObjectsV2`, and that
@@ -919,6 +922,8 @@ retired — its emitter was deleted in the same change that added the annotation
 | `RETRY` | `probe_retry_cap_failfast` | the probe fail-fast cap's steal-side twin (`Thief.steal`): the `TRANSIENT.probe_retry_cap_failfast` `ThrottleException` above, caught and folded into the SAME non-productive-steal `RETRY` outcome an ordinary retry takes — frees the sole `IdleStealBackoff` in-flight slot immediately instead of camping on it | |
 | `PROBE` | `slow_` | a probe fetch (never a worker page) was slow (>1 s) or failed — the reason is suffixed with the request's `call_class` (`slow_pivot_probe`/`slow_structure_probe`). Fired on EVERY such probe, where the `slow_probe_exemplar` DEBUG line beside it is rate-limited (first 20, then powers of two), so the count is the honest engagement figure and the line is only a reproducible sample of it. The exemplar's request identity (prefix/`start_after`) is deliberately NOT a tag — an object key is unbounded cardinality — and stays log-only | |
 | `REDIRECT` | `region` | a 301 `PermanentRedirect` — the bucket lives in a region other than the passed `--region` — surfaced as a typed `RegionRedirectException` naming the correct region (never an untyped crash) | |
+| `S3_RESPONSE` | `streaming_xml` | one successful `ListObjectsV2` response body took swath's bounded streaming StAX parser instead of the AWS SDK's generic `XmlElement` tree materialization. Counts every successful worker/probe page on this path; compare it with successful LIST calls to prove coverage. Error bodies stay on the SDK's modeled error-unmarshal path and do not fire this counter | |
+| `S3_RESPONSE` | `sdk_error_in_success` | a nominally successful HTTP response contained an S3 `<Error>` root, so the streaming parser reconstructed that rare XML tree and returned it to the SDK's error-could-be-in-body handler rather than turning it into an empty successful page. Such responses never co-fire `streaming_xml` | |
 | `FATAL` | `access_denied` | a seed/fetch 403 `AccessDenied` — a permanent permissions/config failure (e.g. an anonymous or under-privileged LIST of a bucket that denies it) — surfaced as a typed `AccessDeniedException` with `error_class=access_denied`, exit 1, `stop_reason=seed_failure`; terminal, never retried/AIMD-fed (a transient 403-coded throttle is caught by `isThrottle` first) | |
 | `FATAL` | `no_such_bucket` | a seed/fetch 404 `NoSuchBucket` — the bucket does not exist — typed `NoSuchBucketException`, `error_class=no_such_bucket`, exit 1, terminal (a sibling 404 `NoSuchKey` is NOT reclassified) | |
 | `FATAL` | `unauthorized` | a seed/fetch HTTP 401 — missing/invalid credentials — typed `UnauthorizedException`, `error_class=unauthorized`, exit 1, terminal | |

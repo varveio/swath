@@ -103,9 +103,9 @@ public final class S3ClientFactory {
     /**
      * Same as {@link #create(S3Config)}, but attaches a {@link S3PoolMetricPublisher} wired to
      * {@code metrics} so the §3.8 {@code swath.s3.pool.*} gauges are populated from this client's
-     * {@code ApacheHttpClient} connection pool. {@code metrics == null} behaves exactly like
-     * {@link #create(S3Config)} — no publisher is attached, so every other caller (tests, replay,
-     * LocalStack fixtures) is unaffected.
+     * {@code ApacheHttpClient} connection pool. {@code metrics == null} attaches no metrics
+     * publisher. The success-response streaming interceptor is part of both overloads; only its
+     * engagement counter is null-safe when no metrics registry was supplied.
      */
     public static S3Client create(S3Config config, RunMetrics metrics) {
         var retry = AwsRetryStrategy.standardRetryStrategy()
@@ -117,6 +117,7 @@ public final class S3ClientFactory {
                 .retryStrategy(retry)
                 .apiCallAttemptTimeout(config.apiCallAttemptTimeout())
                 .putAdvancedOption(SdkAdvancedClientOption.USER_AGENT_PREFIX, userAgentPrefix())
+                .addExecutionInterceptor(new StreamingListObjectsV2Interceptor(metrics))
                 // The overall per-logical-call ceiling -- see S3Config#DEFAULT_API_CALL_TIMEOUT for
                 // why it is the PRIMARY liveness guarantee.
                 .apiCallTimeout(config.apiCallTimeout());
