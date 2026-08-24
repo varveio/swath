@@ -331,6 +331,20 @@ public final class ConcurrencyGauge {
     }
 
     /**
+     * Feed one completed attempt into the controller as an ordered event. For a successful page,
+     * apply its uncensored latency sample before its status can claim a paced growth opportunity;
+     * otherwise a slow completion could double {@code T} using the preceding EWMA and only publish
+     * its own evidence after that decision. Returned 503s retain the existing throttle path and do
+     * not contaminate the successful-latency baseline.
+     */
+    void reportCompletedAttempt(int httpStatus, long latencyNanos) {
+        if (httpStatus != SLOWDOWN_STATUS && latencyNanos > 0L) {
+            onAttemptLatency(latencyNanos);
+        }
+        reportStatus(httpStatus);
+    }
+
+    /**
      * A client-side attempt-timeout / exhausted network fault observed by the retry loop. Unlike a
      * 503 through {@link #reportStatus}, a single timeout is NOT an AIMD down-vote (it never multiplies
      * {@code T} by {@link #DECREASE_FACTOR} nor records a {@code swath.aimd.votes} vote — a hung local

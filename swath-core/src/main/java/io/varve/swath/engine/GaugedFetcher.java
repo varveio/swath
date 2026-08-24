@@ -150,13 +150,12 @@ final class GaugedFetcher implements PageFetcher {
             try {
                 ListPage page = fetchOnce(attemptReq);
                 if (reportSuccess) {
-                    gauge.reportStatus(page.httpStatus());
-                    // Feed the latency-freeze rung ONLY from genuinely successful attempts.
-                    // A returned 503 page is store backpressure (routed to onThrottle above), not a
-                    // latency observation; a timed-out attempt never reaches here at all (it throws).
-                    if (page.httpStatus() != ConcurrencyGauge.SLOWDOWN_STATUS && page.latency() != null) {
-                        gauge.onAttemptLatency(page.latency().toNanos());
-                    }
+                    // One ordered controller event: the successful attempt's latency must be visible
+                    // before that same completion is allowed to claim a paced growth step. A returned
+                    // 503 is store backpressure, not a successful-latency observation; a timed-out
+                    // attempt never reaches here at all (it throws).
+                    gauge.reportCompletedAttempt(page.httpStatus(),
+                            page.latency() == null ? 0L : page.latency().toNanos());
                 }
                 if (level > 0) {
                     // A page that only completes at an escalated level is post-hoc proof the

@@ -1109,11 +1109,8 @@ a **resizable permit gauge**, not a constant:
   already seen. Engagement counters: `swath.steal_reason{AIMD,
   slow_start_double}` per doubling step, `swath.steal_reason{AIMD,
   slow_start_exit_congestion}` once, on the latch.
-- **Decrease on stress** — **required trigger:** a 503 `SlowDown` /
-  `ServiceUnavailable` or a `Retry-After`. **Optional trigger:** a
-  latency-EWMA breach (EWMA of page latency over a window, default α=0.2,
-  breach = 3× the run's rolling median) — off by default; the 503 path is
-  the one exercised in practice. On any trigger: `T := max(1, floor(0.7·T))` and
+- **Decrease on stress** — a 503 `SlowDown` / `ServiceUnavailable` or a
+  `Retry-After`: `T := max(1, floor(0.7·T))` and
   **pause new steals**. Workers above the new `T` finish their *current
   page* (never killed mid-page — that would lose the cheap cursor advance)
   then park. The
@@ -1179,6 +1176,11 @@ a **resizable permit gauge**, not a constant:
   genuine overload's 503/timeout decrease paths (multiplicative, per-window
   capacity ≫ 1) still dominate the valve's additive-only `+1`, so the loop
   converges to the largest sustainable `T`.
+  A completed successful attempt feeds its latency sample before that same
+  completion may claim a paced growth step; the decision never evaluates a
+  request's status first and publishes its latency evidence afterward. This is
+  an event-ordering precondition for the latency gate; it does not aggregate
+  evidence across concurrent completions or make latency vote the target down.
 
 Uneven progress needs no separate mechanism: a finishing worker becomes a
 thief that targets the laggard (`argmax estRemaining`) — stealing *is* the
