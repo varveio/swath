@@ -19,6 +19,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,36 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * exceed T or it silently caps concurrency.
  */
 class S3ClientFactoryTest {
+
+    @Test
+    void streamingTimestampFastPathMatchesInstantParseAndFallsBackWithoutBroadeningTheGrammar() {
+        List<String> accepted = List.of(
+                "0000-01-01T00:00:00Z",
+                "2024-02-29T23:59:59Z",
+                "9999-12-31T23:59:59.123456789Z",
+                "2026-08-24T12:34:56.1Z",
+                "2026-08-24T12:34:56.123Z",
+                "2026-08-24T12:34:56.123456Z",
+                "2026-08-24T12:34:56.Z",
+                "2026-08-24T12:34:56+01:30",
+                "2026-08-24T24:00:00Z",
+                "2016-12-31T23:59:60Z",
+                "+010000-01-01T00:00:00Z");
+
+        accepted.forEach(value -> assertThat(StreamingListObjectsV2Interceptor.parseInstantValue(value))
+                .as(value)
+                .isEqualTo(Instant.parse(value)));
+
+        List<String> rejected = List.of(
+                "2026-02-29T00:00:00Z",
+                "2026-08-24T25:00:00Z",
+                "2026-08-24T12:34:56.AZ",
+                "2026-08-24T12:34:56.1234567890Z",
+                "2026-08-24 12:34:56Z");
+        rejected.forEach(value -> assertThatExceptionOfType(DateTimeParseException.class)
+                .as(value)
+                .isThrownBy(() -> StreamingListObjectsV2Interceptor.parseInstantValue(value)));
+    }
 
     @Test
     void maxConnectionsIsTargetPlusHeadroom() {

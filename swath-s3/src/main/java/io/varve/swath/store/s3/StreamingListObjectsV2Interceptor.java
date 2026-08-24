@@ -10,7 +10,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -258,7 +260,74 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
     }
 
     private static Instant parseInstant(XMLStreamReader reader) throws XMLStreamException {
-        return Instant.parse(reader.getElementText());
+        return parseInstantValue(reader.getElementText());
+    }
+
+    /**
+     * Avoid the general {@link java.time.format.DateTimeFormatter} state machine for the canonical
+     * UTC form emitted by S3 on every object. Anything outside that deliberately narrow grammar is
+     * handed back to {@link Instant#parse(CharSequence)}, preserving the SDK path's accepted input
+     * and failure semantics for offsets, extended years and leap seconds.
+     */
+    static Instant parseInstantValue(String value) {
+        int length = value.length();
+        int fractionDigits;
+        if (length == 20 && value.charAt(19) == 'Z') {
+            fractionDigits = 0;
+        } else if (length >= 22 && length <= 30 && value.charAt(19) == '.' && value.charAt(length - 1) == 'Z') {
+            fractionDigits = length - 21;
+        } else {
+            return Instant.parse(value);
+        }
+
+        if (value.charAt(4) != '-'
+                || value.charAt(7) != '-'
+                || value.charAt(10) != 'T'
+                || value.charAt(13) != ':'
+                || value.charAt(16) != ':') {
+            return Instant.parse(value);
+        }
+
+        int year = parseDigits(value, 0, 4);
+        int month = parseDigits(value, 5, 2);
+        int day = parseDigits(value, 8, 2);
+        int hour = parseDigits(value, 11, 2);
+        int minute = parseDigits(value, 14, 2);
+        int second = parseDigits(value, 17, 2);
+        if ((year | month | day | hour | minute | second) < 0 || hour > 23 || minute > 59 || second > 59) {
+            return Instant.parse(value);
+        }
+
+        int nanos = 0;
+        if (fractionDigits > 0) {
+            nanos = parseDigits(value, 20, fractionDigits);
+            if (nanos < 0) {
+                return Instant.parse(value);
+            }
+            for (int i = fractionDigits; i < 9; i++) {
+                nanos *= 10;
+            }
+        }
+
+        try {
+            long epochDay = LocalDate.of(year, month, day).toEpochDay();
+            long epochSecond = epochDay * 86_400L + hour * 3_600L + minute * 60L + second;
+            return Instant.ofEpochSecond(epochSecond, nanos);
+        } catch (DateTimeException ignored) {
+            return Instant.parse(value);
+        }
+    }
+
+    private static int parseDigits(String value, int offset, int count) {
+        int parsed = 0;
+        for (int i = offset, end = offset + count; i < end; i++) {
+            int digit = value.charAt(i) - '0';
+            if (digit < 0 || digit > 9) {
+                return -1;
+            }
+            parsed = parsed * 10 + digit;
+        }
+        return parsed;
     }
 
     private static void skipElement(XMLStreamReader reader) throws XMLStreamException {
