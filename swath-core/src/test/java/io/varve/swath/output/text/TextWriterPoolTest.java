@@ -100,6 +100,28 @@ final class TextWriterPoolTest {
     }
 
     @Test
+    void byteTsvPartsRemainReadableAndDigestExactForEveryCompression(@TempDir Path dir)
+            throws Exception {
+        for (TextCompression compression : TextCompression.values()) {
+            Path part = dir.resolve("part-" + compression + ".tsv");
+            TextDatasetFormat format = new TextDatasetFormat(OutputFormat.TSV, compression, true);
+            var writer = format.openPart(part);
+            writer.write(PageBatches.batch(0, 0, 0, 1).entries().getFirst());
+            writer.close();
+
+            assertThat(writer.md5()).isEqualTo(DigestUtils.md5Hex(Files.readAllBytes(part)));
+            try (InputStream input = decoded(part, compression)) {
+                List<String> lines = new String(input.readAllBytes(), StandardCharsets.UTF_8)
+                        .lines().toList();
+                assertThat(lines).hasSize(2);
+                assertThat(lines.getFirst())
+                        .isEqualTo("key\tsize\tlast_modified\tetag\tstorage_class\trow_type");
+                assertThat(lines.get(1).split("\t")).hasSize(6);
+            }
+        }
+    }
+
+    @Test
     void textAbortCannotExposeADigest(@TempDir Path dir) throws Exception {
         TextDatasetFormat format = new TextDatasetFormat(OutputFormat.JSONL, TextCompression.GZIP, true);
         var writer = format.openPart(dir.resolve("part.jsonl.gz"));
@@ -252,6 +274,32 @@ final class TextWriterPoolTest {
         assertThat(summary.datasetWriter().manifestWriteCount()).isEqualTo(1L);
         assertThat(summary.datasetWriter().lanes()).extracting(RunSummary.DatasetWriterLane::rowsWritten)
                 .containsExactlyInAnyOrder(1L, 0L);
+    }
+
+    @Test
+    void tsvBytePathReportsItsEngagementAndEscapeMode(@TempDir Path dir) throws Exception {
+        Files.createDirectories(dir);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        TextWriterPool pool = new TextWriterPool(new TextWriterPoolConfig(
+                dir, OutputFormat.TSV, TextCompression.NONE, true, "hash", "bucket",
+                2, Long.MAX_VALUE, 8, 0, 0, metrics));
+
+        pool.close();
+
+        assertThat(registry.counter("swath.steal_reason", "outcome", "OUTPUT", "reason",
+                "tsv_byte_encoder").count()).isEqualTo(1.0);
+        assertThat(registry.counter("swath.steal_reason", "outcome", "OUTPUT", "reason",
+                "tsv_escape_on").count()).isEqualTo(1.0);
+    }
+
+    private static InputStream decoded(Path part, TextCompression compression) throws IOException {
+        InputStream input = Files.newInputStream(part);
+        return switch (compression) {
+            case NONE -> input;
+            case GZIP -> new GZIPInputStream(input);
+            case ZSTD -> new ZstdInputStream(input);
+        };
     }
 
     private static TextWriterPool pool(Path dir, TextCompression compression, int writers)

@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.Timer;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
@@ -34,6 +35,11 @@ public final class TextWriterPool implements DatasetWriterPool {
         DatasetWriterMetrics.registerSummary(config.metrics(),
                 config.format().name().toLowerCase(Locale.ROOT), delegate,
                 DatasetWriterResourcePlan.NONE);
+        if (config.metrics() != null && config.format() == OutputFormat.TSV) {
+            config.metrics().recordStealReason("OUTPUT", "tsv_byte_encoder");
+            config.metrics().recordStealReason("OUTPUT",
+                    config.escape() ? "tsv_escape_on" : "tsv_raw_output");
+        }
     }
 
     private static DatasetWriterObserver observer(RunMetrics metrics) {

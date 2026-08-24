@@ -11,6 +11,7 @@ import io.varve.swath.output.CountingWriter;
 import io.varve.swath.output.EntryFormatter;
 import io.varve.swath.output.Formatters;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.Utf8TsvFormatter;
 import io.varve.swath.output.dataset.DatasetFormat;
 import io.varve.swath.output.dataset.DatasetPartWriter;
 import io.varve.swath.output.dataset.DigestingOutputStream;
@@ -54,41 +55,42 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
     }
 
     @Override public DatasetPartWriter openPart(Path path) throws IOException {
-        return openPart(path, TextDatasetFormat::openEncoder);
+        PartEncoderFactory factory = format == OutputFormat.TSV
+                ? TextDatasetFormat::openTsvEncoder
+                : TextDatasetFormat::openWriterEncoder;
+        return new TextPartWriter(path, factory);
     }
 
     DatasetPartWriter openPart(Path path, EncoderFactory encoderFactory) throws IOException {
-        return new TextPartWriter(path, encoderFactory);
+        return new TextPartWriter(path, (stream, compression, escape) ->
+                new WriterPartEncoder(encoderFactory.open(stream, compression), format, escape));
     }
 
     private final class TextPartWriter implements DatasetPartWriter {
         private final Path path;
-        private final CountingWriter counting;
-        private final EntryFormatter formatter;
+        private final PartEncoder encoder;
         private final PartDigest digest;
         private long rows;
 
-        TextPartWriter(Path path, EncoderFactory encoderFactory) throws IOException {
+        TextPartWriter(Path path, PartEncoderFactory encoderFactory) throws IOException {
             this.path = path;
             digest = new PartDigest();
-            OpenedTextPart opened = open(path, encoderFactory, digest);
-            counting = opened.counting();
-            formatter = opened.formatter();
+            encoder = open(path, encoderFactory, digest);
         }
 
         @Override public Path path() { return path; }
         @Override public long rows() { return rows; }
-        @Override public long bufferedDataSize() { return counting.bytesWritten(); }
-        @Override public void write(ListEntry entry) throws IOException { formatter.write(entry); rows++; }
+        @Override public long bufferedDataSize() { return encoder.bytesWritten(); }
+        @Override public void write(ListEntry entry) throws IOException { encoder.write(entry); rows++; }
         @Override public void close() throws IOException {
             IOException failure = null;
             try {
-                formatter.close();
+                encoder.finish();
             } catch (IOException e) {
                 failure = e;
             }
             try {
-                counting.close();
+                encoder.close();
             } catch (IOException e) {
                 failure = retain(failure, e);
             }
@@ -106,7 +108,7 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         }
 
         @Override public void discard() throws IOException {
-            counting.close();
+            encoder.close();
         }
 
         @Override public String md5() { return digest.md5(); }
@@ -114,19 +116,18 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
     }
 
     /** Open the whole encoder stack transactionally so constructor failure cannot leak the file. */
-    private OpenedTextPart open(Path path, EncoderFactory encoderFactory, PartDigest digest) throws IOException {
+    private PartEncoder open(Path path, PartEncoderFactory encoderFactory, PartDigest digest) throws IOException {
         OutputStream stream = null;
-        CountingWriter counting = null;
+        PartEncoder encoder = null;
         try {
             stream = new BufferedOutputStream(new DigestingOutputStream(Files.newOutputStream(path), digest));
-            counting = encoderFactory.open(stream, compression);
-            EntryFormatter formatter = Formatters.text(format, counting, escape);
-            formatter.writeHeader();
-            return new OpenedTextPart(counting, formatter);
+            encoder = encoderFactory.open(stream, compression, escape);
+            encoder.writeHeader();
+            return encoder;
         } catch (IOException | RuntimeException | Error failure) {
             try {
-                if (counting != null) {
-                    counting.close();
+                if (encoder != null) {
+                    encoder.close();
                 } else if (stream != null) {
                     stream.close();
                 }
@@ -142,20 +143,84 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         }
     }
 
+    private static PartEncoder openWriterEncoder(
+            OutputStream stream, TextCompression compression, boolean escape)
+            throws IOException {
+        CountingWriter writer = openEncoder(stream, compression);
+        return new WriterPartEncoder(writer, OutputFormat.JSONL, escape);
+    }
+
+    private static PartEncoder openTsvEncoder(
+            OutputStream stream, TextCompression compression, boolean escape)
+            throws IOException {
+        OutputStream compressed = compress(stream, compression);
+        return new TsvPartEncoder(new Utf8TsvFormatter(compressed, escape));
+    }
+
     private static CountingWriter openEncoder(OutputStream stream, TextCompression compression)
+            throws IOException {
+        OutputStream compressed = compress(stream, compression);
+        return new CountingWriter(new BufferedWriter(
+                new OutputStreamWriter(compressed, StandardCharsets.UTF_8)));
+    }
+
+    private static OutputStream compress(OutputStream stream, TextCompression compression)
             throws IOException {
         OutputStream compressed = switch (compression) {
             case NONE -> stream;
             case GZIP -> new GZIPOutputStream(stream);
             case ZSTD -> new ZstdOutputStream(stream);
         };
-        return new CountingWriter(new BufferedWriter(
-                new OutputStreamWriter(compressed, StandardCharsets.UTF_8)));
+        return compressed;
     }
 
     @FunctionalInterface
     interface EncoderFactory {
         CountingWriter open(OutputStream stream, TextCompression compression) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface PartEncoderFactory {
+        PartEncoder open(OutputStream stream, TextCompression compression, boolean escape)
+                throws IOException;
+    }
+
+    private interface PartEncoder {
+        void writeHeader() throws IOException;
+        void write(ListEntry entry) throws IOException;
+        long bytesWritten();
+        void finish() throws IOException;
+        void close() throws IOException;
+    }
+
+    private static final class WriterPartEncoder implements PartEncoder {
+        private final CountingWriter writer;
+        private final EntryFormatter formatter;
+
+        WriterPartEncoder(CountingWriter writer, OutputFormat format, boolean escape) {
+            this.writer = writer;
+            formatter = Formatters.text(format, writer, escape);
+        }
+
+        @Override public void writeHeader() throws IOException { formatter.writeHeader(); }
+        @Override public void write(ListEntry entry) throws IOException { formatter.write(entry); }
+        @Override public long bytesWritten() { return writer.bytesWritten(); }
+        @Override public void finish() throws IOException { formatter.close(); }
+        @Override public void close() throws IOException { writer.close(); }
+    }
+
+    private static final class TsvPartEncoder implements PartEncoder {
+        private final Utf8TsvFormatter formatter;
+
+        TsvPartEncoder(Utf8TsvFormatter formatter) {
+            this.formatter = formatter;
+        }
+
+        @Override public void writeHeader() throws IOException { formatter.writeHeader(); }
+        @Override public void write(ListEntry entry) throws IOException { formatter.write(entry); }
+        @Override public long bytesWritten() { return formatter.bytesWritten(); }
+        @Override public void finish() throws IOException { formatter.flush(); }
+        @Override public void close() throws IOException { formatter.close(); }
     }
 
     private static IOException retain(IOException first, IOException next) {
@@ -166,6 +231,4 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         return first;
     }
 
-    private record OpenedTextPart(CountingWriter counting, EntryFormatter formatter) {
-    }
 }

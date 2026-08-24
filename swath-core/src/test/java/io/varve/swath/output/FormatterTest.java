@@ -8,10 +8,15 @@ package io.varve.swath.output;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.model.CommonPrefixEntry;
+import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /** Text-formatter unit checks (INT-2 line integrity). */
@@ -88,6 +93,35 @@ class FormatterTest {
             f.write(obj("plain", 5));
         }
         assertThat(sw.toString()).startsWith("plain\t");
+    }
+
+    @Test
+    void byteTsvFormatterIsByteExactToTheCharacterFormatter() throws IOException {
+        List<ListEntry> entries = List.of(
+                new ObjectEntry(KeyBytes.ofUtf8("plain/世界/😀"), 0, 1_700_000_000_123_456L,
+                        "é\t-tag", "STANDARD", null, true, null, null, null, null),
+                new ObjectEntry(KeyBytes.of(new byte[]{'a', (byte) 0x80, '\n'}), Long.MAX_VALUE, -1,
+                        null, null, null, true, null, null, null, null),
+                new DeleteMarkerEntry(KeyBytes.ofUtf8("deleted"), "v1", true, 0, null),
+                new CommonPrefixEntry(KeyBytes.ofUtf8("prefix/")));
+
+        for (boolean escape : List.of(false, true)) {
+            StringWriter characters = new StringWriter();
+            try (TsvFormatter formatter = new TsvFormatter(characters, escape)) {
+                formatter.writeHeader();
+                for (ListEntry entry : entries) formatter.write(entry);
+            }
+
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            Utf8TsvFormatter formatter = new Utf8TsvFormatter(bytes, escape);
+            formatter.writeHeader();
+            for (ListEntry entry : entries) formatter.write(entry);
+            formatter.flush();
+
+            assertThat(bytes.toByteArray())
+                    .isEqualTo(characters.toString().getBytes(StandardCharsets.UTF_8));
+            assertThat(formatter.bytesWritten()).isEqualTo(bytes.size());
+        }
     }
 
     @Test
