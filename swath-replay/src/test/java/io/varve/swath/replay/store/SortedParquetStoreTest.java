@@ -572,6 +572,26 @@ class SortedParquetStoreTest {
     }
 
     @Test
+    void lazyDelimiterPoolClosesABorrowedReaderWhenItReturns(@TempDir Path dir) throws IOException {
+        Fixture fixture = writeSorted(dir, manySmallGroups(), keys(120));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
+        var pool = new SortedParquetStore.LazyGroupReaderPool(
+                fixture.files.getFirst(), 1, metrics);
+
+        var borrowed = pool.borrow();
+        pool.close();
+        pool.release(borrowed);
+
+        assertThat(registry.find("swath.replay.delimiter.reader_pool.open.latency").timer().count())
+                .as("the lazy fleet opens and is timed exactly once")
+                .isEqualTo(1L);
+        assertThatThrownBy(pool::borrow)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pool is closed");
+    }
+
+    @Test
     void rangeReadFailureReturnsTheReaderAndBalancesInFlightMetrics(@TempDir Path dir) throws IOException {
         Fixture fixture = writeSorted(dir, manySmallGroups(), keys(120));
         ReplayMetrics metrics = new ReplayMetrics(new SimpleMeterRegistry(), ReplayMetrics.SERVING_MODE_SORTED);

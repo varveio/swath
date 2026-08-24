@@ -132,14 +132,16 @@ Jetty's implicit 200-thread default. It defaults to 512 and is reported as
 connector queueing is not mistaken for backend latency.
 
 `--parquet-connections 0` uses the selected store's own reader default:
-`max(8, min(32, 2 × cores))` for sorted serving and `min(4, cores)` for DuckDB.
+`max(8, min(32, cores))` for sorted serving and `min(4, cores)` for DuckDB.
 Size this for concurrent decode work, not total requests: readers are returned before
 injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
-very large pools can waste file descriptors and heap. Sorted mode opens both a row-group
-and range-reader pool per file: approximately `2 × connections × files` open readers. Those
-pools are independent. An ordinary range fill uses only the range pool; a native `delimiter=/`
-skip-scan holds one row-group reader while it may briefly borrow a range reader to materialize
-a bare object.
+very large pools can waste file descriptors and heap. Sorted mode eagerly opens the range-reader
+pool per file (`connections × files` readers). Its independent row-group pool opens lazily, one
+file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
+the conservative fully engaged bound remains `2 × connections × files`. An ordinary range fill
+uses only the range pool; an engaged skip-scan holds one row-group reader while it may briefly
+borrow a range reader to materialize a bare object. The first engagement for each file is visible
+through `delimiter.reader_pool.open.latency`.
 
 ## Reading a running server's meters (`--metrics-port`)
 
@@ -315,9 +317,9 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}` | Legacy-fixture sort work and engagement. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
-| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts` | Rollup vs walk, skip-scan I/O, and routing-index-only whole-group engagements. |
+| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.reader_pool.open.latency` | Rollup vs walk, skip-scan I/O, routing-index-only whole-group engagements, and lazy per-file delimiter-pool first touch (timer count = files opened). |
 | `page.read.latency`, `fixture.list.latency` | Post-borrow range-decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
-| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent row-group and range pools and a conservative aggregate bound of `2 × connections × files`. |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving eagerly holds `connections × files` range readers and has the conservative fully engaged bound `2 × connections × files` after every lazy row-group pool opens. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |

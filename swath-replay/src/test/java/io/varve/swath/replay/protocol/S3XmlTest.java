@@ -8,6 +8,7 @@ package io.varve.swath.replay.protocol;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -38,6 +39,7 @@ class S3XmlTest {
         assertThat(xml.indexOf("<Delimiter>")).isLessThan(xml.indexOf("<EncodingType>"));
         assertThat(xml).contains("<IsTruncated>true</IsTruncated>");
         assertThat(xml).contains("<Key>a/has%20space.txt</Key>");
+        assertThat(xml).contains("<LastModified>2026-01-01T00:00:00.123Z</LastModified>");
         assertThat(xml).contains("<ETag>&quot;abc&amp;def&quot;</ETag>");
         assertThat(xml).contains("<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>");
         assertThat(xml).contains("<ChecksumType>FULL_OBJECT</ChecksumType>");
@@ -45,6 +47,70 @@ class S3XmlTest {
         assertThat(xml).contains("<Prefix>a/dir/</Prefix>");
         assertThat(xml).contains("<NextContinuationToken>v2:");
         assertThat(xml.indexOf("<Contents>")).isLessThan(xml.indexOf("<CommonPrefixes>"));
+    }
+
+    @Test
+    void rendersAdversarialUnencodedValuesAsExactUtf8Bytes() {
+        byte[] malformed = new byte[] {'a', '&', '<', '>', '"', '\'', (byte) 0xff};
+        S3ListRequest request = new S3ListRequest(
+                "b&<>\"'\ud800", malformed, null, null, null, Integer.MIN_VALUE, false, true);
+        ListedObject object = new ListedObject(bytes("k/😀&<>'\""), Long.MIN_VALUE, -1,
+                "e&<>\"'😀", "ST😀&", "id<", "display'", "CRC&", "TYPE>");
+        S3ListResult result = new S3ListResult(request,
+                List.of(new S3ResultEntry.ObjectResult(object)), false, null);
+
+        String expected = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                + "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+                + "<Name>b&amp;&lt;&gt;&quot;&apos;?</Name>"
+                + "<Prefix>a&amp;&lt;&gt;&quot;&apos;�</Prefix>"
+                + "<KeyCount>1</KeyCount><MaxKeys>-2147483648</MaxKeys>"
+                + "<IsTruncated>false</IsTruncated><Contents>"
+                + "<Key>k/😀&amp;&lt;&gt;&apos;&quot;</Key>"
+                + "<LastModified>1969-12-31T23:59:59.999Z</LastModified>"
+                + "<ETag>&quot;e&amp;&lt;&gt;&quot;&apos;😀&quot;</ETag>"
+                + "<ChecksumAlgorithm>CRC&amp;</ChecksumAlgorithm><ChecksumType>TYPE&gt;</ChecksumType>"
+                + "<Size>-9223372036854775808</Size><StorageClass>ST😀&amp;</StorageClass>"
+                + "<Owner><ID>id&lt;</ID><DisplayName>display&apos;</DisplayName></Owner>"
+                + "</Contents></ListBucketResult>";
+
+        assertThat(S3Xml.listBucketBytes(result)).isEqualTo(expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void percentEncodesEveryUnsafeByteWithoutUtf8Decoding() {
+        byte[] raw = new byte[] {'/', ' ', (byte) 0xff, '&', '<', '>'};
+        S3ListRequest request = new S3ListRequest("bucket", raw, bytes("/"), raw, null,
+                1, true, false);
+        S3ListResult result = new S3ListResult(request, List.of(new S3ResultEntry.CommonPrefixResult(raw)),
+                false, null);
+
+        String xml = S3Xml.listBucket(result);
+        assertThat(xml).contains("<Prefix>/%20%FF%26%3C%3E</Prefix>")
+                .contains("<StartAfter>/%20%FF%26%3C%3E</StartAfter>")
+                .contains("<Delimiter>/</Delimiter>")
+                .contains("<CommonPrefixes><Prefix>/%20%FF%26%3C%3E</Prefix></CommonPrefixes>");
+    }
+
+    @Test
+    void boundedBufferGrowthPreservesEveryResponseByte() {
+        List<S3ResultEntry> entries = new ArrayList<>();
+        String longKey = "x".repeat(1_024);
+        for (int i = 0; i < 20; i++) {
+            entries.add(new S3ResultEntry.ObjectResult(new ListedObject(
+                    bytes(longKey + i), i, 0, null, "STANDARD", null, null, null, null)));
+        }
+        S3ListRequest request = new S3ListRequest("bucket", null, null, null, null, 20, true, false);
+        S3ListResult result = new S3ListResult(request, entries, false, null);
+
+        byte[] exact = S3Xml.listBucketBytes(result);
+        var buffer = S3Xml.listBucketBuffer(result);
+        byte[] bounded = new byte[buffer.remaining()];
+        buffer.get(bounded);
+
+        assertThat(bounded).isEqualTo(exact);
+        assertThat(new String(exact, StandardCharsets.UTF_8))
+                .contains("<Key>" + longKey + "19</Key>")
+                .endsWith("</ListBucketResult>");
     }
 
     private static byte[] bytes(String value) {

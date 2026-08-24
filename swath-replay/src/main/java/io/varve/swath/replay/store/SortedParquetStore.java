@@ -25,8 +25,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 
 /**
  * A {@link ListingStore} over a stamped, globally sorted swath Parquet fixture, answered by
@@ -86,9 +84,7 @@ public final class SortedParquetStore implements ListingStore {
     private final List<IndexEntry> index;
     private final ReplayMetrics metrics;
     private final Map<Path, SortedRangeReader> rangeReaders;
-    private final Map<Path, BlockingQueue<SortedRowGroupReader>> groupReaders;
-    /** Every group reader this store made, borrowed or not — {@link #close()} closes the list, not the pool. */
-    private final List<SortedRowGroupReader> ownedGroupReaders;
+    private final Map<Path, LazyGroupReaderPool> groupReaders;
 
     public SortedParquetStore(List<Path> files, List<IndexEntry> index, ReplayMetrics metrics) {
         this(files, index, metrics, defaultConnectionCount());
@@ -119,15 +115,8 @@ public final class SortedParquetStore implements ListingStore {
                         metrics.parquetReaderReleased();
                     }
                 });
-        try {
-            this.groupReaders = openGroupReaders(files, connectionCount);
-            this.rangeReaders = openedRangeReaders;
-            this.ownedGroupReaders = groupReaders.values().stream()
-                    .flatMap(java.util.Collection::stream).toList();
-        } catch (RuntimeException e) {
-            openedRangeReaders.values().forEach(SortedParquetStore::closeQuietly);
-            throw e;
-        }
+        this.groupReaders = groupReaderPools(files, connectionCount, metrics);
+        this.rangeReaders = openedRangeReaders;
     }
 
     /**
@@ -137,12 +126,14 @@ public final class SortedParquetStore implements ListingStore {
      * {@code min(4, cores)}. That was right when a pooled slot was a DuckDB connection, which owns a
      * thread pool; it is wrong now that a slot is a Parquet file handle plus its decoded footer.
      * Decoding is still CPU work, so many multiples of the core count buy nothing — but a request
-     * stalled on an uncached page should not hold the only slot on a small machine. Hence a small
-     * multiple of the cores, floored so a 2-core box has headroom and capped so a large one does not
-     * hold hundreds of open footers per file for no throughput.
+     * stalled on an uncached page should not hold the only slot on a small machine. One slot per
+     * visible core saturated the decode path in local large-fixture sweeps; doubling it increased
+     * page latency and GC while reducing throughput. Keep the small-machine floor for I/O headroom,
+     * and cap large machines so a multi-file fixture does not hold hundreds of open footers per file
+     * for no throughput.
      */
     public static int defaultConnectionCount() {
-        return Math.max(8, Math.min(32, 2 * Runtime.getRuntime().availableProcessors()));
+        return Math.max(8, Math.min(32, Runtime.getRuntime().availableProcessors()));
     }
 
     @Override
@@ -212,20 +203,11 @@ public final class SortedParquetStore implements ListingStore {
      * (its requested schema, its open page store), so it is pooled rather than shared, exactly as the
      * range readers are.
      */
-    private static Map<Path, BlockingQueue<SortedRowGroupReader>> openGroupReaders(List<Path> files,
-                                                                                   int poolSize) {
-        Map<Path, BlockingQueue<SortedRowGroupReader>> readers = new LinkedHashMap<>();
-        try {
-            for (Path file : files) {
-                BlockingQueue<SortedRowGroupReader> pool = new ArrayBlockingQueue<>(Math.max(1, poolSize));
-                readers.put(file.toAbsolutePath(), pool);
-                for (int i = 0; i < Math.max(1, poolSize); i++) {
-                    pool.add(new SortedRowGroupReader(file));
-                }
-            }
-        } catch (IOException | RuntimeException e) {
-            readers.values().forEach(pool -> pool.forEach(SortedParquetStore::closeQuietly));
-            throw new IllegalStateException("failed to open a sorted Parquet row-group reader", e);
+    private static Map<Path, LazyGroupReaderPool> groupReaderPools(List<Path> files, int poolSize,
+                                                                   ReplayMetrics metrics) {
+        Map<Path, LazyGroupReaderPool> readers = new LinkedHashMap<>();
+        for (Path file : files) {
+            readers.put(file.toAbsolutePath(), new LazyGroupReaderPool(file, poolSize, metrics));
         }
         return Map.copyOf(readers);
     }
@@ -244,8 +226,8 @@ public final class SortedParquetStore implements ListingStore {
         return reader;
     }
 
-    private BlockingQueue<SortedRowGroupReader> pool(Path file) {
-        BlockingQueue<SortedRowGroupReader> readers = groupReaders.get(file.toAbsolutePath());
+    private LazyGroupReaderPool pool(Path file) {
+        LazyGroupReaderPool readers = groupReaders.get(file.toAbsolutePath());
         if (readers == null) {
             throw new IllegalStateException("no sorted Parquet row-group reader for fixture file " + file);
         }
@@ -253,12 +235,7 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     private SortedRowGroupReader borrowGroupReader(Path file) {
-        try {
-            return pool(file).take();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted waiting for a sorted Parquet row-group reader", e);
-        }
+        return pool(file).borrow();
     }
 
     private static Map<Path, SortedRangeReader> openRangeReaders(
@@ -314,17 +291,17 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /**
-     * Closes every reader this store opened — the row-group readers and the range readers alike,
-     * whether or not they are currently in their pool.
+     * Closes every reader this store opened — the row-group readers and the range readers alike.
      *
-     * <p>Both halves are load-bearing. Iterating the <em>pools</em> would skip anything a request
-     * still holds, and the range readers were being missed entirely: they are the sole serving path
-     * now, and each owns one open {@code ParquetFileReader} per pooled slot per file.
+     * <p>Both halves are load-bearing. A row-group reader still held by a request is closed when that
+     * request returns it; an idle one is closed here. The range readers were once missed entirely:
+     * they are the sole ordinary-page serving path, and each owns one open {@code ParquetFileReader}
+     * per pooled slot per file.
      */
     @Override
     public void close() {
-        for (SortedRowGroupReader reader : ownedGroupReaders) {
-            closeQuietly(reader);
+        for (LazyGroupReaderPool pool : groupReaders.values()) {
+            pool.close();
         }
         for (SortedRangeReader reader : rangeReaders.values()) {
             closeQuietly(reader);
@@ -336,6 +313,88 @@ public final class SortedParquetStore implements ListingStore {
             reader.close();
         } catch (Exception e) {
             // Best effort: a fixture reader holds no state a failed close could corrupt.
+        }
+    }
+
+    /**
+     * Delimiter readers are a second footer-bearing reader fleet per fixture file. Most replay
+     * traffic is ordinary range pages, and a worker-only run must not pay that fleet's startup and
+     * resident-memory cost merely because the endpoint also supports delimiter probes. Initialize a
+     * file's pool on its first delimiter request; publication occurs only after the whole pool opens,
+     * so concurrent first probes either see the complete pool or wait for it.
+     */
+    static final class LazyGroupReaderPool {
+
+        private final Path file;
+        private final int size;
+        private final ReplayMetrics metrics;
+        private ArrayDeque<SortedRowGroupReader> available;
+        private boolean closed;
+
+        LazyGroupReaderPool(Path file, int size, ReplayMetrics metrics) {
+            this.file = file;
+            this.size = Math.max(1, size);
+            this.metrics = metrics;
+        }
+
+        synchronized SortedRowGroupReader borrow() {
+            initialize();
+            while (available.isEmpty() && !closed) {
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "interrupted waiting for a sorted Parquet row-group reader", e);
+                }
+            }
+            if (closed) {
+                throw new IllegalStateException("sorted Parquet row-group reader pool is closed for " + file);
+            }
+            return available.removeFirst();
+        }
+
+        synchronized void release(SortedRowGroupReader reader) {
+            if (closed) {
+                closeQuietly(reader);
+            } else {
+                available.addLast(reader);
+                notifyAll();
+            }
+        }
+
+        private synchronized void initialize() {
+            if (closed) {
+                throw new IllegalStateException("sorted Parquet row-group reader pool is closed for " + file);
+            }
+            if (available != null) {
+                return;
+            }
+            ArrayDeque<SortedRowGroupReader> creating = new ArrayDeque<>(size);
+            var sample = metrics.startTimer();
+            try {
+                for (int i = 0; i < size; i++) {
+                    creating.addLast(new SortedRowGroupReader(file));
+                }
+            } catch (IOException | RuntimeException e) {
+                creating.forEach(SortedParquetStore::closeQuietly);
+                throw new IllegalStateException(
+                        "failed to open a sorted Parquet row-group reader for " + file, e);
+            }
+            available = creating;
+            metrics.recordDelimiterReaderPoolOpen(sample);
+        }
+
+        synchronized void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (available != null) {
+                available.forEach(SortedParquetStore::closeQuietly);
+                available.clear();
+            }
+            notifyAll();
         }
     }
 
@@ -519,7 +578,7 @@ public final class SortedParquetStore implements ListingStore {
         try {
             metrics.parquetReaderReleased();
         } finally {
-            pool(file).add(reader);
+            pool(file).release(reader);
         }
     }
 
@@ -539,13 +598,13 @@ public final class SortedParquetStore implements ListingStore {
     private SortedRowGroupReader.ObjectRow objectAt(Deque<SortedRowGroupReader.ObjectRow> lookahead,
                                                     IndexEntry entry, byte[] key, byte[] upper, int want,
                                                     boolean includeOwner) throws IOException {
-        if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().key(), key)) {
+        if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
             lookahead.clear();
             lookahead.addAll(rangeReader(entry.file())
                     .range(entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
         }
         SortedRowGroupReader.ObjectRow row = lookahead.poll();
-        if (row != null && Arrays.equals(row.key(), key)) {
+        if (row != null && Arrays.equals(row.keyUnsafe(), key)) {
             return row;
         }
         // Only reachable if the key vanished between the cursor reading it and this read, which the
@@ -572,7 +631,7 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     private static ListedObject toListedObject(SortedRowGroupReader.ObjectRow row) {
-        return new ListedObject(row.key(), row.size(), row.lastModifiedEpochMicros(),
+        return new ListedObject(row.keyUnsafe(), row.size(), row.lastModifiedEpochMicros(),
                 row.etag(), row.storageClass(), row.ownerId(), row.ownerDisplayName(),
                 row.checksumAlgorithm(), row.checksumType());
     }
