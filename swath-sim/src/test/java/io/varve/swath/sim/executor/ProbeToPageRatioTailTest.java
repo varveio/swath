@@ -21,8 +21,8 @@ import org.junit.jupiter.api.Test;
 /**
  * <b>The tail is a property of the probe:page cost ratio, and this is the leg that says so.</b> One
  * fixture, one fleet, one page size, one arm — and the only thing that varies between a run whose
- * heaviest directory drains as a single 96-second serial range and a run whose fleet carves it up is
- * how much a one-key probe costs relative to a page.
+ * heaviest directory drains almost entirely in one 96-second serial range and a run whose fleet
+ * carves it up is how much a one-key probe costs relative to a page.
  *
  * <p>{@link PolicyRunFixtures#MEASURED_TAIL_LATENCY} prices a probe at 35 ms against a 110 ms page
  * (0.32); the live store was measured at 121 ms against 223 ms (0.54,
@@ -54,19 +54,20 @@ import org.junit.jupiter.api.Test;
  * threshold inverts, so the table below is pinned rather than remembered.
  *
  * <table border="1">
- *   <caption>live 121/223 (asserted) against bench 35/110 (pre-fix), four seeds</caption>
+ *   <caption>live 121/223 (asserted) against bench 35/110, four seeds after top-scope closure</caption>
  *   <tr><th>reading</th><th>at 0.54</th><th>at 0.32</th></tr>
- *   <tr><td>tail victim's own share of the heavy leaf</td><td>1.000 ×4</td><td>0.402–0.572</td></tr>
- *   <tr><td>keys drained by the children the thief carved off it</td><td>0 ×4</td><td>1,001–1,003</td></tr>
- *   <tr><td>proposal loss share</td><td>0.9938–0.9939</td><td>0.7595–0.8226</td></tr>
- *   <tr><td>splits published (owner + thief)</td><td>18 ×4</td><td>39–61</td></tr>
- *   <tr><td>serial fraction</td><td>0.4871–0.4889</td><td>0.0880–0.2114</td></tr>
+ *   <tr><td>tail victim's own share of the heavy leaf</td><td>0.9725–1.000</td><td>0.4475–0.5825</td></tr>
+ *   <tr><td>keys drained by the children the thief carved off it</td><td>0 ×3; 11,003 ×1</td><td>1,001–1,003</td></tr>
+ *   <tr><td>proposal loss share</td><td>0.9808–0.9939</td><td>0.7160–0.7679</td></tr>
+ *   <tr><td>splits published (owner + thief)</td><td>18–21</td><td>43–59</td></tr>
+ *   <tr><td>serial fraction</td><td>0.4850–0.4881</td><td>0.0696–0.1790</td></tr>
  * </table>
  *
- * <p>The mechanism counters read the same way: at the live ratio one run's 668 steal attempts produce
- * <b>one</b> child, 155 of 161 retries die {@code cursor_passed_pivot}, and 478 of 506 scans find every
- * victim futility-paced — the engine's own tail signature. At the bench ratio the same fixture hands
- * the thief 11–35 children.
+ * <p>The open-tile sentinel added by the top-scope closure makes one seed a disclosed split verdict:
+ * at seed 987654321 the thief drains 11,003 keys from the tail victim. That is 2.75% of the heavy
+ * leaf, not a cure: the victim still drains more than 97% and the run still spends 48.5% serial. The
+ * other three seeds drain no keys through a thief child. Pinning both sides prevents this test from
+ * quietly reverting to the obsolete claim that the mass-bearing tail is always an open frontier.
  *
  * <p><b>Not pinned: the window in pages itself.</b> E-11's third threshold — a scan-to-attempt window
  * with a median of one to three owner pages on the tail victim — is not asserted here because it is not
@@ -86,32 +87,34 @@ class ProbeToPageRatioTailTest {
     private static final SensingVariant ARM = SensingVariant.RATE_ANCHORED_FLOOR_QUARTER;
 
     /**
-     * The share of the heavy leaf the tail victim must drain by itself. It reads 1.000 at all four
-     * seeds — the range emits every one of the leaf's files plus the accession's three token files —
-     * against 0.402–0.572 at the bench ratio, where the fleet takes the rest off it.
+     * The share of the heavy leaf the tail victim must drain by itself. It reads 0.9725–1.000: one
+     * seed lets a mass-bearing thief child drain 11,003 keys, while the other three leave the victim
+     * the whole leaf. The bench ratio reads 0.4475–0.5825, where the fleet takes the rest off it.
      */
     private static final double VICTIM_SHARE_FLOOR = 0.95;
 
-    /** Proposals lost at re-validation over proposals that reached it: 0.9938 here, 0.76–0.82 at 0.32. */
+    /** Proposals lost at re-validation over proposals that reached it: 0.98–0.99 here, 0.71–0.77 at 0.32. */
     private static final double PROPOSAL_LOSS_FLOOR = 0.95;
 
     /**
-     * The band the published splits must land in: 18 at every seed at the live ratio, against 39–61 at
+     * The band the published splits must land in: 18–21 at the live ratio, against 43–59 at
      * the bench ratio. The ceiling is what fails the optimistic regime; the floor is there because a
      * profile that priced probes so high that nothing was ever attempted would satisfy every other
      * threshold below while modelling a fleet that had stopped trying.
      */
-    private static final long SPLITS_FLOOR = 10;
+    private static final long SPLITS_FLOOR = 18;
 
-    private static final long SPLITS_CEILING = 25;
+    private static final long SPLITS_CEILING = 21;
 
-    /** Serial fraction: 0.4871–0.4889 here, 0.0880–0.2114 at the bench ratio. */
+    /** Serial fraction: 0.4850–0.4881 here, 0.0696–0.1790 at the bench ratio. */
     private static final double SERIAL_FRACTION_FLOOR = 0.40;
 
     @Test
-    void atTheLiveProbeToPageRatioTheHeavyLeafDrainsAsOneUnstealableRange() {
+    void atTheLiveProbeToPageRatioTheHeavyLeafStillDrainsAlmostEntirelyOnOneRange() {
         List<byte[]> keys = SensingRaceProtocol.bench().get();
         List<String> rows = new ArrayList<>();
+        int emptyThiefChildren = 0;
+        int massBearingThiefChildren = 0;
         for (long seed : SensingRaceProtocol.SEEDS) {
             PolicyRunResult result = run(keys, seed);
             String leg = SensingRaceProtocol.label(ARM) + "/seed " + seed;
@@ -140,21 +143,30 @@ class ProbeToPageRatioTailTest {
                     result.counter("NO_VICTIM.all_futility_paced"),
                     result.counter(SimExecutor.STEAL_ATTEMPTS_COUNTER)));
 
+            if (stolenKeys == 0) {
+                emptyThiefChildren++;
+            } else {
+                massBearingThiefChildren++;
+            }
+
             assertThat(victimShare)
-                    .as("%s: the range holding the fleet drained the heavy leaf itself", leg)
+                    .as("%s: the range holding the fleet drained almost all of the heavy leaf", leg)
                     .isGreaterThan(VICTIM_SHARE_FLOOR);
-            assertThat(stolenKeys)
-                    .as("%s: what the thief carved off it drained nothing", leg)
-                    .isZero();
             assertThat(lossShare)
                     .as("%s: the thief is trying and losing, not declining to try", leg)
                     .isGreaterThan(PROPOSAL_LOSS_FLOOR);
             assertThat(splits).as("%s: splits published", leg)
                     .isBetween(SPLITS_FLOOR, SPLITS_CEILING);
             assertThat(result.timeline().serialFraction())
-                    .as("%s: the fleet spends the tail as one worker", leg)
+                    .as("%s: the fleet spends almost half the run as one worker", leg)
                     .isGreaterThan(SERIAL_FRACTION_FLOOR);
         }
+        assertThat(emptyThiefChildren)
+                .as("three seeds still publish only empty children from the tail victim")
+                .isEqualTo(3);
+        assertThat(massBearingThiefChildren)
+                .as("top-scope closure lets one seed take real mass from the bounded tail")
+                .isEqualTo(1);
         rows.forEach(System.out::println);
     }
 
@@ -167,7 +179,7 @@ class ProbeToPageRatioTailTest {
      * keep passing there and start failing here.
      *
      * <p>Asserted as the negation of each live threshold rather than against the recorded bench bands
-     * (0.402–0.572 share, 39–61 splits, and so on). The claim being protected is "these readings are a
+     * (0.4475–0.5825 share, 43–59 splits, and so on). The claim being protected is "these readings are a
      * property of the ratio", which is a claim about which side of each threshold a run lands on; the
      * bands themselves are one instrument's readings and would make this brittle against any
      * scheduling-visible change without saying anything more.
