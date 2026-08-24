@@ -32,6 +32,8 @@ import java.util.zip.GZIPOutputStream;
 public record TextDatasetFormat(OutputFormat format, TextCompression compression, boolean escape)
         implements DatasetFormat {
 
+    private static final int COMPRESSED_ENCODER_BUFFER_BYTES = 64 * 1024;
+
     public TextDatasetFormat {
         if (format != OutputFormat.TSV && format != OutputFormat.JSONL) {
             throw new IllegalArgumentException("partitioned text output requires tsv or jsonl");
@@ -154,7 +156,10 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
             OutputStream stream, TextCompression compression, boolean escape)
             throws IOException {
         OutputStream compressed = compress(stream, compression);
-        return new TsvPartEncoder(new Utf8TsvFormatter(compressed, escape));
+        OutputStream sink = compression == TextCompression.NONE
+                ? compressed
+                : new BufferedOutputStream(compressed, COMPRESSED_ENCODER_BUFFER_BYTES);
+        return new TsvPartEncoder(new Utf8TsvFormatter(sink, escape));
     }
 
     private static CountingWriter openEncoder(OutputStream stream, TextCompression compression)

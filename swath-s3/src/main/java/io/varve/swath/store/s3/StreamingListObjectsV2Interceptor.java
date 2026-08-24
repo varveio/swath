@@ -8,6 +8,7 @@ package io.varve.swath.store.s3;
 import io.varve.swath.observability.RunMetrics;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.DateTimeException;
@@ -35,6 +36,7 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.Owner;
 import software.amazon.awssdk.services.s3.model.RestoreStatus;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.utils.DateUtils;
 
 /**
  * Streams successful {@code ListObjectsV2} XML into the SDK response model instead of letting the
@@ -69,14 +71,19 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
             Context.ModifyHttpResponse context, ExecutionAttributes executionAttributes) {
         SdkRequest request = context.request();
         Optional<InputStream> responseBody = context.responseBody();
-        if (!(request instanceof ListObjectsV2Request listRequest)
-                || !isSuccessful(context.httpResponse().statusCode())
+        if (!(request instanceof ListObjectsV2Request listRequest)) {
+            return responseBody;
+        }
+        // ExecutionAttributes live for the whole SDK call, including attempts. Never let a parsed
+        // response from an earlier attempt overlay a later response that bypasses this path.
+        executionAttributes.putAttribute(PARSED_RESPONSE, null);
+        if (!isSuccessful(context.httpResponse().statusCode())
                 || responseBody.isEmpty()) {
             return responseBody;
         }
 
-        try {
-            ParsedResponse parsed = parse(responseBody.orElseThrow(), listRequest.maxKeys());
+        try (InputStream body = responseBody.orElseThrow()) {
+            ParsedResponse parsed = parse(body, listRequest.maxKeys());
             if (parsed.sdkErrorBody != null) {
                 if (metrics != null) {
                     metrics.recordStealReason("S3_RESPONSE", "sdk_error_in_success");
@@ -88,7 +95,7 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 metrics.recordStealReason("S3_RESPONSE", "streaming_xml");
             }
             return Optional.of(new ByteArrayInputStream(EMPTY_RESULT));
-        } catch (XMLStreamException | RuntimeException e) {
+        } catch (IOException | XMLStreamException | RuntimeException e) {
             throw SdkClientException.builder()
                     .message("Unable to stream ListObjectsV2 XML response")
                     .cause(e)
@@ -266,8 +273,8 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
     /**
      * Avoid the general {@link java.time.format.DateTimeFormatter} state machine for the canonical
      * UTC form emitted by S3 on every object. Anything outside that deliberately narrow grammar is
-     * handed back to {@link Instant#parse(CharSequence)}, preserving the SDK path's accepted input
-     * and failure semantics for offsets, extended years and leap seconds.
+     * handed back to the SDK's own parser, preserving its accepted input and failure semantics for
+     * alternate offsets, extended years and leap seconds.
      */
     static Instant parseInstantValue(String value) {
         int length = value.length();
@@ -277,7 +284,7 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
         } else if (length >= 22 && length <= 30 && value.charAt(19) == '.' && value.charAt(length - 1) == 'Z') {
             fractionDigits = length - 21;
         } else {
-            return Instant.parse(value);
+            return DateUtils.parseIso8601Date(value);
         }
 
         if (value.charAt(4) != '-'
@@ -285,7 +292,7 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 || value.charAt(10) != 'T'
                 || value.charAt(13) != ':'
                 || value.charAt(16) != ':') {
-            return Instant.parse(value);
+            return DateUtils.parseIso8601Date(value);
         }
 
         int year = parseDigits(value, 0, 4);
@@ -295,14 +302,14 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
         int minute = parseDigits(value, 14, 2);
         int second = parseDigits(value, 17, 2);
         if ((year | month | day | hour | minute | second) < 0 || hour > 23 || minute > 59 || second > 59) {
-            return Instant.parse(value);
+            return DateUtils.parseIso8601Date(value);
         }
 
         int nanos = 0;
         if (fractionDigits > 0) {
             nanos = parseDigits(value, 20, fractionDigits);
             if (nanos < 0) {
-                return Instant.parse(value);
+                return DateUtils.parseIso8601Date(value);
             }
             for (int i = fractionDigits; i < 9; i++) {
                 nanos *= 10;
@@ -314,7 +321,7 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
             long epochSecond = epochDay * 86_400L + hour * 3_600L + minute * 60L + second;
             return Instant.ofEpochSecond(epochSecond, nanos);
         } catch (DateTimeException ignored) {
-            return Instant.parse(value);
+            return DateUtils.parseIso8601Date(value);
         }
     }
 

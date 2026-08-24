@@ -33,6 +33,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.utils.DateUtils;
 
 /**
  * The S3 client is built with {@code maxConnections = T + 16}. The pool must
@@ -41,7 +42,7 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 class S3ClientFactoryTest {
 
     @Test
-    void streamingTimestampFastPathMatchesInstantParseAndFallsBackWithoutBroadeningTheGrammar() {
+    void streamingTimestampFastPathMatchesTheSdkParserAndFallsBackWithoutNarrowingItsGrammar() {
         List<String> accepted = List.of(
                 "0000-01-01T00:00:00Z",
                 "2024-02-29T23:59:59Z",
@@ -51,16 +52,17 @@ class S3ClientFactoryTest {
                 "2026-08-24T12:34:56.123456Z",
                 "2026-08-24T12:34:56.Z",
                 "2026-08-24T12:34:56+01:30",
+                "2026-08-24T12:34:56+0000",
                 "2026-08-24T24:00:00Z",
                 "2016-12-31T23:59:60Z",
+                "2026-02-29T00:00:00Z",
                 "+010000-01-01T00:00:00Z");
 
         accepted.forEach(value -> assertThat(StreamingListObjectsV2Interceptor.parseInstantValue(value))
                 .as(value)
-                .isEqualTo(Instant.parse(value)));
+                .isEqualTo(DateUtils.parseIso8601Date(value)));
 
         List<String> rejected = List.of(
-                "2026-02-29T00:00:00Z",
                 "2026-08-24T25:00:00Z",
                 "2026-08-24T12:34:56.AZ",
                 "2026-08-24T12:34:56.1234567890Z",

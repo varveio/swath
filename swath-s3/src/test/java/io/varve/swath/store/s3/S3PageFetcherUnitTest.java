@@ -24,6 +24,7 @@ import io.varve.swath.store.PageRequest;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
 import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
@@ -179,6 +180,21 @@ class S3PageFetcherUnitTest {
 
         ObjectEntry entry = (ObjectEntry) page.entries().getFirst();
         assertThat(entry.checksumAlgorithm()).isEqualTo("FUTURE_CHECKSUM");
+    }
+
+    @Test
+    void treatsAnExplicitlyEmptyChecksumAlgorithmListAsAbsent() throws Exception {
+        S3Object object = S3Object.builder()
+                .key("k")
+                .checksumAlgorithmWithStrings(List.of())
+                .build();
+        S3Client client = FakeS3Client.respondingWith(
+                ListObjectsV2Response.builder().isTruncated(false).contents(object).build());
+
+        ListPage page = new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
+
+        ObjectEntry entry = (ObjectEntry) page.entries().getFirst();
+        assertThat(entry.checksumAlgorithm()).isNull();
     }
 
     // ---- throttle classification (algorithms.md §5; THR-1 wiring) -------------------
