@@ -33,14 +33,19 @@ history and delete-marker listing are not implemented yet.
 | --- | --- | --- |
 | Inspect rows in a terminal | `swath list s3://bucket/prefix` | No |
 | Pipe TSV | `swath list ... \| command` | No |
+| Profile listing without materializing rows | `swath list ... --format discard --checkpoint none --report run.json` | No |
 | Write JSONL or TSV | `swath list ... --format jsonl -o rows.jsonl --checkpoint none` | No |
 | Write partitioned JSONL or TSV | `swath list ... --format jsonl --output-type dir -o rows/ --checkpoint none` | No |
 | Keep a managed Parquet dataset | `swath list ... --format parquet -o out/` | Yes |
 | Keep globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
 
 `--format auto` is the default. It chooses an aligned table when stdout is a terminal
-and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, and
-`parquet`. `--compression none|gzip|zstd` compresses table, TSV, or JSONL output to a
+and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, `parquet`,
+and the diagnostic `discard` sink. Discard accepts no `-o` destination or compression: it drains
+and tallies the normal engine pipeline without formatting rows or constructing a writer, writer
+pool, compressor, or file. It still includes S3 response parsing, Swath model/filter work,
+checkpoint commits, bounded-channel handoff, and the normal emission metrics.
+`--compression none|gzip|zstd` compresses table, TSV, or JSONL output to a
 file or stdout, and TSV/JSONL parts in a directory dataset. For files it is also
 inferred from `.gz` or `.zst`; stdout needs the explicit option. Parquet uses its own
 compression and rejects this option.
@@ -205,6 +210,7 @@ managed output directory, not an arbitrary SQLite path.
 | --- | --- |
 | Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
 | stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
+| Discard | Profiling-only and non-resumable; a clean completion means every committed page was drained and tallied, but no output artifact exists. |
 | FILE-kind text | One-shot and non-resumable; successful publication atomically replaces the destination. |
 | Directory-dataset TSV/JSONL | Non-resumable; bounded parallel parts are published with `_SUCCESS` last, and a failed run has no success marker. |
 | FILE-kind Parquet | One-writer, non-resumable dataset directory in the current release. |

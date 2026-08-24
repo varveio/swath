@@ -25,6 +25,7 @@ The resolution rules are deliberately independent:
 | Input | Resolution |
 | --- | --- |
 | No `-o`, or `-o -` | stdout; `auto` is table on a terminal and TSV when redirected |
+| `--format discard` | diagnostic stdout-shaped sink with no bytes written; rejects a real `-o` destination and gzip/Zstandard compression |
 | `-o` ending in `.tsv` or `.jsonl` | atomically published single file; the suffix supplies the format when `--format` is omitted |
 | `-o` ending in `.parquet` | FILE-kind, one-writer Parquet dataset directory containing one part; it is not one physical Parquet file |
 | A `.gz` or `.zst` outer suffix | stripped before format inference and implies gzip or Zstandard for text; for example, `rows.jsonl.gz` is a gzip JSONL file |
@@ -36,6 +37,10 @@ An explicit `--format` must agree with a recognized suffix. An explicit
 compression is internal. Table, TSV, and JSONL support optional compression as stdout
 or single-file streams. Only TSV and JSONL support bounded directory datasets; those
 datasets are non-resumable and require `--checkpoint none` in this release.
+
+Discard is also non-resumable. It uses the normal engine, checkpoint protocol, bounded listing
+channel, row tally, and metrics, but bypasses every material output component. Use `--report PATH`
+to retain its summary because the sink itself intentionally creates no destination.
 
 Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). At startup, unless stdout or `-q` suppresses it,

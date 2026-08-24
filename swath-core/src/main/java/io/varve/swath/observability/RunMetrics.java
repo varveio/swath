@@ -1809,8 +1809,9 @@ public final class RunMetrics {
      * The per-page entries-emitted bump: {@code swath.entries.emitted} plus universal progress
      * (§3.2). Called from exactly ONE of {@link io.varve.swath.output.OutputStage} ("the single
      * output stage" — its own class javadoc), {@link
-     * io.varve.swath.output.dataset.DatasetOutputStage} or {@code SortOutputStage} per run — the
-     * three are mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
+     * io.varve.swath.output.dataset.DatasetOutputStage}, {@link
+     * io.varve.swath.output.DiscardOutputStage} or {@code SortOutputStage} per run — the four are
+     * mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
      * wires up exactly one depending on the sink, never more than one concurrently. That makes this
      * call site THE already-serialized point for this run: no extra synchronization is needed for a
      * caller (like the tail-occupancy sampler below) to treat "cumulative keys emitted" and "current

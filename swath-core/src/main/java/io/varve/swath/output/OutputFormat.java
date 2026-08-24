@@ -10,7 +10,9 @@ public enum OutputFormat {
     PARQUET,
     JSONL,
     TSV,
-    TABLE;
+    TABLE,
+    /** Diagnostic sink that drains and tallies rows without serializing or writing them. */
+    DISCARD;
 
     /** Default ({@code auto}): {@code table} on a TTY, {@code tsv} otherwise (piped). */
     public static OutputFormat defaultFor(boolean tty) {

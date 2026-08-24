@@ -20,6 +20,8 @@ public final class Formatters {
             case TABLE -> new AlignedFormatter(out, escape);
             case PARQUET -> throw new IllegalArgumentException(
                     "Parquet is a path-based sink, not a text Writer");
+            case DISCARD -> throw new IllegalArgumentException(
+                    "Discard output bypasses text formatters and Writers");
         };
     }
 }

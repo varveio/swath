@@ -32,8 +32,8 @@ Output:
                              Compress table/TSV/JSONL streams, files, or
                                dataset parts; inferred from .gz/.zst file names
                                when omitted (default: none).
-      --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
-                               parquet (default: auto).
+      --format=FORMAT        Output encoding/sink: auto, table, tsv, jsonl,
+                               parquet, or discard (default: auto).
   -o, --output=PATH          Write to PATH; known extension selects a file,
                                otherwise a dataset; - is stdout.
       --output-type=file|dir Override -o file/directory inference.

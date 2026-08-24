@@ -24,6 +24,7 @@ import io.varve.swath.engine.RetryConfig;
 import io.varve.swath.error.CancelledException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.observability.RunSummary;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.ListingStatistics;
 import io.varve.swath.output.OutputFormat;
@@ -73,6 +74,11 @@ final class ListRunnerWorkStealingTest {
                 "WORK_STEALING", ListingMode.OBJECTS, "", "parquet");
     }
 
+    private static RunKey discardKey() {
+        return new RunKey("s3", null, "bucket", new byte[0], "ws-discard-hash",
+                "WORK_STEALING", ListingMode.OBJECTS, "", "discard");
+    }
+
     @Test
     @Timeout(30)
     void textSink_emitsEveryKeyOnce_runsCompleted(@TempDir Path dir) throws Exception {
@@ -100,6 +106,41 @@ final class ListRunnerWorkStealingTest {
             // Run must be COMPLETED (markRunFinished was called)
             List<Node> resumable = store.loadResumable(run.id(), false);
             assertThat(resumable).as("run is complete — no resumable nodes").isEmpty();
+        }
+    }
+
+    @Test
+    @Timeout(30)
+    void discardSinkTalliesEveryKeyCompletesAndMaterializesNoOutput(@TempDir Path dir) throws Exception {
+        List<byte[]> keys = Keyspaces.exactly(1500);
+        MockPageFetcher fetcher = MockPageFetcher.builder().keys(keys).build();
+
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(dir.resolve("discard.sqlite"))) {
+            RunMeta run = store.openRun(discardKey(), false, false);
+            store.insertNode(NodeSpec.rootRange(run.id()));
+            List<Node> seeds = store.loadResumable(run.id(), false);
+            ListRunner.Spec spec = new ListRunner.Spec(new byte[0], OutputFormat.DISCARD, true,
+                    8000, 1000, FilterChain.EMPTY, null, null);
+            RunContext ctx = RunContext.create();
+            List<RunSummary> summaries = new ArrayList<>();
+            ctx.metrics().setSummarySink((summary, diagnostics, status) -> summaries.add(summary));
+
+            ListingStatistics stats = new ListRunner().runWorkStealingDiscard(
+                    ctx, fetcher, spec, store, run.id(), 4, seeds,
+                    EngineToggles.DEFAULT, TraceSink.NONE, RetryConfig.DEFAULT);
+
+            assertThat(stats.objects()).isEqualTo(keys.size());
+            assertThat(store.loadResumable(run.id(), false)).isEmpty();
+            assertThat(summaries).singleElement().satisfies(summary -> {
+                assertThat(summary.outputFiles()).isZero();
+                assertThat(summary.compressedBytes()).isZero();
+                assertThat(summary.objects()).isEqualTo(keys.size());
+            });
+            assertThat(ctx.meterRegistry().get("swath.steal_reason")
+                    .tag("outcome", "OUTPUT").tag("reason", "discard").counter().count())
+                    .isEqualTo(1.0);
+            assertThat(ctx.meterRegistry().find("swath.output.files").meters()).isEmpty();
+            assertThat(ctx.meterRegistry().find("swath.output.bytes").meters()).isEmpty();
         }
     }
 

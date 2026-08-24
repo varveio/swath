@@ -1081,6 +1081,18 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 pageMax, filterChain, ctx, argsHash, store, run, nodes, fetcher, config,
                                 traceSink, writer));
                     }
+                    if (resolved == OutputFormat.DISCARD) {
+                        ListRunner.Spec listSpec = listSpec(
+                                s3uri, resolved, channelCapacity, pageMax, filterChain,
+                                argsHash, config);
+                        return runEngineGuarded(store, run.id(), () -> {
+                            new ListRunner().runWorkStealingDiscard(
+                                    ctx, fetcher, listSpec, store, run.id(),
+                                    connection.maxParallelListings, nodes, engine.toggles,
+                                    traceSink, retryConfig());
+                            return ExitCodes.SUCCESS;
+                        });
+                    }
                     if (output.resolvedKind == OutputOptions.DestinationKind.DIRECTORY) {
                         OutputFormat textFormat = resolved;
                         TextWriterPoolConfig writer = textWriterPoolConfig(
@@ -1126,7 +1138,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     }
 
     /**
-     * CLI-level fatal-error seam: every real {@code swath list} engine dispatch (text/
+     * CLI-level fatal-error seam: every real {@code swath list} engine dispatch (text/discard/
      * Parquet/sorted-Parquet) funnels through here so a genuinely unrecoverable listing/output/
      * checkpoint error also marks {@code run_meta.status=FAILED} with the fatal-error flag set
      * ({@link io.varve.swath.checkpoint.CheckpointStore#markRunFatalUnlessFinished}) — distinct from the

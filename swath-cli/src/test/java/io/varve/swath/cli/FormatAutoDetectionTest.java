@@ -149,12 +149,12 @@ class FormatAutoDetectionTest {
     }
 
     @Test
-    void unknownFormatValueIsRejectedWithAllFiveTokensListed() {
+    void unknownFormatValueIsRejectedWithAllSixTokensListed() {
         ListCommand cmd = new ListCommand();
         CommandLine picocliCmd = new CommandLine(cmd);
         Assertions.assertThatThrownBy(
                         () -> picocliCmd.parseArgs("s3://bucket/prefix", "--format", "xml"))
                 .isInstanceOf(ParameterException.class)
-                .hasMessageContaining("table, tsv, jsonl, parquet, auto");
+                .hasMessageContaining("table, tsv, jsonl, parquet, discard, auto");
     }
 }

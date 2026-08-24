@@ -203,7 +203,9 @@ The parent bound is restored in memory when the transaction reports no changed r
 
 `Filter` and `EntryFormatter` are sealed internal families. The current filters cover key
 regex, size, modification time, and storage class; the current formatters cover JSONL, TSV,
-aligned table, and Parquet. `Scope` is the repository's virtual-thread lifecycle helper and
+aligned table, and Parquet. The diagnostic discard sink deliberately bypasses the formatter
+family: its consumer drains raw `PageBatch` values and retains the standard row tally/emission
+metrics without constructing a writer. `Scope` is the repository's virtual-thread lifecycle helper and
 provides fork, coordinated cancellation, join, and close without preview APIs.
 
 ### 2.1 The policy/executor split

@@ -75,7 +75,8 @@ final class OutputOptions {
 
     @Resume(value = ResumeClass.IDENTITY, restored = true)
     @Option(names = "--format", paramLabel = "FORMAT", converter = FormatConverter.class,
-            description = "Output encoding: auto, table, tsv, jsonl, or parquet (default: auto).")
+            description = "Output encoding/sink: auto, table, tsv, jsonl, parquet, or discard "
+                    + "(default: auto).")
     void setFormat(OutputFormat format) {
         this.format = format;
         this.formatSpecified = true;
@@ -88,7 +89,7 @@ final class OutputOptions {
     /** Picocli presence bit: unlike {@link #format}, distinguishes omitted from explicit auto. */
     private boolean formatSpecified;
 
-    /** Accepts the explicit {@code auto} spelling alongside the four concrete formats. Auto maps
+    /** Accepts the explicit {@code auto} spelling alongside the concrete formats. Auto maps
      * to {@code null}; {@link #formatSpecified} preserves its option presence so resume treats it
      * exactly like an explicitly selected concrete format rather than restoring over it. */
     static final class FormatConverter implements ITypeConverter<OutputFormat> {
@@ -101,7 +102,7 @@ final class OutputOptions {
                 return OutputFormat.valueOf(value.toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new TypeConversionException(
-                        "'" + value + "' is not one of [table, tsv, jsonl, parquet, auto]");
+                        "'" + value + "' is not one of [table, tsv, jsonl, parquet, discard, auto]");
             }
         }
     }
@@ -250,6 +251,11 @@ final class OutputOptions {
             throw new InvalidArgsException(cause + " applies only to text output formats "
                     + "(table, tsv, jsonl); Parquet manages its own compression");
         }
+        if (resolved == OutputFormat.DISCARD && resolvedCompression != TextCompression.NONE) {
+            throw new InvalidArgsException("--format discard does not serialize output and therefore "
+                    + "does not support --compression "
+                    + resolvedCompression.name().toLowerCase(Locale.ROOT));
+        }
     }
 
     /**
@@ -326,6 +332,10 @@ final class OutputOptions {
             resolvedFormat = selected;
             resolveCompression(selected);
             return new Resolved(selected, resolvedKind);
+        }
+        if (selected == OutputFormat.DISCARD) {
+            throw new InvalidArgsException("--format discard does not accept -o " + destination
+                    + "; it drains and tallies the listing without creating an output destination");
         }
         String ext = extensionOf(destination);
         OutputFormat fromExtension = formatFromExtension(destination);
