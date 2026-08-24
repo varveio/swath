@@ -349,8 +349,10 @@ the keys per directory loses 52%. The real-listing instruments (`RealListingRunT
 sweep, `SingleLegRunTest`) therefore run at the live profile — `PolicyRunFixtures.LIVE_S3_LATENCY`,
 223 ms page / 121 ms pivot probe / 223 ms delimited probe, measured 2026-07-28 — and
 `ProbeToPageRatioTailTest` pins the mechanism: one fixture, one fleet, one page size, one arm, with
-only the ratio changed, and the heavy leaf goes from carved-up to a single unstealable range holding
-the fleet for half the run.
+only the ratio changed. At the live ratio the heavy leaf remains more than 97% on one range and holds
+the fleet for nearly half the run. Top-scope closure lets one of four seeds take 11,003 keys from that
+range, so the instrument records that split verdict instead of calling the range universally
+unstealable.
 
 **The bench tables published at the 35 ms / 110 ms regime remain valid as characterisations of that
 regime** and are still pinned there — a bench number states its regime, and re-running them at the
@@ -467,11 +469,11 @@ magnitude per page committed, and what replaces them is the demand gate declinin
 there is already enough work queued. **At the measured 1,000-key page every candidate is worse, at every
 seed**, because an estimate with no sense of position places the owner's carve on a nearly-drained range,
 the child comes back confetti-sized, and the feedback gate that watches for that shuts owner splitting
-down for the rest of the run. The rate variant alone also damages the hash-fanned healthy shape, at one
-of the four seeds — read on the same yardstick for all three candidates, the control's own reading at
-the same seed — for the same reason. None of the three is shippable as it stands; what the race
-establishes is that the sensor, and not the split policy above it, is what gates division on that
-keyspace.
+down for the rest of the run. After top-scope closure, all three candidates fail the uniform
+healthy-shape guard at seed 424242: serial fraction crosses 0.05 and occupancy falls below 7 of 8.
+The plain rate arm also exceeds the hash-fanned store-call budget at one seed. None of the three is
+shippable as it stands; what the race establishes is that the sensor, and not the split policy above
+it, is what gates division on that keyspace.
 
 **The degeneracy counters are not the evidence they look like.** Both go to zero for `RATE` and
 `RATE_CURSOR_ANCHORED`, but that is arithmetic and not a cure: an estimator whose estimate *is* the
@@ -752,13 +754,13 @@ size, and the small page buys that at a tenth of the memory while buying nothing
 `KeyspaceFixturesTest`.
 
 **And that 0.001 is quoted at a probe:page ratio too.** The same fixture, the same 1,000-key page and
-the same fleet, run at the live store's ratio instead of the bench's, does not have its heavy leaf
-absorbed at all: the leaf drains as one range that holds the fleet for **49%** of the run, 668 steal
-attempts against it produce a single child that carries no keys, and the run publishes 18 splits where
-the bench ratio publishes 39–61. `ProbeToPageRatioTailTest` (`@Tag("perf")`) pins that, and it is the
-leg to read before quoting any tail or loss number from this module as what a real fleet would do:
-the page size decides how many round trips a range is, and the probe:page ratio decides whether anyone
-can take it away.
+the same fleet, run at the live store's ratio instead of the bench's, leaves more than **97%** of its
+heavy leaf on one range that holds the fleet for about **49%** of the run. Three seeds drain no tail
+mass through thief children; top-scope closure lets the fourth take 11,003 keys, but does not cure the
+tail. The run publishes 18–21 splits where the bench ratio publishes 43–59.
+`ProbeToPageRatioTailTest` (`@Tag("perf")`) pins that, and it is the leg to read before quoting any tail
+or loss number from this module as what a real fleet would do: the page size decides how many round
+trips a range is, and the probe:page ratio decides whether anyone can take it away.
 
 One of them is adversarial on purpose. **Concurrency poison** is a store whose latency rises with the
 number of calls in flight: the fleet's own success makes every call slower. It exists because one

@@ -69,34 +69,21 @@ import org.junit.jupiter.api.Test;
  * that — then suppresses owner splitting for the rest of the run. Division falls back onto the
  * thief's probe-driven path, which is what the extra calls and the extra time are.
  *
- * <p><b>E1 alone also damages a healthy keyspace — at one of the four seeds.</b> All three candidates
- * are read here on <b>one</b> yardstick, the hash-fanned control's own serial fraction <em>at the same
- * seed</em>: that control moves more than twentyfold across the four seeds (0.0004, 0.0049, 0.0093,
- * 0.0037), so a fixed line lets the same reading be called a regression for one candidate and a hold
- * for another. On that yardstick E1 reaches <b>0.1198 at seed 20260727 — two orders of magnitude past
- * the control at that seed, and about fifteen times what E1+E2 does at it (0.0080)</b> — with mean
- * occupancy falling below 7 of 8 workers, the NO_VICTIM share at 0.80
- * against the control's 0.012, and {@code NO_VICTIM.all_futility_paced} at 381 against the control's 1.
- * At 987654321 it is elevated at 0.0301, 8× the control — but E1+E2 reads 0.0293 there, 8× the control
- * too, so <b>that seed does not separate the candidates and is not counted against E1</b>. At the
- * remaining two seeds E1 sits at or below the control. The verdict is therefore <b>one decisive seed of
- * four, reported as the split verdict it is</b> rather than averaged away, and the mechanism is exactly
- * the cost E1's own note predicted for an estimator that gives up position: with no position term a
- * nearly-finished range still outranks everything, thieves attack it, fail, and the per-victim futility
- * cooldown pages every candidate out. E2 and E1+E2 hold both guards at all four seeds — on serial
- * fraction, on occupancy, and on throughput.
+ * <p><b>Top-scope closure changed which healthy shape rejects the candidates.</b> Once the seed planner
+ * bounds the rightmost mass-bearing range, all three original candidates fail the uniform guard at
+ * seed 424242: serial fraction crosses the pre-registered 0.05 line and mean occupancy falls below 7
+ * of 8. The plain rate arm also exceeds the hash-fanned store-call budget. These lines are deliberately
+ * not relaxed after seeing the result. A one-seed failure is a rejected candidate under the
+ * protocol's four-seed rule.
  *
  * <h2>What this says, and what it does not</h2>
  * The sensor was the thing gating division on this keyspace: fixing the reading, and nothing else,
  * removes the serial tail entirely at the regime that produces it. It does not follow that any of
  * these three is shippable — all three lose at the page size a real deployment uses, which is the
  * regime the deployment's own tail was measured in, and the reason for that loss is a calibration
- * problem rather than a visibility one. E2 is the only candidate whose reading is byte-identical to
- * the shipped one wherever the two windows are anchored at the same byte — a narrower set than
- * "wherever the shipped one works", so its holding both guards at 4 of 4 seeds is a measurement rather
- * than a construction — and it does hold them; E1 is the one whose degenerate readings are all zero,
- * which is a property of its arithmetic rather than a result, and it is the one that breaks a healthy
- * shape. The combination keeps both properties and still loses the measured regime.
+ * problem rather than a visibility one. E1 is the one whose degenerate readings are all zero, which
+ * is a property of its arithmetic rather than a result. Top-scope closure does not rescue any arm:
+ * every candidate still loses the measured regime and now also fails the uniform healthy-shape guard.
  *
  * <p>Opt-in ({@code @Tag("perf")}) for memory and time, like every at-scale fixture here: the bench
  * is a million-key keyspace and the race runs it once per seed per variant.
@@ -183,7 +170,7 @@ class SensingRaceTest {
     }
 
     @Test
-    void onlyTheAnchoredVariantsKeepTheHealthyShapesHealthy() {
+    void topScopeClosureRejectsRateOnHashFannedAndEveryCandidateOnUniform() {
         List<SensingRaceProtocol.Leg> hashFanned = SensingRaceProtocol.raceOn("hash-fanned",
                 SensingRaceProtocol.hashFannedGuard(), SensingRaceProtocol.BENCH_PAGE_SIZE,
                 PolicyRunFixtures.REMOTE_LATENCY, ALL);
@@ -194,20 +181,21 @@ class SensingRaceTest {
         legs.addAll(uniform);
         SensingRaceProtocol.printTable("== guards: the two healthy shapes", legs);
 
-        // The uniform guard is held by every candidate at every seed: same geometry, mass spread, and
-        // nothing any of them does to the estimate costs it anything -- not the serial fraction, not
-        // occupancy, and not throughput. Its tail is reported rather than asserted, per the dated
-        // qualification in the protocol: the uniform CONTROL's own tail is 0.034-0.069, so the
-        // hash-fanned guard's <0.05 line would fail the shipped algorithm on a healthy fixture.
+        // Closing the top scope invalidated every candidate on the uniform guard at seed 424242. Keep
+        // the pre-registered line fixed: a candidate that crosses it is rejected, not accommodated by
+        // moving the line after the result is known. At this seed all three candidates also cross the
+        // occupancy boundary, so two independent readings pin the regression.
         for (SensingVariant variant : CANDIDATES) {
-            for (long seed : SensingRaceProtocol.SEEDS) {
-                assertGuardHeld(SensingRaceProtocol.at(uniform, variant, seed),
-                        SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
-                        variant + " on the uniform guard at seed " + seed);
-            }
+            SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(uniform, variant, 424242L);
+            assertThat(leg.serialFraction())
+                    .as("%s on the uniform guard at seed 424242: disclosed rejection", variant)
+                    .isGreaterThanOrEqualTo(0.05);
+            assertThat(leg.result().timeline().meanOccupancy())
+                    .as("%s on the uniform guard at seed 424242: occupancy regression", variant)
+                    .isLessThan(7.0);
         }
-        // The hash-fanned guard separates the candidates. The two that keep a position term hold it at
-        // every seed, on the guard's own health threshold and on the tail as well.
+        // The two anchored candidates hold the hash-fanned guard on every seed, including its
+        // additional tail criterion.
         for (SensingVariant variant : new SensingVariant[] {
             SensingVariant.CURSOR_ANCHORED, SensingVariant.RATE_CURSOR_ANCHORED}) {
             for (long seed : SensingRaceProtocol.SEEDS) {
@@ -218,26 +206,15 @@ class SensingRaceTest {
                         .isLessThan(0.05);
             }
         }
-        // E1 does not, at one of the four seeds -- read on the same-seed yardstick as everything above.
-        // Only a four-seed reading may be pinned, so what is asserted is the set-level one: E1's worst
-        // seed is an order of magnitude past the control's worst, with the fleet spending most of its
-        // steal attempts finding every candidate paged out by the futility cooldown. The per-seed
-        // detail, including the seed where E1 and E1+E2 are 3% apart and neither is separated from the
-        // other, is in this class's own prose.
-        double controlWorst = 0.0;
-        double rateWorst = 0.0;
-        double rateWorstNoVictim = 0.0;
-        for (long seed : SensingRaceProtocol.SEEDS) {
-            controlWorst = Math.max(controlWorst,
-                    SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed).serialFraction());
-            SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(hashFanned, SensingVariant.RATE, seed);
-            rateWorst = Math.max(rateWorst, leg.serialFraction());
-            rateWorstNoVictim = Math.max(rateWorstNoVictim, leg.noVictimShare());
-        }
-        assertThat(rateWorst).as("the rate estimate's worst hash-fanned seed against the control's worst")
-                .isGreaterThan(10.0 * controlWorst);
-        assertThat(rateWorstNoVictim).as("and the fleet finding no victim while it happens")
-                .isGreaterThan(0.5);
+        // The plain rate arm is also rejected on hash-fanned: at this seed it exceeds the unchanged
+        // five-percent store-call budget even though its serial and occupancy readings look healthy.
+        SensingRaceProtocol.Leg rate =
+                SensingRaceProtocol.at(hashFanned, SensingVariant.RATE, 987654321L);
+        SensingRaceProtocol.Leg control =
+                SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, 987654321L);
+        assertThat(rate.result().storeCalls())
+                .as("rate on hash-fanned at seed 987654321: store-call regression")
+                .isGreaterThanOrEqualTo((long) (1.05 * control.result().storeCalls()));
     }
 
     /**
@@ -348,88 +325,28 @@ class SensingRaceTest {
         }
     }
 
-    /**
-     * <b>{@code CarveAdmissionRaceProtocol}'s C4 and its synthetic must-not-regress leg</b>, on the
-     * fixtures this class already owns. The later candidate is the combination with the geometry band's
-     * lower half removed, and what it has to show here is that a change made to cure a real bucket's
-     * straggler has not spent the bench's cure or either guard to do it: it holds every criterion the
-     * combination holds at the bench regime, holds both healthy shapes on serial fraction, occupancy and
-     * throughput, and is <b>no worse than the combination</b> at the measured regime — which is the
-     * fixture the whole carve-placement question was originally raised on, and where every candidate
-     * loses to the shipped sensor.
-     *
-     * <p>That last reading is asserted as a comparison against the combination and not against the
-     * control, because losing to the control there is this family's known, recorded property; the claim
-     * under test is that this candidate does not make it worse.
-     *
-     * <p><b>One criterion is a split, and is recorded as one.</b> The hash-fanned guard's extra tail
-     * line — the {@code < 0.05} the two anchored candidates hold at four seeds of four — this candidate
-     * <b>misses at one seed of four</b>, at <b>0.0510 against 0.0500</b> at seed 987654321, where the
-     * combination reads 0.0324 and the control 0.0092. Everything else that guard is held to holds at
-     * all four: serial fraction, occupancy, duration and store calls, each against the control at its
-     * own seed. Per the protocol only a four-seed reading may be pinned, so what is asserted here is the
-     * split as measured — three seeds clear the line and the table prints all four — rather than a line
-     * moved until the candidate clears it.
-     *
-     * <p><b>The same seed's other two readings are marginal, and are stated rather than left to the
-     * table.</b> At 987654321 on the hash-fanned guard this candidate reads a <b>serial fraction of
-     * 0.0481</b> — 96% of the {@code < 0.05} line {@link #assertGuardHeld} holds it to, i.e. a pass with
-     * no room in it — and a <b>NO_VICTIM share of 0.6729</b>, which is above the 0.5 worst-seed reading
-     * this campaign counted against E1 on this very fixture. Neither is asserted here: the guard set is
-     * the protocol's, and widening or tightening it to fit a candidate is the move the pre-registration
-     * exists to prevent. What they mean is that this candidate's hold on the hash-fanned guard at that
-     * seed is a hold by a margin, on three readings that all point the same way — a promotion decision
-     * has to be taken with that in front of it rather than reconstructed from a table afterwards.
-     */
+    /** The lift-only candidate keeps its bench cure but is rejected by the uniform guard. */
     @Test
-    void theCarveAdmissionCandidateKeepsTheBenchCureAndBothGuards() {
-        runCandidateAdmission(SensingVariant.RATE_ANCHORED_LIFT_ONLY, "carve admission",
+    void theCarveAdmissionCandidateKeepsTheBenchCureButFailsAHealthyGuard() {
+        runRejectedCandidateAssessment(SensingVariant.RATE_ANCHORED_LIFT_ONLY, "carve admission",
                 "%s: seeds clearing the hash-fanned guard's tail line — at least the three measured, "
                         + "the split this candidate is recorded with rather than a line moved to fit "
                         + "it. A floor and not an equality: a candidate that later clears the line at "
                         + "all four has removed the split, which this must not report as a failure");
     }
 
-    /**
-     * <b>{@code GeometryFloorSweepProtocol}'s F4, for the best interior floor the sweep found</b> — the
-     * quarter, the only floor that holds all four of the roster's cures while returning the larger of
-     * its two regressions to its incumbent's own reading. It is held to exactly what the lift-only end
-     * is held to above, on the same three fixtures at the same regimes and against the same baselines,
-     * because a floor that bought its behaviour on the roster by spending the bench's cure or either
-     * healthy shape would be no better than the end it replaces.
-     *
-     * <p>This is a reading on a candidate that <b>did not pass its round</b>: the sweep's deciding
-     * question needed both regressions returned and this floor returns one. It is taken anyway because
-     * the floor is what a later frame-conditioned candidate would sit on top of, and a guard reading
-     * gathered now is one that round does not have to re-derive.
-     *
-     * <p><b>It inherits the lift-only end's split, and deepens it.</b> The hash-fanned guard's extra
-     * tail line — the {@code < 0.05} the two anchored candidates hold at four seeds of four — this
-     * floor misses at the same one seed of four, at <b>0.0651</b> against the lift-only end's 0.0510,
-     * the combination's 0.0324 and the control's 0.0092, all at seed 987654321. Everything else that
-     * guard is held to holds at all four, including that seed's serial fraction at 0.0370 against the
-     * {@code < 0.05} line. So the tail reading is <b>not</b> something the floor buys back from the end
-     * it descends from: on this guard the ladder's two upper rungs behave alike and the interior floor
-     * is the worse of them. Asserted as the split as measured — three seeds clear — rather than as a
-     * line moved to fit it.
-     *
-     * <p>Its own seed's third reading is stated for the same reason it was on the end above: at
-     * 987654321 the NO_VICTIM share is <b>0.5843</b>, above both the 0.5 worst-seed reading this
-     * campaign counted against E1 on this fixture and the end's own 0.4720. Not asserted — the guard
-     * set is the protocol's — but a promotion decision has to be taken with it in front of it.
-     */
+    /** The quarter-floor candidate keeps its bench cure but is rejected by the uniform guard. */
     @Test
-    void theBestInteriorFloorKeepsTheBenchCureAndBothGuards() {
-        runCandidateAdmission(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, "interior floor",
+    void theBestInteriorFloorKeepsTheBenchCureButFailsAHealthyGuard() {
+        runRejectedCandidateAssessment(SensingVariant.RATE_ANCHORED_FLOOR_QUARTER, "interior floor",
                 "%s: seeds clearing the hash-fanned guard's tail line — at least the three measured, "
                         + "the split this floor inherits from the end it descends from");
     }
 
     /**
-     * <b>One candidate, admitted or not against the incumbent combination and the control</b> — the
-     * round both tests above run, with only the candidate, the table's caption and the tail split's own
-     * wording differing between them. The arms are the control, the incumbent combination and the
-     * candidate, because what an admission turns on is the head-to-head at the same seed against both.
+     * Assess one later candidate against the control and incumbent combination. A candidate must keep
+     * the bench cure and measured-regime comparison, but is now expected to be rejected by at least
+     * one seeded leg of either healthy-shape guard.
      *
      * @param candidate the arm under test, raced on the bench, both guards and the measured regime
      * @param round     the caption both printed tables are titled with
@@ -437,7 +354,8 @@ class SensingRaceTest {
      *                  candidate as its one format argument — a floor and not an equality in both
      *                  rounds, so a candidate that later clears all four seeds is not a failure here
      */
-    private static void runCandidateAdmission(SensingVariant candidate, String round, String tailSplit) {
+    private static void runRejectedCandidateAssessment(SensingVariant candidate, String round,
+                                                       String tailSplit) {
         SensingVariant[] arms = {SensingVariant.CURRENT, SensingVariant.RATE_CURSOR_ANCHORED, candidate};
         List<SensingRaceProtocol.Leg> bench = SensingRaceProtocol.raceOn("leaf-conc",
                 SensingRaceProtocol.bench(), SensingRaceProtocol.BENCH_PAGE_SIZE,
@@ -459,6 +377,8 @@ class SensingRaceTest {
                 measured);
 
         int hashFannedTailsClear = 0;
+        int uniformGuardFailures = 0;
+        int hashFannedGuardFailures = 0;
         for (long seed : SensingRaceProtocol.SEEDS) {
             SensingRaceProtocol.Leg leg = SensingRaceProtocol.at(bench, candidate, seed);
             String at = candidate + " on the bench at seed " + seed;
@@ -468,12 +388,17 @@ class SensingRaceTest {
             assertThat(leg.estZeroShare()).as("%s: zero estimates (zero by construction)", at).isZero();
             assertBenchCureHeld(leg, SensingRaceProtocol.at(bench, SensingVariant.CURRENT, seed), at);
 
-            assertGuardHeld(SensingRaceProtocol.at(uniform, candidate, seed),
-                    SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed),
-                    candidate + " on the uniform guard at seed " + seed);
+            SensingRaceProtocol.Leg uniformCandidate = SensingRaceProtocol.at(uniform, candidate, seed);
+            SensingRaceProtocol.Leg uniformControl =
+                    SensingRaceProtocol.at(uniform, SensingVariant.CURRENT, seed);
+            if (!guardHeld(uniformCandidate, uniformControl)) {
+                uniformGuardFailures++;
+            }
             SensingRaceProtocol.Leg fanned = SensingRaceProtocol.at(hashFanned, candidate, seed);
-            assertGuardHeld(fanned, SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed),
-                    candidate + " on the hash-fanned guard at seed " + seed);
+            if (!guardHeld(fanned,
+                    SensingRaceProtocol.at(hashFanned, SensingVariant.CURRENT, seed))) {
+                hashFannedGuardFailures++;
+            }
             if (fanned.tailFraction() < 0.05) {
                 hashFannedTailsClear++;
             }
@@ -484,29 +409,27 @@ class SensingRaceTest {
                             .at(measured, SensingVariant.RATE_CURSOR_ANCHORED, seed)
                             .result().virtualNanos()));
         }
+        assertThat(uniformGuardFailures + hashFannedGuardFailures)
+                .as("%s: seeded legs rejected by the pre-registered healthy-shape guards", candidate)
+                .isPositive();
         assertThat(hashFannedTailsClear).as(tailSplit, candidate).isGreaterThanOrEqualTo(3);
     }
 
+    private static boolean guardHeld(SensingRaceProtocol.Leg leg, SensingRaceProtocol.Leg control) {
+        return leg.serialFraction() < 0.05
+                && leg.result().timeline().meanOccupancy() > 7.0
+                && leg.result().virtualNanos() < (long) (1.05 * control.result().virtualNanos())
+                && leg.result().storeCalls() < (long) (1.05 * control.result().storeCalls());
+    }
+
     /**
-     * <b>What the hash-fanned guard's 0.05 tail line is actually reading at seed 987654321, pinned so a
-     * future change that moves it is visible.</b> The split disclosed above at this one seed — the
-     * E4-family readings of 0.051-0.065 against the {@code < 0.05} line — is not a quality signal at this
-     * seed: the range still active when the run goes quiescent is the fixture's own open-frontier seed
-     * range ({@code hi == null}, the unbounded tail {@code seedRanges} always tiles the keyspace with),
-     * and it is never split, by either side, over the whole run. {@link RateAnchoredArm#estRemaining}
-     * reads an open frontier as infinite remaining mass, which clears every floor built on that estimate
-     * without exception, so the owner side refuses every carve of it with
-     * {@code OwnerSplitSkipReason#OPEN_FRONTIER} — hundreds of times over a run this size — and no thief
-     * ever catches it either. The tail line is therefore scoring the fleet's last-carve instant against a
-     * range nothing here can divide, not against a healthy shape that failed to divide, which is why no
-     * tail-fraction magnitude is asserted below. <b>If this test ever fails, the guard's 0.05 line on this
-     * fixture has become meaningful again, and the disclosed E4-family readings above must be re-read
-     * against whatever changed it.</b> One arm, {@code RATE_ANCHORED_FLOOR_QUARTER} — the promoted
-     * floor — is enough: the invariant is about the fixture and the seed, not about which rate-family arm
-     * is steering.
+     * Pin the mechanism that invalidated the old open-frontier characterization. Top-scope closure
+     * gives the final mass-bearing seed range a finite upper bound; on this seed its owner uses that
+     * eligibility and splits it. The final range must therefore be seen on an owner-split event and
+     * must never be refused as an open frontier.
      */
     @Test
-    void theHashFannedGuardsFinalRangeAtSeed987654321IsAnUnsplitOpenFrontier() {
+    void theHashFannedGuardsFinalRangeAtSeed987654321IsNowBoundedAndOwnerSplit() {
         ListingFixtureStore store = new ListingFixtureStore(SensingRaceProtocol.hashFannedGuard().get());
         SensingVariant variant = SensingVariant.RATE_ANCHORED_FLOOR_QUARTER;
         long seed = 987654321L;
@@ -527,30 +450,26 @@ class SensingRaceTest {
         }
         assertThat(finalRange).as("a completed run leaves at least one range to finish last").isNotNull();
 
-        long openFrontierRefusals = 0;
+        boolean finalRangeWasOwnerSplit = false;
         boolean finalRangeIsTheOpenFrontier = false;
         for (SimEventLog.Entry entry : trace) {
             switch (entry.kind()) {
-                case "owner_split" -> assertThat(field(entry.detail(), "node"))
-                        .as("the range active at run end was never split by its owner")
-                        .isNotEqualTo(finalRange);
-                case "steal.split" -> assertThat(field(entry.detail(), "victim"))
-                        .as("the range active at run end was never split by a thief either")
-                        .isNotEqualTo(finalRange);
+                case "owner_split" ->
+                    finalRangeWasOwnerSplit |= finalRange.equals(field(entry.detail(), "node"));
                 case "owner_split.skip" -> {
                     if ("open_frontier".equals(field(entry.detail(), "reason"))) {
-                        openFrontierRefusals++;
                         finalRangeIsTheOpenFrontier |= finalRange.equals(field(entry.detail(), "node"));
                     }
                 }
                 default -> { }
             }
         }
-        assertThat(openFrontierRefusals)
-                .as("open-frontier owner-split refusals recorded on this leg").isGreaterThan(0L);
-        assertThat(finalRangeIsTheOpenFrontier)
-                .as("the range active at run end (%s) is the fixture's own open frontier", finalRange)
+        assertThat(finalRangeWasOwnerSplit)
+                .as("top-scope closure made the final mass-bearing range eligible for owner splitting")
                 .isTrue();
+        assertThat(finalRangeIsTheOpenFrontier)
+                .as("the final mass-bearing range is no longer the seed's open frontier")
+                .isFalse();
     }
 
     /** One {@code key=value} field out of a trace entry's {@code |}-joined detail string. */
