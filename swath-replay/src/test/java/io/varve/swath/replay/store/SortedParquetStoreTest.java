@@ -6,6 +6,7 @@
 package io.varve.swath.replay.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -30,6 +31,7 @@ import io.varve.swath.sort.SortConfigs;
 import io.varve.swath.sort.SortMode;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedParquetWriter;
+import io.varve.swath.sort.SortedRowGroupReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -39,6 +41,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -572,7 +577,7 @@ class SortedParquetStoreTest {
     }
 
     @Test
-    void lazyDelimiterPoolClosesABorrowedReaderWhenItReturns(@TempDir Path dir) throws IOException {
+    void closingLazyDelimiterPoolClosesABorrowedReaderWhenItReturns(@TempDir Path dir) throws IOException {
         Fixture fixture = writeSorted(dir, manySmallGroups(), keys(120));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ReplayMetrics metrics = new ReplayMetrics(registry, ReplayMetrics.SERVING_MODE_SORTED);
@@ -580,6 +585,11 @@ class SortedParquetStoreTest {
                 fixture.files.getFirst(), 1, metrics);
 
         var borrowed = pool.borrow();
+        assertThatCode(() -> {
+            try (var cursor = borrowed.openKeyCursor(0)) {
+                // Opening the cursor is the observable reader operation; no row walk is needed.
+            }
+        }).as("the borrowed reader is usable before the pool closes").doesNotThrowAnyException();
         pool.close();
         pool.release(borrowed);
 
@@ -589,6 +599,51 @@ class SortedParquetStoreTest {
         assertThatThrownBy(pool::borrow)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("pool is closed");
+        assertThatThrownBy(() -> borrowed.openKeyCursor(0))
+                .as("release after pool close must close the returned reader")
+                .isInstanceOfAny(IOException.class, RuntimeException.class);
+    }
+
+    @Test
+    void releasingLazyDelimiterReaderWakesOneBlockedBorrower(@TempDir Path dir) throws Exception {
+        Fixture fixture = writeSorted(dir, manySmallGroups(), keys(120));
+        var pool = new SortedParquetStore.LazyGroupReaderPool(
+                fixture.files.getFirst(), 1,
+                new ReplayMetrics(new SimpleMeterRegistry(), ReplayMetrics.SERVING_MODE_SORTED));
+        var held = pool.borrow();
+        CountDownLatch enteredBorrow = new CountDownLatch(1);
+        CountDownLatch returned = new CountDownLatch(1);
+        AtomicReference<SortedRowGroupReader> received = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread waiter = Thread.ofVirtual().start(() -> {
+            enteredBorrow.countDown();
+            try {
+                received.set(pool.borrow());
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                returned.countDown();
+            }
+        });
+
+        try {
+            assertThat(enteredBorrow.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(returned.await(100, TimeUnit.MILLISECONDS))
+                    .as("the second borrow stays blocked while the only reader is held")
+                    .isFalse();
+
+            pool.release(held);
+
+            assertThat(returned.await(5, TimeUnit.SECONDS))
+                    .as("release must wake the blocked borrower")
+                    .isTrue();
+            assertThat(failure.get()).isNull();
+            assertThat(received.get()).isSameAs(held);
+        } finally {
+            pool.close();
+            waiter.join(5000);
+            pool.release(received.get() != null ? received.get() : held);
+        }
     }
 
     @Test

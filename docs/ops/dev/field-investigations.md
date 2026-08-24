@@ -179,3 +179,99 @@ far longer to accumulate splits. The equal-duration rounds are the honest compar
 splits went **up 3.5×** (146/154 vs 42/42 in the same 110 s). Suppressing hopeless probes does not
 cost parallelism — it buys it, because the thief stops spending its steal attempts on regions that
 cannot answer.
+
+---
+
+## 2026-08-24 — sorted replay-server capacity
+
+This investigation sized the standalone replay server before using it as a benchmark dependency.
+It is replay capacity evidence, not a comparative Swath result and not a throughput SLA.
+
+### Environment and method
+
+- Host: 32 logical CPUs / 16 physical Intel Xeon Platinum 8581C cores, 62 GiB RAM.
+- Server: Temurin JDK 25.0.4+7, pinned to eight physical cores; the byte-counting load client was
+  pinned to the other eight physical cores.
+- Large fixture: 1,049,162,031 object rows, 32 Parquet files, 27.997 GiB. Its routing index contained
+  3,874 row-group entries; deriving it took 2.691 seconds in the startup measurement.
+- Each reported capacity point followed a warm-up. The storage page cache was warm, so the results
+  characterize serving and decode capacity, not cold-disk bandwidth.
+- Worker responses used `max-keys=1000`. The client parsed HTTP framing without allocating a UTF-16
+  response String, and server metrics plus process CPU verified that it did not cap the eight-core
+  server.
+
+### Request shapes
+
+Capacity pressure covered the three shapes Swath emits:
+
+| Shape | Request | Important server path |
+| --- | --- | --- |
+| `worker_page` | ordinary listing page, normally 1,000 objects | continuation walk and prefetch |
+| `pivot_probe` | delimiter-free request with `max-keys<=1` | random/far key seek, normally no useful prefetch |
+| `structure_probe` | `delimiter=/` request | routing bounds plus native row-group skip-scan when needed |
+
+The mixed test used 93% worker pages, 5% far pivots outside the active worker windows, and 2% real
+parent-prefix structure probes. This corrected an earlier locality-optimistic test whose pivots were
+usually cache hits and whose delimiter probes targeted the empty root prefix.
+
+This is request-*shape* coverage, not a claim that one synthetic ratio represents every Swath run.
+Protocol correctness is covered separately and more broadly by the conformance harness and
+adversarial tests: prefix, delimiter, start-after, continuation token, truncation, empty results,
+URL encoding, owner/no-owner responses, and XML escaping. A future trace-driven load command should
+replay a captured Swath arrival stream when an exact production distribution matters.
+
+### Capacity results
+
+All rows below used eight physical server cores, reader pool 8, and zero HTTP errors:
+
+| Fixture/workload | Prefetch | Heap/windows | Result |
+| --- | --- | --- | ---: |
+| 9,919,142-row fixture, distributed warm random pages | off | 4 GiB / n/a | **6.126M rows/s** |
+| 1.049B-row fixture, 16 sequential continuation walks | on | 8 GiB / 24 | **5.517M rows/s** |
+| 1.049B-row fixture, corrected 93/5/2 mixed shapes | on | 8 GiB / 24 | **4.153M rows/s**, 4,464 requests/s |
+
+The large-fixture result shows that total cardinality is not itself a throughput cliff. Physical
+page geometry and access locality matter: sequential workers reuse prefetched windows, while far
+pivots and delimiter probes pay more seek/decode work.
+
+### Heap and reader-pool knees
+
+At fixed eight cores, pool 8, 16 continuation walks, and a 60-second measurement:
+
+| Heap / windows | Sustained rows/s | RSS before forced GC | Post-force-GC used heap |
+| --- | ---: | ---: | ---: |
+| 2 GiB / 16 | 4.661M | 2.35 GiB | 432 MiB |
+| 3 GiB / 24 | 4.852M | 3.35 GiB | 431 MiB |
+| 4 GiB / 24 | **5.468M** | 4.31 GiB | 557 MiB |
+| 8 GiB / 24 | 5.517M (30-second point) | 6.47 GiB after prior mixed load | 626 MiB |
+
+Four GiB was the practical knee. Two and three GiB retained little live data after forced GC but
+lost throughput to allocation/collection pressure. Forcing two-MiB G1 regions at a two-GiB heap
+reduced throughput further, so automatic G1 region sizing remains the recommendation.
+
+At fixed four-GiB heap and 24 windows:
+
+| Reader pool | Sustained rows/s | Peak readers | Mean page-read latency |
+| ---: | ---: | ---: | ---: |
+| 8 | **5.468M** | 8 | 12.18 ms |
+| 12 | 5.509M | 12 | 12.06 ms |
+| 16 | 5.072M | 16 | 14.29 ms |
+
+Pool 12's 0.75% edge was within single-run noise and required 50% more open readers and decoded
+footers. Pool 16 was 7.2% slower and increased GC pressure. This drove the sorted default from two
+readers per visible CPU to one, bounded to 8–32.
+
+### Correctness and limits
+
+The optimized and untouched implementations produced byte-identical complete responses over all
+9,920 pages and 9,919,142 objects of the smaller fixture, including owner fields: 2,886,109,739
+response bytes with SHA-256
+`20078b857c86ff394ec9794da39e231507658004bb678058f05443ef75993c1e` on both sides. The full build,
+replay integration tests, HAR conformance, sorted-vs-DuckDB differentials, and adversarial XML tests
+also passed.
+
+The saturation client used for this investigation was diagnostic and is not a supported release
+command: its distributed anchors were fixture-derived and its mixed ratio was synthetic. The
+built-in `bench` command remains the reproducible correctness/warm single-walk tool; it does not
+saturate an eight-core server. Do not use these figures to infer cold-storage performance, remote
+network capacity, or an exact production request distribution.

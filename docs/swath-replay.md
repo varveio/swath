@@ -143,6 +143,53 @@ uses only the range pool; an engaged skip-scan holds one row-group reader while 
 borrow a range reader to materialize a bare object. The first engagement for each file is visible
 through `delimiter.reader_pool.open.latency`.
 
+### Resource sizing for sorted serving
+
+Fixture cardinality does not become a heap-sized object index. At startup, sorted mode retains
+file/footer state and one routing entry per Parquet row group. Object rows are decoded on demand
+into bounded reader and prefetch windows; fixture bytes remain on storage and may occupy the OS
+page cache outside the JVM heap. Consequently, row-group count, file count, active readers, page
+geometry, and cached windows are more useful sizing inputs than the fixture's total object count.
+
+For an eight-CPU replay allocation driving up to 16 independent continuation walks, start with:
+
+```bash
+export JAVA_TOOL_OPTIONS='-Xms4g -Xmx4g -Dswath.replay.prefetch.max-windows=24'
+
+swath-replay serve \
+  --fixture <sorted-fixture> --bucket <bucket> \
+  --host 127.0.0.1 --port 19090 --serving-mode sorted \
+  --parquet-connections 0 --max-concurrent-requests 512 \
+  --metrics-port 19192
+```
+
+This is a capacity-test starting point, not a minimum. Leave G1 region sizing automatic and leave
+headroom above `-Xmx` for JVM native state and the OS page cache. The default 96-window cache is the
+safer starting point for wider or unknown fan-out; 24 windows was the measured knee for 16 active
+walks. A window retains decoded rows, so `max-windows` and heap must be tuned together.
+
+Tune one resource at a time after warming the JVM and storage cache:
+
+1. Keep prefetch enabled for continuation-heavy worker traffic. Disable it only to isolate random
+   seek/decode cost; that is a different workload, not a generally faster configuration.
+2. Compare `parquet.queries.peak` with the reader count. If the pool is full, CPU has headroom, and
+   `page.read.latency` is stable, try a small increase. If page latency or GC rises, reduce it.
+   Reader count is decode parallelism, not HTTP concurrency.
+3. Size `max-windows` near the number of independently advancing worker streams, with some headroom.
+   Use the prefetch hit/miss and live-window meters rather than retaining windows speculatively.
+4. Set `--max-concurrent-requests` at or above client fan-out, then verify that the client—not only
+   the server—has spare CPU. An undersized client can make a server change look neutral.
+5. Measure `worker_page`, `pivot_probe`, and `structure_probe` separately. Full pages benefit most
+   from prefetch; one-key pivots and delimiter skip-scans exercise different Parquet paths.
+
+On 2026-08-24, warm loopback saturation tests on eight isolated physical Xeon 8581C cores measured
+about **4.15–5.52 million object rows/s** over a 1.049-billion-row, 32-file fixture, depending on
+request mixture. A smaller warm random-page fixture reached **6.13 million rows/s**. Treat these as
+an order-of-magnitude capacity corridor, not a portable guarantee: CPU generation, Parquet page
+geometry, filesystem cache state, response fields, request locality, and client cost all move it.
+The setup, shape mix, resource sweep, and limitations are retained in the
+[dated field investigation](ops/dev/field-investigations.md#2026-08-24--sorted-replay-server-capacity).
+
 ## Reading a running server's meters (`--metrics-port`)
 
 `serve` keeps every meter in the table under "Metrics And Tuning" below, but a

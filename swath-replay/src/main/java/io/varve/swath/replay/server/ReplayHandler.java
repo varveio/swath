@@ -114,7 +114,7 @@ final class ReplayHandler extends Handler.Abstract {
         } catch (RuntimeException e) {
             log.error("replay failed to serve request", e);
             status = HttpStatus.INTERNAL_SERVER_ERROR_500;
-            body = errorBuffer("InternalError", e.getMessage(), request.getHttpURI().getPath());
+            body = errorBuffer("InternalError", "internal replay error", request.getHttpURI().getPath());
         }
         metrics.recordHttpRequest(sample, status);
         write(response, status, body, callback);

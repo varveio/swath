@@ -437,6 +437,7 @@ public final class SortedRangeReader implements AutoCloseable {
 
         private static PrimitiveConverter string(java.util.function.Consumer<String> sink) {
             return new PrimitiveConverter() {
+                private Dictionary dictionarySource;
                 private String[] dictionary;
 
                 @Override
@@ -446,15 +447,18 @@ public final class SortedRangeReader implements AutoCloseable {
 
                 @Override
                 public void setDictionary(Dictionary values) {
+                    dictionarySource = values;
                     dictionary = new String[values.getMaxId() + 1];
-                    for (int id = 0; id < dictionary.length; id++) {
-                        dictionary[id] = values.decodeToBinary(id).toStringUsingUTF8();
-                    }
                 }
 
                 @Override
                 public void addValueFromDictionary(int dictionaryId) {
-                    sink.accept(dictionary[dictionaryId]);
+                    String value = dictionary[dictionaryId];
+                    if (value == null) {
+                        value = dictionarySource.decodeToBinary(dictionaryId).toStringUsingUTF8();
+                        dictionary[dictionaryId] = value;
+                    }
+                    sink.accept(value);
                 }
 
                 @Override
