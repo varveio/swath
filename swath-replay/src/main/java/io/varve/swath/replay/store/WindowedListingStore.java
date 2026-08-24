@@ -53,9 +53,10 @@ import java.util.Objects;
  *
  * <p><b>Eviction.</b> Eager: when a serve consumes through a delegate-final window's last row the
  * window is dead and is dropped immediately. LRU (bounded {@code max-windows}) is the backstop. Memory
- * is bounded by {@code max-windows × window-rows × row footprint} — a few MB to tens of MB, a function
- * of config, never of the fixture size N (I11 spirit); v1 holds windows as materialised row lists (the
- * PageBlock-packed follow-up is a deliberate, separately-measured next rung, not built here).
+ * is bounded by {@code max-windows × window-rows × row footprint}, a function of config and never of
+ * fixture size N (I11 spirit). The default permits 1.2M materialised rows and can therefore retain
+ * hundreds of MiB, not merely a few tens: v1 holds full object graphs. A packed-window follow-up is a
+ * deliberate, separately measured next rung, not built here.
  */
 public final class WindowedListingStore implements ListingStore {
 

@@ -23,6 +23,30 @@ import org.junit.jupiter.api.io.TempDir;
 class SortedRangeReaderTest {
 
     @Test
+    void pooledReaderCanSwitchFromNoOwnerToOwnerProjection(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("part-00001.parquet");
+        try (SortedFileWriter writer = new SortedParquetWriter(file, SortConfigs.base(), SortMode.OBJECTS, 1)) {
+            for (int i = 0; i < 5_000; i++) {
+                writer.write(object(String.format("key-%05d", i)));
+            }
+        }
+
+        try (SortedRangeReader reader = new SortedRangeReader(file, 1)) {
+            byte[] lower = KeyBytes.ofUtf8("key-02000").raw();
+            assertThat(reader.range(0, lower, true, null, 10, false))
+                    .hasSize(10)
+                    .allSatisfy(row -> assertThat(row.ownerId()).isNull());
+
+            assertThat(reader.range(0, lower, true, null, 10, true))
+                    .hasSize(10)
+                    .allSatisfy(row -> {
+                        assertThat(row.ownerId()).isEqualTo("owner-id");
+                        assertThat(row.ownerDisplayName()).isEqualTo("owner-display");
+                    });
+        }
+    }
+
+    @Test
     void poolContentionIsExcludedFromTheReaderLeaseDuration(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("part-00001.parquet");
         try (SortedFileWriter writer = new SortedParquetWriter(file, SortConfigs.base(), SortMode.OBJECTS, 1)) {

@@ -64,6 +64,11 @@ public final class ReplayMetrics {
     private final Counter prefetchWindowEvictions;
     private final Counter delimiterSkipScanRowGroupOpens;
     private final Counter delimiterSkipScanWholeGroupShortcuts;
+    private final Timer delimiterReaderPoolOpenLatency;
+    // Micrometer gauges weakly reference their state object. Retain these method-reference objects
+    // for the metrics lifetime or a sustained run's next GC turns both live-cache values into NaN.
+    private IntSupplier prefetchWindowsGaugeSource;
+    private IntSupplier prefetchAnchorsGaugeSource;
     private final AtomicLong parquetQueriesInFlight = new AtomicLong();
     private final AtomicLong parquetQueriesPeak = new AtomicLong();
     private final long startedNanos = System.nanoTime();
@@ -122,6 +127,8 @@ public final class ReplayMetrics {
                 .register(registry);
         delimiterSkipScanWholeGroupShortcuts = Counter.builder(
                 "swath.replay.delimiter.skipscan.whole_group_shortcuts").register(registry);
+        delimiterReaderPoolOpenLatency = Timer.builder("swath.replay.delimiter.reader_pool.open.latency")
+                .publishPercentiles(0.5, 0.99).register(registry);
         Gauge
                 .builder("swath.replay.parquet.queries.in_flight", parquetQueriesInFlight, AtomicLong::get)
                 .register(registry);
@@ -218,9 +225,13 @@ public final class ReplayMetrics {
 
     /** Registers live bounded-cache cardinalities after the prefetch store is constructed. */
     public void registerPrefetchCacheGauges(IntSupplier windows, IntSupplier anchors) {
-        Gauge.builder("swath.replay.prefetch.windows.live", windows, IntSupplier::getAsInt)
+        prefetchWindowsGaugeSource = windows;
+        prefetchAnchorsGaugeSource = anchors;
+        Gauge.builder("swath.replay.prefetch.windows.live", prefetchWindowsGaugeSource,
+                        IntSupplier::getAsInt)
                 .register(registry);
-        Gauge.builder("swath.replay.prefetch.anchors.live", anchors, IntSupplier::getAsInt)
+        Gauge.builder("swath.replay.prefetch.anchors.live", prefetchAnchorsGaugeSource,
+                        IntSupplier::getAsInt)
                 .register(registry);
     }
 
@@ -316,6 +327,11 @@ public final class ReplayMetrics {
     /** Records a row group proven to contain one common prefix from routing-index bounds alone. */
     public void recordDelimiterSkipScanWholeGroupShortcut() {
         delimiterSkipScanWholeGroupShortcuts.increment();
+    }
+
+    /** Records one file's lazy delimiter-reader fleet opening on its first Parquet-backed rollup. */
+    public void recordDelimiterReaderPoolOpen(Timer.Sample sample) {
+        sample.stop(delimiterReaderPoolOpenLatency);
     }
 
     /** Records how many rows one window fill asked the delegate for (proves the ramp engages). */

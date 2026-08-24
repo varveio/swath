@@ -132,14 +132,63 @@ Jetty's implicit 200-thread default. It defaults to 512 and is reported as
 connector queueing is not mistaken for backend latency.
 
 `--parquet-connections 0` uses the selected store's own reader default:
-`max(8, min(32, 2 × cores))` for sorted serving and `min(4, cores)` for DuckDB.
+`max(8, min(32, cores))` for sorted serving and `min(4, cores)` for DuckDB.
 Size this for concurrent decode work, not total requests: readers are returned before
 injected sleep. Each sorted slot holds an open reader and decoded footer per file, so
-very large pools can waste file descriptors and heap. Sorted mode opens both a row-group
-and range-reader pool per file: approximately `2 × connections × files` open readers. Those
-pools are independent. An ordinary range fill uses only the range pool; a native `delimiter=/`
-skip-scan holds one row-group reader while it may briefly borrow a range reader to materialize
-a bare object.
+very large pools can waste file descriptors and heap. Sorted mode eagerly opens the range-reader
+pool per file (`connections × files` readers). Its independent row-group pool opens lazily, one
+file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
+the conservative fully engaged bound remains `2 × connections × files`. An ordinary range fill
+uses only the range pool; an engaged skip-scan holds one row-group reader while it may briefly
+borrow a range reader to materialize a bare object. The first engagement for each file is visible
+through `delimiter.reader_pool.open.latency`.
+
+### Resource sizing for sorted serving
+
+Fixture cardinality does not become a heap-sized object index. At startup, sorted mode retains
+file/footer state and one routing entry per Parquet row group. Object rows are decoded on demand
+into bounded reader and prefetch windows; fixture bytes remain on storage and may occupy the OS
+page cache outside the JVM heap. Consequently, row-group count, file count, active readers, page
+geometry, and cached windows are more useful sizing inputs than the fixture's total object count.
+
+For an eight-CPU replay allocation driving up to 16 independent continuation walks, start with:
+
+```bash
+export JAVA_TOOL_OPTIONS='-Xms4g -Xmx4g -Dswath.replay.prefetch.max-windows=24'
+
+swath-replay serve \
+  --fixture <sorted-fixture> --bucket <bucket> \
+  --host 127.0.0.1 --port 19090 --serving-mode sorted \
+  --parquet-connections 0 --max-concurrent-requests 512 \
+  --metrics-port 19192
+```
+
+This is a capacity-test starting point, not a minimum. Leave G1 region sizing automatic and leave
+headroom above `-Xmx` for JVM native state and the OS page cache. The default 96-window cache is the
+safer starting point for wider or unknown fan-out; 24 windows was the measured knee for 16 active
+walks. A window retains decoded rows, so `max-windows` and heap must be tuned together.
+
+Tune one resource at a time after warming the JVM and storage cache:
+
+1. Keep prefetch enabled for continuation-heavy worker traffic. Disable it only to isolate random
+   seek/decode cost; that is a different workload, not a generally faster configuration.
+2. Compare `parquet.queries.peak` with the reader count. If the pool is full, CPU has headroom, and
+   `page.read.latency` is stable, try a small increase. If page latency or GC rises, reduce it.
+   Reader count is decode parallelism, not HTTP concurrency.
+3. Size `max-windows` near the number of independently advancing worker streams, with some headroom.
+   Use the prefetch hit/miss and live-window meters rather than retaining windows speculatively.
+4. Set `--max-concurrent-requests` at or above client fan-out, then verify that the client—not only
+   the server—has spare CPU. An undersized client can make a server change look neutral.
+5. Measure `worker_page`, `pivot_probe`, and `structure_probe` separately. Full pages benefit most
+   from prefetch; one-key pivots and delimiter skip-scans exercise different Parquet paths.
+
+On 2026-08-24, warm loopback saturation tests on eight isolated physical Xeon 8581C cores measured
+about **4.15–5.52 million object rows/s** over a 1.049-billion-row, 32-file fixture, depending on
+request mixture. A smaller warm random-page fixture reached **6.13 million rows/s**. Treat these as
+an order-of-magnitude capacity corridor, not a portable guarantee: CPU generation, Parquet page
+geometry, filesystem cache state, response fields, request locality, and client cost all move it.
+The setup, shape mix, resource sweep, and limitations are retained in the
+[dated field investigation](ops/dev/field-investigations.md#2026-08-24--sorted-replay-server-capacity).
 
 ## Reading a running server's meters (`--metrics-port`)
 
@@ -315,9 +364,9 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}` | Legacy-fixture sort work and engagement. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
-| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts` | Rollup vs walk, skip-scan I/O, and routing-index-only whole-group engagements. |
+| `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.reader_pool.open.latency` | Rollup vs walk, skip-scan I/O, routing-index-only whole-group engagements, and lazy per-file delimiter-pool first touch (timer count = files opened). |
 | `page.read.latency`, `fixture.list.latency` | Post-borrow range-decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
-| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent row-group and range pools and a conservative aggregate bound of `2 × connections × files`. |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving eagerly holds `connections × files` range readers and has the conservative fully engaged bound `2 × connections × files` after every lazy row-group pool opens. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |

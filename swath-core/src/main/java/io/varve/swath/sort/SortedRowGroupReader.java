@@ -117,6 +117,14 @@ public final class SortedRowGroupReader implements AutoCloseable {
         public byte[] key() {
             return key.clone();
         }
+
+        /**
+         * Internal zero-copy view for the replay serving pipeline. Callers must never mutate it;
+         * public {@link #key()} remains the defensive API for general consumers.
+         */
+        public byte[] keyUnsafe() {
+            return key;
+        }
     }
 
     private static final ColumnPath KEY_COLUMN_PATH = ColumnPath.get(KEY_FIELD);

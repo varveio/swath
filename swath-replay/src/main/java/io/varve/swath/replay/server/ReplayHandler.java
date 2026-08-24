@@ -96,12 +96,12 @@ final class ReplayHandler extends Handler.Abstract {
     public boolean handle(Request request, Response response, Callback callback) {
         var sample = metrics.startTimer();
         int status = HttpStatus.OK_200;
-        String body;
+        ByteBuffer body;
         try {
             body = handle(request);
         } catch (S3Error e) {
             status = e.status();
-            body = S3Xml.error(e.code(), e.getMessage(), request.getHttpURI().getPath());
+            body = errorBuffer(e.code(), e.getMessage(), request.getHttpURI().getPath());
         } catch (RowGroupOrderException e) {
             // The fixture is internally disordered and no path can serve this request (see
             // docs/swath-replay.md, "--serving-mode"). The full report — including the
@@ -110,17 +110,18 @@ final class ReplayHandler extends Handler.Abstract {
             // server's filesystem layout and a sweep classifies from the reason, not from the text.
             log.error("replay refused a request over a disordered fixture: {}", e.getMessage(), e);
             status = HttpStatus.INTERNAL_SERVER_ERROR_500;
-            body = S3Xml.error("InternalError", e.redactedMessage(), request.getHttpURI().getPath());
+            body = errorBuffer("InternalError", e.redactedMessage(), request.getHttpURI().getPath());
         } catch (RuntimeException e) {
+            log.error("replay failed to serve request", e);
             status = HttpStatus.INTERNAL_SERVER_ERROR_500;
-            body = S3Xml.error("InternalError", e.getMessage(), request.getHttpURI().getPath());
+            body = errorBuffer("InternalError", "internal replay error", request.getHttpURI().getPath());
         }
         metrics.recordHttpRequest(sample, status);
         write(response, status, body, callback);
         return true;
     }
 
-    private String handle(Request request) {
+    private ByteBuffer handle(Request request) {
         if (!"GET".equals(request.getMethod())) {
             throw new S3Error(405, "MethodNotAllowed", "method not allowed");
         }
@@ -131,7 +132,7 @@ final class ReplayHandler extends Handler.Abstract {
         }
         S3ListRequest listRequest = ListObjectsV2RequestParser.parse(bucket, request.getHttpURI().getQuery());
         ServedListing served = boundedList(listRequest);
-        String body = S3Xml.listBucket(served.result());
+        ByteBuffer body = S3Xml.listBucketBuffer(served.result());
         sleepToDeadline(served.latency(), System.nanoTime() - served.startedNanos(), served.shape());
         return body;
     }
@@ -246,14 +247,18 @@ final class ReplayHandler extends Handler.Abstract {
         }
     }
 
-    private static void write(Response response, int status, String body, Callback callback) {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    private static ByteBuffer errorBuffer(String code, String message, String resource) {
+        String renderedMessage = message == null ? "internal replay error" : message;
+        return ByteBuffer.wrap(S3Xml.error(code, renderedMessage, resource).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void write(Response response, int status, ByteBuffer body, Callback callback) {
         response.setStatus(status);
         response.getHeaders().put(HttpHeader.CONTENT_TYPE, "application/xml");
-        response.getHeaders().put(HttpHeader.CONTENT_LENGTH, Integer.toString(bytes.length));
+        response.getHeaders().put(HttpHeader.CONTENT_LENGTH, Integer.toString(body.remaining()));
         response.getHeaders().put("x-amz-request-id", "S3LISTINGREPLAY");
         response.getHeaders().put("x-amz-id-2", "S3LISTINGREPLAY");
-        response.write(true, ByteBuffer.wrap(bytes), callback);
+        response.write(true, body, callback);
     }
 
     private static String parseBucket(String path) {

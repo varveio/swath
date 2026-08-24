@@ -104,6 +104,26 @@ class ReplayServerTest {
     }
 
     @Test
+    void anUnexpectedFixtureFailureReturnsNoInternalDetail() throws Exception {
+        String sensitiveDetail = "/srv/captures/private/part-00001.parquet at key secret/customer";
+        try (ReplayServer server = new ReplayServer("127.0.0.1", 0, "bucket", request -> {
+            throw new IllegalStateException(sensitiveDetail);
+        })) {
+            server.start();
+
+            HttpResponse<String> response = HttpProbe.response(server, "/bucket?list-type=2");
+
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.body())
+                    .contains("<Code>InternalError</Code>")
+                    .contains("<Message>internal replay error</Message>")
+                    .doesNotContain(sensitiveDetail)
+                    .doesNotContain("/srv/captures")
+                    .doesNotContain("secret/customer");
+        }
+    }
+
+    @Test
     void echoesRequestedMaxKeysButClampsInternalPageSize() throws Exception {
         AtomicReference<S3ListRequest> seen = new AtomicReference<>();
         try (ReplayServer server = new ReplayServer(

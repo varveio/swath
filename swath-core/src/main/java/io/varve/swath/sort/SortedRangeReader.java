@@ -19,9 +19,8 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
+import org.apache.parquet.column.Dictionary;
 import org.apache.parquet.column.page.PageReadStore;
-import org.apache.parquet.example.data.Group;
-import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
 import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterApi;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
@@ -38,6 +37,10 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
 import org.apache.parquet.io.api.Binary;
+import org.apache.parquet.io.api.Converter;
+import org.apache.parquet.io.api.GroupConverter;
+import org.apache.parquet.io.api.PrimitiveConverter;
+import org.apache.parquet.io.api.RecordMaterializer;
 import org.apache.parquet.schema.MessageType;
 
 /**
@@ -167,9 +170,18 @@ public final class SortedRangeReader implements AutoCloseable {
             readerAcquired.run();
             acquisitionRecorded = true;
             readStartedNanos = nanoClock.getAsLong();
-            reader.setRequestedSchema(schema);
             for (int block = Math.max(0, startRowGroup); block < blocks.size() && out.size() < limit; block++) {
+                // ParquetFileReader caches a block's ColumnIndexStore the first time it is asked
+                // for it, but builds that store only for the reader's currently requested paths.
+                // A pooled reader can alternate between the owner and no-owner projections. If a
+                // no-owner request creates the cache first, a later owner request asks
+                // readFilteredRowGroup for owner offset indexes that are absent from the cached
+                // store; parquet-java then dereferences null inside filterOffsetIndex. Prime each
+                // block's cache under the maximal projection before selecting the response's real
+                // projection. This reads no data pages and preserves the no-owner decode saving.
+                reader.setRequestedSchema(schemaWithOwner);
                 ColumnIndexStore indexStore = reader.getColumnIndexStore(block);
+                reader.setRequestedSchema(schema);
                 RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
                         filter, indexStore, FILTERED_COLUMNS, blocks.get(block).getRowCount());
                 if (ranges.rowCount() == 0) {
@@ -208,20 +220,20 @@ public final class SortedRangeReader implements AutoCloseable {
             throws IOException {
         try (PageReadStore pages = reader.readFilteredRowGroup(block, ranges)) {
             long rowCount = pages.getRowCount();
-            RecordReader<Group> rowReader =
-                    columnIo.getRecordReader(pages, new GroupRecordConverter(schema));
+            RecordReader<ObjectRow> rowReader =
+                    columnIo.getRecordReader(pages, new ObjectRowMaterializer(schema, includeOwner));
             for (long i = 0; i < rowCount && out.size() < limit; i++) {
-                Group g = rowReader.read();
-                if (!isObject(g)) {
+                ObjectRow row = rowReader.read();
+                if (row == null) {
                     // Eligibility should have excluded a fixture carrying anything else, but a
                     // reader that assumes it would serve a rolled-up prefix as an object.
                     continue;
                 }
-                byte[] key = g.getBinary(KEY_FIELD, 0).getBytes();
+                byte[] key = row.keyUnsafe();
                 if (!inRange(key, from, fromInclusive, toExclusive)) {
                     continue;   // the index prunes pages, never rows
                 }
-                out.add(SortedRowGroupReader.toObjectRow(g, key, includeOwner));
+                out.add(row);
             }
         }
     }
@@ -295,12 +307,6 @@ public final class SortedRangeReader implements AutoCloseable {
         }
     }
 
-    private static boolean isObject(Group g) {
-        return g.getFieldRepetitionCount(SortedRowGroupReader.ROW_TYPE_FIELD) > 0
-                && SortedRowGroupReader.OBJECT_ROW_TYPE.equals(
-                        g.getString(SortedRowGroupReader.ROW_TYPE_FIELD, 0));
-    }
-
     private static boolean inRange(byte[] key, byte[] from, boolean fromInclusive, byte[] toExclusive) {
         if (from != null) {
             int c = KeyBytes.compareUnsigned(key, from);
@@ -328,6 +334,148 @@ public final class SortedRangeReader implements AutoCloseable {
             return upper;
         }
         return upper == null ? lower : FilterApi.and(lower, upper);
+    }
+
+    /** Typed row materialization for the replay hot path; avoids building a generic Group per row. */
+    private static final class ObjectRowMaterializer extends RecordMaterializer<ObjectRow> {
+
+        private final ObjectRowConverter root;
+
+        ObjectRowMaterializer(MessageType schema, boolean includeOwner) {
+            root = new ObjectRowConverter(schema, includeOwner);
+        }
+
+        @Override
+        public ObjectRow getCurrentRecord() {
+            return root.current;
+        }
+
+        @Override
+        public GroupConverter getRootConverter() {
+            return root;
+        }
+    }
+
+    private static final class ObjectRowConverter extends GroupConverter {
+
+        private final Converter[] fields;
+        private final boolean includeOwner;
+        private byte[] key;
+        private long size;
+        private long lastModified;
+        private String etag;
+        private String storageClass;
+        private String ownerId;
+        private String ownerDisplayName;
+        private String checksumAlgorithm;
+        private String checksumType;
+        private String rowType;
+        private ObjectRow current;
+
+        ObjectRowConverter(MessageType schema, boolean includeOwner) {
+            this.includeOwner = includeOwner;
+            this.fields = new Converter[schema.getFieldCount()];
+            for (int i = 0; i < fields.length; i++) {
+                fields[i] = converter(schema.getFieldName(i));
+            }
+        }
+
+        @Override
+        public Converter getConverter(int fieldIndex) {
+            return fields[fieldIndex];
+        }
+
+        @Override
+        public void start() {
+            key = null;
+            size = 0L;
+            lastModified = 0L;
+            etag = null;
+            storageClass = null;
+            ownerId = null;
+            ownerDisplayName = null;
+            checksumAlgorithm = null;
+            checksumType = null;
+            rowType = null;
+        }
+
+        @Override
+        public void end() {
+            current = SortedRowGroupReader.OBJECT_ROW_TYPE.equals(rowType)
+                    ? new ObjectRow(key, size, lastModified, etag, storageClass,
+                            includeOwner ? ownerId : null, includeOwner ? ownerDisplayName : null,
+                            checksumAlgorithm, checksumType)
+                    : null;
+        }
+
+        private Converter converter(String name) {
+            return switch (name) {
+                // ObjectRow's public-seam constructor takes the one owning defensive copy. Copying
+                // Binary here as well would allocate and copy every key twice.
+                case KEY_FIELD -> binary(value -> key = value.getBytesUnsafe());
+                case "size" -> longValue(value -> size = value);
+                case "last_modified" -> longValue(value -> lastModified = value);
+                case "etag" -> string(value -> etag = value);
+                case "storage_class" -> string(value -> storageClass = value);
+                case "owner_id" -> string(value -> ownerId = value);
+                case "owner_display_name" -> string(value -> ownerDisplayName = value);
+                case "checksum_algorithm" -> string(value -> checksumAlgorithm = value);
+                case "checksum_type" -> string(value -> checksumType = value);
+                case SortedRowGroupReader.ROW_TYPE_FIELD -> string(value -> rowType = value);
+                default -> throw new IllegalArgumentException("unsupported object projection field: " + name);
+            };
+        }
+
+        private static PrimitiveConverter binary(java.util.function.Consumer<Binary> sink) {
+            return new PrimitiveConverter() {
+                @Override
+                public void addBinary(Binary value) {
+                    sink.accept(value);
+                }
+            };
+        }
+
+        private static PrimitiveConverter string(java.util.function.Consumer<String> sink) {
+            return new PrimitiveConverter() {
+                private Dictionary dictionarySource;
+                private String[] dictionary;
+
+                @Override
+                public boolean hasDictionarySupport() {
+                    return true;
+                }
+
+                @Override
+                public void setDictionary(Dictionary values) {
+                    dictionarySource = values;
+                    dictionary = new String[values.getMaxId() + 1];
+                }
+
+                @Override
+                public void addValueFromDictionary(int dictionaryId) {
+                    String value = dictionary[dictionaryId];
+                    if (value == null) {
+                        value = dictionarySource.decodeToBinary(dictionaryId).toStringUsingUTF8();
+                        dictionary[dictionaryId] = value;
+                    }
+                    sink.accept(value);
+                }
+
+                @Override
+                public void addBinary(Binary value) {
+                    sink.accept(value.toStringUsingUTF8());
+                }
+            };
+        }
+
+        private static PrimitiveConverter longValue(java.util.function.LongConsumer sink) {
+            return new PrimitiveConverter() {
+                @Override
+                public void addLong(long value) {
+                    sink.accept(value);
+                }
+            };
+        }
     }
 
     @Override
