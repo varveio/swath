@@ -130,21 +130,31 @@ one looked like, and what the seed step decided to do about it) without re-deriv
 Absent (an empty array, never omitted) on `--tune seed.mode=none` (no probe ever runs) and — like the rest of
 `seed` — the whole `seed` block is omitted on `swath resume` (seeding never re-runs).
 
-**`trajectory`**: the bounded time-bin rollup of in-flight concurrency + progress rate over
-the run, plus four derived scalars — reconstructs a dense-shape bucket's fan-out trajectory (did it
-ramp up and stay parallel, or collapse to a near-serial tail, and when) without a separate metrics
-backend. `in_flight[]`/`progress_rate[]` are parallel arrays, one entry per **time bin actually
-used** (never zero-padded to a fixed length): the average in-flight listing count and the keys/sec
-observed in that bin. Bounded memory regardless of run length — a fixed **30-bin** rollup that
+**`trajectory`**: the bounded time-bin rollup of in-flight concurrency, downstream progress and
+upstream worker-page/AIMD observations over the run, plus four derived scalars — reconstructs a
+dense-shape bucket's fan-out trajectory (did it ramp up and stay parallel, or collapse to a
+near-serial tail, and when) and makes the concurrency controller's evidence auditable without a
+separate metrics backend. Every array is parallel and has one entry per **time bin actually used**
+(never zero-padded to a fixed length). `in_flight[]` is average in-flight LIST calls and
+`progress_rate[]` is committed/emitted keys/sec; the worker fields below are deliberately upstream
+store-completion observations and can include rows later filtered or replayed. Bounded memory
+regardless of run length — a fixed **30-bin** rollup that
 halves its live bin count (merging adjacent pairs) and doubles its bin width whenever the run's
 elapsed time would otherwise need more bins, the classic ring/doubling-bucket downsample; a window
 between two in-flight transitions is attributed to the bin containing the window's END instant (a
 documented approximation — this is a diagnostic rollup, not a correctness measurement). Folded on
-the SAME "sample on every transition" seam `swath.in_flight.avg` (§1) already uses, so it costs
-nothing extra on the healthy path beyond a few array writes per LIST call.
+the same rollup/lock as `swath.in_flight.avg` (§1); each successful slot-gated worker page adds one
+short O(1) locked observation. The retained ceiling-512 discard A/B measured 3.113M keys/s with the
+fields versus the 3.106M/s pre-change median, so this cost was below run scatter.
 
 | field | meaning |
 |---|---|
+| `worker_pages_per_sec` | successful slot-gated worker LIST pages completed per second in the bin; excludes probes, returned 503s and timed-out attempts. |
+| `worker_keys_fetched_per_sec` | raw `ListPage.entries().size()` per second at worker HTTP completion. Non-durable and upstream of filtering/checkpoint/output; never use it as an exactly-once output count. |
+| `worker_latency_min_ms` / `worker_latency_mean_ms` | minimum/mean uncensored successful worker-attempt latency in the bin; `null` when no latency sample was available. |
+| `aimd_target_min` / `aimd_target_max` / `aimd_target_last` | minimum, maximum and last effective controller target observed on successful worker completions in the bin; `null` if the bin has no such completion. |
+| `aimd_latency_baseline_ms` / `aimd_latency_ewma_ms` | last rolling-min baseline and EWMA observed in the bin after applying the completed attempt's latency and controller decision; `null` before a successful latency sample exists. |
+| `aimd_latency_inflated_frac` | fraction of sampled successful worker completions whose post-sample EWMA exceeded the current latency-freeze threshold. This is interval evidence/diagnostics, not a controller vote. |
 | `serial_frac` | fraction of total wall-time spent at `<= 2` in-flight (time-weighted over the bins actually used). |
 | `collapse_at_frac` | the fractional bin index where a TRAILING run of `<= 2` in-flight began (e.g. `0.5` = the back half of the run ran serial) — `null` when the run never permanently collapsed (its last bin is still `> 2`, the good outcome). |
 | `peak_workers` | the existing `peak_in_flight` counter, reused here (not a second measurement). |

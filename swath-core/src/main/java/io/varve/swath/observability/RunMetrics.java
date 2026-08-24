@@ -1966,6 +1966,18 @@ public final class RunMetrics {
     }
 
     /**
+     * Record one successful slot-gated worker page at HTTP completion. This is deliberately an
+     * upstream, non-durable store-service signal: it may include rows later filtered or replayed and
+     * must never be confused with {@code entriesEmitted} or fed back into the controller.
+     */
+    public void recordAimdWorkerSuccess(int keysOnPage, long latencyNanos, int targetT,
+                                        long baselineNanos, long ewmaNanos,
+                                        boolean latencyInflated, boolean latencySampled) {
+        trajectory.recordAimdWorkerSuccess(nanoClock.getAsLong() - runStartNanos.get(), keysOnPage,
+                latencyNanos, targetT, baselineNanos, ewmaNanos, latencyInflated, latencySampled);
+    }
+
+    /**
      * Delegate the CAS'd in-flight transition to {@link InFlightGauge}, then fold the winning
      * transition's {@code (value HELD for window)} into the bounded {@link TrajectoryRollup} — reusing
      * the exact {@code (now, window, valueDuringWindow)} tuple the gauge's area integral already

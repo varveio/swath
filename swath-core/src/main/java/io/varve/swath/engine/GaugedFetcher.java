@@ -154,8 +154,15 @@ final class GaugedFetcher implements PageFetcher {
                     // before that same completion is allowed to claim a paced growth step. A returned
                     // 503 is store backpressure, not a successful-latency observation; a timed-out
                     // attempt never reaches here at all (it throws).
-                    gauge.reportCompletedAttempt(page.httpStatus(),
-                            page.latency() == null ? 0L : page.latency().toNanos());
+                    long latencyNanos = page.latency() == null ? 0L : page.latency().toNanos();
+                    ConcurrencyGauge.CompletionSnapshot controller =
+                            gauge.reportCompletedAttempt(page.httpStatus(), latencyNanos);
+                    if (page.httpStatus() != ConcurrencyGauge.SLOWDOWN_STATUS) {
+                        metrics.recordAimdWorkerSuccess(page.entries().size(), latencyNanos,
+                                controller.effectiveT(), controller.latencyBaselineNanos(),
+                                controller.latencyEwmaNanos(), controller.latencyInflated(),
+                                controller.latencySampled());
+                    }
                 }
                 if (level > 0) {
                     // A page that only completes at an escalated level is post-hoc proof the

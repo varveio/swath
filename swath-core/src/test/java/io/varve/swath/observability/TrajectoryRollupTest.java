@@ -47,6 +47,10 @@ final class TrajectoryRollupTest {
 
         clock[0] = 1_000_000_000L;     // t = 1s
         metrics.decrementInFlight();   // 3 -> 2: bin[1] gets (value=3, dt=1s)
+        metrics.recordAimdWorkerSuccess(1000, 30_000_000L, 64,
+                10_000_000L, 20_000_000L, false, true);
+        metrics.recordAimdWorkerSuccess(900, 50_000_000L, 128,
+                10_000_000L, 25_000_000L, true, true);
 
         clock[0] = 2_000_000_000L;     // t = 2s
         metrics.decrementInFlight();   // 2 -> 1: bin[2] gets (value=2, dt=1s)
@@ -67,6 +71,19 @@ final class TrajectoryRollupTest {
         assertThat(trajectory.inFlight()[1]).isEqualTo(3.0);
         assertThat(trajectory.inFlight()[2]).isEqualTo(2.0);
         assertThat(trajectory.inFlight()[3]).isEqualTo(1.0);
+        assertThat(trajectory.workerPagesPerSec()[1]).isEqualTo(2.0);
+        assertThat(trajectory.workerKeysFetchedPerSec()[1]).isEqualTo(1900.0);
+        assertThat(trajectory.workerLatencyMinMs()[1]).isEqualTo(30.0);
+        assertThat(trajectory.workerLatencyMeanMs()[1]).isEqualTo(40.0);
+        assertThat(trajectory.aimdTargetMin()[1]).isEqualTo(64.0);
+        assertThat(trajectory.aimdTargetMax()[1]).isEqualTo(128.0);
+        assertThat(trajectory.aimdTargetLast()[1]).isEqualTo(128.0);
+        assertThat(trajectory.aimdLatencyBaselineMs()[1]).isEqualTo(10.0);
+        assertThat(trajectory.aimdLatencyEwmaMs()[1]).isEqualTo(25.0);
+        assertThat(trajectory.aimdLatencyInflatedFrac()[1]).isEqualTo(0.5);
+        assertThat(trajectory.workerLatencyMinMs()[2])
+                .as("a bin with no worker-success observation uses the internal unavailable sentinel")
+                .isEqualTo(-1.0);
 
         // serial_frac: bins at or below the <=2 threshold (bins 2 and 3) over total dt (bins 1-3).
         assertThat(trajectory.serialFrac()).isCloseTo(2.0 / 3.0, Offset.offset(1e-9));
@@ -118,6 +135,8 @@ final class TrajectoryRollupTest {
         assertThat(trajectory).isNotNull();
         assertThat(trajectory.inFlight().length).as("at least one bin used").isGreaterThan(0);
         assertThat(trajectory.inFlight().length).isEqualTo(trajectory.progressRate().length);
+        assertThat(trajectory.inFlight().length).isEqualTo(trajectory.workerPagesPerSec().length);
+        assertThat(trajectory.inFlight().length).isEqualTo(trajectory.aimdTargetLast().length);
         assertThat(trajectory.serialFrac()).isBetween(0.0, 1.0);
         double collapseAtFrac = trajectory.collapseAtFrac();
         assertThat(collapseAtFrac == -1.0 || (collapseAtFrac >= 0.0 && collapseAtFrac <= 1.0))

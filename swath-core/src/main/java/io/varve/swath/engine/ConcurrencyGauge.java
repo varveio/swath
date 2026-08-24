@@ -337,11 +337,20 @@ public final class ConcurrencyGauge {
      * its own evidence after that decision. Returned 503s retain the existing throttle path and do
      * not contaminate the successful-latency baseline.
      */
-    void reportCompletedAttempt(int httpStatus, long latencyNanos) {
-        if (httpStatus != SLOWDOWN_STATUS && latencyNanos > 0L) {
+    CompletionSnapshot reportCompletedAttempt(int httpStatus, long latencyNanos) {
+        boolean latencySampled = httpStatus != SLOWDOWN_STATUS && latencyNanos > 0L;
+        if (latencySampled) {
             onAttemptLatency(latencyNanos);
         }
+        boolean latencyInflated = latencySampled && latencyFrozen();
         reportStatus(httpStatus);
+        return new CompletionSnapshot(effectiveT.get(), latencyBaselineNs.get(), latencyEwmaNs.get(),
+                latencyInflated, latencySampled);
+    }
+
+    /** Coherent-enough observation captured at the ordered successful-attempt controller seam. */
+    record CompletionSnapshot(int effectiveT, long latencyBaselineNanos, long latencyEwmaNanos,
+                              boolean latencyInflated, boolean latencySampled) {
     }
 
     /**
