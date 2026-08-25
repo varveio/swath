@@ -333,6 +333,16 @@ Every arm passed exact row, manifest, inventory, MD5, sorted-readback, and repla
 checks. The tradeoff was consumer-visible: four final files at R4 and eight at R8. This
 supports the typed override for measured topologies, not a universal default change.
 
+The R8 CPU profile attributed 4,256 of 9,097 range-thread samples (46.8%) to
+timestamp parsing or formatting. PageRun staging already stores epoch microseconds, but rebuilding
+the text-backed entry and then writing typed Parquet repeated the canonical conversion in both
+directions. A byte-exact arithmetic fast path for canonical UTC text, with the previous general
+fallback retained for every alternate accepted spelling, reduced two matched R8 range merges from
+21.5–21.6 seconds to 14.0 seconds. Whole-run report time fell from 57.6–57.8 seconds to
+44.2–44.9 seconds, and peak RSS fell from 3.27–3.31 GiB to 3.21–3.22 GiB. Both candidate arms
+passed the same exact output and replay-error gates. The source text model, PageRun encoding, and
+Parquet schema did not change.
+
 The remaining serial fractions are boundary sampling, small/resource-limited fallbacks,
 and final publication. A serial fraction becomes more visible as listing gets faster, so
 judge merge share against the machine and storage, not object count alone.

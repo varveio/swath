@@ -85,7 +85,10 @@ public record DeleteMarkerEntry(KeyBytes key, String versionId, boolean isLatest
 unsorted text sinks write that value without parsing or canonicalizing it. Typed consumers call
 `lastModifiedEpochMicros()` explicitly: the mtime filter, the current Parquet timestamp writer,
 and sorted spill encoding. The current sorted spill format therefore canonicalizes timestamp text;
-preserving it through sorted output requires a separately versioned spill change. Entries supplied
+the canonical UTC form emitted by S3 and reconstructed by sorted spill uses a byte-exact arithmetic
+parse/format path, while every alternate or unusual accepted form retains the general formatter
+fallback. This is an implementation optimization, not a grammar or representation change.
+Preserving it through sorted output requires a separately versioned spill change. Entries supplied
 by typed stores/fixtures retain the compatibility
 constructor that starts from epoch microseconds. Thus an ordinary unsorted TSV/JSONL listing does
 not pay a timestamp parse-and-format round trip, while the shipped Parquet schema below remains
