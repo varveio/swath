@@ -1,4 +1,4 @@
-# Using Swath
+# Using swath
 
 This page covers the choices that change a listing's output or durability. For every
 visible option and its current default, use the installed CLI:
@@ -9,7 +9,7 @@ swath resume --help
 ```
 
 For a first run, start with [Getting started](getting-started.md). Credentials, IAM,
-endpoint compatibility, and request cost are in [Operating Swath](operating.md).
+endpoint compatibility, and request cost are in [Operating swath](operating.md).
 
 ## Commands and targets
 
@@ -23,12 +23,12 @@ Verbs are explicit: `swath s3://bucket` is an error and suggests `swath list`.
 Targets are `s3://bucket` or `s3://bucket/prefix`. The path is literal:
 `s3://bucket/a%20b` means the bytes `a%20b`, not `a b`.
 
-Swath currently lists current objects from general-purpose S3 buckets. It rejects S3
+swath currently lists current objects from general-purpose S3 buckets. It rejects S3
 directory buckets before the first request because their listing contract does not
 provide the global ordering and `StartAfter` primitive required by the parallel range
 scan. Version history and delete-marker listing are planned but not implemented.
 
-A completed run is the complete result of the live listing Swath performed. It is not a
+A completed run is the complete result of the live listing swath performed. It is not a
 point-in-time snapshot of a bucket that changed while the run was in progress.
 
 ## Choose an output
@@ -60,7 +60,7 @@ dataset, or shorten the crash-recovery window. Benchmark it before enabling it; 
 ### Managed Parquet
 
 Use a directory path such as `out/` when you need checkpoint and resume. A **managed
-Parquet dataset** contains data parts plus Swath's manifest, completion marker, run report,
+Parquet dataset** contains data parts plus swath's manifest, completion marker, run report,
 and temporary resume state.
 
 Avoid `-o inventory.parquet`. In the current pre-1.0 compatibility behavior, that spelling
@@ -96,19 +96,19 @@ out/
   `out/data/*.parquet` or `out/data/*.jsonl.gz` is safe.
 - `manifest.json` lists parts, row counts, checksums, and dataset metadata. Sorted
   datasets also carry key-range metadata.
-- `.swath-state.json` stores Swath's internal ownership and run identity. Consumers
+- `.swath-state.json` stores swath's internal ownership and run identity. Consumers
   should ignore it.
 - `_swath_summary.json` is the machine-readable run report. It is automatic for managed
   Parquet and available elsewhere through `--report`.
-- `_SUCCESS` is written last. Its presence means Swath published the complete result of
+- `_SUCCESS` is written last. Its presence means swath published the complete result of
   the listing.
 - `symlink.txt` lists part paths for Hive-, Athena-, and Trino-style discovery.
 
 While a resumable Parquet run is active, `.swath/checkpoint.sqlite` is present. A sorted
 run also uses `_staging/`. Both are internal and disappear after successful publication.
 
-Do not edit, move, or concurrently reuse an active managed directory. Swath refuses
-symlinked managed paths and non-empty directories that lack durable Swath ownership
+Do not edit, move, or concurrently reuse an active managed directory. swath refuses
+symlinked managed paths and non-empty directories that lack durable swath ownership
 evidence.
 
 Read all parts as one table:
@@ -171,7 +171,7 @@ Sorted output has three important constraints:
 3. Staging and final output coexist during the merge, so disk usage scales with captured
    data.
 
-Swath checks free space before and during a sorted run. It stops with resumable state
+swath checks free space before and during a sorted run. It stops with resumable state
 rather than continue toward a merge that is already certain to exhaust the device.
 `--tune sort.ignore-disk-check=on` bypasses that protection and is intended only for a
 volume sized independently.
@@ -187,7 +187,7 @@ remain serial. See [Performance](performance.md#the-sorted-merge) and
 ## Checkpoint and resume
 
 The managed output directory is the public resume handle. With the default
-`--checkpoint auto`, Swath keeps the live SQLite checkpoint at:
+`--checkpoint auto`, swath keeps the live SQLite checkpoint at:
 
 ```text
 <output>/.swath/checkpoint.sqlite
@@ -203,7 +203,7 @@ swath resume out/
 ```
 
 The checkpoint records range ownership and committed cursors. Finalized Parquet parts
-remain durable. An unfinished part was never published in the manifest; Swath removes it
+remain durable. An unfinished part was never published in the manifest; swath removes it
 and re-lists from the last durable cursor.
 
 On clean completion the live checkpoint is removed. `swath resume out/` then reports that
