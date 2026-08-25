@@ -1,7 +1,7 @@
 # Documentation
 
 Choose the path that matches the job in front of you. You do not need the internals to
-use Swath.
+use swath.
 
 ## Start
 
