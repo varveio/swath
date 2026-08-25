@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  * {@code R} contiguous ordered ranges and merge each range independently on its own thread, each
  * producing its own ordered part file(s). The concatenation of the ranges' outputs, in range order,
  * is the global sort with no duplicate and no gap — given the input segments already had none — so
- * {@link SortTransform} renames them into a single ascending {@code part-00001.parquet}… sequence.
+ * {@link SortTransform} renames them into a single ascending {@code part-00000.parquet}… sequence.
  *
  * <p><b>Why this is correct.</b> Ranges split on the <b>key bytes</b> (the primary component of
  * {@link ListEntryComparator}); each row is assigned to exactly one range by an exact per-row key

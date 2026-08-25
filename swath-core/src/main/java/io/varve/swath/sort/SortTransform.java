@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  * {@link #cleanStaleFinals}, not here.
  *
  * <p>Multi-file output rolls the sorted stream into range-disjoint files named {@code
- * part-00001.parquet}, {@code part-00002.parquet}, … (lexical order == key order), starting a
+ * part-00000.parquet}, {@code part-00001.parquet}, … (lexical order == key order), starting a
  * fresh file each time the current one reaches {@code finalFileBytes} (default ~1&nbsp;GiB;
  * {@code docs/internals/contracts.md} §7).
  *
@@ -273,7 +273,7 @@ public final class SortTransform {
      * degenerate keyspace that cannot be split into more than one range, so the caller falls back to
      * the untouched serial merge. Otherwise it merges the ranges concurrently
      * ({@link ParallelRangeMerge}), then does the SAME serial publish as the serial path — rename the
-     * ordered range parts into one ascending {@code part-00001.parquet}… sequence (filename order ==
+     * ordered range parts into one ascending {@code part-00000.parquet}… sequence (filename order ==
      * key order == global sort), fire the publish listener, delete staging. Immediately before that
      * rename it writes the multi-file completeness stamp ({@code file_index} 1..N, one
      * {@code file_final} on N), which is the point at which the global part order is first known.
@@ -410,9 +410,9 @@ public final class SortTransform {
             writer.close();
             atomicRename(tf.get(0), finalFiles.get(0));
         } else {
-            int index = 1;
+            int filenameIndex = 0;
             for (Path tmp : tmpsInOrder) {
-                String name = String.format("%s%05d%s", FINAL_PREFIX, index++, FINAL_SUFFIX);
+                String name = finalPartName(filenameIndex++);
                 Path finalPath = outputDir.resolve(name);
                 atomicRename(tmp, finalPath);
                 finalFiles.add(finalPath);
@@ -455,18 +455,26 @@ public final class SortTransform {
     private SortedFileWriter openNextFile(Path outputDir, Path stagingDir, List<Path> finalFiles,
                                           List<Path> tmpFiles, List<SortedFileWriter> finalWriters,
                                           SortedFileWriterFactory outputSequence) throws IOException {
-        int index = finalFiles.size() + 1;
-        String name = String.format("%s%05d%s", FINAL_PREFIX, index, FINAL_SUFFIX);
+        int filenameIndex = finalFiles.size();
+        String name = finalPartName(filenameIndex);
         Path finalPath = outputDir.resolve(name);
         // Write the tmp OUTSIDE data/ — into the sibling staging dir on the same
         // filesystem — and atomically rename it INTO data/ (see transform()). data/ (outputDir) thus
         // only ever holds finalized *.parquet; a crash never strands a *.tmp inside the pure-parquet dir.
         Path tmpPath = stagingDir.resolve(name + TMP_SUFFIX);
-        SortedFileWriter writer = outputSequence.create(tmpPath, index);
+        // The public filename follows Spark/Hadoop's zero-based part ordinal. The footer's
+        // file_index remains a 1-based position so existing sorted fixtures retain their stamp
+        // semantics and replay's completeness check remains backward-compatible.
+        SortedFileWriter writer = outputSequence.create(tmpPath, filenameIndex + 1);
         finalFiles.add(finalPath);
         tmpFiles.add(tmpPath);
         finalWriters.add(writer);
         return writer;
+    }
+
+    /** Spark/Hadoop-style public part name with a dense, zero-based ordinal. */
+    private static String finalPartName(int filenameIndex) {
+        return String.format("%s%05d%s", FINAL_PREFIX, filenameIndex, FINAL_SUFFIX);
     }
 
     private static List<FinalPart> finalParts(List<Path> paths, List<SortedFileWriter> writers) {

@@ -125,7 +125,7 @@ class SortTransformFanInClampTest {
         assertThat(parts.size()).as("small final-file-bytes must roll into multiple parts").isGreaterThan(1);
         for (int i = 0; i < parts.size(); i++) {
             assertThat(parts.get(i).getFileName().toString())
-                    .isEqualTo(String.format("part-%05d.parquet", i + 1));
+                    .isEqualTo(String.format("part-%05d.parquet", i));
         }
         // Monotonic part boundaries: the last key of part i is strictly before the first key of part i+1.
         String prevMax = null;

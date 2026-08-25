@@ -194,7 +194,7 @@ class SortTransformPageRunParallelMergePropTest {
 
     /**
      * Rolled output: each range also splits into several parts. Stacks intra-range file boundaries on
-     * top of the inter-range ones — the whole {@code part-00001..N} sequence must still be the exact
+     * top of the inter-range ones — the whole {@code part-00000..part-(N-1)} sequence must still be the exact
      * global sort.
      */
     @Property(tries = 30)
@@ -829,7 +829,7 @@ class SortTransformPageRunParallelMergePropTest {
             List<String> names = parallel.finalFiles().stream()
                     .map(p -> p.getFileName().toString()).toList();
             for (int i = 0; i < names.size(); i++) {
-                assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i + 1));
+                assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i));
             }
         } finally {
             deleteRecursively(root);

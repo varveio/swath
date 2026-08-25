@@ -61,8 +61,8 @@ class SortTransformParallelMergeTest {
         // Filename order == key order == the global sort, no gap, no duplicate.
         assertThat(keys(parallel.finalFiles())).containsExactlyElementsOf(expected);
         List<String> names = parallel.finalFiles().stream().map(p -> p.getFileName().toString()).toList();
-        assertThat(names).isSorted();
-        assertThat(names.get(0)).isEqualTo("part-00001.parquet");
+        assertThat(names).containsExactly(
+                "part-00000.parquet", "part-00001.parquet", "part-00002.parquet");
         // Staging fully reclaimed and the dir removed (same publish contract as serial).
         assertThat(Files.exists(parDirs.staging)).isFalse();
         assertThat(listTmp(parDirs.output)).isEmpty();

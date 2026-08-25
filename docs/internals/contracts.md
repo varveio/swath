@@ -486,10 +486,12 @@ needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 - **Sorted output (`--sort`, §6) gets the same consumer `manifest.json` +
   `.swath-state.json` + `_SUCCESS` at publish time** — the
   final **`part-NNNNN.parquet`** files (uniform naming, no
-  `sorted-` prefix; `%05d` zero-padded, lexical name order == key order) live
+  `sorted-` prefix; `NNNNN` is a dense, zero-based sequence beginning at
+  `00000`, `%05d` zero-padded, and lexical name order == key order) live
   under `data/` like any part — a `--sort` dataset and a plain dataset share
   the same `part-` prefix (never a `sorted-` prefix on either) but differ by
   the `w`-infix: plain (unsorted) parts are `part-w{worker}-{seq}.parquet`,
+  where each writer's dense `seq` is independently zero-based,
   `--sort` finals are `part-{NNNNN}.parquet` with no `w`-infix — a consumer
   distinguishes them either way, but authoritatively via `manifest.json`'s
   `sorted` field; the manifest carries their
@@ -716,7 +718,8 @@ which owns the at-most-once-text durability questions it would reopen):
   file carries static footer key-value metadata — `swath.sort.order` (the
   comparator order), `swath.sort.mode` (`objects` | `versions`),
   `swath.sort.format_version`, and, for a multi-file rolled output,
-  `swath.sort.file_index`/`swath.sort.file_final` (1-based position and a
+  `swath.sort.file_index`/`swath.sort.file_final` (1-based position, independent
+  of the filename's zero-based ordinal, and a
   last-file marker proving the resolved file set is complete) — static values
   only, no routing data; the replay server derives its own in-memory
   first-key index at startup instead of trusting an embedded index.

@@ -52,7 +52,7 @@ class SortFixtureCommandTest {
         }
 
         assertThat(exit).isEqualTo(0);
-        Path output = outputDir.resolve("part-00001.parquet");
+        Path output = outputDir.resolve("part-00000.parquet");
         assertThat(Files.exists(output)).isTrue();
         assertThat(SortStamp.read(output)).isPresent();
 
@@ -122,7 +122,7 @@ class SortFixtureCommandTest {
         Path capture = Files.createDirectories(dir.resolve("capture"));
         writeUnsortedPart(capture.resolve("part-0.parquet"), "a", "b");
         Path outputDir = Files.createDirectories(dir.resolve("out"));
-        Path staleTmp = Files.createFile(outputDir.resolve("part-00001.parquet.tmp"));
+        Path staleTmp = Files.createFile(outputDir.resolve("part-00000.parquet.tmp"));
         Files.createDirectories(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME));
         Files.createFile(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME).resolve("fixture-0.parquet"));
 
@@ -132,7 +132,7 @@ class SortFixtureCommandTest {
         assertThat(exit).isEqualTo(0);
         assertThat(Files.exists(staleTmp)).isFalse();
         assertThat(Files.exists(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME))).isFalse();
-        assertThat(SortStamp.read(outputDir.resolve("part-00001.parquet"))).isPresent();
+        assertThat(SortStamp.read(outputDir.resolve("part-00000.parquet"))).isPresent();
     }
 
     // --- helpers ---

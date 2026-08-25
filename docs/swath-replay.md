@@ -86,7 +86,7 @@ swath-replay sort-fixture \
 
 The transform uses the same bounded sort library as swath, writes temporary files then
 renames them, and prints row/file/byte/segment/merge counts. Output files are named
-`part-00001.parquet` onward. Versioned rows or duplicate keys are rejected in the current
+`part-00000.parquet` onward. Versioned rows or duplicate keys are rejected in the current
 non-versioned format rather than silently collapsed.
 
 ## Start the server

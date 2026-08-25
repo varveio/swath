@@ -112,7 +112,7 @@ class SortTransformParallelMergePropTest {
     /**
      * Same core property, but each range ALSO rolls into multiple parts (a decorator forces a roll
      * every ~5 rows). Stresses intra-range file boundaries stacked on top of the inter-range
-     * boundaries: filename order across the whole {@code part-00001..part-N} sequence must still be the
+     * boundaries: filename order across the whole {@code part-00000..part-(N-1)} sequence must still be the
      * exact global sort, byte-exact to a serial run rolled the same way.
      */
     @Property(tries = 30)
@@ -508,7 +508,7 @@ class SortTransformParallelMergePropTest {
         List<String> names = files.stream().map(p -> p.getFileName().toString()).toList();
         assertThat(names).as("final files enumerated in ascending name order").isSorted();
         for (int i = 0; i < names.size(); i++) {
-            assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i + 1));
+            assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i));
         }
     }
 

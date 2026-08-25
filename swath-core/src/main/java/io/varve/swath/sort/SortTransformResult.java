@@ -10,7 +10,7 @@ import java.util.List;
 
 /**
  * The outcome of a {@link SortTransform} run: the published final sorted file(s), in key order, and
- * the total row count. Range-disjoint and named {@code part-00001.parquet}… when
+ * the total row count. Range-disjoint and named {@code part-00000.parquet}… when
  * {@code final-file-bytes} rolls the output; a single file otherwise.
  *
  * <p>{@code mergePasses}/{@code cascadedPasses}/{@code fastPathEmissions} surface the

@@ -32,7 +32,7 @@ class SortedManifestMetadataHandoffTest {
     void trustedFreshMetadataPublishesWithoutOpeningTheFinalPart(@TempDir Path root) throws Exception {
         DatasetLayout layout = DatasetLayout.of(root);
         Files.createDirectories(layout.dataDir());
-        Path absent = layout.dataDir().resolve("part-00001.parquet");
+        Path absent = layout.dataDir().resolve("part-00000.parquet");
         FinalPartMetadata metadata =
                 new FinalPartMetadata(2, 123, "0123456789abcdef0123456789abcdef",
                         "alpha", "omega", 23, 17, 10);
@@ -45,7 +45,7 @@ class SortedManifestMetadataHandoffTest {
                 new RunMetrics(registry));
 
         JsonNode file = MAPPER.readTree(layout.manifest().toFile()).path("files").get(0);
-        assertThat(file.path("key").asText()).isEqualTo("data/part-00001.parquet");
+        assertThat(file.path("key").asText()).isEqualTo("data/part-00000.parquet");
         assertThat(file.path("size").asLong()).isEqualTo(123);
         assertThat(file.path("MD5checksum").asText()).isEqualTo(metadata.md5());
         assertThat(file.path("rowCount").asLong()).isEqualTo(2);
@@ -60,7 +60,7 @@ class SortedManifestMetadataHandoffTest {
     void metadataLessCarriedPartIsStillReadAndRejectedWhenTruncated(@TempDir Path root) throws Exception {
         DatasetLayout layout = DatasetLayout.of(root);
         Files.createDirectories(layout.dataDir());
-        Path truncated = layout.dataDir().resolve("part-00001.parquet");
+        Path truncated = layout.dataDir().resolve("part-00000.parquet");
         Files.write(truncated, new byte[] {1, 2, 3, 4});
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();

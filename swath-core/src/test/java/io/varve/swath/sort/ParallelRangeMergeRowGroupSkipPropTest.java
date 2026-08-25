@@ -538,7 +538,7 @@ class ParallelRangeMergeRowGroupSkipPropTest {
         List<String> names = files.stream().map(p -> p.getFileName().toString()).toList();
         assertThat(names).as("final files in ascending name order").isSorted();
         for (int i = 0; i < names.size(); i++) {
-            assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i + 1));
+            assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i));
         }
     }
 

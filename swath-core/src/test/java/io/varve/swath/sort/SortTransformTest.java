@@ -47,7 +47,7 @@ class SortTransformTest {
         // contents — the sorter owns it exclusively.
         assertThat(Files.exists(dirs.staging)).isFalse();
         assertThat(listTmp(dirs.output)).isEmpty();                    // no stale .tmp
-        assertThat(result.finalFiles().get(0).getFileName().toString()).isEqualTo("part-00001.parquet");
+        assertThat(result.finalFiles().get(0).getFileName().toString()).isEqualTo("part-00000.parquet");
     }
 
     @Test
@@ -109,8 +109,8 @@ class SortTransformTest {
         assertThat(result.finalFiles()).hasSize(6);
         List<String> names = result.finalFiles().stream().map(p -> p.getFileName().toString()).toList();
         assertThat(names).containsExactly(
-                "part-00001.parquet", "part-00002.parquet", "part-00003.parquet",
-                "part-00004.parquet", "part-00005.parquet", "part-00006.parquet");
+                "part-00000.parquet", "part-00001.parquet", "part-00002.parquet",
+                "part-00003.parquet", "part-00004.parquet", "part-00005.parquet");
         // Lexical file order == key order, and files are range-disjoint (one key each, ascending).
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d", "e", "f");
         for (Path f : result.finalFiles()) {
@@ -187,7 +187,7 @@ class SortTransformTest {
     void staleTmpFromACrashedPublishIsCleanedBeforeReRun(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         // A previous run crashed mid-publish, leaving a partial .tmp behind.
-        Path stale = Files.createFile(dirs.output.resolve("part-00001.parquet.tmp"));
+        Path stale = Files.createFile(dirs.output.resolve("part-00000.parquet.tmp"));
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b")));
 
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
@@ -245,14 +245,14 @@ class SortTransformTest {
 
         assertThat(Files.exists(staleFinal)).as("stale final swept before republish").isFalse();
         assertThat(keys(result.finalFiles())).containsExactly("a", "b");
-        assertThat(result.finalFiles()).containsExactly(dirs.output.resolve("part-00001.parquet"));
+        assertThat(result.finalFiles()).containsExactly(dirs.output.resolve("part-00000.parquet"));
         // The manifest callback saw exactly the files this run produced — no stale survivor mixed in.
         assertThat(published).containsExactlyElementsOf(result.finalFiles());
         // Only the produced final remains on disk under the output dir root.
         try (var s = Files.newDirectoryStream(dirs.output, "part-*.parquet")) {
             List<Path> onDisk = new ArrayList<>();
             s.forEach(onDisk::add);
-            assertThat(onDisk).containsExactly(dirs.output.resolve("part-00001.parquet"));
+            assertThat(onDisk).containsExactly(dirs.output.resolve("part-00000.parquet"));
         }
     }
 

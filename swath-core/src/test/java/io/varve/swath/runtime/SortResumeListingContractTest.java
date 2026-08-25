@@ -234,7 +234,7 @@ final class SortResumeListingContractTest {
         }
 
         // ---- correctness: complete, globally sorted, no dup, no gap (byte-exact) ----
-        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
         List<String> outKeys = ParquetReads.keys(finalFile);
         List<String> expected = keyspace.stream().map(k -> new String(k, StandardCharsets.UTF_8))
                 .sorted().toList();
@@ -323,7 +323,7 @@ final class SortResumeListingContractTest {
         }
 
         // ---- correctness: complete, sorted, no dup, no gap ----
-        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
         List<String> outKeys = ParquetReads.keys(finalFile);
         List<String> expected = keyspace.stream().map(k -> new String(k, StandardCharsets.UTF_8))
                 .sorted().toList();
@@ -433,7 +433,7 @@ final class SortResumeListingContractTest {
         }
 
         // ---- correctness sanity: the published output is complete + globally sorted ----
-        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+        Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
         List<String> expected = keyspace.stream()
                 .map(k -> new String(k, StandardCharsets.UTF_8)).sorted().toList();
         assertThat(ParquetReads.keys(finalFile))

@@ -147,7 +147,7 @@ final class SortMergeReentryContractTest {
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
 
-        Path finalFile = outputDir.resolve("part-00001.parquet");
+        Path finalFile = outputDir.resolve("part-00000.parquet");
         assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(sortedStrings(keyspace));
         assertThat(SortStamp.read(finalFile)).isPresent();
         assertThat(result.totalRows()).isEqualTo(keyspace.size());
@@ -194,20 +194,20 @@ final class SortMergeReentryContractTest {
             // cascade intermediate the re-run must clean. Finals live under <root>/data/, so the
             // crashed prior attempt's orphans sit there too.
             Path dataDir = Files.createDirectories(DatasetLayout.of(outputDir).dataDir());
-            Files.writeString(dataDir.resolve("part-00001.parquet"), "orphaned pre-manifest content");
-            Files.writeString(dataDir.resolve("part-00001.parquet.tmp"), "stale tmp");
+            Files.writeString(dataDir.resolve("part-00000.parquet"), "orphaned pre-manifest content");
+            Files.writeString(dataDir.resolve("part-00000.parquet.tmp"), "stale tmp");
             Files.writeString(stagingDir.resolve("merge-0.parquet"), "stale cascade intermediate");
             assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).isFalse();
 
             new ListRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
                     singlePass(), SortMode.OBJECTS, spec(sidecar));
 
-            Path finalFile = dataDir.resolve("part-00001.parquet");
+            Path finalFile = dataDir.resolve("part-00000.parquet");
             assertThat(ParquetReads.keys(finalFile))
                     .as("orphaned final file overwritten with the correct merge output")
                     .containsExactlyElementsOf(sortedStrings(keyspace));
             assertThat(SortStamp.read(finalFile)).isPresent();
-            assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00001.parquet");
+            assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00000.parquet");
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(Files.exists(stagingDir)).as("staging removed after republish").isFalse();
             assertThat(counter(ctx, "swath.steal_reason", "merge_redone"))
@@ -297,7 +297,7 @@ final class SortMergeReentryContractTest {
         SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
-        assertThat(ParquetReads.keys(outputDir.resolve("part-00001.parquet")))
+        assertThat(ParquetReads.keys(outputDir.resolve("part-00000.parquet")))
                 .containsExactlyElementsOf(sortedStrings(keyspace));
         assertThat(result.totalRows()).isEqualTo(keyspace.size());
     }

@@ -133,7 +133,7 @@ final class SortForeignManifestTest {
         // never silently trusted — the identity mismatch is decisive before _SUCCESS is even consulted.
         Files.writeString(layout.success(), "");
         Path dataDir = Files.createDirectories(layout.dataDir());
-        Path staleFinal = dataDir.resolve("part-00001.parquet");
+        Path staleFinal = dataDir.resolve("part-00000.parquet");
         Files.writeString(staleFinal, "not a real parquet file — a foreign prior run's leftover");
         assertThat(Manifest.readIdentity(outputDir)).hasValueSatisfying(id -> {
             assertThat(id.argsHash()).isEqualTo(foreignArgsHash);

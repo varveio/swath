@@ -84,7 +84,7 @@ final class SortPublishedReentryTest {
         Files.writeString(layout.success(), "");
         // Resume guard: a resumed run must NOT clear a finalized part — plant one and require it
         // to survive the PUBLISHED reentry (prepareDatasetForFreshRun runs ONLY on a non-resumed run).
-        Path finalizedPart = Files.createDirectories(layout.dataDir()).resolve("part-00001.parquet");
+        Path finalizedPart = Files.createDirectories(layout.dataDir()).resolve("part-00000.parquet");
         Files.writeString(finalizedPart, "this run's already-published finalized part");
         assertThat(CheckpointDbProbe.runStatus(db, runId)).isEqualTo("RUNNING");
 
