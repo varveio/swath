@@ -1,12 +1,16 @@
 # Documentation style and terminology
 
-This guide keeps Swath's public writing consistent without flattening the technical
+This guide keeps swath's public writing consistent without flattening the technical
 detail that makes the project useful.
 
 ## Names and voice
 
-- Use **Swath** for the product or project.
-- Use `swath` for the executable and code-form commands such as `swath list`.
+- Write the project name as **swath** in lowercase everywhere, including in headings and
+  at the beginning of a sentence.
+- Use code formatting only for literal executables, commands, flags, paths, package names,
+  and artifact identifiers: `swath`, `swath list`, `--sort`, and
+  `ghcr.io/varveio/swath`.
+- Use plain swath when referring to the project or tool in ordinary prose.
 - Use US English in first-party documentation: `behavior`, `color`, `analyze`.
 - Prefer direct verbs—list, write, resume, query, sort, inspect—over abstract nouns such
   as surface, disposition, or seam in user-facing pages.
@@ -29,12 +33,12 @@ describing a user interface or a dataset's physical output directory.
 
 ### Live listing, result, and snapshot
 
-Swath performs a **live listing** and publishes a **listing result** or **inventory**.
+swath performs a **live listing** and publishes a **listing result** or **inventory**.
 
 Do not call the result a point-in-time snapshot. Use this standard qualification when
 consistency matters:
 
-> Swath publishes the complete result of the live listing it performed. It is not a
+> swath publishes the complete result of the live listing it performed. It is not a
 > point-in-time snapshot of a bucket that changes during the run.
 
 `_SUCCESS` means the result was completely published; it does not add transactional
@@ -44,7 +48,7 @@ snapshot semantics.
 
 On first use in a beginner or workflow page, define it:
 
-> A managed Parquet dataset is a directory of Parquet parts plus Swath's manifest,
+> A managed Parquet dataset is a directory of Parquet parts plus swath's manifest,
 > completion marker, run report, and temporary resume state.
 
 After that, **managed dataset** is enough when the format is clear.
@@ -69,7 +73,7 @@ S3-compatible access, not a native GCS backend.
 
 Every prominent measured run should identify as much of the following as is available:
 
-- Swath version and commit;
+- swath version and commit;
 - date;
 - target bucket or fixture;
 - client machine and region;
@@ -85,7 +89,7 @@ Label an observed number as an observation, not a portable limit or promise. Pre
 
 over:
 
-> Swath lists at 655,346 keys/s.
+> swath lists at 655,346 keys/s.
 
 When provenance is incomplete, say so rather than inferring it.
 
