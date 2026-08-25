@@ -37,6 +37,7 @@ final class DocumentationEntryPointTest {
 
     private static final Pattern MARKDOWN_LINK =
             Pattern.compile("!?\\[[^]\\n]*]\\(([^)\\s]+)(?:\\s+[^)]*)?\\)");
+    private static final Pattern CAPITALIZED_PROJECT_NAME = Pattern.compile("\\bSwath\\b");
 
     @Test
     void entryPointLocalLinkTargetsExist() throws Exception {
@@ -50,6 +51,15 @@ final class DocumentationEntryPointTest {
     }
 
     @Test
+    void entryPointsUseTheLowercaseProjectName() throws Exception {
+        for (String relative : ENTRY_POINTS) {
+            assertThat(CAPITALIZED_PROJECT_NAME.matcher(read(relative)).find())
+                    .as(relative + " contains capitalized project name")
+                    .isFalse();
+        }
+    }
+
+    @Test
     void releaseEntryPointsUseTheNewcomerFirstStory() throws Exception {
         String readme = read("README.md");
         String gettingStarted = read("docs/getting-started.md");
@@ -59,6 +69,7 @@ final class DocumentationEntryPointTest {
         String agentGuide = read("AGENTS.md");
 
         assertThat(readme)
+                .contains("Parallel, resumable S3 listing for very large buckets")
                 .contains("stofs_2d_glo.20230113/")
                 .contains("## See it at full scale")
                 .contains("not a point-in-time snapshot")
@@ -70,7 +81,7 @@ final class DocumentationEntryPointTest {
                 .contains("not a point-in-time snapshot");
         assertThat(fullScale)
                 .contains("39,585,029")
-                .contains("v0.2.1")
+                .contains("swath v0.2.1")
                 .contains("full public bucket");
         assertThat(usage)
                 .contains("The listing-scope `args_hash`, filter specification, and output/run identity")
