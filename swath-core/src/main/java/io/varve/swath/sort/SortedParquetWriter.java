@@ -6,7 +6,7 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.output.parquet.DigestingOutputFile;
+import io.varve.swath.output.parquet.ListEntryParquetWriters;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
 import java.io.IOException;
@@ -76,9 +76,8 @@ public final class SortedParquetWriter implements SortedFileWriter {
     /** The only value {@link #FILE_FINAL_KEY} is ever written with — its absence is the negative case. */
     public static final String FILE_FINAL_VALUE = "true";
 
-    private final Path path;
     private final ParquetWriter<ListEntry> writer;
-    private final DigestingOutputFile output;
+    private final ListEntryParquetWriters.TrackedWriter tracked;
     private long rows;
     private long boundsBytes;
     private byte[] firstKey;
@@ -89,7 +88,6 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private FinalPartMetadata finalMetadata;
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
-        this.path = path;
         this.fileIndex = fileIndex;
         Map<String, String> stamp = Map.of(
                 ORDER_KEY, ORDER_VALUE,
@@ -107,8 +105,8 @@ public final class SortedParquetWriter implements SortedFileWriter {
         ListEntryParquetWriters.TrackedWriter tracked =
                 ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
                         ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
+        this.tracked = tracked;
         this.writer = tracked.writer();
-        this.output = tracked.output();
     }
 
     @Override
@@ -175,13 +173,12 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // look completed, so a retry would silently skip a file whose footer was never written --
         // publishing a part with no stamp at all.
         long closeStart = System.nanoTime();
-        ListEntryParquetWriters.closeWithDurability(path, writer);
-        output.markDurable();
+        tracked.closeWithDurability();
         long closeNanos = System.nanoTime() - closeStart;
-        finalMetadata = new FinalPartMetadata(rows, output.bytes(), output.md5(),
+        finalMetadata = new FinalPartMetadata(rows, tracked.bytes(), tracked.md5(),
                 firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),
                 lastKey == null ? null : new String(lastKey, StandardCharsets.UTF_8),
-                closeNanos, output.digestNanos(), boundsBytes);
+                closeNanos, tracked.digestNanos(), boundsBytes);
         closed = true;
     }
 
