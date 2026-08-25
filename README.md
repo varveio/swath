@@ -1,16 +1,16 @@
 [![CI](https://github.com/varveio/swath/actions/workflows/ci.yml/badge.svg)](https://github.com/varveio/swath/actions/workflows/ci.yml)
 
-# Swath
+# swath
 
-**Turn a very large S3 bucket into a resumable, query-ready inventory.**
+**Parallel, resumable S3 listing for very large buckets.**
 
-Swath is an open-source CLI for live S3 listings that are too large for a serial SDK loop
-and cannot wait for a fresh S3 Inventory. It learns the bucket's key distribution while
-it scans, so flat keys, deep prefix trees, and badly skewed layouts do not require
-different partitioning scripts.
+swath is an open-source CLI for on-demand S3 listings that are too large for a serial
+paginator. It learns the bucket's key distribution as it runs, so flat, deeply nested,
+and heavily skewed keyspaces can be listed in parallel without pre-partitioning. Stream
+the result, or write a crash-resumable Parquet dataset and query it directly.
 
-> **Safety and consistency:** Swath reads listing metadata only; it never downloads or
-> modifies object contents. The result is complete for the live listing Swath performed,
+> **Safety and consistency:** swath reads listing metadata only; it never downloads or
+> modifies object contents. The result is complete for the live listing swath performed,
 > but it is not a point-in-time snapshot of a bucket that changes during the run.
 
 - **List in parallel without pre-partitioning.** Idle workers take part of the remaining
@@ -20,15 +20,12 @@ different partitioning scripts.
 - **Query the result directly.** Write Parquet for DuckDB, Athena, Trino, and other
   engines, or stream a table, TSV, or JSONL.
 
-## Choose the right tool
+Use swath when you need an on-demand listing of a very large bucket and a serial paginator
+is too slow. If a sufficiently current S3 Inventory or S3 Metadata table already exists
+and contains the fields you need, query that instead. For a small prefix or simple one-off
+task, the AWS CLI or an SDK paginator is usually simpler.
 
-| Situation | Usually the best choice |
-| --- | --- |
-| Small bucket or one-off script | `aws s3 ls` or an SDK loop |
-| Fresh S3 Inventory or S3 Metadata table already exists | Query the precomputed table |
-| Very large bucket, no usable inventory, and a serial listing is too slow | Swath |
-
-Swath is designed for general-purpose S3 buckets whose listings are globally ordered and
+swath is designed for general-purpose S3 buckets whose listings are globally ordered and
 support `StartAfter`. S3 directory buckets use a different listing contract and are not
 supported.
 
@@ -58,7 +55,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --format parquet -o /out/stofs-20230113
 ```
 
-A managed dataset is a directory of Parquet parts plus Swath's manifest, completion
+A managed dataset is a directory of Parquet parts plus swath's manifest, completion
 marker, run report, and temporary resume state. Query all parts as one table:
 
 ```bash
@@ -73,9 +70,9 @@ requester-pays bucket, read the [request-cost guidance](docs/operating.md#reques
 
 ## See it at full scale
 
-[![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
+[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
 
-*The embedded recording was captured with Swath v0.2.1 against the full public
+*The embedded recording was captured with swath v0.2.1 against the full public
 `noaa-gestofs-pds` bucket. That observed run listed 39,585,029 objects, made 41,582
 `ListObjectsV2` calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB RSS.
 The bucket and the current release can produce different figures. Read the
@@ -84,12 +81,12 @@ The bucket and the current release can produce different figures. Read the
 
 The [visual field guide](https://swath.varve.io/field-guide/) explains why S3 listing is
 hard to parallelize and walks through the range model, safe splitting, work stealing,
-checkpointing, and cases where Swath is not the right tool.
+checkpointing, and cases where swath is not the right tool.
 
 ## How it works
 
 Suppose one worker owns the ordered key range `(A, Z]`. It lists forward from `A`. When
-another worker becomes idle, Swath chooses a pivot such as `M` and atomically changes
+another worker becomes idle, swath chooses a pivot such as `M` and atomically changes
 ownership to two adjacent ranges:
 
 ```text
@@ -103,14 +100,14 @@ worker busy. Real keys and observed density improve later pivots, so an inaccura
 guess does not determine the rest of the run.
 
 Checkpointing follows the same ownership model. A page cursor commits before its rows
-enter the output pipeline. A finalized Parquet part is durable; after a crash, Swath may
+enter the output pipeline. A finalized Parquet part is durable; after a crash, swath may
 re-list an unfinished tail but does not rewrite finalized parts. The
 [internals overview](docs/internals/overview.md) is the technical bridge from this model
 to the implementation.
 
 ## Output and resume
 
-Swath can:
+swath can:
 
 - show an aligned table in a terminal;
 - stream TSV or JSONL, optionally compressed;
@@ -123,7 +120,7 @@ reduce emitted rows and output size but not LIST requests or the request bill.
 
 ## Status and limits
 
-Swath is **pre-1.0**. The `list` and `resume` commands, managed Parquet output,
+swath is **pre-1.0**. The `list` and `resume` commands, managed Parquet output,
 checkpoint/resume, filtering, text output, and opt-in global sorting are implemented and
 tested. Flags and schemas may still change before 1.0.
 
@@ -137,7 +134,7 @@ Current scope:
   not a native GCS backend.
 
 Every live scan costs approximately one LIST request per 1,000 returned keys, plus probes,
-retries, and any unfinished tail re-listed after interruption. Swath reports the actual
+retries, and any unfinished tail re-listed after interruption. swath reports the actual
 request count. A fresh precomputed inventory is normally cheaper.
 
 ## Documentation
