@@ -12,10 +12,12 @@ import static org.awaitility.Awaitility.await;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunSummary;
 import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.runtime.RunContext;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -218,17 +220,9 @@ class ParquetWriterPoolMetricsTest {
         // fails.
         //
         // A ROW-COUNT trigger -- not the clock-driven time trigger this test used to arm the fault
-        // with -- makes the fault window deterministic. Whether rotation fires is then a pure
-        // function of how many rows THIS lane thread has itself written from the ordered queue;
-        // nothing the test thread does (revoking permissions, submitting the next batch) can move
-        // that number. The old clock-based design raced: under full-suite load, the lane thread
-        // could still be evaluating the FIRST (under-threshold) batch's rotationReason() by the
-        // time the test thread had already bumped the injected clock and revoked permissions -- so
-        // the FIRST batch's own rotation check (now reading the already-bumped clock) could fire
-        // the fault before the SECOND, intended batch ever ran, recording the failure into the
-        // pool's shared state before the test's own second submit() call -- which then threw the
-        // already-recorded failure straight out of `pool.submit()` (via `checkFailure()`) instead
-        // of surfacing where this test asserts it (#37).
+        // with -- ensures that only the second batch can trigger rotation. The lane may still
+        // record that expected failure before submit() performs its post-admission failure check,
+        // so the test accepts the AccessDeniedException there and then verifies its metric effect.
         RunContext ctx = RunContext.create();
         var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 8,
                 ParquetWriterPoolConfig.DEFAULT.withRotationMaxRows(5L).withMetrics(ctx.metrics()));
@@ -237,9 +231,15 @@ class ParquetWriterPoolMetricsTest {
         pool.submit(batch(0, 0, 0, 3));   // opens part-w0-00000; 3 rows < maxRows(5) -> never rotates on its own
         await().atMost(Duration.ofSeconds(5)).until(() -> Files.exists(partPath));
         Files.setPosixFilePermissions(partPath, Set.of());   // revoke access for any NEW open() of this file
-        pool.submit(batch(0, 1, 3, 6));   // cumulative rows=6 >= maxRows(5) -> rotationReason() fires ROWS -> finalizeCurrent() -> close() fails
 
         try {
+            try {
+                // cumulative rows=6 >= maxRows(5) -> rotationReason() fires ROWS ->
+                // finalizeCurrent() -> close() fails
+                pool.submit(batch(0, 1, 3, 6));
+            } catch (OutputException expected) {
+                assertThat(expected).hasRootCauseInstanceOf(AccessDeniedException.class);
+            }
             MeterRegistry registry = ctx.meterRegistry();
             await().atMost(Duration.ofSeconds(5))
                     .until(() -> registry.find("swath.parquet.parts").tag("outcome", "finalize_failed").counter() != null
