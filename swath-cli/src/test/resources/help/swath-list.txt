@@ -57,9 +57,9 @@ Output:
                                256mb).
       --text-writers=N       Parallel writers for a TSV/JSONL directory dataset
                                (default: 3; range: 2-64).
-      --writeback-size=SIZE  Shape writeback for open TSV/JSONL dataset parts
-                               without rotating (default: off; minimum: 4mb;
-                               does not change crash recovery).
+      --writeback-size=SIZE  Shape writeback for open TSV/JSONL/Parquet dataset
+                               parts without rotating (default: off; minimum:
+                               4mb; does not change crash recovery).
 
 Connection:
       --bearer-token-command=CMD

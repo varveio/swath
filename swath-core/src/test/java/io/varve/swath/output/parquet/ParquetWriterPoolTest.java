@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet;
 
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.batch;
+import static io.varve.swath.output.parquet.ParquetPoolTestSupport.incompressibleRowGroupBatch;
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.parts;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -18,6 +19,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.LastModifiedParseException;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.PageBatch;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.testkit.ParquetReads;
 import java.math.BigInteger;
@@ -27,7 +29,11 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,6 +53,84 @@ class ParquetWriterPoolTest {
                 .hasCauseInstanceOf(LastModifiedParseException.class);
         assertThat(parts(dir)).isEmpty();
         assertThat(DatasetLayout.of(dir).manifest()).doesNotExist();
+    }
+
+    @Test
+    void periodicSyncFailureDeletesTheOpenPartAndPublishesNothing(@TempDir Path dir)
+            throws Exception {
+        var config = ParquetWriterPoolConfig.DEFAULT
+                .withWritebackBytes(PeriodicDataSync.MIN_INTERVAL_BYTES);
+        var pool = ParquetWriterPool.withDataForcer(
+                dir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 1, config,
+                ignored -> { throw new java.io.IOException("forced parquet sync failure"); });
+        pool.submit(incompressibleRowGroupBatch(0, 0));
+
+        assertThatThrownBy(pool::close)
+                .isInstanceOf(OutputException.class)
+                .hasMessageContaining("writer");
+
+        DatasetLayout layout = DatasetLayout.of(dir);
+        assertThat(layout.dataParts()).isEmpty();
+        assertThat(layout.manifest()).doesNotExist();
+        assertThat(layout.success()).doesNotExist();
+    }
+
+    @Test
+    void successfulPeriodicSyncIsNeitherAbortNorCrashResumeAuthority(@TempDir Path dir)
+            throws Exception {
+        Path liveDir = dir.resolve("live");
+        AtomicInteger successfulSyncs = new AtomicInteger();
+        AtomicInteger finalizedEvents = new AtomicInteger();
+        CountDownLatch syncCompleted = new CountDownLatch(1);
+        var config = ParquetWriterPoolConfig.DEFAULT
+                .withWritebackBytes(PeriodicDataSync.MIN_INTERVAL_BYTES)
+                .withPartListener(ignored -> finalizedEvents.incrementAndGet());
+        var pool = ParquetWriterPool.withDataForcer(
+                liveDir, ParquetSchema.canonical(), "hash", 1, Long.MAX_VALUE, 1, config,
+                channel -> {
+                    channel.force(false);
+                    successfulSyncs.incrementAndGet();
+                    syncCompleted.countDown();
+                });
+
+        pool.submit(incompressibleRowGroupBatch(0, 0));
+        assertThat(syncCompleted.await(20, TimeUnit.SECONDS))
+                .as("the open part completed a real data-only force")
+                .isTrue();
+
+        DatasetLayout liveLayout = DatasetLayout.of(liveDir);
+        Path openPart = liveLayout.dataFile("part-w0-00000.parquet");
+        assertThat(openPart).exists();
+        assertThat(successfulSyncs).hasValue(1);
+        assertThat(finalizedEvents)
+                .as("periodic sync must not invoke the checkpoint/finalization listener")
+                .hasValue(0);
+        assertThat(pool.committedPartCount()).isZero();
+        assertThat(liveLayout.manifest()).doesNotExist();
+        assertThat(liveLayout.success()).doesNotExist();
+
+        // Preserve the exact open-file image as a stand-in for bytes left by SIGKILL. The live
+        // pool then exercises normal abort cleanup, while the copied image independently exercises
+        // resume's authority rule: no listener/checkpoint record means the file is discarded even
+        // though a successful periodic force made its emitted prefix reach storage.
+        Path crashedDir = dir.resolve("crashed");
+        DatasetLayout crashedLayout = DatasetLayout.of(crashedDir);
+        Path crashedPart = crashedLayout.dataFile(openPart.getFileName().toString());
+        Files.createDirectories(crashedPart.getParent());
+        Files.copy(openPart, crashedPart);
+        assertThat(crashedPart).exists();
+
+        pool.abort();
+
+        assertThat(finalizedEvents).hasValue(0);
+        assertThat(liveLayout.dataParts()).isEmpty();
+        assertThat(liveLayout.manifest()).doesNotExist();
+        assertThat(liveLayout.success()).doesNotExist();
+
+        ParquetResume.discardNonFinalized(crashedDir, Set.of());
+        assertThat(crashedLayout.dataParts()).isEmpty();
+        assertThat(crashedLayout.manifest()).doesNotExist();
+        assertThat(crashedLayout.success()).doesNotExist();
     }
 
     @Test

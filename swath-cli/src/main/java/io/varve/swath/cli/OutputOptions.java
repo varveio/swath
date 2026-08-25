@@ -431,7 +431,7 @@ final class OutputOptions {
 
     @Resume(ResumeClass.FREE)
     @Option(names = "--writeback-size", paramLabel = "SIZE",
-            description = "Shape writeback for open TSV/JSONL dataset parts without rotating "
+            description = "Shape writeback for open TSV/JSONL/Parquet dataset parts without rotating "
                     + "(default: off; minimum: 4mb; does not change crash recovery).")
     String writebackSize;
 
@@ -583,11 +583,12 @@ final class OutputOptions {
         if (writebackSizeBytes() == 0L) {
             return;
         }
-        boolean partitionedText = resolvedKind == DestinationKind.DIRECTORY
-                && (format == OutputFormat.TSV || format == OutputFormat.JSONL);
-        if (sorted || !partitionedText) {
+        boolean supportedDataset = resolvedKind == DestinationKind.DIRECTORY
+                && (format == OutputFormat.TSV || format == OutputFormat.JSONL
+                || format == OutputFormat.PARQUET);
+        if (sorted || !supportedDataset) {
             throw new InvalidConfigException("--writeback-size currently supports only unsorted "
-                    + "TSV/JSONL directory datasets");
+                    + "TSV/JSONL/Parquet directory datasets");
         }
     }
 

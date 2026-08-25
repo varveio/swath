@@ -10,6 +10,8 @@ import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
+import io.varve.swath.output.dataset.DatasetFormat;
 import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
@@ -32,17 +34,45 @@ public final class ParquetWriterPool implements DatasetWriterPool {
     public ParquetWriterPool(Path dir, MessageType schema, String argsHash,
                              int writers, long targetBytes, int queueCapacity,
                              ParquetWriterPoolConfig config) {
-        delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
-                writers, targetBytes, queueCapacity, sharedConfig(config));
-        registerSummary(config.metrics(), writers);
+        this(createDelegate(dir, argsHash, writers, targetBytes, queueCapacity,
+                config, new ParquetDatasetFormat(schema, config.writebackBytes()), null),
+                config.metrics(), writers);
     }
 
     ParquetWriterPool(Path dir, MessageType schema, String argsHash,
                       int writers, long targetBytes, int queueCapacity,
                       ParquetWriterPoolConfig config, LongSupplier nanoClock) {
-        delegate = new SharedDatasetWriterPool(dir, new ParquetDatasetFormat(schema), argsHash,
-                writers, targetBytes, queueCapacity, sharedConfig(config), nanoClock);
-        registerSummary(config.metrics(), writers);
+        this(createDelegate(dir, argsHash, writers, targetBytes, queueCapacity,
+                config, new ParquetDatasetFormat(schema, config.writebackBytes()), nanoClock),
+                config.metrics(), writers);
+    }
+
+    private ParquetWriterPool(SharedDatasetWriterPool delegate, RunMetrics metrics, int writers) {
+        this.delegate = delegate;
+        registerSummary(metrics, writers);
+    }
+
+    static ParquetWriterPool withDataForcer(
+            Path dir, MessageType schema, String argsHash, int writers, long targetBytes,
+            int queueCapacity, ParquetWriterPoolConfig config,
+            SyncableLocalOutputFile.DataForcer dataForcer) {
+        DatasetFormat format = new ParquetDatasetFormat(schema, config.writebackBytes())
+                .withDataForcer(dataForcer);
+        return new ParquetWriterPool(createDelegate(dir, argsHash, writers,
+                targetBytes, queueCapacity, config, format, null), config.metrics(), writers);
+    }
+
+    private static SharedDatasetWriterPool createDelegate(
+            Path dir, String argsHash, int writers, long targetBytes,
+            int queueCapacity, ParquetWriterPoolConfig config, DatasetFormat format,
+            LongSupplier nanoClock) {
+        DatasetWriterPoolConfig shared = sharedConfig(config);
+        if (nanoClock == null) {
+            return new SharedDatasetWriterPool(dir, format, argsHash,
+                    writers, targetBytes, queueCapacity, shared);
+        }
+        return new SharedDatasetWriterPool(dir, format, argsHash,
+                writers, targetBytes, queueCapacity, shared, nanoClock);
     }
 
     private void registerSummary(RunMetrics metrics, int writers) {
@@ -65,12 +95,20 @@ public final class ParquetWriterPool implements DatasetWriterPool {
         if (metrics == null) {
             return DatasetWriterObserver.NONE;
         }
+        DatasetDataSyncMetrics syncMetrics =
+                new DatasetDataSyncMetrics(metrics, "parquet", DatasetDataSyncMetrics.Classification.PARQUET);
         return new DatasetWriterObserver() {
             @Override public void recordLaneWork(long elapsedNanos) { metrics.recordParquetWrite(elapsedNanos); }
             @Override public void recordRotation(String reason) { metrics.recordParquetRotation(reason); }
             @Override public Object startFinalize() { return metrics.startParquetFinalizeTimer(); }
             @Override public void recordFinalize(Object sample) {
                 metrics.recordParquetFinalizeLatency((Timer.Sample) sample);
+            }
+            @Override public void recordPeriodicSync(long elapsedNanos, long bytes) {
+                syncMetrics.recordSync(elapsedNanos, bytes);
+            }
+            @Override public void recordPeriodicSyncResidual(long bytes) {
+                syncMetrics.recordResidual(bytes);
             }
             @Override public void recordPart(String result) { metrics.recordParquetPart(result); }
             @Override public void markProgress() { metrics.markProgress(); }

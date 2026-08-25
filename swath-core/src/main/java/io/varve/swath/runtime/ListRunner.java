@@ -149,40 +149,53 @@ public final class ListRunner {
      *                              disables the time trigger
      * @param rotationMaxRows rotate once a lane's open part has this many rows, even below
      *                        {@code targetBytes}; {@code 0} disables the row-count trigger
+     * @param writebackBytes physical emitted-byte cadence for data-only writeback; {@code 0}
+     *                       disables it
      */
     public record ParquetSpec(byte[] prefix, int queueCapacity, int maxKeys, FilterChain filters,
                               int numWriters, long targetBytes, int writerQueueCapacity, String argsHash,
                               Duration progressInterval, JsonRunSummaryWriter.Config jsonSummary,
-                              long rotationIntervalNanos, long rotationMaxRows, String bucket) {
+                              long rotationIntervalNanos, long rotationMaxRows, String bucket,
+                              long writebackBytes) {
+
+        /** Existing disabled-writeback construction shape retained for tests and internal callers. */
+        public ParquetSpec(byte[] prefix, int queueCapacity, int maxKeys, FilterChain filters,
+                           int numWriters, long targetBytes, int writerQueueCapacity, String argsHash,
+                           Duration progressInterval, JsonRunSummaryWriter.Config jsonSummary,
+                           long rotationIntervalNanos, long rotationMaxRows, String bucket) {
+            this(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
+                    writerQueueCapacity, argsHash, progressInterval, jsonSummary,
+                    rotationIntervalNanos, rotationMaxRows, bucket, 0L);
+        }
 
         public ParquetSpec withProgressInterval(Duration progressInterval) {
             return new ParquetSpec(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
                     writerQueueCapacity, argsHash, progressInterval, jsonSummary, rotationIntervalNanos,
-                    rotationMaxRows, bucket);
+                    rotationMaxRows, bucket, writebackBytes);
         }
 
         public ParquetSpec withJsonSummary(JsonRunSummaryWriter.Config jsonSummary) {
             return new ParquetSpec(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
                     writerQueueCapacity, argsHash, progressInterval, jsonSummary, rotationIntervalNanos,
-                    rotationMaxRows, bucket);
+                    rotationMaxRows, bucket, writebackBytes);
         }
 
         public ParquetSpec withRotationIntervalNanos(long rotationIntervalNanos) {
             return new ParquetSpec(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
                     writerQueueCapacity, argsHash, progressInterval, jsonSummary, rotationIntervalNanos,
-                    rotationMaxRows, bucket);
+                    rotationMaxRows, bucket, writebackBytes);
         }
 
         public ParquetSpec withRotationMaxRows(long rotationMaxRows) {
             return new ParquetSpec(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
                     writerQueueCapacity, argsHash, progressInterval, jsonSummary, rotationIntervalNanos,
-                    rotationMaxRows, bucket);
+                    rotationMaxRows, bucket, writebackBytes);
         }
 
         public ParquetSpec withBucket(String bucket) {
             return new ParquetSpec(prefix, queueCapacity, maxKeys, filters, numWriters, targetBytes,
                     writerQueueCapacity, argsHash, progressInterval, jsonSummary, rotationIntervalNanos,
-                    rotationMaxRows, bucket);
+                    rotationMaxRows, bucket, writebackBytes);
         }
     }
 
@@ -320,7 +333,7 @@ public final class ListRunner {
         ParquetWriterPool pool = new ParquetWriterPool(outputDir, ParquetSchema.canonical(), spec.argsHash(),
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), partFinalizedListener(store, runId), existingParts,
-                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
+                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), spec.writebackBytes(), ctx.metrics()));
         DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "SEQUENTIAL",
                 pool.committedPartCount(), pool.committedBytes());
@@ -596,7 +609,7 @@ public final class ListRunner {
         ParquetWriterPool pool = new ParquetWriterPool(outputDir, ParquetSchema.canonical(), spec.argsHash(),
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), partFinalizedListener(store, runId), existingParts,
-                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
+                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), spec.writebackBytes(), ctx.metrics()));
         DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "WORK_STEALING",
                 pool.committedPartCount(), pool.committedBytes());
@@ -1321,7 +1334,7 @@ public final class ListRunner {
         ParquetWriterPool pool = new ParquetWriterPool(outputDir, ParquetSchema.canonical(), spec.argsHash(),
                 spec.numWriters(), spec.targetBytes(), spec.writerQueueCapacity(),
                 new ParquetWriterPoolConfig(spec.bucket(), PartListener.NONE, List.of(),
-                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), ctx.metrics()));
+                        spec.rotationIntervalNanos(), spec.rotationMaxRows(), spec.writebackBytes(), ctx.metrics()));
         DatasetOutputStage stage = new DatasetOutputStage(pool);
         Function<Duration, RunSummary> summary = el -> ctx.metrics().summary(el, "SEQUENTIAL",
                 pool.committedPartCount(), pool.committedBytes());

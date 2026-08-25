@@ -44,20 +44,32 @@ final class OutputDatasetConfigValidationTest {
     }
 
     @Test
-    void writebackRejectsFormatsWhoseAdaptersHaveNotBeenBenchmarked() {
+    void writebackSupportsUnsortedParquetAndTextDirectoryDatasetsOnly() throws Exception {
         OutputOptions parquet = new OutputOptions();
         parquet.writebackSize = "4mb";
         parquet.resolvedKind = OutputOptions.DestinationKind.DIRECTORY;
-        assertThatThrownBy(() -> parquet.validateWritebackTarget(OutputFormat.PARQUET, false))
+        parquet.validateWritebackTarget(OutputFormat.PARQUET, false);
+
+        OutputOptions sortedParquet = new OutputOptions();
+        sortedParquet.writebackSize = "4mb";
+        sortedParquet.resolvedKind = OutputOptions.DestinationKind.DIRECTORY;
+        assertThatThrownBy(() -> sortedParquet.validateWritebackTarget(OutputFormat.PARQUET, true))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("only unsorted TSV/JSONL directory datasets");
+                .hasMessageContaining("only unsorted TSV/JSONL/Parquet directory datasets");
 
         OutputOptions sortedText = new OutputOptions();
         sortedText.writebackSize = "4mb";
         sortedText.resolvedKind = OutputOptions.DestinationKind.DIRECTORY;
         assertThatThrownBy(() -> sortedText.validateWritebackTarget(OutputFormat.TSV, true))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("only unsorted TSV/JSONL directory datasets");
+                .hasMessageContaining("only unsorted TSV/JSONL/Parquet directory datasets");
+
+        OutputOptions parquetFile = new OutputOptions();
+        parquetFile.writebackSize = "4mb";
+        parquetFile.resolvedKind = OutputOptions.DestinationKind.FILE;
+        assertThatThrownBy(() -> parquetFile.validateWritebackTarget(OutputFormat.PARQUET, false))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only unsorted TSV/JSONL/Parquet directory datasets");
     }
 
     @Test

@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet;
 
 import static io.varve.swath.output.parquet.ParquetPoolTestSupport.batch;
+import static io.varve.swath.output.parquet.ParquetPoolTestSupport.incompressibleRowGroupBatch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -13,6 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.observability.RunSummary;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.runtime.RunContext;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -59,6 +61,35 @@ class ParquetWriterPoolMetricsTest {
                 .isEqualTo((double) pool.committedPartCount());
         assertThat(registry.get("swath.parquet.finalize.latency").timer().count())
                 .isEqualTo(pool.committedPartCount());
+    }
+
+    @Test
+    void periodicSyncReportsParquetEngagementAndConservesPhysicalBytes(@TempDir Path dir)
+            throws Exception {
+        RunContext ctx = RunContext.create();
+        var config = ParquetWriterPoolConfig.DEFAULT
+                .withWritebackBytes(PeriodicDataSync.MIN_INTERVAL_BYTES)
+                .withMetrics(ctx.metrics());
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash",
+                1, Long.MAX_VALUE, 1, config);
+
+        pool.submit(incompressibleRowGroupBatch(0, 0));
+        pool.close();
+
+        MeterRegistry registry = ctx.meterRegistry();
+        assertThat(registry.counter("swath.steal_reason", "outcome", "OUTPUT", "reason",
+                "data_sync").count()).isEqualTo(1.0);
+        assertThat(registry.counter("swath.steal_reason", "outcome", "OUTPUT", "reason",
+                "data_sync_parquet").count()).isEqualTo(1.0);
+        assertThat(registry.timer("swath.data_sync.latency", "format", "parquet").count())
+                .isPositive();
+        double syncedBytes = registry.summary(
+                "swath.data_sync.bytes", "format", "parquet").totalAmount();
+        double residualBytes = registry.summary(
+                "swath.data_sync.residual.bytes", "format", "parquet").totalAmount();
+        long physicalBytes = Files.size(DatasetLayout.of(dir).dataParts().getFirst());
+        assertThat(syncedBytes + residualBytes).isEqualTo((double) physicalBytes);
+        assertThat(DatasetLayout.of(dir).dataParts()).hasSize(1);
     }
 
     @Test

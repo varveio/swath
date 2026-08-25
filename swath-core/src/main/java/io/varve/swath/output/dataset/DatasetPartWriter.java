@@ -20,7 +20,7 @@ public interface DatasetPartWriter {
     /**
      * Optionally force physical bytes already accepted by the file without closing, rotating, or
      * publishing the part. Returns the number of newly forced bytes, or zero when disabled/not due.
-     * The default deliberately leaves Parquet and other formats unchanged.
+     * The default deliberately leaves formats without an adapter unchanged.
      */
     default long maybeSyncData() throws IOException { return 0L; }
 

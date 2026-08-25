@@ -140,7 +140,9 @@ are elapsed time, not CPU time. For CPU attribution, use the
 When `--writeback-size` engages, `meters` also includes
 `swath.data_sync.latency`, `swath.data_sync.bytes`, and
 `swath.data_sync.residual.bytes`. These measure writeback shaping; they do not indicate
-publication or an earlier crash-recovery boundary.
+publication or an earlier crash-recovery boundary. The first successful force also emits
+`OUTPUT.data_sync` and one of `data_sync_text_uncompressed`,
+`data_sync_text_compressed`, or `data_sync_parquet`.
 
 ## 4. Progress and logs
 

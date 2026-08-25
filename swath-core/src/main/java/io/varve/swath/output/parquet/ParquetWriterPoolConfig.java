@@ -6,6 +6,7 @@
 package io.varve.swath.output.parquet;
 
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.util.List;
 
 /**
@@ -28,6 +29,8 @@ import java.util.List;
  *                              disables the time trigger
  * @param rotationMaxRows rotate once a lane's open part has this many rows, even below {@code
  *                        targetBytes}; {@code 0} disables the row-count trigger
+ * @param writebackBytes physical emitted-byte cadence for data-only writeback; {@code 0} disables
+ *                       it, otherwise the shared minimum applies
  * @param metrics rotation-trigger attribution, finalize/discard counters, footer-fsync latency, and
  *                the lanes' own encode/write span ({@code swath.parquet.write.latency});
  *                {@code null} (the default) attaches no metrics
@@ -38,7 +41,12 @@ public record ParquetWriterPoolConfig(
         List<PartInfo> existingParts,
         long rotationIntervalNanos,
         long rotationMaxRows,
+        long writebackBytes,
         RunMetrics metrics) {
+
+    public ParquetWriterPoolConfig {
+        PeriodicDataSync.requireValidInterval(writebackBytes);
+    }
 
     /**
      * The canonical default: no bucket, no listener, no carried-over parts, both cadence triggers
@@ -46,35 +54,40 @@ public record ParquetWriterPoolConfig(
      * the {@code withX} methods (a single differing knob is {@code DEFAULT.withRotationMaxRows(5)}).
      */
     public static final ParquetWriterPoolConfig DEFAULT =
-            new ParquetWriterPoolConfig("", PartListener.NONE, List.of(), 0L, 0L, null);
+            new ParquetWriterPoolConfig("", PartListener.NONE, List.of(), 0L, 0L, 0L, null);
 
     public ParquetWriterPoolConfig withBucket(String bucket) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 
     public ParquetWriterPoolConfig withPartListener(PartListener partListener) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 
     public ParquetWriterPoolConfig withExistingParts(List<PartInfo> existingParts) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 
     public ParquetWriterPoolConfig withRotationIntervalNanos(long rotationIntervalNanos) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 
     public ParquetWriterPoolConfig withRotationMaxRows(long rotationMaxRows) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
+    }
+
+    public ParquetWriterPoolConfig withWritebackBytes(long writebackBytes) {
+        return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 
     public ParquetWriterPoolConfig withMetrics(RunMetrics metrics) {
         return new ParquetWriterPoolConfig(bucket, partListener, existingParts,
-                rotationIntervalNanos, rotationMaxRows, metrics);
+                rotationIntervalNanos, rotationMaxRows, writebackBytes, metrics);
     }
 }
