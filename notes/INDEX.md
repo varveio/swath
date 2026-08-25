@@ -1,7 +1,7 @@
 # Working notes
 
 Notes capture design work, prototypes, and evidence useful to maintainers but outside
-Swath's user-facing reference. Current product behavior belongs in `README.md` and
+swath's user-facing reference. Current product behavior belongs in `README.md` and
 `docs/`; code remains the final authority when they disagree.
 
 - [`docs-redesign.md`](docs-redesign.md) — accepted information architecture and review
