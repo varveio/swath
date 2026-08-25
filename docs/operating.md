@@ -1,6 +1,6 @@
-# Operating Swath against object storage
+# Operating swath against object storage
 
-> **Swath lists metadata and writes local output.** It never reads, modifies, or deletes
+> **swath lists metadata and writes local output.** It never reads, modifies, or deletes
 > object contents. The S3 path uses `ListObjectsV2`; it does not call `HeadObject`,
 > `GetObject`, `HeadBucket`, `GetBucketLocation`, or `ListBuckets`.
 
@@ -10,7 +10,7 @@ XML API is experimental compatibility, not a native GCS backend.
 
 ## Credentials and region
 
-With no authentication flags, Swath uses the AWS SDK's default credential and region
+With no authentication flags, swath uses the AWS SDK's default credential and region
 chains:
 
 ```bash
@@ -27,7 +27,7 @@ swath list s3://my-public-bucket/prefix/ \
   --region us-east-1 --no-sign-request
 ```
 
-If neither `--region` nor the SDK chain resolves a region, Swath exits 2 before opening a
+If neither `--region` nor the SDK chain resolves a region, swath exits 2 before opening a
 checkpoint or sending a request.
 
 Prefer workload identity, task/pod roles, and instance roles over long-lived access keys.
@@ -97,7 +97,7 @@ bucket-level `s3:ListBucket` action:
 ```
 
 The resource is the bucket ARN without `/*`. Prefix conditions can narrow access, but
-they must allow every prefix value Swath may issue while discovering and splitting the
+they must allow every prefix value swath may issue while discovering and splitting the
 requested subtree. The source URI still determines what the run lists.
 
 For requester-pays buckets, add:
@@ -121,7 +121,7 @@ swath list s3://my-bucket/prefix/ \
 `--endpoint-url` enables path-style addressing and supplies `us-east-1` as the default
 region. Use `--no-force-path-style` when an implementation requires virtual-hosted style.
 
-A server that accepts S3-shaped requests is not automatically compatible with Swath.
+A server that accepts S3-shaped requests is not automatically compatible with swath.
 The range engine depends on:
 
 - a single bytewise global ordering for the requested listing;
@@ -130,7 +130,7 @@ The range engine depends on:
 - response encoding compatible with the AWS SDK.
 
 One known edge case involves endpoints that echo a literal `%` cursor instead of the
-percent-encoding used by AWS S3, causing the SDK decoder to reject the response. Swath
+percent-encoding used by AWS S3, causing the SDK decoder to reject the response. swath
 does not synthesize unsafe `%` pivots, but it cannot rewrite a user prefix or real key.
 See [S3 implementation compatibility](internals/s3-implementation-compatibility.md).
 
@@ -174,13 +174,13 @@ cost = actual requests / 1,000 × current provider price per 1,000 LIST requests
 Pricing varies by provider, region, storage class, and time. Use the provider's current
 price rather than treating a number in this repository as a quote.
 
-The terminal estimate uses a labeled AWS reference rate. Under `--endpoint-url`, Swath
+The terminal estimate uses a labeled AWS reference rate. Under `--endpoint-url`, swath
 omits the dollar estimate because it cannot know the provider's tariff.
 
 The JSON run report is the reliable input for cost accounting:
 
 - `cost.api_calls` — actual `ListObjectsV2` attempts, including probes and retries;
-- `cost.cost_usd` and `cost.basis` — Swath's labeled reference-rate estimate; and
+- `cost.cost_usd` and `cost.basis` — swath's labeled reference-rate estimate; and
 - `efficiency.api_calls_per_1k_objects` — request overhead relative to returned objects.
 
 Recompute the bill from `cost.api_calls` and the current price. A value materially above
@@ -193,7 +193,7 @@ S3 does not provide one point-in-time transaction across a long `ListObjectsV2` 
 Objects added, removed, or renamed while a run is active can affect which live state the
 result observes.
 
-`_SUCCESS` means Swath completed and published the result of its listing. It does not
+`_SUCCESS` means swath completed and published the result of its listing. It does not
 convert a changing bucket into a historical snapshot. Use a provider-generated inventory
 or another snapshotting mechanism when point-in-time semantics are required.
 
