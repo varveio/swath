@@ -162,10 +162,11 @@ Higher counts are not monotonic throughput scaling. Dividing the fixed budget gi
 queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
 rotation is also per lane: more active lanes can create more sub-target parts, each of which maintains
 a streamed full-part digest and incurs its own close/checkpoint work. The complete manifest is written
-once after all lanes join. Compare `part_digest_ms`, finalize/checkpoint time, terminal
-`manifest_write_ms`, part count, `submit_blocked_ms`, and `head_of_line_blocked_ms` at 4/8/16 before
-adopting an expert count. If small-file overhead or HOL blocking rises faster than throughput, more
-writers are making the sink worse.
+once after all lanes join. For text, first bracket the default with matched 2/3/4-writer arms; keep
+direct Parquet comparisons inside its measured 2–4 release envelope. Compare `part_digest_ms`,
+finalize/checkpoint time, terminal `manifest_write_ms`, part count, `submit_blocked_ms`, and
+`head_of_line_blocked_ms` before adopting an expert count. If small-file overhead or HOL blocking
+rises faster than throughput, more writers are making the sink worse.
 
 ### Size CPU and memory empirically
 
@@ -236,6 +237,73 @@ The 32-concurrency arm stayed below 1 GiB heap at 96 million objects, while smal
 higher concurrency used more. That supports the buffer-sizing design, but it is one host,
 one bucket, one run per point, and unsorted output only.
 
+### Local replay concurrency and TSV service centers (2026-08-24)
+
+A later campaign used a fixed sorted production capture behind `swath-replay` on a
+32-logical-CPU / 16-physical-core Intel Xeon Platinum 8581C host. Replay and Swath ran on
+disjoint physical cores with Temurin JDK 25.0.4+7. Every retained arm validated the exact
+object count and required zero replay HTTP/query errors. These are co-located replay and local
+filesystem results, not real-S3 capacity claims.
+
+The concurrency experiment used the exact 201,024,215-object Sentinel prefix, the diagnostic
+discard sink, deterministic 20 ms latency for worker/pivot/structure requests, and eight physical
+cores for each process. Three alternating passes produced:
+
+| `--concurrency` ceiling | Median keys/s | Mean in flight | Worker p50 |
+| ---: | ---: | ---: | ---: |
+| 64 | 2.297 M | 59.5 | 22.0 ms |
+| 128 | 3.089 M | 108.9 | 25.5 ms |
+| 192 | 3.115 M | 154.3 | 34.6 ms |
+| 256 | 3.142 M | 204.9 | 47.2 ms |
+| 384 | 3.154 M | 307.6 | 74.4 ms |
+| 512 | 3.106 M | 404.0 | 102.4 ms |
+| 768 | 3.050 M | 585.9 | 161.1 ms |
+| 1024 | 2.560 M | 828.9 | 250.6 ms |
+
+For this exact regime, 128 was the resource-efficient knee: its median was 2.0% below the raw
+384 maximum, while 64 was 27.2% below 128. Five matched 1024 observations were all more than 10%
+slower than their 512 references. Higher is therefore not harmless: queue depth and latency can
+grow much faster than useful throughput, and an extreme ceiling can reduce throughput outright.
+
+The number does not transfer unchanged across latency regimes. With deterministic 60 ms latency,
+ceiling 128 achieved 1.651 M keys/s overall while 384 achieved 2.665 M keys/s; additional
+concurrency hid latency when the endpoint had capacity. Keep 64 as the general default, and use
+the repeated-ladder procedure in [Choosing `--concurrency`](configuration.md#choosing-concurrency)
+for a known workload. Do not promote either 128 or 384 to a universal S3 constant.
+
+This campaign also confirmed the controller boundary described in
+[Adaptive concurrency](internals/algorithms.md#5-adaptive-concurrency-aimd). Recording a
+successful attempt's latency before the same completion's growth vote fixes event ordering, but
+does not turn AIMD into a capacity search: latency inflation gates future growth and does not vote
+an already-high target down. Bounded automatic downshift prototypes either learned too late or
+mistook non-stationary ramp latency for a capacity signal; none shipped. `--concurrency` remains
+an operator resource ceiling.
+
+Separate exact IDC arms isolated the uncompressed TSV-directory service centers. Results below
+come from different matched experiments and must not be read as one additive scaling ladder:
+
+- Three writers were the measured knee on the eight-core/root-volume setup. Two visibly starved
+  producers; four did not improve throughput or remove sticky-lane head-of-line blocking. This
+  justifies the default for that resource shape, not every destination.
+- On the tested write-through ext4 volume, 128 MiB text parts averaged 1.893 M keys/s versus
+  1.628 M/s for 256 MiB character-path controls. Shorter `force(true)` stalls outweighed the
+  additional files. The default remains 256 MiB because this is a filesystem/durability result;
+  re-sweep 64/128/256 MiB on a different storage class.
+- The retained byte-oriented/raw-timestamp path averaged about 1.95 M keys/s on that root volume
+  at 128 MiB and 2.533 M/s on tmpfs with eight physical Swath cores. Moving the full-machine
+  replay/Swath allocation raised a tmpfs TSV arm to 3.197 M/s. Similar CPU work but materially
+  lower wall time and writer blocking on tmpfs proves an application-visible output/finalization
+  service-center cost; it does not identify raw device bandwidth.
+- The streaming successful-response parser's repeated IDC comparison improved mean throughput
+  44.2% and reduced Swath CPU 40.3% against the SDK's generic XML tree path. Canonical timestamp
+  arithmetic added 18.4% throughput and reduced CPU 22.6% in its separate comparison. Do not
+  compound those percentages or compare their absolute rates across changed resource regimes.
+
+The full 1,049,162,031-object Sentinel fixture was not materialized as uncompressed TSV: the
+measured prefix projected about 156 GiB of output, and the host lacked the roughly 200 GiB free
+space needed for output, a current-geometry fixture transform, and operating headroom. The exact
+201-million-object prefix supplied the sustained scale and concurrency evidence instead.
+
 ## The sorted merge
 
 Sorted output stages packed runs, samples boundaries, then merges contiguous key ranges.
@@ -295,9 +363,12 @@ pages, or resume overhead.
 
 ## Methodology and missing evidence
 
-Current observations are mostly n=1, from one ARM host and one cross-cloud vantage. Live
-buckets can mutate between arms. Runs were serial and read from their JSON reports; the
+The August 7–8 real-S3 observations are mostly n=1, from one ARM host and one cross-cloud vantage.
+Live buckets can mutate between arms. Those runs were serial and read from their JSON reports; the
 merge comparison bracketed the default arm with two serial arms on the same idle filesystem.
+The August 24 local-replay campaign adds exact immutable fixtures, alternating A/B arms, three
+concurrency passes, dependency metrics, and CPU isolation, but remains one x86 host, one replay
+implementation, and a small set of storage/latency regimes.
 
 Raise this evidence to release-candidate quality with repeated runs and reported variance,
 an in-region client, an x86 comparison, a fixed-shape object-count sweep, and a documented
