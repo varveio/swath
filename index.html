@@ -197,6 +197,13 @@
   }
   .fit.inventory .k { color: var(--signal); }
   .fit p { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.5; }
+  .fit-note {
+    max-width: 42rem;
+    margin: 0.75rem 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
 
   figure { margin: 0; }
   .hero-media {
@@ -412,8 +419,10 @@
         <p class="tagline">List very large S3 buckets in parallel, even when you don't know how their keys are distributed.</p>
         <p class="lede">
           swath divides S3's ordered keyspace across workers and rebalances it as the
-          listing runs. Stream object metadata as a table, TSV, or JSONL, or write
-          checkpointed Parquet for direct querying. Object contents are never read.
+          listing runs. Stream object metadata as a table, TSV, or JSONL, or write a
+          crash-resumable Parquet dataset for direct querying. Object contents are never
+          read. A live listing is not a point-in-time snapshot of a bucket that changes
+          during the run.
         </p>
 
         <div class="cta">
@@ -424,17 +433,18 @@
         <div class="fit-grid" aria-label="When to use swath">
           <div class="fit">
             <span class="k">Use swath when</span>
-            <p>You need a current listing, Inventory is absent or stale, and a serial listing is too slow.</p>
+            <p>You need an on-demand listing of a very large bucket, no sufficiently current inventory is available, and serial pagination is too slow.</p>
           </div>
           <div class="fit inventory">
-            <span class="k">Use Inventory when</span>
-            <p>A fresh S3 Inventory already exists. Querying it is cheaper than running a live bucket scan.</p>
+            <span class="k">Use existing metadata when</span>
+            <p>A current S3 Inventory or S3 Metadata table already has the fields you need. Querying it is normally cheaper than a live scan.</p>
           </div>
         </div>
+        <p class="fit-note">For a small prefix or a one-off task, the AWS CLI or an SDK paginator is usually simpler.</p>
       </div>
 
       <figure class="hero-media">
-        <div class="media-top"><span>Recorded run · 36 seconds</span><span>39.7M objects / 128 workers</span></div>
+        <div class="media-top"><span>36-second replay</span><span>39.7M objects · 1m 09s run</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/poster.png"
           src="assets/swath-noaa-gestofs.mp4" aria-label="Animated replay of a swath listing run">
           <a href="assets/swath-noaa-gestofs.mp4">Watch the recorded run</a>
@@ -501,7 +511,7 @@
       </div>
 
       <figure class="workflow-media">
-        <div class="media-top"><span>CLI demo · 36 seconds</span><span>list / resume / DuckDB</span></div>
+        <div class="media-top"><span>36-second CLI demo</span><span>list / resume / DuckDB</span></div>
         <video controls muted playsinline preload="metadata" poster="assets/swath-cli-demo-poster.png"
           src="assets/swath-cli-demo.mp4" aria-label="Terminal demo of listing, resuming, and querying with swath">
           <a href="assets/swath-cli-demo.mp4">Watch the command-line demo</a>
@@ -515,8 +525,9 @@
   <footer>
     <p>
       swath is pre-1.0: <span class="mono">list</span> and <span class="mono">resume</span> ship;
+      general-purpose S3 buckets are supported, and GCS through its XML API is experimental.
       <span class="mono">inspect</span>, <span class="mono">diff</span>, versioned listing, and
-      stores beyond S3 are roadmap. Flags and output schemas may still change.
+      native additional backends are roadmap. Flags and output schemas may still change.
     </p>
     <div class="colophon">
       <svg viewBox="0 0 64 64" aria-hidden="true">
