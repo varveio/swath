@@ -7,6 +7,7 @@ package io.varve.swath.cli;
 
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
+import io.varve.swath.sort.SortConfig;
 import java.io.PrintWriter;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,6 +30,9 @@ final class TuneOptions {
             new KeySpec("summary.interval", "duration",
                     "positive duration (for example 2s, 500ms, or PT2S)", "--progress-interval",
                     "stable", ResumeClass.FREE, "fresh list"),
+            new KeySpec("sort.merge-parallelism", "integer", "1..16",
+                    Integer.toString(SortConfig.DEFAULT.mergeParallelism()), "stable", ResumeClass.FREE,
+                    "fresh list and resume"),
             new KeySpec("sort.ignore-disk-check", "boolean", "on|off", "off",
                     "diagnostic", ResumeClass.FREE, "fresh list and resume"));
 
@@ -85,6 +89,9 @@ final class TuneOptions {
             if ("sort.ignore-disk-check".equals(key)) {
                 sorting.forceSort = parseOnOff(key, setting.getValue());
                 effectiveValues.put(key, setting.getValue().toLowerCase(Locale.ROOT));
+            } else if ("sort.merge-parallelism".equals(key)) {
+                sorting.mergeParallelism = parseMergeParallelism(key, setting.getValue());
+                effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
             } else {
                 throw new AssertionError("resume-applicable tune key has no implementation: " + key);
             }
@@ -194,8 +201,26 @@ final class TuneOptions {
                     sorting.forceSort = parseOnOff(key, value);
                     effectiveValues.put(key, value.toLowerCase(Locale.ROOT));
                 }
+                case "sort.merge-parallelism" -> {
+                    sorting.mergeParallelism = parseMergeParallelism(key, value);
+                    effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
+                }
                 default -> throw new AssertionError("unregistered tune key " + key);
         }
+    }
+
+    private static int parseMergeParallelism(String key, String value) throws InvalidArgsException {
+        int parallelism;
+        try {
+            parallelism = Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw valueError(key, value);
+        }
+        if (parallelism < SortOptions.MIN_MERGE_PARALLELISM
+                || parallelism > SortOptions.MAX_MERGE_PARALLELISM) {
+            throw valueError(key, value);
+        }
+        return parallelism;
     }
 
     private static boolean parseOnOff(String key, String value) throws InvalidArgsException {

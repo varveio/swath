@@ -170,8 +170,11 @@ the volume has been sized independently.
 
 Large merges use several contiguous key ranges by default and reduce that parallelism
 when heap or file-descriptor limits cannot carry it. Small merges remain serial. For
-resource sizing, staging codecs, merge controls, and how to identify the bottleneck,
-see [Performance](performance.md#the-sorted-merge) and
+an explicitly measured topology, set the ceiling with
+`--tune sort.merge-parallelism=N`; each engaged range produces at least one final file,
+so compare merge time, peak memory, and file count together. The settled default remains
+core-derived and capped at eight. For resource sizing, staging codecs, merge controls,
+and how to identify the bottleneck, see [Performance](performance.md#the-sorted-merge) and
 [Advanced configuration](configuration.md#sorted-output-jvm-properties).
 
 <a id="parallel-range-merge"></a>

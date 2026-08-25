@@ -1496,7 +1496,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             clearSortStagingContents(outputDir, stagingDir);
         }
         Files.createDirectories(stagingDir);
-        SortConfig sortConfig = SortConfig.fromSystemProperties();
+        SortConfig sortConfig = sorting.resolveConfig();
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
 
@@ -1860,12 +1860,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         Duration flushInterval = resolveSummaryJsonInterval();
         Duration resolvedMaxDuration = liveness.resolveMaxDuration();
         Long maxDurationMs = resolvedMaxDuration == null ? null : resolvedMaxDuration.toMillis();
-        // Sort observability polish: SortConfig.fromSystemProperties() is a cheap, idempotent
-        // re-read of the same -D knobs runSortedParquet() reads independently — echoing
+        // Sort observability polish: resolveConfig() is a cheap, idempotent re-read of the same -D
+        // knobs plus the typed --tune override runSortedParquet() reads independently — echoing
         // effectiveFanIn() here makes the binding merge-pass-width knob self-describing in the
         // summary without threading a SortConfig through the whole call chain.
         Integer sortEffectiveFanIn = sorting.sort
-                ? SortConfig.fromSystemProperties().effectiveFanIn() : null;
+                ? sorting.resolveConfig().effectiveFanIn() : null;
         JsonRunSummaryWriter.RunConfig runConfig =
                 new JsonRunSummaryWriter.RunConfig(
                         uri, config.region() == null ? null : config.region().id(),

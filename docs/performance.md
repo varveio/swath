@@ -301,7 +301,9 @@ max(1, min(8, availableProcessors / 2))
 
 The runtime may lower it for segment count, heap, fan-in, or file descriptors. Fewer than
 two effective ranges uses the serial path. Set
-`-Dswath.sort.merge-parallelism=1` for an explicit serial comparison. See
+`--tune sort.merge-parallelism=1` for an explicit serial comparison. The JVM property
+`-Dswath.sort.merge-parallelism=N` remains available for benchmark and development harnesses;
+an explicit `--tune` value wins. See
 [configuration](configuration.md#sorted-output-jvm-properties) and
 [using sorted output](usage.md#sorted-output).
 
@@ -322,6 +324,14 @@ cascade, or failure reason. Peak heap was 3.598 GiB of `-Xmx12g`.
 GEFS and MRMS corroborate scale only. MRMS mutated between runs and its physical order was
 not independently checked. Merge-object rate is not listing throughput; do not combine the
 campaign's phase rates with the unsorted sweep.
+
+A later fixed 56,311,145-row local replay on eight assigned CPUs compared the shipped
+core-derived ceiling (`R=4`) with `--tune sort.merge-parallelism=8`. The two R4 merges
+took 40.5 and 41.1 seconds; three R8 screens took 27.4–28.0 seconds, about 32% less merge
+wall. Whole-run wall improved 13–19% while peak RSS remained approximately 3.22–3.27 GiB.
+Every arm passed exact row, manifest, inventory, MD5, sorted-readback, and replay-error
+checks. The tradeoff was consumer-visible: four final files at R4 and eight at R8. This
+supports the typed override for measured topologies, not a universal default change.
 
 The remaining serial fractions are boundary sampling, small/resource-limited fallbacks,
 and final publication. A serial fraction becomes more visible as listing gets faster, so

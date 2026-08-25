@@ -154,7 +154,7 @@ final class ResumeCommandTest {
     }
 
     @Test
-    void resumeAcceptsDiskCheckTuneButRejectsRunShapeTune(@TempDir Path tempDir)
+    void resumeAcceptsFreeTunesButRejectsRunShapeTune(@TempDir Path tempDir)
             throws Exception {
         Path outputDir = seedCompletedRunDir(tempDir);
 
@@ -162,6 +162,11 @@ final class ResumeCommandTest {
         new CommandLine(allowed).parseArgs(outputDir.toString(),
                 "--tune", "sort.ignore-disk-check=on");
         assertThat(allowed.call()).isEqualTo(ExitCodes.SUCCESS);
+
+        ResumeCommand mergeAllowed = new ResumeCommand();
+        new CommandLine(mergeAllowed).parseArgs(outputDir.toString(),
+                "--tune", "sort.merge-parallelism=16");
+        assertThat(mergeAllowed.call()).isEqualTo(ExitCodes.SUCCESS);
 
         // A run-shape tune is rejected during validation, before any checkpoint I/O — so a run
         // handle that does not exist yet still surfaces the tune error first.
