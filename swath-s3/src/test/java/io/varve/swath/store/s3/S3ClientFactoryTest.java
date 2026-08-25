@@ -352,6 +352,11 @@ class S3ClientFactoryTest {
                             .tags("outcome", "S3_RESPONSE", "reason", "streaming_xml")
                             .counters())
                     .isEmpty();
+            assertThat(registry.get("swath.steal_reason")
+                            .tags("outcome", "FATAL", "reason", "streaming_xml_unparseable")
+                            .counter()
+                            .count())
+                    .isEqualTo(1.0);
         } finally {
             server.stop(0);
             registry.close();

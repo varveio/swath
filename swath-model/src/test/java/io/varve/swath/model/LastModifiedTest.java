@@ -6,6 +6,7 @@
 package io.varve.swath.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
@@ -41,5 +42,21 @@ class LastModifiedTest {
         assertThat(LastModified.epochMicrosFromText("")).isZero();
         assertThat(LastModified.textFromEpochMicros(1_700_000_000_123_456L))
                 .isEqualTo("2023-11-14T22:13:20.123456Z");
+    }
+
+    @Test
+    void objectEntryMapsUnsupportedWireTextToAnExplicitParseFailure() {
+        ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("bad-time"), 1L, "not-a-timestamp",
+                "etag", "STANDARD", null, true, null, null, null, null);
+
+        assertThatThrownBy(entry::lastModifiedEpochMicros)
+                .isInstanceOf(LastModifiedParseException.class)
+                .hasMessage("invalid last-modified timestamp in object-store response")
+                .hasCauseInstanceOf(java.time.format.DateTimeParseException.class)
+                .satisfies(error -> {
+                    LastModifiedParseException parseFailure = (LastModifiedParseException) error;
+                    assertThat(parseFailure.key()).isEqualTo(entry.key());
+                    assertThat(parseFailure.lastModifiedText()).isEqualTo("not-a-timestamp");
+                });
     }
 }

@@ -5,6 +5,8 @@
  */
 package io.varve.swath.model;
 
+import java.time.format.DateTimeParseException;
+
 /**
  * A listed object. {@code versionId} is non-null only in versioned listings;
  * {@code ownerId} only with {@code --fetch-owner}; {@code checksumAlgorithm}
@@ -50,8 +52,13 @@ public record ObjectEntry(
                 versionId, isLatest, ownerId, ownerDisplayName, checksumAlgorithm, checksumType);
     }
 
+    /** Parse the source text for a typed consumer, with an entry-attributed failure. */
     public long lastModifiedEpochMicros() {
-        return LastModified.epochMicrosFromText(lastModifiedText);
+        try {
+            return LastModified.epochMicrosFromText(lastModifiedText);
+        } catch (DateTimeParseException e) {
+            throw new LastModifiedParseException(key, lastModifiedText, e);
+        }
     }
 
     /**

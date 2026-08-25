@@ -210,7 +210,7 @@ managed output directory, not an arbitrary SQLite path.
 | --- | --- |
 | Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
 | stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
-| Discard | Profiling-only and non-resumable; a clean completion means every committed page was drained and tallied, but no output artifact exists. |
+| Discard | Profiling-only and non-resumable; a clean completion means every committed page was drained and tallied, but no listing-output artifact exists. A requested JSON report is still written. |
 | FILE-kind text | One-shot and non-resumable; successful publication atomically replaces the destination. |
 | Directory-dataset TSV/JSONL | Non-resumable; bounded parallel parts are published with `_SUCCESS` last, and a failed run has no success marker. |
 | FILE-kind Parquet | One-writer, non-resumable dataset directory in the current release. |

@@ -5,7 +5,9 @@
  */
 package io.varve.swath.filter;
 
+import io.varve.swath.error.ListingException;
 import io.varve.swath.model.DeleteMarkerEntry;
+import io.varve.swath.model.LastModifiedParseException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 
@@ -24,12 +26,17 @@ public record MtimeFilter(long afterMicros, long beforeMicros) implements Filter
     }
 
     @Override
-    public boolean matches(ListEntry e) {
-        Long mtime = switch (e) {
-            case ObjectEntry o -> o.lastModifiedEpochMicros();
-            case DeleteMarkerEntry d -> d.lastModifiedEpochMicros();
-            default -> null;
-        };
+    public boolean matches(ListEntry e) throws ListingException {
+        Long mtime;
+        try {
+            mtime = switch (e) {
+                case ObjectEntry o -> o.lastModifiedEpochMicros();
+                case DeleteMarkerEntry d -> d.lastModifiedEpochMicros();
+                default -> null;
+            };
+        } catch (LastModifiedParseException parseFailure) {
+            throw new ListingException(parseFailure.getMessage(), parseFailure);
+        }
         if (mtime == null) {
             return true;
         }

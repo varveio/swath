@@ -6,7 +6,9 @@
 package io.varve.swath.filter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.error.ListingException;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ObjectEntry;
@@ -23,21 +25,21 @@ class FilterTest {
     }
 
     @Test
-    void includeRegexKeepsOnlyMatches() {
+    void includeRegexKeepsOnlyMatches() throws Exception {
         IncludeRegexFilter f = IncludeRegexFilter.of("\\.parquet$");
         assertThat(f.matches(obj("a/x.parquet", 1, 0, "STANDARD"))).isTrue();
         assertThat(f.matches(obj("a/x.tmp", 1, 0, "STANDARD"))).isFalse();
     }
 
     @Test
-    void excludeRegexDropsMatches() {
+    void excludeRegexDropsMatches() throws Exception {
         ExcludeRegexFilter f = ExcludeRegexFilter.of("\\.tmp$");
         assertThat(f.matches(obj("a/x.tmp", 1, 0, "STANDARD"))).isFalse();
         assertThat(f.matches(obj("a/x.parquet", 1, 0, "STANDARD"))).isTrue();
     }
 
     @Test
-    void sizeFilterIsInclusiveRangeAndPassesNonObjects() {
+    void sizeFilterIsInclusiveRangeAndPassesNonObjects() throws Exception {
         SizeFilter f = new SizeFilter(100, 1000);
         assertThat(f.matches(obj("k", 100, 0, "STANDARD"))).isTrue();
         assertThat(f.matches(obj("k", 1000, 0, "STANDARD"))).isTrue();
@@ -47,7 +49,7 @@ class FilterTest {
     }
 
     @Test
-    void mtimeFilterIsInclusiveRange() {
+    void mtimeFilterIsInclusiveRange() throws Exception {
         MtimeFilter f = new MtimeFilter(1000, 2000);
         assertThat(f.matches(obj("k", 1, 1000, "STANDARD"))).isTrue();
         assertThat(f.matches(obj("k", 1, 2000, "STANDARD"))).isTrue();
@@ -56,14 +58,14 @@ class FilterTest {
     }
 
     @Test
-    void storageClassFilterIsCaseInsensitive() {
+    void storageClassFilterIsCaseInsensitive() throws Exception {
         StorageClassFilter f = new StorageClassFilter(Set.of("glacier"));
         assertThat(f.matches(obj("k", 1, 0, "GLACIER"))).isTrue();
         assertThat(f.matches(obj("k", 1, 0, "STANDARD"))).isFalse();
     }
 
     @Test
-    void chainOrdersCheapFiltersBeforeRegexAndAnds() {
+    void chainOrdersCheapFiltersBeforeRegexAndAnds() throws Exception {
         // Insertion order: regex (cost 10) then size (cost 0). The chain must reorder
         // size-first so the cheap predicate short-circuits before the regex.
         FilterChain chain = FilterChain.of(List.of(
@@ -79,8 +81,20 @@ class FilterTest {
     }
 
     @Test
-    void emptyChainKeepsEverything() {
+    void emptyChainKeepsEverything() throws Exception {
         assertThat(FilterChain.EMPTY.isEmpty()).isTrue();
         assertThat(FilterChain.EMPTY.matches(obj("anything", 1, 0, "X"))).isTrue();
+    }
+
+    @Test
+    void mtimeFilterMapsUnsupportedWireTextToAListingFailure() {
+        MtimeFilter filter = new MtimeFilter(Long.MIN_VALUE, Long.MAX_VALUE);
+        ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("bad-time"), 1L, "not-a-timestamp",
+                "etag", "STANDARD", null, true, null, null, null, null);
+
+        assertThatThrownBy(() -> filter.matches(entry))
+                .isInstanceOf(ListingException.class)
+                .hasMessage("invalid last-modified timestamp in object-store response")
+                .hasRootCauseInstanceOf(java.time.format.DateTimeParseException.class);
     }
 }

@@ -7,7 +7,6 @@ package io.varve.swath.store.s3;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.RunMetrics;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -113,6 +112,9 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
             }
             return Optional.of(new ByteArrayInputStream(EMPTY_RESULT));
         } catch (IOException | XMLStreamException | RuntimeException e) {
+            if (metrics != null) {
+                metrics.recordStealReason("FATAL", "streaming_xml_unparseable");
+            }
             throw SdkClientException.builder()
                     .message("Unable to stream ListObjectsV2 XML response")
                     .cause(e)
@@ -536,23 +538,8 @@ final class StreamingListObjectsV2Interceptor implements ExecutionInterceptor {
                 for (int i = 0; i < contents.size(); i++) {
                     S3Object object = contents.get(i);
                     String key = decode ? SdkHttpUtils.urlDecode(object.key()) : object.key();
-                    String checksumAlgorithm = object.hasChecksumAlgorithm()
-                            && !object.checksumAlgorithmAsStrings().isEmpty()
-                            ? object.checksumAlgorithmAsStrings().getFirst()
-                            : null;
-                    String checksumType = object.checksumTypeAsString();
-                    entries.add(new ObjectEntry(
-                            KeyBytes.of(key.getBytes(StandardCharsets.UTF_8)),
-                            object.size() != null ? object.size() : 0L,
-                            rawLastModified.get(i),
-                            S3PageFetcher.stripEtagQuotes(object.eTag()),
-                            object.storageClassAsString(),
-                            null,
-                            true,
-                            object.owner() == null ? null : object.owner().id(),
-                            object.owner() == null ? null : object.owner().displayName(),
-                            checksumAlgorithm,
-                            checksumType == null || checksumType.isBlank() ? null : checksumType));
+                    entries.add(S3ObjectEntryMapper.map(object,
+                            KeyBytes.of(key.getBytes(StandardCharsets.UTF_8)), rawLastModified.get(i)));
                 }
             }
             List<KeyBytes> prefixes = commonPrefixes == null

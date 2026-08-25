@@ -5,6 +5,8 @@
  */
 package io.varve.swath.model;
 
+import java.time.format.DateTimeParseException;
+
 /** A delete-marker row (versioned listings). Emitted only with {@code --all-versions}. */
 public record DeleteMarkerEntry(
         KeyBytes key,
@@ -31,7 +33,12 @@ public record DeleteMarkerEntry(
         this(key, versionId, isLatest, LastModified.textFromEpochMicros(lastModifiedEpochMicros), ownerId);
     }
 
+    /** Parse the source text for a typed consumer, with an entry-attributed failure. */
     public long lastModifiedEpochMicros() {
-        return LastModified.epochMicrosFromText(lastModifiedText);
+        try {
+            return LastModified.epochMicrosFromText(lastModifiedText);
+        } catch (DateTimeParseException e) {
+            throw new LastModifiedParseException(key, lastModifiedText, e);
+        }
     }
 }

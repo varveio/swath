@@ -5,6 +5,7 @@
  */
 package io.varve.swath.filter;
 
+import io.varve.swath.error.ListingException;
 import io.varve.swath.model.ListEntry;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -40,7 +41,7 @@ public final class FilterChain {
         return List.of(filters);
     }
 
-    public boolean matches(ListEntry e) {
+    public boolean matches(ListEntry e) throws ListingException {
         for (Filter f : filters) {
             if (!f.matches(e)) {
                 return false;
@@ -50,7 +51,7 @@ public final class FilterChain {
     }
 
     /** Apply the chain to a batch, returning the kept entries (the batch itself when empty chain). */
-    public List<ListEntry> apply(List<ListEntry> batch) {
+    public List<ListEntry> apply(List<ListEntry> batch) throws ListingException {
         if (filters.length == 0) {
             return batch;
         }

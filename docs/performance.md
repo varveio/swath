@@ -21,18 +21,19 @@ Bucket shape, client location, output disk, filters, CPU architecture, and servi
 all affect the result. Absolute numbers from another bucket are rarely useful; the
 relationships among your own report fields are.
 
-To measure the listing engine without row serialization or output I/O, run the same fixture and
-configuration through the diagnostic discard sink:
+To measure the listing engine without row serialization or listing-sink I/O, run the same fixture
+and configuration through the diagnostic discard sink:
 
 ```bash
 swath list s3://bucket/prefix/ --format discard --checkpoint none --report discard.json
 ```
 
 This is not a parser-free HTTP benchmark. It retains response parsing and model construction,
-filters, checkpoint/engine coordination, the bounded listing channel, row tally, and internal
-metrics. Compare it with an otherwise identical TSV/Parquet arm to quantify the removable output
-cost. If discard drives the replay service to its own CPU or latency ceiling, the result is a server
-limit rather than Swath's client ceiling; retain the server metrics beside the client report.
+filters, checkpoint/engine coordination, the bounded listing channel, row tally, internal metrics,
+and the small diagnostic write requested by `--report`. Compare it with an otherwise identical
+TSV/Parquet arm to quantify the removable listing-output cost. If discard drives the replay service
+to its own CPU or latency ceiling, the result is a server limit rather than Swath's client ceiling;
+retain the server metrics beside the client report.
 
 ### Retain a JFR CPU profile
 

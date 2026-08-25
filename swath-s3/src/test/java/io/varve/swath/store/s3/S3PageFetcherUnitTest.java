@@ -120,8 +120,9 @@ class S3PageFetcherUnitTest {
      * {@link PageRequest#attemptTimeoutEscalationLevel()}, when non-zero, must be mapped onto the
      * ListObjectsV2 request's per-request {@code overrideConfiguration} — this is the ONLY wiring
      * that lets the escalation retry loops (TransientRetryFetcher / GaugedFetcher) actually lengthen
-     * the SDK's per-attempt budget for a single retried attempt. At level 0 a scan-class call sets no
-     * {@code overrideConfiguration} at all (the client-level base timeout applies).
+     * the SDK's per-attempt budget for a single retried attempt. At level 0 a scan-class call still
+     * carries an {@code overrideConfiguration} for the direct-page carrier, but leaves {@code
+     * apiCallAttemptTimeout} unset so the client-level base timeout applies.
      */
     @Test
     void escalationLevelIsMappedOntoTheRequestAsAnAttemptTimeout() throws Exception {

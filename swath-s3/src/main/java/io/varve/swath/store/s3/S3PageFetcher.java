@@ -388,20 +388,7 @@ public final class S3PageFetcher implements PageFetcher {
     private static ObjectEntry toEntry(S3Object o) {
         byte[] key = o.key().getBytes(StandardCharsets.UTF_8);
         long micros = toEpochMicros(o.lastModified());
-        String etag = stripEtagQuotes(o.eTag());
-        String storageClass = o.storageClassAsString();
-        String ownerId = o.owner() != null ? o.owner().id() : null;
-        String ownerDisplayName = o.owner() != null ? o.owner().displayName() : null;
-        String checksumAlgorithm = o.hasChecksumAlgorithm() && !o.checksumAlgorithmAsStrings().isEmpty()
-                ? o.checksumAlgorithmAsStrings().getFirst()
-                : null;
-        String checksumType = (o.checksumTypeAsString() != null && !o.checksumTypeAsString().isBlank())
-                ? o.checksumTypeAsString()
-                : null;
-        return new ObjectEntry(KeyBytes.of(key),
-                o.size() != null ? o.size() : 0L,
-                micros, etag, storageClass, null, true, ownerId, ownerDisplayName,
-                checksumAlgorithm, checksumType);
+        return S3ObjectEntryMapper.map(o, KeyBytes.of(key), micros);
     }
 
     /** Strip the surrounding quotes S3 wraps ETags in; keep the multipart {@code hex-N} form verbatim (§4). */

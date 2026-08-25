@@ -35,9 +35,11 @@ echoed back unchanged. `URLDecoder` then throws:
 java.lang.IllegalArgumentException: URLDecoder: Incomplete trailing escape (%) pattern
 ```
 
-which surfaces to swath as an SDK-side response-unmarshalling failure, not an S3 error — it
-aborts the whole listing rather than producing a normal error response swath's retry/backoff
-logic can reason about.
+The raw SDK response-model path surfaces that exception text as an SDK-side response-unmarshalling
+failure. Production swath decodes inside `StreamingListObjectsV2Interceptor`, which wraps it as
+`SdkClientException: Unable to stream ListObjectsV2 XML response`. Neither is an S3 error: both
+abort the listing rather than producing a normal response swath's retry/backoff logic can reason
+about.
 
 **The synthesis exposure swath prevents.** swath invents two kinds of string that
 travel through `start-after`/`prefix`: (1) split-pivot cursors synthesized by
@@ -76,10 +78,11 @@ XML without a container) is the closest thing swath's own test suite can carry.
 *invents*. A user-supplied `--prefix` (or any bound copied verbatim from user input or from a
 bucket's real keys) may legitimately contain `%`, including a lone/trailing one, and that is a
 load-bearing filter the user asked for — swath must not silently strip or rewrite it. If a user
-targets a verbatim-echo endpoint with a prefix ending in a lone `%`, the same
-`URLDecoder` crash can still occur, and swath does not — and should not — work around it by
-mangling the user's input. This is a documented, known limitation of running swath against a
-verbatim-echo endpoint with such a prefix, not a defect in the fix above.
+targets a verbatim-echo endpoint with a prefix ending in a lone `%`, the same decode failure can
+still occur; production swath reports it through the interceptor's `SdkClientException` wrapper
+described above. swath does not — and should not — work around it by mangling the user's input.
+This is a documented, known limitation of running swath against a verbatim-echo endpoint with such
+a prefix, not a defect in the fix above.
 
 **Upstream.** This is a LocalStack conformance gap against real S3's re-encoding
 behavior. A minimal upstream report can use this note and a

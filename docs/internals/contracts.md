@@ -89,7 +89,9 @@ preserving it through sorted output requires a separately versioned spill change
 by typed stores/fixtures retain the compatibility
 constructor that starts from epoch microseconds. Thus an ordinary unsorted TSV/JSONL listing does
 not pay a timestamp parse-and-format round trip, while the shipped Parquet schema below remains
-unchanged until the separately benchmarked string-schema decision is made.
+unchanged until the separately benchmarked string-schema decision is made. If a typed consumer
+cannot parse the source text, the run fails through its listing/output error path; an affected
+dataset part or sorted segment is not published.
 
 Emission rules:
 - **Objects** are always emitted.
