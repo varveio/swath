@@ -254,7 +254,7 @@ public final class SortedRangeReader implements AutoCloseable {
      * the group's remaining rows do, which is what makes the caller's widen path a backstop rather
      * than an expected cost.
      */
-    private static RowRanges firstRowsOf(RowRanges ranges, ColumnIndexStore indexStore, int want) {
+    static RowRanges firstRowsOf(RowRanges ranges, ColumnIndexStore indexStore, int want) {
         long first = ranges.iterator().nextLong();
         long slack = pageRowsAt(indexStore, first);
         long end = first + slack + want;
@@ -307,7 +307,7 @@ public final class SortedRangeReader implements AutoCloseable {
         }
     }
 
-    private static boolean inRange(byte[] key, byte[] from, boolean fromInclusive, byte[] toExclusive) {
+    static boolean inRange(byte[] key, byte[] from, boolean fromInclusive, byte[] toExclusive) {
         if (from != null) {
             int c = KeyBytes.compareUnsigned(key, from);
             if (c < 0 || (c == 0 && !fromInclusive)) {
@@ -317,7 +317,7 @@ public final class SortedRangeReader implements AutoCloseable {
         return toExclusive == null || KeyBytes.compareUnsigned(key, toExclusive) < 0;
     }
 
-    private static FilterPredicate predicate(byte[] from, boolean fromInclusive, byte[] toExclusive) {
+    static FilterPredicate predicate(byte[] from, boolean fromInclusive, byte[] toExclusive) {
         Operators.BinaryColumn key = FilterApi.binaryColumn(KEY_FIELD);
         FilterPredicate lower = null;
         if (from != null) {
@@ -337,7 +337,7 @@ public final class SortedRangeReader implements AutoCloseable {
     }
 
     /** Typed row materialization for the replay hot path; avoids building a generic Group per row. */
-    private static final class ObjectRowMaterializer extends RecordMaterializer<ObjectRow> {
+    static final class ObjectRowMaterializer extends RecordMaterializer<ObjectRow> {
 
         private final ObjectRowConverter root;
 

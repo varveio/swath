@@ -56,10 +56,11 @@ import org.apache.parquet.schema.Type;
  * position — would pay for rows the hop never needed, and would repay nothing on the next hop that
  * lands in the same group. A forward cursor instead decodes only the rows between the last position
  * and the next, whichever hop asks; parquet's page-level decompression is itself lazy per read, so a
- * cursor that never revisits an earlier row also never re-pays for a page already stepped past. {@link
- * #rows} — the expensive tier, full-row decode of every listing column — stays a bulk per-row-group
- * read: it is paid only for a bare object directly under the scan prefix, rare in a real bucket, so
- * there is no equivalent hot path to spare it from.
+ * cursor that never revisits an earlier row also never re-pays for a page already stepped past.
+ * {@link #objectRange} is the bounded full-row tier used when the cursor lands on bare objects; it
+ * reuses this reader's per-row-group page index after priming it under the maximal object projection,
+ * and decodes only the answer's pages. {@link #rows} remains the explicit whole-row-group tier for
+ * callers that genuinely need every object row.
  *
  * <p>{@link #forEachKey} is the third shape: <b>every</b> key of one row group, in order, handed to a
  * visitor. A caller that is going to consume the whole group anyway (the simulator's decode-once
@@ -80,10 +81,10 @@ import org.apache.parquet.schema.Type;
  * keeps for the routing-index derive.
  *
  * <p>Column projection is set on the shared {@link ParquetFileReader} immediately before each read
- * (never once at construction), so {@link #openKeyCursor} and {@link #rows} can freely interleave
- * against the same open file handle, each paying for only its own columns. Not thread-safe — a caller
- * serving concurrent requests must not share one instance across threads (mirrors {@link
- * SegmentReader}).
+ * (never once at construction), so {@link #openKeyCursor}, {@link #objectRange}, and {@link #rows}
+ * can freely interleave against the same open file handle, each paying for only its own columns. Not
+ * thread-safe — a caller serving concurrent requests must not share one instance across threads
+ * (mirrors {@link SegmentReader}).
  */
 public final class SortedRowGroupReader implements AutoCloseable {
 
@@ -101,8 +102,8 @@ public final class SortedRowGroupReader implements AutoCloseable {
      * One decoded {@code OBJECT} row — the plain-typed twin of the replay server's own row shape,
      * kept independent so this module never depends on {@code io.varve.swath.replay}.
      * {@code ownerId}/{@code ownerDisplayName} are {@code null} when the row group was decoded without
-     * owner columns (see {@link #rows}), matching how a projection-pruning store reports an
-     * unrequested column elsewhere in the replay server.
+     * owner columns (see {@link #objectRange} and {@link #rows}), matching how a projection-pruning
+     * store reports an unrequested column elsewhere in the replay server.
      */
     public record ObjectRow(byte[] key, long size, long lastModifiedEpochMicros, String etag,
                             String storageClass, String ownerId, String ownerDisplayName,
@@ -142,6 +143,10 @@ public final class SortedRowGroupReader implements AutoCloseable {
     private final MessageColumnIO objectColumnIoWithOwner;
     private final MessageType objectSchemaWithoutOwner;
     private final MessageColumnIO objectColumnIoWithoutOwner;
+    private final MessageType objectRangeSchemaWithOwner;
+    private final MessageColumnIO objectRangeColumnIoWithOwner;
+    private final MessageType objectRangeSchemaWithoutOwner;
+    private final MessageColumnIO objectRangeColumnIoWithoutOwner;
 
     public SortedRowGroupReader(Path file) throws IOException {
         this.file = file;
@@ -152,10 +157,14 @@ public final class SortedRowGroupReader implements AutoCloseable {
         this.keySchema = project(full, KEY_FIELD);
         this.keyColumnIo = columnIoFactory.getColumnIO(keySchema);
         this.keyColumn = keySchema.getColumns().getFirst();
-        this.objectSchemaWithOwner = project(full, OBJECT_FIELDS_WITH_OWNER);
+        this.objectSchemaWithOwner = objectProjection(full, true);
         this.objectColumnIoWithOwner = columnIoFactory.getColumnIO(objectSchemaWithOwner);
-        this.objectSchemaWithoutOwner = project(full, OBJECT_FIELDS_WITHOUT_OWNER);
+        this.objectSchemaWithoutOwner = objectProjection(full, false);
         this.objectColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectSchemaWithoutOwner);
+        this.objectRangeSchemaWithOwner = objectProjection(full, true, true);
+        this.objectRangeColumnIoWithOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithOwner);
+        this.objectRangeSchemaWithoutOwner = objectProjection(full, false, true);
+        this.objectRangeColumnIoWithoutOwner = columnIoFactory.getColumnIO(objectRangeSchemaWithoutOwner);
     }
 
     /**
@@ -190,7 +199,7 @@ public final class SortedRowGroupReader implements AutoCloseable {
     public KeyCursor openKeyCursor(int blockIndex, byte[] from, boolean inclusive, byte[] toExclusive)
             throws IOException {
         long rowCount = blocks.get(blockIndex).getRowCount();
-        ColumnIndexStore indexStore = reader.getColumnIndexStore(blockIndex);
+        ColumnIndexStore indexStore = columnIndexStore(blockIndex, keySchema);
         requirePagesAscend(indexStore, file, blockIndex);
         RowRanges eligible = from == null && toExclusive == null
                 ? RowRanges.createSingle(rowCount)
@@ -202,6 +211,82 @@ public final class SortedRowGroupReader implements AutoCloseable {
         }
         OffsetIndex offsets = indexStore.getOffsetIndex(KEY_COLUMN_PATH);
         return new KeyCursor(this, file, blockIndex, eligible, offsets, rowCount);
+    }
+
+    /**
+     * The first {@code limit} object rows in one physical row group at/after {@code from}. This is the
+     * full-row companion to {@link #openKeyCursor(int, byte[], boolean, byte[])} for a delimiter
+     * skip-scan that lands on bare objects.
+     *
+     * <p>The important part is ownership: the caller already holds this reader for its key cursor, and
+     * the row group's {@link ColumnIndexStore} was primed under the maximal object projection before
+     * that cursor narrowed the reader to its key column. Borrowing a separate range reader rebuilt the
+     * same column/offset indexes once per pooled slot before the first bare-object batch could be
+     * returned. Reusing this reader leaves concurrency bounded by the delimiter-reader lease and
+     * retains the exact same page-bounded read as {@link SortedRangeReader}.
+     */
+    public List<ObjectRow> objectRange(int blockIndex, byte[] from, boolean fromInclusive,
+                                       byte[] toExclusive, int limit, boolean includeOwner) throws IOException {
+        if (limit <= 0 || blockIndex < 0 || blockIndex >= blocks.size()) {
+            return List.of();
+        }
+        MessageType schema = includeOwner ? objectRangeSchemaWithOwner : objectRangeSchemaWithoutOwner;
+        MessageColumnIO columnIo = includeOwner
+                ? objectRangeColumnIoWithOwner : objectRangeColumnIoWithoutOwner;
+        ColumnIndexStore indexStore = columnIndexStore(blockIndex, schema);
+        requirePagesAscend(indexStore, file, blockIndex);
+        RowRanges ranges = ColumnIndexFilter.calculateRowRanges(
+                FilterCompat.get(SortedRangeReader.predicate(from, fromInclusive, toExclusive)),
+                indexStore, KEY_COLUMN, blocks.get(blockIndex).getRowCount());
+        if (ranges.rowCount() == 0) {
+            return List.of();
+        }
+        RowRanges wanted = SortedRangeReader.firstRowsOf(ranges, indexStore, limit);
+        List<ObjectRow> out = new ArrayList<>(Math.min(limit, 1024));
+        readObjectsInto(out, blockIndex, wanted, from, fromInclusive, toExclusive,
+                limit, schema, columnIo, includeOwner);
+        if (out.size() < limit && wanted.rowCount() < ranges.rowCount()) {
+            // Eligibility promises pure OBJECT groups, so this is only a correctness backstop if
+            // that promise ever slips: widen to every page the key predicate retained.
+            out.clear();
+            readObjectsInto(out, blockIndex, ranges, from, fromInclusive, toExclusive,
+                    limit, schema, columnIo, includeOwner);
+        }
+        return out;
+    }
+
+    /**
+     * Returns the row group's cached page indexes, selecting {@code requestedSchema} for the data read.
+     *
+     * <p>{@link ParquetFileReader} builds that cache only for the requested paths active on first
+     * access and never invalidates it when the projection changes. A key cursor that created the cache
+     * under {@link #keySchema} would therefore leave later object reads without offset indexes for
+     * their value columns. Always prime under the maximal projection before narrowing the real read;
+     * this reads footer indexes only, never data pages.
+     */
+    private ColumnIndexStore columnIndexStore(int blockIndex, MessageType requestedSchema) {
+        reader.setRequestedSchema(objectRangeSchemaWithOwner);
+        ColumnIndexStore indexStore = reader.getColumnIndexStore(blockIndex);
+        reader.setRequestedSchema(requestedSchema);
+        return indexStore;
+    }
+
+    private void readObjectsInto(List<ObjectRow> out, int blockIndex, RowRanges ranges, byte[] from,
+                                 boolean fromInclusive, byte[] toExclusive, int limit,
+                                 MessageType schema, MessageColumnIO columnIo, boolean includeOwner)
+            throws IOException {
+        try (PageReadStore pages = reader.readFilteredRowGroup(blockIndex, ranges)) {
+            RecordReader<ObjectRow> rowReader = columnIo.getRecordReader(
+                    pages, new SortedRangeReader.ObjectRowMaterializer(schema, includeOwner));
+            long rowCount = pages.getRowCount();
+            for (long i = 0; i < rowCount && out.size() < limit; i++) {
+                ObjectRow row = rowReader.read();
+                if (row != null && SortedRangeReader.inRange(
+                        row.keyUnsafe(), from, fromInclusive, toExclusive)) {
+                    out.add(row);
+                }
+            }
+        }
     }
 
     /**
@@ -523,9 +608,9 @@ public final class SortedRowGroupReader implements AutoCloseable {
 
     /**
      * The physical row group {@code blockIndex}'s full {@code OBJECT} rows, in on-disk (ascending) row
-     * order — the expensive tier, paid only for a bare object directly under the scan prefix (rare in
-     * a real bucket). {@code includeOwner} mirrors the replay server's {@code Projection#owner()}: when
-     * {@code false} the owner columns are never decoded and every row's owner fields are {@code null}.
+     * order — the explicit whole-group tier. Callers needing only a bounded range should use {@link
+     * #objectRange}. When {@code includeOwner} is {@code false}, owner columns are never decoded and
+     * every row's owner fields are {@code null}.
      */
     public List<ObjectRow> rows(int blockIndex, boolean includeOwner) throws IOException {
         MessageType schema = includeOwner ? objectSchemaWithOwner : objectSchemaWithoutOwner;

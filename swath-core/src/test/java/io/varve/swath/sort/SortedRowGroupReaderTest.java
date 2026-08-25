@@ -17,15 +17,20 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.SplittableRandom;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.metadata.ColumnPath;
+import org.apache.parquet.io.LocalInputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
  * {@link SortedRowGroupReader} — the replay server's delimiter skip-scan reads a sorted fixture
  * through exactly this class, so its per-row-group decode must be exact at a row-group boundary
- * (never bleed a neighboring group's rows in or drop the group's own), for all three of its tiers
+ * (never bleed a neighboring group's rows in or drop the group's own), for all four of its tiers
  * ({@link SortedRowGroupReader.KeyCursor} key-only resumable, {@link SortedRowGroupReader#forEachKey}
- * key-only bulk, {@link SortedRowGroupReader#rows} full row).
+ * key-only bulk, {@link SortedRowGroupReader#objectRange} bounded full row, and {@link
+ * SortedRowGroupReader#rows} whole-group full row).
  */
 class SortedRowGroupReaderTest {
 
@@ -229,6 +234,61 @@ class SortedRowGroupReaderTest {
             assertThat(firstGroupKeysAgain).hasSize(firstGroupKeys.size());
             for (int i = 0; i < firstGroupKeys.size(); i++) {
                 assertThat(firstGroupKeysAgain.get(i)).isEqualTo(firstGroupKeys.get(i));
+            }
+        }
+    }
+
+    @Test
+    void objectRangeCanFollowAKeyOnlyCursorInALaterRowGroup(@TempDir Path dir) throws IOException {
+        List<String> keys = new ArrayList<>();
+        SplittableRandom random = new SplittableRandom(0x5A17CA5EL);
+        for (int i = 0; i < 8_000; i++) {
+            // The numeric prefix preserves order; the incompressible suffix forces several key pages
+            // inside each row group instead of letting parquet collapse this into a one-page fixture.
+            StringBuilder key = new StringBuilder(908).append(String.format("%08d", i));
+            for (int j = 0; j < 900; j++) {
+                key.append((char) ('a' + random.nextInt(26)));
+            }
+            keys.add(key.toString());
+        }
+        Path path = dir.resolve("part-00001.parquet");
+        SortConfig multiPageGroups = config(Map.of(
+                "final-page-rows", "1024",
+                "final-row-group-bytes", Long.toString(4L << 20)));
+        try (SortedFileWriter writer = new SortedParquetWriter(path, multiPageGroups, SortMode.OBJECTS, 1)) {
+            for (String k : keys) {
+                writer.write(object(k));
+            }
+        }
+
+        List<SortedFileIndex.RowGroupSpan> spans = SortedFileIndex.rowGroupSpans(path);
+        assertThat(spans.size()).isGreaterThan(1);
+        assertThat(spans.get(1).rowCount()).isGreaterThan(600);
+        int targetBlock = spans.get(1).blockIndex();
+        try (ParquetFileReader parquet = ParquetFileReader.open(new LocalInputFile(path))) {
+            assertThat(parquet.getColumnIndexStore(targetBlock)
+                    .getOffsetIndex(ColumnPath.get("key")).getPageCount())
+                    .as("key pages in target row group with %d rows", spans.get(1).rowCount())
+                    .isGreaterThan(1);
+        }
+
+        try (SortedRowGroupReader reader = new SortedRowGroupReader(path)) {
+            // Loading group 0 leaves the mutable Parquet reader on its key-only projection. Before
+            // maximal-projection priming, opening group 1 then poisoned that group's permanent index
+            // cache with key-only paths before a multi-hop delimiter scan discovered a bare object.
+            try (SortedRowGroupReader.KeyCursor ignored = reader.openKeyCursor(spans.get(0).blockIndex())) {
+                // Opening the cursor is enough to select and decode the key projection.
+            }
+            int groupOneStart = Math.toIntExact(spans.get(0).rowCount());
+            String from = keys.get(groupOneStart + 500);
+            String to = keys.get(groupOneStart + 502);
+            try (SortedRowGroupReader.KeyCursor ignored = reader.openKeyCursor(targetBlock)) {
+                List<SortedRowGroupReader.ObjectRow> rows = reader.objectRange(
+                        targetBlock, bytes(from), true, bytes(to), 2, true);
+                assertThat(rows).extracting(row -> utf8(row.key()))
+                        .containsExactly(from, keys.get(groupOneStart + 501));
+                assertThat(rows).extracting(SortedRowGroupReader.ObjectRow::ownerId)
+                        .containsExactly("owner-id", "owner-id");
             }
         }
     }
