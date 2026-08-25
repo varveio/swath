@@ -436,6 +436,15 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
         if (reason != RotationReason.NONE) {
             recordRotation(reason);
             finalizeCurrent(lane);
+            return;
+        }
+        if (lane.current.periodicSyncEnabled()) {
+            long syncStartedAt = nanoClock.getAsLong();
+            long syncedBytes = lane.current.maybeSyncData();
+            if (syncedBytes > 0) {
+                observer.recordPeriodicSync(
+                        Math.max(0L, nanoClock.getAsLong() - syncStartedAt), syncedBytes);
+            }
         }
     }
 
@@ -505,6 +514,7 @@ public final class SharedDatasetWriterPool implements DatasetWriterPool {
             observer.recordFinalize(finalizeSample);
         }
         lane.current = null;
+        w.periodicSyncResidualBytes().ifPresent(observer::recordPeriodicSyncResidual);
         long bytes = Files.size(path);
         // Canonical relative form: data/<filename>, shared verbatim by the consumer
         // manifest files[].key, the checkpoint part_file.path (via the event's fileName), and the

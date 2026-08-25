@@ -7,6 +7,7 @@ package io.varve.swath.output.text;
 
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import java.nio.file.Path;
 
@@ -14,17 +15,9 @@ import java.nio.file.Path;
 public record TextWriterPoolConfig(
         Path directory, OutputFormat format, TextCompression compression, boolean escape,
         String argsHash, String bucket, int writers, long targetBytes, int queueCapacity,
-        long rotationIntervalNanos, long rotationMaxRows, RunMetrics metrics) {
+        long rotationIntervalNanos, long rotationMaxRows, long writebackBytes, RunMetrics metrics) {
     public static final int MIN_WRITERS = 2;
     public static final int MAX_WRITERS = SharedDatasetWriterPool.MAX_WRITERS;
-
-    public TextWriterPoolConfig(
-            Path directory, OutputFormat format, TextCompression compression, boolean escape,
-            String argsHash, String bucket, int writers, long targetBytes, int queueCapacity,
-            long rotationIntervalNanos, long rotationMaxRows) {
-        this(directory, format, compression, escape, argsHash, bucket, writers, targetBytes,
-                queueCapacity, rotationIntervalNanos, rotationMaxRows, null);
-    }
 
     public TextWriterPoolConfig {
         if (directory == null) throw new IllegalArgumentException("directory is required");
@@ -41,10 +34,12 @@ public record TextWriterPoolConfig(
         if (rotationIntervalNanos < 0 || rotationMaxRows < 0) {
             throw new IllegalArgumentException("rotation values must be non-negative");
         }
+        PeriodicDataSync.requireValidInterval(writebackBytes);
     }
 
     public TextWriterPoolConfig withMetrics(RunMetrics metrics) {
         return new TextWriterPoolConfig(directory, format, compression, escape, argsHash, bucket,
-                writers, targetBytes, queueCapacity, rotationIntervalNanos, rotationMaxRows, metrics);
+                writers, targetBytes, queueCapacity, rotationIntervalNanos, rotationMaxRows,
+                writebackBytes, metrics);
     }
 }

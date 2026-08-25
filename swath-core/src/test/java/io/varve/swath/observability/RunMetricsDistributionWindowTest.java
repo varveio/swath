@@ -7,6 +7,7 @@ package io.varve.swath.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MockClock;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleConfig;
@@ -94,5 +95,24 @@ class RunMetricsDistributionWindowTest {
         assertThat(t.takeSnapshot().percentileValues())
                 .as("published percentiles describe the run, not its last 2 minutes")
                 .anySatisfy(p -> assertThat(p.value(TimeUnit.MILLISECONDS)).isGreaterThan(0.0));
+    }
+
+    @Test
+    void dataSyncByteMaximaSurviveAQuietTailOfTheRun() {
+        MockClock clock = new MockClock();
+        RunMetrics metrics = metricsOn(clock);
+
+        metrics.recordDatasetDataSync("tsv", Duration.ofMillis(20).toNanos(), 32L * 1024 * 1024);
+        metrics.recordDatasetDataSyncResidual("tsv", 3L * 1024 * 1024);
+        clock.add(PAST_DEFAULT_EXPIRY);
+
+        DistributionSummary synced = metrics.registry().find("swath.data_sync.bytes")
+                .tag("format", "tsv").summary();
+        DistributionSummary residual = metrics.registry().find("swath.data_sync.residual.bytes")
+                .tag("format", "tsv").summary();
+        assertThat(synced).isNotNull();
+        assertThat(residual).isNotNull();
+        assertThat(synced.max()).isEqualTo(32L * 1024 * 1024);
+        assertThat(residual.max()).isEqualTo(3L * 1024 * 1024);
     }
 }

@@ -5,11 +5,16 @@
  */
 package io.varve.swath.output.parquet;
 
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.testkit.PageBatches;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Shared {@link ParquetWriterPool} test scaffolding, package-private to
@@ -28,6 +33,20 @@ final class ParquetPoolTestSupport {
     /** The {@code n<nodeId>/key-<i>} batch builder shared by the writer-pool/rotation/idle-lane tests. */
     static PageBatch batch(long nodeId, long seq, int from, int to) {
         return PageBatches.batch(nodeId, seq, from, to);
+    }
+
+    /** One naturally row-group-sized batch with non-compressible binary keys. */
+    static PageBatch incompressibleRowGroupBatch(long nodeId, long seq) {
+        Random random = new Random(0x51A7B00BL);
+        List<ListEntry> entries = new ArrayList<>(36_000);
+        for (int row = 0; row < 36_000; row++) {
+            byte[] key = new byte[2048];
+            random.nextBytes(key);
+            entries.add(new ObjectEntry(KeyBytes.of(key), row,
+                    1_700_000_000_000_000L + row, "etag", "STANDARD",
+                    null, true, null, null, null, null));
+        }
+        return new PageBatch(nodeId, seq, entries);
     }
 
     /** Finalized data parts live under {@code <root>/data/}. */

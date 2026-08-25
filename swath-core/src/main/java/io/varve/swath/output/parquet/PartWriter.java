@@ -8,8 +8,10 @@ package io.varve.swath.output.parquet;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.dataset.DatasetPartWriter;
 import io.varve.swath.output.dataset.DurableFiles;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.OptionalLong;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
 import org.apache.parquet.hadoop.ParquetFileWriter;
@@ -36,13 +38,33 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     private final Path path;
     private final ParquetWriter<ListEntry> writer;
     private final DigestingOutputFile output;
+    private final SyncableLocalOutputFile syncableOutput;
+    private final PeriodicDataSync periodicSync;
     private long rows;
 
     public PartWriter(Path path, MessageType schema) throws IOException {
+        this(path, schema, 0L, null);
+    }
+
+    PartWriter(Path path, MessageType schema, long writebackBytes) throws IOException {
+        this(path, schema, writebackBytes, null);
+    }
+
+    PartWriter(Path path, MessageType schema, long writebackBytes,
+               SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
         this.path = path;
         Configuration conf = new Configuration(false);
         conf.setInt("parquet.compression.codec.zstd.level", ZSTD_LEVEL);
-        output = new DigestingOutputFile(new LocalOutputFile(path));
+        periodicSync = new PeriodicDataSync(writebackBytes);
+        if (periodicSync.enabled()) {
+            syncableOutput = dataForcer == null
+                    ? new SyncableLocalOutputFile(path)
+                    : new SyncableLocalOutputFile(path, dataForcer);
+            output = new DigestingOutputFile(syncableOutput);
+        } else {
+            syncableOutput = null;
+            output = new DigestingOutputFile(new LocalOutputFile(path));
+        }
         this.writer = new Builder(output, schema)
                 .withConf(conf)
                 .withCompressionCodec(CompressionCodecName.ZSTD)
@@ -72,6 +94,15 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
         return path;
     }
 
+    @Override public boolean periodicSyncEnabled() { return periodicSync.enabled(); }
+
+    @Override public long maybeSyncData() throws IOException {
+        if (!periodicSync.enabled()) {
+            return 0L;
+        }
+        return periodicSync.maybeSync(output.physicalBytes(), syncableOutput::syncData);
+    }
+
     /**
      * Write the footer, then fsync the file <b>and its parent directory</b> so the part is
      * durable (I6): the bytes and the directory entry that names the new part must both reach
@@ -79,6 +110,16 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
      */
     @Override
     public void close() throws IOException {
+        try {
+            periodicSync.requirePublishable();
+        } catch (IOException failure) {
+            try {
+                writer.close();
+            } catch (IOException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
         writer.close();
         DurableFiles.fileAndParent(path);
         output.markDurable();
@@ -112,6 +153,12 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     @Override
     public long digestNanos() {
         return output.digestNanos();
+    }
+
+    @Override public OptionalLong periodicSyncResidualBytes() {
+        return periodicSync.enabled()
+                ? OptionalLong.of(periodicSync.residualBytes(output.bytes()))
+                : OptionalLong.empty();
     }
 
     private static final class Builder extends ParquetWriter.Builder<ListEntry, Builder> {

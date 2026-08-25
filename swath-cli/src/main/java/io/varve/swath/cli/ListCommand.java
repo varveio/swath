@@ -1380,7 +1380,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     argsHash, s3uri.bucket(), writers, output.textPartSizeBytes(),
                     datasetWriterQueueCapacityPerLane(writers),
                     output.resolvePartRotationInterval().toNanos(),
-                    output.resolvePartRotationMaxRows());
+                    output.resolvePartRotationMaxRows(), output.writebackSizeBytes(), null);
         } catch (IllegalArgumentException e) {
             throw new InvalidConfigException(e.getMessage(), e);
         }
@@ -1671,7 +1671,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 s3uri.prefix(), channelCapacity, pageMax, filterChain, writers, rotation,
                 datasetWriterQueueCapacityPerLane(writers), argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
-                rotationIntervalNanos, rotationMaxRows, s3uri.bucket());
+                rotationIntervalNanos, rotationMaxRows, s3uri.bucket(),
+                singleFile || sorting.sort ? 0L : output.writebackSizeBytes());
     }
 
     /** Equal per-lane share whose pool-wide product never exceeds the fixed production budget. */
@@ -1685,7 +1686,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * names both bounded resources this knob can stress: heap and per-finalize publication work.
      */
     private void validateDatasetWriterConfiguration(OutputFormat format)
-            throws InvalidConfigException {
+            throws InvalidConfigException, InvalidArgsException {
+        output.validateWritebackTarget(format, sorting.sort);
         if (sorting.sort) {
             return;
         }

@@ -10,6 +10,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.filter.SizeParser;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.output.parquet.ParquetWriterMemoryPlan;
 import io.varve.swath.output.text.TextCompression;
@@ -429,6 +430,12 @@ final class OutputOptions {
     String textPartSize;
 
     @Resume(ResumeClass.FREE)
+    @Option(names = "--writeback-size", paramLabel = "SIZE",
+            description = "Shape writeback for open TSV/JSONL/Parquet dataset parts without rotating "
+                    + "(default: off; minimum: 4mb; does not change crash recovery).")
+    String writebackSize;
+
+    @Resume(ResumeClass.FREE)
     @Option(names = "--part-rotation-interval", paramLabel = "DURATION",
             description = "Rotate dataset parts by age (default: 30s; 0/none disables).")
     String partRotationInterval;
@@ -554,6 +561,35 @@ final class OutputOptions {
     long textPartSizeBytes() throws InvalidConfigException, InvalidArgsException {
         return positivePartSize("--text-part-size",
                 textPartSize != null ? SizeParser.parse(textPartSize) : DEFAULT_PART_SIZE_BYTES);
+    }
+
+    long writebackSizeBytes() throws InvalidConfigException, InvalidArgsException {
+        if (writebackSize == null) {
+            return 0L;
+        }
+        long bytes = SizeParser.parse(writebackSize);
+        if (bytes == 0L) {
+            return 0L;
+        }
+        if (bytes < PeriodicDataSync.MIN_INTERVAL_BYTES) {
+            throw new InvalidConfigException("--writeback-size must be at least 4mb when enabled"
+                    + " (got " + writebackSize + "); use 0 to disable it");
+        }
+        return bytes;
+    }
+
+    void validateWritebackTarget(OutputFormat format, boolean sorted)
+            throws InvalidConfigException, InvalidArgsException {
+        if (writebackSizeBytes() == 0L) {
+            return;
+        }
+        boolean supportedDataset = resolvedKind == DestinationKind.DIRECTORY
+                && (format == OutputFormat.TSV || format == OutputFormat.JSONL
+                || format == OutputFormat.PARQUET);
+        if (sorted || !supportedDataset) {
+            throw new InvalidConfigException("--writeback-size currently supports only unsorted "
+                    + "TSV/JSONL/Parquet directory datasets");
+        }
     }
 
     private static long positivePartSize(String option, long bytes) throws InvalidConfigException {

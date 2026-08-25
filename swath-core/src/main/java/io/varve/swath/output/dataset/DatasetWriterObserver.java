@@ -13,6 +13,8 @@ public interface DatasetWriterObserver {
     default void recordRotation(String reason) { }
     default Object startFinalize() { return null; }
     default void recordFinalize(Object sample) { }
+    default void recordPeriodicSync(long elapsedNanos, long bytes) { }
+    default void recordPeriodicSyncResidual(long bytes) { }
     default void recordPart(String result) { }
     default void markProgress() { }
 }

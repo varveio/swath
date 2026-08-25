@@ -49,6 +49,11 @@ public final class DigestingOutputFile implements OutputFile {
         return digest.bytes();
     }
 
+    /** Physical bytes parquet-mr has emitted so far; deliberately ungated for writeback cadence. */
+    public long physicalBytes() {
+        return digest.physicalBytes();
+    }
+
     public long digestNanos() {
         return digest.digestNanos();
     }

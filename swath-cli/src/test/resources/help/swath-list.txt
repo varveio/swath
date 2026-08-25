@@ -18,7 +18,7 @@ Usage: swath list [-hVqv] [--fetch-owner] [--force] [--[no-]force-path-style]
                   [--progress-interval=DURATION] [--region=REGION]
                   [--report=PATH] [--request-rate=N]
                   [--requester-pays=requester] [--text-part-size=SIZE]
-                  [--text-writers=N] [--trace=PATH]
+                  [--text-writers=N] [--trace=PATH] [--writeback-size=SIZE]
                   [--engine-toggle=NAME=VALUE]... [--storage-class=CLASS[,CLASS]
                   [,CLASS[,CLASS]...]]... [--tune=KEY=VALUE]... [<s3-uri>]
 List a bucket or prefix.
@@ -57,6 +57,9 @@ Output:
                                256mb).
       --text-writers=N       Parallel writers for a TSV/JSONL directory dataset
                                (default: 3; range: 2-64).
+      --writeback-size=SIZE  Shape writeback for open TSV/JSONL/Parquet dataset
+                               parts without rotating (default: off; minimum:
+                               4mb; does not change crash recovery).
 
 Connection:
       --bearer-token-command=CMD

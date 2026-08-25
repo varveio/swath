@@ -10,6 +10,8 @@ import io.varve.swath.error.OutputException;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.observability.RunMetrics;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
+import io.varve.swath.output.dataset.DatasetFormat;
 import io.varve.swath.output.dataset.DatasetWriterMetrics;
 import io.varve.swath.output.dataset.DatasetWriterObserver;
 import io.varve.swath.output.dataset.DatasetWriterPool;
@@ -25,12 +27,31 @@ public final class TextWriterPool implements DatasetWriterPool {
     private final SharedDatasetWriterPool delegate;
 
     public TextWriterPool(TextWriterPoolConfig config) {
-        TextDatasetFormat format = new TextDatasetFormat(
-                config.format(), config.compression(), config.escape());
+        this(createDelegate(config, textFormat(config)));
+    }
+
+    private TextWriterPool(SharedDatasetWriterPool delegate) {
+        this.delegate = delegate;
+    }
+
+    static TextWriterPool withDataForcer(
+            TextWriterPoolConfig config, TextDatasetFormat.DataForcer dataForcer) {
+        return new TextWriterPool(createDelegate(
+                config, textFormat(config).withDataForcer(dataForcer)));
+    }
+
+    private static TextDatasetFormat textFormat(TextWriterPoolConfig config) {
+        return new TextDatasetFormat(config.format(), config.compression(), config.escape(),
+                config.writebackBytes());
+    }
+
+    private static SharedDatasetWriterPool createDelegate(
+            TextWriterPoolConfig config, DatasetFormat format) {
         DatasetWriterPoolConfig poolConfig = new DatasetWriterPoolConfig(
                 "text", config.bucket(), PartListener.NONE, List.of(),
-                config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config.metrics()));
-        delegate = new SharedDatasetWriterPool(config.directory(), format, config.argsHash(),
+                config.rotationIntervalNanos(), config.rotationMaxRows(), observer(config));
+        SharedDatasetWriterPool delegate = new SharedDatasetWriterPool(
+                config.directory(), format, config.argsHash(),
                 config.writers(), config.targetBytes(), config.queueCapacity(), poolConfig);
         DatasetWriterMetrics.registerSummary(config.metrics(),
                 config.format().name().toLowerCase(Locale.ROOT), delegate,
@@ -40,18 +61,31 @@ public final class TextWriterPool implements DatasetWriterPool {
             config.metrics().recordStealReason("OUTPUT",
                     config.escape() ? "tsv_escape_on" : "tsv_raw_output");
         }
+        return delegate;
     }
 
-    private static DatasetWriterObserver observer(RunMetrics metrics) {
+    private static DatasetWriterObserver observer(TextWriterPoolConfig config) {
+        RunMetrics metrics = config.metrics();
         if (metrics == null) {
             return DatasetWriterObserver.NONE;
         }
+        String format = config.format().name().toLowerCase(Locale.ROOT);
+        DatasetDataSyncMetrics syncMetrics = new DatasetDataSyncMetrics(metrics, format,
+                config.compression() == TextCompression.NONE
+                        ? DatasetDataSyncMetrics.Classification.TEXT_UNCOMPRESSED
+                        : DatasetDataSyncMetrics.Classification.TEXT_COMPRESSED);
         return new DatasetWriterObserver() {
             @Override public void recordLaneWork(long elapsedNanos) { metrics.recordTextDatasetWrite(elapsedNanos); }
             @Override public void recordRotation(String reason) { metrics.recordTextDatasetRotation(reason); }
             @Override public Object startFinalize() { return metrics.startTextDatasetFinalizeTimer(); }
             @Override public void recordFinalize(Object sample) {
                 metrics.recordTextDatasetFinalizeLatency((Timer.Sample) sample);
+            }
+            @Override public void recordPeriodicSync(long elapsedNanos, long bytes) {
+                syncMetrics.recordSync(elapsedNanos, bytes);
+            }
+            @Override public void recordPeriodicSyncResidual(long bytes) {
+                syncMetrics.recordResidual(bytes);
             }
             @Override public void recordPart(String result) { metrics.recordTextDatasetPart(result); }
             @Override public void markProgress() { metrics.markProgress(); }

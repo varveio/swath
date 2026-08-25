@@ -147,7 +147,8 @@ class PartRotationCliTest {
      */
     @Test
     void singleFileDestinationOverridesNonZeroRotationFlagsToDisabled() throws Exception {
-        ListCommand list = parse("--part-rotation-interval", "10s", "--part-rotation-max-rows", "500");
+        ListCommand list = parse("--part-rotation-interval", "10s", "--part-rotation-max-rows", "500",
+                "--writeback-size", "4mb");
         list.output.resolvedKind = OutputOptions.DestinationKind.FILE;   // as resolveOutput() would set it for -o out.parquet
 
         S3Uri s3uri = S3Uri.parse("s3://bucket/prefix");
@@ -155,17 +156,20 @@ class PartRotationCliTest {
 
         assertThat(spec.rotationIntervalNanos()).isZero();
         assertThat(spec.rotationMaxRows()).isZero();
+        assertThat(spec.writebackBytes()).isZero();
     }
 
     /** With a directory-dataset destination (the default), the same non-zero flags flow straight through. */
     @Test
     void withoutSingleFileTheRotationFlagsFlowThroughUnchanged() throws Exception {
-        ListCommand list = parse("--part-rotation-interval", "10s", "--part-rotation-max-rows", "500");
+        ListCommand list = parse("--part-rotation-interval", "10s", "--part-rotation-max-rows", "500",
+                "--writeback-size", "4mb");
 
         S3Uri s3uri = S3Uri.parse("s3://bucket/prefix");
         ListRunner.ParquetSpec spec = list.parquetSpec(s3uri, 1000, 1000, FilterChain.EMPTY, "hash", TEST_CONFIG);
 
         assertThat(spec.rotationIntervalNanos()).isEqualTo(Duration.ofSeconds(10).toNanos());
         assertThat(spec.rotationMaxRows()).isEqualTo(500L);
+        assertThat(spec.writebackBytes()).isEqualTo(4L * 1024 * 1024);
     }
 }
