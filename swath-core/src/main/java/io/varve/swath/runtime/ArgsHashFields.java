@@ -6,24 +6,27 @@
 package io.varve.swath.runtime;
 
 /**
- * The typed, canonical field set the {@code args_hash} is computed over:
- * <b>exactly the fields that change what is listed</b> — store
- * scheme + endpoint, bucket, prefix, recursive flag, {@code --all-versions}, the
- * user-supplied {@code --strategy} literal, hints-file contents, and the
- * inventory-manifest URI (+ delivery id). It deliberately <b>excludes</b>
- * concurrency, output format, filters, log level, and progress prefs — changing
- * any of those still resumes (§5).
+ * The typed, canonical field set used for the listing-scope {@code args_hash}.
  *
- * <p>A single canonical, typed field list lets a test pin the field set, so a
- * future field is added deliberately (and visibly flips the hash) rather than
- * by accident. Each field is emitted <b>label-tagged</b> so two distinct field
- * sets can never alias to the same canonical string.
+ * <p>The hash covers exactly the fields that change the source keyspace: store scheme and
+ * endpoint, bucket, prefix, recursive flag, {@code --all-versions}, the user-supplied
+ * {@code --strategy} literal, hints-file contents, and the inventory-manifest URI and
+ * delivery ID.
  *
- * <p>v1.0 only wires {@code scheme}/{@code endpoint}/{@code bucket}/{@code prefix}
- * from live flags; the rest are dormant seams carrying their v1.0 defaults
- * ({@code recursive=true}, {@code allVersions=false}, {@code strategy="auto"}, no
- * hints, no inventory) so the hash is already stable across the phases that light
- * them up.
+ * <p>Filters, output identity, and other resume-sensitive fields are deliberately not folded
+ * into this digest. They are persisted and validated separately; excluding them from
+ * {@code args_hash} does <b>not</b> mean they may change during resume. Operational settings
+ * classified as free or restorable—such as concurrency, logging, and progress preferences—are
+ * handled by their own resume classes.
+ *
+ * <p>A single typed field list lets tests pin the scope of the digest, so a future field is
+ * added deliberately and visibly changes the hash. Each field is label-tagged, preventing two
+ * different field sets from aliasing to the same canonical string.
+ *
+ * <p>The current CLI wires {@code scheme}, {@code endpoint}, {@code bucket}, and
+ * {@code prefix}. The remaining fields carry their reserved defaults
+ * ({@code recursive=true}, {@code allVersions=false}, {@code strategy="auto"}, no hints,
+ * and no inventory) until the corresponding features ship.
  */
 public record ArgsHashFields(
         String scheme,
@@ -37,7 +40,7 @@ public record ArgsHashFields(
         String inventoryManifestUri,
         String inventoryDeliveryId) {
 
-    /** v1.0 defaults for the dormant seams (no {@code --recursive}/{@code --all-versions}/… flags yet). */
+    /** Defaults for the reserved listing-scope fields that the current CLI does not expose. */
     public static ArgsHashFields forListing(String scheme, String endpoint, String bucket, String prefix) {
         return new ArgsHashFields(scheme, endpoint, bucket, prefix,
                 true, false, "auto", "", null, null);
@@ -59,7 +62,7 @@ public record ArgsHashFields(
         };
     }
 
-    /** SHA-256 over the canonical field set. */
+    /** SHA-256 over the canonical listing-scope field set. */
     public String hash() {
         return ArgsHash.of(canonical());
     }

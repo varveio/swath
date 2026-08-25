@@ -1,75 +1,79 @@
 # Documentation
 
-Choose the path that matches what you are trying to do. You do not need to read the
-internals to use swath.
+Choose the path that matches the job in front of you. You do not need the internals to
+use swath.
 
 ## Start
 
-1. [Getting started](getting-started.md) — check the Docker image, optionally reproduce
-   the full public demo, query its managed Parquet dataset, and learn how to resume a run.
-2. [Installation](install.md) — choose Docker, the self-contained jar, a release archive,
-   or a source build.
-3. [Common workflows](usage.md) — choose an output, filter rows, sort Parquet, resume a
-   run, and consume the result.
+1. [Getting started](getting-started.md) — verify the image, list a small public prefix,
+   create a managed Parquet dataset, query it, and learn the resume model.
+2. [Installation](install.md) — choose Docker, the runnable JAR, a release archive, or a
+   source build.
+3. [Full-scale public demonstration](full-scale-demo.md) — reproduce the
+   39.6-million-object README recording and practice interruption and resume.
 
-For the current command-line options, ask the installed version:
+For the exact options and defaults in the installed release, ask the binary:
 
 ```bash
 swath list --help
 swath resume --help
 ```
 
-## Operate
+## Use and operate
 
-- [Credentials, IAM, S3-compatible endpoints, and request cost](operating.md)
+- [Common workflows and output choices](usage.md)
+- [Credentials, IAM, endpoints, and request cost](operating.md)
 - [Troubleshooting and FAQ](faq.md)
 - [Configuration and advanced controls](configuration.md)
 - [Performance and resource sizing](performance.md)
 - [Progress, run reports, metrics, and traces](metrics-and-observability.md)
 
-The defaults are intended for ordinary runs. Use [Common workflows](usage.md) and
-[Operating swath](operating.md) first; open the configuration, performance, or
-observability references when a specific run gives you a reason to.
+The defaults are intended for ordinary runs. Start with the workflow and operating
+guides. Open the configuration, performance, or observability references when a real run
+gives you a reason to.
 
 ## Understand
 
 The [visual field guide](https://swath.varve.io/field-guide/) is the clearest explanation
-of the problem and the algorithm. It shows why an S3 listing is difficult to parallelize,
-how swath divides an unknown keyspace, how safe splits move work to idle workers, and where
-a live parallel scan is the wrong choice.
+of the problem and algorithm. It shows why an unknown S3 keyspace is difficult to divide,
+how adjacent ranges preserve correctness, and how idle workers take part of a busy
+range's remaining work.
 
-For the repository-level technical model, continue with
-[the internals overview](internals/overview.md), then go only as deep as you need:
+Continue with the [internals overview](internals/overview.md), then go only as deep as
+needed:
 
-- [Architecture](internals/architecture.md) — components and the flow of a run.
+- [Architecture](internals/architecture.md) — components and the lifecycle of a run.
 - [Listing algorithms](internals/algorithms.md) — seeding, pivots, stealing, adaptive
   concurrency, sorting, and the correctness argument.
-- [Contracts and data model](internals/contracts.md) — invariants I1–I12, types,
-  persistence schemas, output schemas, and delivery guarantees.
+- [Contracts and data model](internals/contracts.md) — invariants I1–I12, persistence
+  schemas, output schemas, and delivery guarantees.
 - [Worked bucket shapes](internals/walkthroughs.md) — step-by-step traces through
   difficult key distributions.
-- [Instrumentation internals](internals/metrics-internals.md) — engagement-counter
-  registry and trace schema.
-- [S3 implementation compatibility](internals/s3-implementation-compatibility.md)
-  and [probe budgets](internals/probe-budgets.md) — focused protocol details.
+- [S3 implementation compatibility](internals/s3-implementation-compatibility.md) and
+  [probe budgets](internals/probe-budgets.md) — focused protocol details.
+- [Instrumentation internals](internals/metrics-internals.md) — contributor-facing
+  metric identities, engagement reasons, and trace schema.
 
 ## Contribute
 
 - [Contributing](../CONTRIBUTING.md)
+- [Documentation style and terminology](style.md)
 - [Build and module structure](internals/build-and-modules.md)
 - [Testing](ops/dev/TESTING.md)
 - [Packaging and release engineering](packaging-and-docker.md)
-- [Replay toolkit reference](swath-replay.md) and the
+- [Replay toolkit](swath-replay.md) and
   [reproduction workflow](replay-troubleshooting.md)
 - [Decision-trace goldens](ops/dev/decision-trace-goldens.md)
-- [Field investigations](ops/dev/field-investigations.md) — dated supporting
-  evidence, not product semantics.
-- [Release process](../RELEASING.md) and the current
+- [Field investigations](ops/dev/field-investigations.md) — dated evidence, not current
+  product semantics
+- [Release process](../RELEASING.md) and
   [release notes](ops/dev/RELEASE_NOTES.md)
 
-## Documentation contract
+## Documentation sources of truth
 
-User and internals pages describe current behavior; code remains the final authority when
-they disagree. Dated field evidence and release notes explain why behavior changed but do
-not override current contracts. Rewrite stale guidance instead of adding correction banners,
-and give each detailed fact one canonical owner so linked summaries cannot drift.
+User and internals pages describe current behavior. Code is the final authority when a
+difference is found, and the documentation should be corrected in the same change.
+
+Each detailed fact should have one owner. Other pages may summarize it briefly and link
+to that owner. Release notes and dated investigations explain how behavior changed; they
+do not override the current guides or contracts.

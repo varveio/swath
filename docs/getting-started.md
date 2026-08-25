@@ -1,135 +1,190 @@
 # Getting started
 
-This guide uses Docker to run the same public listing as the README video, query its
-managed Parquet dataset, and resume it after an interruption. This is a full-scale
-demonstration, not a lightweight smoke test: the recording listed 39,585,029 objects,
-made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB of resident
-memory (RSS). Review the [request-cost guidance](operating.md#request-cost) before running it.
+This guide gets from a Docker image to a small queryable Parquet inventory. The public
+example lists one historical day from NOAA's `noaa-gestofs-pds` bucket, so it is a quick
+functional check rather than the 39.6-million-object demonstration shown in the README.
 
-**Shell note:** the commands use a Bash-compatible shell on Linux or macOS. On Windows
-PowerShell, create the directory with `New-Item -ItemType Directory -Force out`, replace
-`$PWD` with `${PWD}`, and omit `--user "$(id -u):$(id -g)"`; Docker Desktop makes its
-bind mount writable.
+swath reads object metadata only. It never downloads or modifies object contents. A run is
+a live listing, not a point-in-time snapshot of a bucket that changes while the scan is in
+progress.
 
-**Without Docker:** choose the jar or launcher in [Installation](install.md), omit the
-Docker options, and run the swath arguments directly. For example, use
-`swath list s3://...` and write to the host path `-o out/` instead of `/out`.
+## Prerequisites
+
+The commands below use Docker with Linux-container support. They use a Bash-compatible
+shell on Linux or macOS.
+
+On Windows PowerShell:
+
+- create the output directory with `New-Item -ItemType Directory -Force out`;
+- replace `$PWD` with `${PWD}`; and
+- omit `--user "$(id -u):$(id -g)"`, because Docker Desktop makes the bind mount writable.
+
+To use the runnable JAR or application archive instead, choose one in
+[Installation](install.md), remove the Docker options, and run the `swath` arguments
+directly.
 
 ## 1. Check the CLI
-
-Docker includes the required Java runtime:
 
 ```bash
 docker run --rm ghcr.io/varveio/swath:latest --version
 ```
 
-This should print the swath version and exit without contacting S3.
+This prints the swath version and exits without contacting object storage.
 
-## 2. Run the public demo
+For reproducible automation, replace `latest` with a release tag or the immutable digest
+published with that release.
 
-If you want to reproduce the full demo, create a host directory first.
-Then run the exact listing command shown in the demo. Running the container as your
-current user avoids root-owned output on Linux:
+## 2. Stream a few public rows
+
+The following command lists one historical NOAA day and stops after the downstream
+`head` process has read five rows:
+
+```bash
+docker run --rm ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
+  --no-sign-request --region us-east-1 \
+  --format tsv |
+  head -n 5
+```
+
+The command is anonymous and needs no AWS credentials. Closing the pipe is treated as a
+successful downstream stop, not as a failed listing.
+
+If this exact public command fails, follow the reported network, region, or Docker symptom
+in [Troubleshooting and FAQ](faq.md). Do not add credentials to the public example.
+
+## 3. Create a managed Parquet dataset
+
+Create a host directory, mount it into the container, and write the listing beneath it:
 
 ```bash
 mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/ \
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
-  --concurrency 128 \
-  --format parquet -o /out/noaa-gestofs-pds
+  --format parquet -o /out/stofs-20230113
 ```
 
-Sections 3 and 4 use the resulting dataset. If you skip the full demo, continue to
-[List your bucket](#5-list-your-bucket).
+A **managed Parquet dataset** is a directory of Parquet parts plus swath's manifest,
+completion marker, run report, and temporary resume state. Use a directory path such as
+`/out/stofs-20230113`, not a filename ending in `.parquet`.
 
-The command is anonymous and needs no AWS credentials. If the exact command fails, use
-the [troubleshooting guide](faq.md) for the reported access, network, or Docker error
-instead of adding credentials to this public example.
-
-swath reads listing metadata; it never downloads object contents.
-
-## 3. Query the Parquet dataset
-
-When the listing completes, `out/noaa-gestofs-pds/` is a managed Parquet dataset:
+When the command completes, the host directory contains:
 
 ```text
-out/noaa-gestofs-pds/
+out/stofs-20230113/
   data/                   Parquet part files
-  manifest.json           files and dataset metadata
+  manifest.json           files, row counts, checksums, and dataset metadata
   .swath-state.json       internal run identity
   _swath_summary.json     machine-readable run report
-  _SUCCESS                written last: the dataset is complete
+  _SUCCESS                written last: the listing result is complete
   symlink.txt             part paths for engines that use a manifest list
 ```
 
-Read every part as one table. If the DuckDB CLI is installed:
+Do not consume a directory dataset until `_SUCCESS` exists. During a resumable run,
+swath also keeps `<output>/.swath/checkpoint.sqlite`; the live checkpoint is removed after
+successful publication.
+
+## 4. Query it with DuckDB
+
+With the DuckDB CLI installed:
 
 ```bash
-duckdb -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
-duckdb -c "SELECT key, size FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet') LIMIT 5"
+duckdb -c "
+  SELECT count(*) AS objects
+  FROM read_parquet('out/stofs-20230113/data/*.parquet')
+"
+
+duckdb -c "
+  SELECT key, size, last_modified
+  FROM read_parquet('out/stofs-20230113/data/*.parquet')
+  LIMIT 5
+"
 ```
 
-Or use DuckDB's
-[official container](https://duckdb.org/docs/current/operations_manual/duckdb_docker),
-so the entire walkthrough still requires only Docker:
+Or use DuckDB's official container, so the entire walkthrough still needs only Docker:
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
-  -c "SELECT count(*) AS objects FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
+  -c "SELECT count(*) AS objects
+      FROM read_parquet('out/stofs-20230113/data/*.parquet')"
 ```
 
-The default dataset is not globally ordered: parallel workers finish independently. Add
-`--sort` to the original listing only when downstream processing requires global key order.
-Sorted output uses temporary disk space; read
-[Sorted output](usage.md#sorted-output) before using it on a large bucket.
+The default dataset is not globally ordered. Parallel ranges can finish in any order.
+Add `--sort` only when a downstream consumer requires global key order; sorted output
+needs temporary disk and a final merge. Read [Sorted output](usage.md#sorted-output)
+before using it on a large bucket.
 
-## 4. Resume an interrupted run
+## 5. Resume a run
 
-While a listing is active, swath keeps its checkpoint under `<output>/.swath/`. After
-Ctrl+C, a crash, or a stopped container, pass the same output directory to `resume`:
+The output directory is the public resume handle:
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  resume /out/stofs-20230113
 ```
 
-The same command retains finalized parts, discards an unfinished part, and continues after
-the last durable cursor. Running it against a completed directory is also safe: swath reports
-that there is nothing to resume and exits successfully.
+Against the completed example, this reports that there is nothing to resume and exits
+successfully.
 
-To replace a completed dataset deliberately, run a new `list` command with `--overwrite`.
-For mismatched or refused run directories, follow
-[The output directory is refused](faq.md#the-output-directory-is-refused) rather than
-editing the checkpoint.
+To observe real recovery, use the optional
+[full-scale demonstration](full-scale-demo.md), stop it with Ctrl+C, and pass the same
+output directory to `resume`. swath retains finalized Parquet parts, discards an
+unfinished part, and continues after the last durable cursor.
 
-## 5. List your bucket
+Do not edit the checkpoint or move an interrupted managed dataset. To replace a completed
+dataset deliberately, start a new listing with `--overwrite`.
 
-For a private bucket, remove `--no-sign-request`. A container does not automatically
-inherit credentials from the host, so pass environment credentials explicitly. Replace
-`us-east-1` below with the bucket's region:
+<a id="5-list-your-bucket"></a>
+
+## 6. List a private bucket
+
+Remove `--no-sign-request` and use the bucket's region. A container does not
+automatically inherit credentials from the host, so forward the selected credential
+source deliberately:
 
 ```bash
 mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/out:/out" \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN -e AWS_REGION \
   ghcr.io/varveio/swath:latest \
-  list s3://my-bucket/prefix/ --region us-east-1 --format parquet -o /out
+  list s3://my-bucket/prefix/ \
+  --region us-east-1 \
+  --format parquet -o /out/my-inventory
 ```
 
-For a shared profile, mount its files read-only; on AWS compute, prefer the platform's
-container, task, pod, or instance role instead of copying long-lived keys. The exact
-examples and limitations are in [Credentials in Docker](operating.md#credentials-in-docker).
-The bucket needs only `s3:ListBucket`; the same operator guide owns IAM, endpoint,
-requester-pays, and cost guidance.
+For shared profiles, workload roles, web identity, requester-pays buckets, custom
+endpoints, and least-privilege IAM, use
+[Operating swath against object storage](operating.md). The normal S3 permission is
+bucket-level `s3:ListBucket`; swath does not need permission to read object bodies.
+
+## Cost and consistency
+
+A live scan ideally uses approximately one `ListObjectsV2` request per 1,000 returned
+keys, plus probes, retries, and any unfinished tail re-listed after interruption. swath
+reports its actual request count. Pricing varies by provider, region, and time, so
+calculate from the current provider price rather than from an evergreen number in these
+docs.
+
+If a fresh S3 Inventory or S3 Metadata table already exists and is accessible, query it
+instead. A precomputed inventory is normally cheaper than any live scan.
+
+Because S3 does not give a point-in-time transaction across a long listing, concurrent
+bucket changes can affect which live state the result observes. `_SUCCESS` means swath
+finished and published the complete result of its listing; it does not turn that listing
+into a historical snapshot.
 
 ## Next steps
 
-- To choose another output, filter rows, sort, or automate exit handling, read
-  [Common workflows](usage.md).
-- Before a large or requester-pays listing, read
-  [Credentials, IAM, endpoints, and request cost](operating.md).
-- To understand why the parallel scan works, read the
+- Choose output forms, filters, sorting, and automation behavior in
+  [Using swath](usage.md).
+- Review credentials, IAM, endpoint compatibility, and request cost in
+  [Operating swath](operating.md).
+- Understand the range model through the
   [visual field guide](https://swath.varve.io/field-guide/).
-- If a command failed, go directly to [Troubleshooting and FAQ](faq.md).
+- Go directly to [Troubleshooting and FAQ](faq.md) when a command fails.

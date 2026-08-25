@@ -4,168 +4,152 @@
 
 **Parallel, resumable S3 listing for very large buckets.**
 
-`swath` is an open-source CLI for finding out **what is in a very large S3 bucket
-right now**. It turns a live `ListObjectsV2` scan into a stream or a query-ready
-Parquet inventory, filling the gap between a simple `aws s3 ls` or SDK loop and a
-precomputed S3 Inventory.
+swath is an open-source CLI for on-demand S3 listings that are too large for a serial
+paginator. It learns the bucket's key distribution as it runs, so flat, deeply nested,
+and heavily skewed keyspaces can be listed in parallel without pre-partitioning. Stream
+the result, or write a crash-resumable Parquet dataset and query it directly.
 
-- **Parallel without pre-partitioning.** swath learns the bucket's key distribution while
-  it lists, then moves work from dense ranges to idle workers. Flat keys, deep prefix
-  trees, and badly skewed layouts do not need different partitioning scripts.
-- **Resume instead of restarting.** Managed Parquet output checkpoints progress and
-  resumes after Ctrl+C or a crash, while keeping active memory buffers bounded.
-- **Analyze without downloading objects.** swath reads metadata only. Stream a table,
-  TSV, or JSONL—with optional gzip or Zstandard compression—to stdout or a file; TSV
-  and JSONL can also publish a bounded parallel directory dataset. Or query the Parquet
-  result directly with tools such as DuckDB.
+> **Safety and consistency:** swath reads listing metadata only; it never downloads or
+> modifies object contents. The result is complete for the live listing swath performed,
+> but it is not a point-in-time snapshot of a bucket that changes during the run.
 
-Use swath when a fresh S3 Inventory or S3 Metadata table is unavailable, stale, or
-controlled by somebody else, and a serial listing is too slow.
+- **List in parallel without pre-partitioning.** Idle workers take part of the remaining
+  key range from busy workers as the scan discovers where objects actually are.
+- **Resume after interruption.** A managed Parquet dataset checkpoints progress, retains
+  finalized parts, and continues after Ctrl+C, a stopped container, or a crash.
+- **Query the result directly.** Write Parquet for DuckDB, Athena, Trino, and other
+  engines, or stream a table, TSV, or JSONL.
 
-**Want to understand how swath works? Read the
-[visual field guide](https://swath.varve.io/field-guide/).** It explains why S3 listing
-is difficult to parallelize, then walks through swath's range model, safe splitting,
-work stealing, checkpoints, and the cases where swath is not the right tool.
+Use swath when you need an on-demand listing of a very large bucket and a serial paginator
+is too slow. If a sufficiently current S3 Inventory or S3 Metadata table already exists
+and contains the fields you need, query that instead. For a small prefix or simple one-off
+task, the AWS CLI or an SDK paginator is usually simpler.
 
-[![Swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
-
-*A real 39.6-million-object run: one of 513 initial range guesses held 68% of the
-bucket. swath discovered the imbalance while listing and split the busy ranges so idle
-workers could help. [Explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
-or [see the visual field guide](https://swath.varve.io/field-guide/).*
+swath is designed for general-purpose S3 buckets whose listings are globally ordered and
+support `StartAfter`. S3 directory buckets use a different listing contract and are not
+supported.
 
 <a id="quickstart"></a>
 
-## Try it
+## Quick start
 
-This is the exact listing shown in the demo. It scans the entire public NOAA bucket and
-saves a resumable Parquet dataset. The recorded run listed 39.6 million objects, made
-41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB of resident
-memory (RSS). Review the [request-cost guidance](docs/operating.md#request-cost) before
-running it. This is a full-scale demonstration, not a lightweight smoke test:
+The quickest check streams a few rows from one historical day in NOAA's public
+`noaa-gestofs-pds` bucket. It needs Docker but no AWS account:
+
+```bash
+docker run --rm ghcr.io/varveio/swath:latest \
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
+  --no-sign-request --region us-east-1 |
+  head -n 5
+```
+
+To create a small managed Parquet dataset instead:
 
 ```bash
 mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest \
-  list s3://noaa-gestofs-pds/ \
+  list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ \
   --no-sign-request --region us-east-1 \
-  --concurrency 128 \
-  --format parquet -o /out/noaa-gestofs-pds
+  --format parquet -o /out/stofs-20230113
 ```
 
-If the DuckDB CLI is installed, query the result directly—there is no conversion or
-compaction step:
+A managed dataset is a directory of Parquet parts plus swath's manifest, completion
+marker, run report, and temporary resume state. Query all parts as one table:
 
 ```bash
-duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
+docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
+  -c "SELECT count(*) AS objects
+      FROM read_parquet('out/stofs-20230113/data/*.parquet')"
 ```
 
-If the listing is interrupted, resume it by passing the same output directory:
+The [getting-started guide](docs/getting-started.md) explains the output files, private
+credentials, Windows commands, and resume behavior. Before listing a very large or
+requester-pays bucket, read the [request-cost guidance](docs/operating.md#request-cost).
 
-```bash
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
-```
+## See it at full scale
 
-`--concurrency` is an adaptive ceiling rather than a fixed request count; see
-[Choosing concurrency](docs/configuration.md#choosing-concurrency) before raising it.
+[![swath demo: interrupt and resume a 39.6-million-object S3 listing, then query the Parquet inventory with DuckDB](docs/assets/swath-demo-v0.2.1.gif)](https://swath.varve.io/runs/noaa-gestofs-pds/)
 
-For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
-credentials into the container. Docker does not automatically inherit a host AWS profile;
-see [Credentials in Docker](docs/operating.md#credentials-in-docker) for environment,
-shared-profile, and workload-role paths.
+*The embedded recording was captured with swath v0.2.1 against the full public
+`noaa-gestofs-pds` bucket. That observed run listed 39,585,029 objects, made 41,582
+`ListObjectsV2` calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB RSS.
+The bucket and the current release can produce different figures. Read the
+[full-scale demonstration](docs/full-scale-demo.md) before reproducing it, or
+[explore the run trace](https://swath.varve.io/runs/noaa-gestofs-pds/).*
 
-The [getting-started guide](docs/getting-started.md) walks through the same flow with
-expected files, a Docker-only DuckDB option, private credentials, resume behavior, and
-troubleshooting routes.
-
-Building from source requires JDK 25:
-
-```bash
-./gradlew :swath-cli:installDist
-export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
-swath list s3://noaa-gestofs-pds/ \
-  --no-sign-request --region us-east-1 \
-  --concurrency 128 \
-  --format parquet -o out/noaa-gestofs-pds
-swath resume out/noaa-gestofs-pds
-```
+The [visual field guide](https://swath.varve.io/field-guide/) explains why S3 listing is
+hard to parallelize and walks through the range model, safe splitting, work stealing,
+checkpointing, and cases where swath is not the right tool.
 
 ## How it works
 
-Imagine that one worker owns the key range `(A, Z]`. It lists forward from `A`. When
+Suppose one worker owns the ordered key range `(A, Z]`. It lists forward from `A`. When
 another worker becomes idle, swath chooses a pivot such as `M` and atomically changes
-the ownership to two adjacent ranges:
+ownership to two adjacent ranges:
 
 ```text
 before:  worker 1  (A ------------------------------- Z]
 after:   worker 1  (A ------------- M]  worker 2  (M - Z]
 ```
 
-The ranges touch but never overlap, and the boundary belongs to exactly one side. If
-the upper range is sparse it finishes quickly and steals again; if it is dense it keeps
-a worker busy. Real keys and observed density improve later pivots, so a poor initial
-guess does not condemn the rest of the run.
+The ranges touch but never overlap, and the boundary belongs to exactly one side. If the
+upper range is sparse, it finishes quickly and steals again. If it is dense, it keeps a
+worker busy. Real keys and observed density improve later pivots, so an inaccurate initial
+guess does not determine the rest of the run.
 
-Checkpointing follows the same ownership model. A page's cursor is committed before
-its rows enter the output pipeline. A finalized Parquet part is durable; after a crash,
-swath may re-list an unfinished tail but does not rewrite finalized parts. The exact
-range, split, and resume contracts are documented under
-[internals](docs/internals/overview.md).
+Checkpointing follows the same ownership model. A page cursor commits before its rows
+enter the output pipeline. A finalized Parquet part is durable; after a crash, swath may
+re-list an unfinished tail but does not rewrite finalized parts. The
+[internals overview](docs/internals/overview.md) is the technical bridge from this model
+to the implementation.
 
-## When to use it
+## Output and resume
 
-- Large general-purpose S3 buckets with unknown, skewed, flat, or deeply nested key
-  distributions.
-- Listings where S3 Inventory or S3 Metadata is unavailable, stale, or controlled by
-  somebody else.
-- Streaming with bounded active buffers into Parquet, JSONL, TSV, or a terminal table.
-- Long-running inventories that need crash-safe checkpoint and resume.
-- Producing globally sorted Parquet when downstream readers require key order (opt-in;
-  unsorted output is the faster default).
+swath can:
 
-swath reads listings only. It never fetches object contents. Filters are applied after
-listing, so they reduce output size but not LIST requests.
+- show an aligned table in a terminal;
+- stream TSV or JSONL, optionally compressed;
+- write non-resumable TSV or JSONL files or directory datasets;
+- write a resumable managed Parquet dataset; and
+- opt into globally key-sorted Parquet when downstream readers require key order.
 
-## When not to use it
-
-If a fresh S3 Inventory or S3 Metadata table already exists, query that instead. A
-precomputed inventory is cheaper than any live `ListObjectsV2` scan. For small buckets,
-the AWS CLI or an SDK loop may also be simpler.
-
-Every run costs roughly one LIST request per 1,000 returned keys, plus probes, retries,
-and any unfinished tail re-listed after interruption. swath reports its actual request
-count; see [operating swath](docs/operating.md) before pointing it at a very large or
-requester-pays bucket.
+Unsorted Parquet is the faster default. Filters run after S3 returns each page, so they
+reduce emitted rows and output size but not LIST requests or the request bill.
 
 ## Status and limits
 
-swath is **pre-1.0**. The `list` and `resume` commands, managed Parquet datasets,
-checkpoint/resume, and opt-in global sorting are implemented and tested. Flags and
-schemas may still change before 1.0.
+swath is **pre-1.0**. The `list` and `resume` commands, managed Parquet output,
+checkpoint/resume, filtering, text output, and opt-in global sorting are implemented and
+tested. Flags and schemas may still change before 1.0.
 
 Current scope:
 
-- general-purpose S3 buckets with globally ordered listings and `StartAfter`;
-- object listing only—version history and delete markers are not listed yet;
-- local output; and
-- JDK 25, with no preview features in shipped artifacts.
+- general-purpose S3 buckets;
+- current objects only—version history and delete markers are planned;
+- local output;
+- JDK 25 for the JAR, application archive, and source build; Docker includes Java; and
+- S3 as the supported backend. GCS through its S3-compatible XML API is experimental,
+  not a native GCS backend.
 
-S3 directory buckets are rejected because their listing contract does not provide the
-ordering this engine requires. See the [roadmap](ROADMAP.md) for planned work.
+Every live scan costs approximately one LIST request per 1,000 returned keys, plus probes,
+retries, and any unfinished tail re-listed after interruption. swath reports the actual
+request count. A fresh precomputed inventory is normally cheaper.
 
 ## Documentation
 
 - **Start:** [getting started](docs/getting-started.md) and
   [installation](docs/install.md).
-- **Use and operate:** [common workflows](docs/usage.md),
-  [credentials and cost](docs/operating.md), [configuration](docs/configuration.md),
-  [performance](docs/performance.md), and [troubleshooting](docs/faq.md).
-- **Understand:** read the [visual field guide](https://swath.varve.io/field-guide/) first,
-  then continue to the repository's [internals overview](docs/internals/overview.md),
-  [architecture](docs/internals/architecture.md), [algorithms](docs/internals/algorithms.md),
-  and [correctness contracts](docs/internals/contracts.md).
+- **Use:** [common workflows](docs/usage.md),
+  [credentials and cost](docs/operating.md), and
+  [troubleshooting](docs/faq.md).
+- **Tune and diagnose:** [configuration](docs/configuration.md),
+  [performance](docs/performance.md), and
+  [metrics and observability](docs/metrics-and-observability.md).
+- **Understand:** [visual field guide](https://swath.varve.io/field-guide/),
+  [internals overview](docs/internals/overview.md), and
+  [architecture](docs/internals/architecture.md).
 - **Contribute:** [contribution guide](CONTRIBUTING.md) and
   [testing guide](docs/ops/dev/TESTING.md).
 
