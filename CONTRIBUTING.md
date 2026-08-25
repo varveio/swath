@@ -1,6 +1,6 @@
-# Contributing to Swath
+# Contributing to swath
 
-Thanks for your interest in Swath. This guide covers the normal build, test, and pull
+Thanks for your interest in swath. This guide covers the normal build, test, and pull
 request workflow.
 
 ## Ground rules
@@ -11,12 +11,12 @@ request workflow.
 - Open an issue before a substantial behavioral or architectural change so the intended
   user contract and implementation approach can be discussed first.
 - Keep user documentation and code behavior in the same change. Use
-  [the documentation style guide](docs/style.md) for product casing, terminology,
+  [the documentation style guide](docs/style.md) for project casing, terminology,
   consistency claims, evidence, and ownership.
 
 ## Build and test
 
-Swath is a multi-module Gradle build and requires **JDK 25**. The wrapper supplies Gradle,
+swath is a multi-module Gradle build and requires **JDK 25**. The wrapper supplies Gradle,
 but JDK 25 must be available to it.
 
 ```bash
