@@ -64,7 +64,7 @@
 
 ## Limits and known issues
 
-- Swath remains pre-1.0; CLI options, schemas, and experimental controls can still change.
+- swath remains pre-1.0; CLI options, schemas, and experimental controls can still change.
 - Durable resume is available for managed Parquet directory datasets. Stdout, text files,
   partitioned text datasets, the discard sink, and the legacy `.parquet`-looking one-writer
   layout are non-resumable.
@@ -78,7 +78,7 @@
   experimental S3-compatible access rather than a native GCS implementation. S3 directory
   buckets are not supported.
 - A long live listing is not a point-in-time snapshot of a bucket that changes during the
-  run. `_SUCCESS` means Swath completed and published the result it observed.
+  run. `_SUCCESS` means swath completed and published the result it observed.
 - Existing managed Parquet consumers should continue to wait for `_SUCCESS` and read all
   parts listed by the manifest or a `data/*.parquet` glob.
 - Automation should parse `_swath_summary.json` rather than terminal prose. The report is
