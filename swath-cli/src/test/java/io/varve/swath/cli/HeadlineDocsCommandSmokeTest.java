@@ -23,7 +23,7 @@ class HeadlineDocsCommandSmokeTest {
         String readme = Files.readString(Path.of("..", "README.md"));
 
         assertThat(readme)
-                .contains("Turn a very large S3 bucket into a resumable, query-ready inventory")
+                .contains("Parallel, resumable S3 listing for very large buckets")
                 .contains("list " + SMALL_PUBLIC_PREFIX)
                 .contains("--no-sign-request --region us-east-1")
                 .contains("--format parquet -o /out/stofs-20230113")
@@ -81,7 +81,7 @@ class HeadlineDocsCommandSmokeTest {
         String demo = Files.readString(Path.of("..", "docs", "full-scale-demo.md"));
 
         assertThat(demo)
-                .contains("Swath v0.2.1")
+                .contains("swath v0.2.1")
                 .contains("list " + FULL_PUBLIC_BUCKET)
                 .contains("--concurrency 128")
                 .contains("--format parquet -o /out/noaa-gestofs-pds")
