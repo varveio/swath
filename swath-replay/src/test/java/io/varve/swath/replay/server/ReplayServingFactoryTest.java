@@ -91,17 +91,17 @@ class ReplayServingFactoryTest {
         // A genuine 2-file rolled publish (file 1 honestly stamped file_index=1, file 2 file_index=2
         // + file_final=true) so the completeness check passes — but the two files' NAMES are
         // then swapped, so resolveFiles' lexical order disagrees with each file's own key content
-        // (the file named "00001" actually holds the higher keys) — only the ascending-first-key
+        // (the file named "00000" actually holds the higher keys) — only the ascending-first-key
         // sanity check catches this, and it must still fire even though completeness is satisfied.
         Path fixtureDir = Files.createDirectories(dir.resolve("fixture"));
-        rollToNFiles(dir, fixtureDir, List.of("a", "d"));   // part-00001=a (idx 1), part-00002=d (idx 2, final)
-        Path first = fixtureDir.resolve("part-00001.parquet");
-        Path second = fixtureDir.resolve("part-00002.parquet");
+        rollToNFiles(dir, fixtureDir, List.of("a", "d"));   // part-00000=a (idx 1), part-00001=d (idx 2, final)
+        Path first = fixtureDir.resolve("part-00000.parquet");
+        Path second = fixtureDir.resolve("part-00001.parquet");
         Path tmp = fixtureDir.resolve("swap.tmp");
         Files.move(first, tmp);
         Files.move(second, first);
         Files.move(tmp, second);
-        // Now "part-00001.parquet" holds "d" (file_index=2, final) and "part-00002.parquet" holds
+        // Now "part-00000.parquet" holds "d" (file_index=2, final) and "part-00001.parquet" holds
         // "a" (file_index=1) — completeness still holds (indices {1,2} present, final on max), but the
         // flattened first-key sequence in lexical order is d, a — not ascending.
 

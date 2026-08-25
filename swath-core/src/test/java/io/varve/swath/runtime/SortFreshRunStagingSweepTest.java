@@ -93,7 +93,7 @@ final class SortFreshRunStagingSweepTest {
             assertThat(Files.exists(staleSeg)).as("abandoned stale segment swept before listing began").isFalse();
             assertThat(Files.exists(staleMerge)).as("abandoned stale cascade intermediate swept too").isFalse();
 
-            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             List<String> keys = ParquetReads.keys(finalFile);
             assertThat(keys).as("only this run's real keys — the stale content was never merged in")
                     .containsExactlyElementsOf(expectedSorted(keyspace));

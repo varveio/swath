@@ -100,7 +100,7 @@ final class SortPipelineTest {
                     EngineToggles.DEFAULT, TraceSink.NONE, false);
 
             // One published, globally-sorted, stamped file (under <root>/data/).
-            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             assertThat(Files.exists(finalFile)).isTrue();
             List<String> keys = ParquetReads.keys(finalFile);
             assertThat(keys).containsExactlyElementsOf(expectedSorted(keyspace));
@@ -110,7 +110,7 @@ final class SortPipelineTest {
 
             // Manifest published (LAST) referencing only the final file — never a staging segment.
             String manifest = Files.readString(DatasetLayout.of(outputDir).manifest());
-            assertThat(manifest).contains("part-00001.parquet");
+            assertThat(manifest).contains("part-00000.parquet");
             assertThat(manifest).doesNotContain("seg-");
             assertThat(manifest).doesNotContain("_staging");
 
@@ -173,10 +173,10 @@ final class SortPipelineTest {
             new ListRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
                     smallSegments(), SortMode.OBJECTS, spec());
 
-            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(expectedSorted(keyspace));
             assertThat(SortStamp.read(finalFile)).isPresent();
-            assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00001.parquet");
+            assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00000.parquet");
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(counter(ctx, "swath.steal_reason", "SORT", "merge_redone")).isEqualTo(1.0);
             assertThat(Files.exists(stagingDir)).as("staging dir removed after republish").isFalse();

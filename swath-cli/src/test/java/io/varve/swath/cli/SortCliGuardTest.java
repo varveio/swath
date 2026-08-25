@@ -116,14 +116,14 @@ final class SortCliGuardTest {
         DatasetLayout layout = DatasetLayout.of(outputDir);
         Path dataDir = Files.createDirectories(layout.dataDir());
         Files.createFile(stagingDir.resolve("seg-1-0.parquet"));
-        Files.createFile(dataDir.resolve("part-00001.parquet.tmp"));
+        Files.createFile(dataDir.resolve("part-00000.parquet.tmp"));
         Path manifest = Files.createFile(layout.manifest());
-        Path finalFile = Files.createFile(dataDir.resolve("part-00001.parquet"));
+        Path finalFile = Files.createFile(dataDir.resolve("part-00000.parquet"));
 
         ListCommand.cleanSortStagingAndStaleTmp(outputDir, stagingDir);
 
         assertThat(Files.exists(stagingDir)).as("staging dir removed").isFalse();
-        assertThat(Files.exists(dataDir.resolve("part-00001.parquet.tmp"))).as("stale tmp removed").isFalse();
+        assertThat(Files.exists(dataDir.resolve("part-00000.parquet.tmp"))).as("stale tmp removed").isFalse();
         assertThat(Files.exists(manifest)).as("published manifest kept").isTrue();
         assertThat(Files.exists(finalFile)).as("published final file kept").isTrue();
     }

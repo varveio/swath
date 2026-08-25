@@ -178,7 +178,7 @@ final class SortResumeCascadeScaleTest {
                     .as("SORT.merge_redone fired exactly once (zero new LIST fetches)").isEqualTo(1.0);
 
             // Every sealed segment reused; final output complete, globally sorted, duplicate-free.
-            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             List<String> outKeys = ParquetReads.keys(finalFile);
             List<String> expected = sortedStrings(keyspace);
             assertThat(outKeys).as("no duplicate rows").doesNotHaveDuplicates();

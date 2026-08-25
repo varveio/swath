@@ -99,7 +99,7 @@ final class SortCascadeContractTest {
                     store, run.id(), 4, seeds, cascadingSegments(), SortMode.OBJECTS,
                     EngineToggles.DEFAULT, TraceSink.NONE, false);
 
-            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00001.parquet");
+            Path finalFile = DatasetLayout.of(outputDir).dataFile("part-00000.parquet");
             assertThat(Files.exists(finalFile)).isTrue();
 
             // Byte-exact global order + completeness (no gap, no overlap) against the ground truth.

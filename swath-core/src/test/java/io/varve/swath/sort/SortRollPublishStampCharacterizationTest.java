@@ -50,8 +50,8 @@ class SortRollPublishStampCharacterizationTest {
 
     /**
      * Serial rolled publish: with a 1-byte roll gate every row lands in its own file, so the four rows
-     * produce {@code part-00001..part-00004}. The stamp's {@code file_index} is the GLOBAL 1..N in
-     * filename order and {@code file_final} is present on the LAST file only.
+     * produce {@code part-00000..part-00003}. The stamp's {@code file_index} remains the GLOBAL 1..N
+     * position in filename order and {@code file_final} is present on the LAST file only.
      */
     @Test
     void serialRollStampsGlobalFileIndexOneToNAndFinalOnLastOnly(@TempDir Path root) throws IOException {
@@ -68,7 +68,7 @@ class SortRollPublishStampCharacterizationTest {
         // Roll cadence: one row per file, four files, named in key order.
         assertThat(result.finalFiles()).hasSize(4);
         assertThat(names(result.finalFiles())).containsExactly(
-                "part-00001.parquet", "part-00002.parquet", "part-00003.parquet", "part-00004.parquet");
+                "part-00000.parquet", "part-00001.parquet", "part-00002.parquet", "part-00003.parquet");
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d");
         for (Path f : result.finalFiles()) {
             assertThat(keys(List.of(f))).hasSize(1);
@@ -92,10 +92,9 @@ class SortRollPublishStampCharacterizationTest {
 
     /**
      * Parallel rolled publish: three balanced ranges, each rolling every row into its own part, so the
-     * nine rows produce {@code part-00001..part-00009} — a correct global sort by filename order. But the
-     * stamp's {@code file_index} is RANGE-LOCAL: it restarts at 1 within each range, so the observed
-     * sequence in filename order is {@code 1,2,3,1,2,3,1,2,3}, NOT the global {@code 1..9}. And NO file
-     * carries the {@code file_final} key — asserted by its explicit absence, the tripwire.
+     * nine rows produce {@code part-00000..part-00008} — a correct global sort by filename order.
+     * The filename ordinal is zero-based while the footer's compatibility-preserving {@code
+     * file_index} is the global 1..N position.
      */
     @Test
     void parallelRollStampsTheSameGlobalFileIndexAndFinalAsSerial(@TempDir Path root) throws IOException {
@@ -115,6 +114,10 @@ class SortRollPublishStampCharacterizationTest {
                 .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add);
 
         assertThat(result.finalFiles()).hasSize(9);
+        assertThat(names(result.finalFiles())).containsExactly(
+                "part-00000.parquet", "part-00001.parquet", "part-00002.parquet",
+                "part-00003.parquet", "part-00004.parquet", "part-00005.parquet",
+                "part-00006.parquet", "part-00007.parquet", "part-00008.parquet");
         assertThat(keys(result.finalFiles()))
                 .containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i");
 

@@ -126,7 +126,7 @@ class CaptureSorterTest {
      * decorator that wraps the final writer (see {@code CaptureSorter.DuplicateKeyCheckingWriterFactory})
      * — its {@code previousKey} state must survive a FINAL-FILE ROLL, not just a single writer's
      * lifetime. Force a roll after every row ({@code finalFileBytes = 1}) so the OBJECT "a" is
-     * written to {@code part-00001} and its COMMON_PREFIX duplicate lands in {@code part-00002}
+     * written to {@code part-00000} and its COMMON_PREFIX duplicate lands in {@code part-00001}
      * — only cross-file state can catch
      * this. Also proves the duplicate-detected path still leaves ONLY {@code .tmp} files behind (no
      * renamed/published final), same as the merge-phase {@link DuplicateHook} discipline.
@@ -280,7 +280,7 @@ class CaptureSorterTest {
 
         // Simulate a crash: a stale FINAL .tmp in outputDir, and stale partial segments left in this
         // engine's own fixed staging dir from an interrupted prior attempt.
-        Path staleTmp = Files.createFile(outputDir.resolve("part-00001.parquet.tmp"));
+        Path staleTmp = Files.createFile(outputDir.resolve("part-00000.parquet.tmp"));
         Path stagingDir = Files.createDirectories(outputDir.resolve(CaptureSorter.STAGING_DIR_NAME));
         Path staleSegment = Files.createFile(stagingDir.resolve("fixture-0.parquet"));
 

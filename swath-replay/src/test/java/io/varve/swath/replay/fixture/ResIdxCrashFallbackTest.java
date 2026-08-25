@@ -78,7 +78,7 @@ class ResIdxCrashFallbackTest {
         // abandoned part-*.parquet.tmp. No completed stamped file exists.
         Path crashDir = Files.createDirectories(dir.resolve("crash"));
         writeUnsortedPart(crashDir.resolve("part-0.parquet"), "delta", "alpha", "charlie", "bravo");
-        Files.writeString(crashDir.resolve("part-00001.parquet.tmp"), "partial-crash-bytes");
+        Files.writeString(crashDir.resolve("part-00000.parquet.tmp"), "partial-crash-bytes");
 
         // Sorted mode refuses it by name rather than quietly serving it a different way.
         assertThatThrownBy(() -> ReplayServingFactory.open(crashDir, ServingMode.SORTED, 2))
