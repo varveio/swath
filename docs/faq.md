@@ -1,15 +1,15 @@
 # Troubleshooting and FAQ
 
-## Does Swath read or modify object contents?
+## Does swath read or modify object contents?
 
-No. Swath calls `ListObjectsV2` and writes the selected local output. It does not call
+No. swath calls `ListObjectsV2` and writes the selected local output. It does not call
 `GetObject`, modify objects, delete objects, or change bucket configuration.
 
 The normal IAM permission is bucket-level `s3:ListBucket`.
 
 ## Is the result a point-in-time snapshot?
 
-No. Swath publishes the complete result of the live listing it performed, but S3 does not
+No. swath publishes the complete result of the live listing it performed, but S3 does not
 provide one transaction across a long scan. Objects added, removed, or renamed during the
 run can affect which live state the result observes.
 
@@ -21,7 +21,7 @@ bucket into a historical snapshot.
 Yes, when a fresh table already exists and you can query it. Reading a precomputed
 inventory is normally cheaper than any live `ListObjectsV2` scan.
 
-Use Swath when the inventory is missing, stale, inaccessible, or too slow to arrive and a
+Use swath when the inventory is missing, stale, inaccessible, or too slow to arrive and a
 serial live listing is too slow.
 
 ## How much will a run cost?
@@ -29,7 +29,7 @@ serial live listing is too slow.
 The ideal page count is approximately one LIST request per 1,000 returned keys, plus
 probes, retries, sparse pages, and any unfinished tail re-listed after interruption.
 
-Swath reports the actual request count. Calculate the bill with the provider's current
+swath reports the actual request count. Calculate the bill with the provider's current
 price rather than an evergreen number in the documentation. See
 [Request cost](operating.md#request-cost).
 
@@ -49,7 +49,7 @@ S3-compatible endpoint must provide globally ordered listings and correct `Start
 semantics. GCS through its XML API is experimental compatibility, not a native backend.
 S3 directory buckets are not supported.
 
-See [Operating Swath](operating.md#s3-compatible-endpoints).
+See [Operating swath](operating.md#s3-compatible-endpoints).
 
 ## Can every output resume?
 
@@ -63,7 +63,7 @@ legacy `.parquet`-looking one-writer layout are one-shot outputs.
 Pass `--region`, set `AWS_REGION` or `AWS_DEFAULT_REGION`, or configure a region in the
 selected AWS profile.
 
-Swath fails before opening a checkpoint or sending a request when the SDK chain cannot
+swath fails before opening a checkpoint or sending a request when the SDK chain cannot
 resolve a region.
 
 ## Credentials could not be loaded
@@ -117,7 +117,7 @@ If the output is a managed Parquet directory, resume by that directory:
 swath resume out/
 ```
 
-Swath retains finalized parts, removes an unfinished part, and continues after the last
+swath retains finalized parts, removes an unfinished part, and continues after the last
 durable cursor.
 
 Exit codes 74, 75, 124, 130, and 143 imply resumable state only when a managed output
@@ -126,16 +126,16 @@ error and `_swath_summary.json`.
 
 ## The output directory is refused
 
-Swath does not silently mix or delete unrelated data. A directory can be refused because
+swath does not silently mix or delete unrelated data. A directory can be refused because
 it is already complete, contains another run identity, has an unfinished checkpoint, is
-a symlinked managed path, or lacks durable evidence that Swath owns it.
+a symlinked managed path, or lacks durable evidence that swath owns it.
 
 - Resume an interrupted matching run with `swath resume out/`.
 - Replace a completed result with a fresh `list ... -o out/ --overwrite`.
 - Discard an unfinished checkpoint and start again with `--restart`.
 - For a foreign directory or symlink refusal, choose a clean destination.
 
-Do not edit the checkpoint or create files that imitate Swath's ownership markers.
+Do not edit the checkpoint or create files that imitate swath's ownership markers.
 
 ## A `.parquet` output path became a directory
 
@@ -158,14 +158,14 @@ recovery is to free space or expand the current volume in place, then resume.
 
 Moving an interrupted run works only when the exact absolute output path recorded in the
 checkpoint remains available, for example through the same mount or bind path. Otherwise
-Swath refuses the moved run and a fresh listing is required.
+swath refuses the moved run and a fresh listing is required.
 
 `--tune sort.ignore-disk-check=on` bypasses the guard. Use it only after sizing the volume
 independently. See [Sorted output](usage.md#sorted-output).
 
 ## The process used less concurrency than requested
 
-`--concurrency` is a ceiling, not a fixed worker count. Swath begins below it, increases
+`--concurrency` is a ceiling, not a fixed worker count. swath begins below it, increases
 the live target after healthy windows, and reduces it under S3 backpressure.
 
 A sparse or poorly divisible keyspace can also leave workers idle. Raising the ceiling
@@ -177,7 +177,7 @@ Start with [Performance](performance.md#start-with-your-own-run).
 Some implementations echo request cursors without the percent-encoding used by AWS S3.
 The AWS SDK can then reject a lone or trailing `%` while decoding the response.
 
-Swath avoids synthesizing `%` in an internal pivot, but a real key or user prefix can
+swath avoids synthesizing `%` in an internal pivot, but a real key or user prefix can
 still expose the endpoint difference. See
 [S3 implementation compatibility](internals/s3-implementation-compatibility.md).
 
@@ -200,5 +200,5 @@ swath list --tune help
 ```
 
 The stable exit-code table and output contracts are in
-[Using Swath](usage.md#exit-codes). Progress, report, and metric fields are in
+[Using swath](usage.md#exit-codes). Progress, report, and metric fields are in
 [Metrics and observability](metrics-and-observability.md).
