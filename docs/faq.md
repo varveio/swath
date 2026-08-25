@@ -41,8 +41,10 @@ If the output is a managed Parquet dataset, resume by its output directory:
 swath resume out/
 ```
 
-Stdout and FILE-kind outputs are one-shot and cannot resume. Exit codes 74, 75, 124,
-130, and 143 only imply resumable state when a managed output directory exists. See
+Stdout, text files, and TSV or JSONL directory datasets are one-shot outputs and cannot
+resume. A Parquet path ending in `.parquet` is also one-shot unless `--output-type dir`
+overrode the default destination-kind inference. Exit codes 74, 75, 124, 130, and 143
+only imply resumable state when a managed output directory exists. See
 [Checkpoint and resume](usage.md#checkpoint-and-resume).
 
 ## The output directory is refused

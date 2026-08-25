@@ -38,8 +38,11 @@ or [see the visual field guide](https://swath.varve.io/field-guide/).*
 
 ## Try it
 
-This is the exact listing shown in the demo. It scans the entire public NOAA bucket—
-39.6 million objects in the recorded run—and saves a resumable Parquet dataset:
+This is the exact listing shown in the demo. It scans the entire public NOAA bucket and
+saves a resumable Parquet dataset. The recorded run listed 39.6 million objects, made
+41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB of resident
+memory (RSS). Review the [request-cost guidance](docs/operating.md#request-cost) before
+running it. This is a full-scale demonstration, not a lightweight smoke test:
 
 ```bash
 mkdir -p out
@@ -58,17 +61,15 @@ compaction step:
 duckdb -c "SELECT count(*) FROM read_parquet('out/noaa-gestofs-pds/data/*.parquet')"
 ```
 
-If the listing is interrupted, the output directory is the run handle:
+If the listing is interrupted, resume it by passing the same output directory:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   ghcr.io/varveio/swath:latest resume /out/noaa-gestofs-pds
 ```
 
-The recorded run made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around
-1.7 GB RSS. Read the [request-cost guidance](docs/operating.md#request-cost) before
-reproducing it. `--concurrency` is an adaptive ceiling rather than a fixed request count;
-see [Choosing concurrency](docs/configuration.md#choosing-concurrency) before raising it.
+`--concurrency` is an adaptive ceiling rather than a fixed request count; see
+[Choosing concurrency](docs/configuration.md#choosing-concurrency) before raising it.
 
 For a private bucket, remove `--no-sign-request`, use the bucket's region, and pass
 credentials into the container. Docker does not automatically inherit a host AWS profile;

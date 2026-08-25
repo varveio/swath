@@ -17,74 +17,28 @@ Logs always go to stderr; listing data can therefore stream safely on stdout. Us
 `-vv`, or `-vvv` for INFO, DEBUG, or TRACE logs. `-q` selects ERROR and `-qq` disables
 logging; quiet wins if both quiet and verbose flags are present.
 
-For most investigations, start with the JSON report. It combines configuration, outcome,
-cost, timing, and the final meter snapshot without requiring a telemetry backend.
+## 1. Start with progress and the JSON report
 
-## 1. Micrometer meters
+Keep the default progress display for an ordinary run. If the run fails or appears slow,
+open `_swath_summary.json` for managed output, or request the same report elsewhere with
+`--report PATH`. Start with `complete`, `error_class`, `cost`, `output`, `duration_ms`,
+`session_duration_ms`, and `listing_duration_ms` before moving into engine details.
 
-Configure OTLP with `--metrics-endpoint` or `SWATH_OTLP_ENDPOINT`; change its default `5s`
-step with `SWATH_OTLP_INTERVAL`. `--no-metrics` disables export. Bucket names are not used
-as default tags, avoiding an unbounded-cardinality series.
+This table provides a first diagnostic pass:
 
-This is the public instrument index. Counters are cumulative; timers include count, total,
-maximum, and configured percentiles; gauges are snapshots. The
-[instrumentation reference](internals/metrics-internals.md) owns exact engagement-reason
-values and implementation details.
-
-| Area | Meters | What they answer |
+| Evidence | Likely bottleneck | Check next |
 | --- | --- | --- |
-| Store requests | `swath.api.calls`, `swath.api.latency`, `swath.fetch.latency.phase` | How many LIST attempts ran, how long they took, and where client-visible latency accumulated. |
-| Useful work | `swath.entries.emitted`, `swath.bytes.estimated`, `swath.progress.units` | How much output was accepted and whether any phase is still advancing. |
-| Scheduling | `swath.workers.active`, `swath.in_flight.avg`, `swath.tail_occupancy.avg_in_flight`, `swath.tail_occupancy.wall_share`, `swath.open_frontier.keys_emitted` | Whether workers stayed supplied and whether an open-ended tail dominated the run. |
-| Split and steal | `swath.steals`, `swath.errors`, `swath.steal_reason`, `swath.probe.fetches`, `swath.probe.structure_fetches`, `swath.probe.empty_upper_bisections`, `swath.split.unsplittable_victims`, `swath.split.guard_aborts` | Which work-discovery paths engaged, failed, or proved unproductive. |
-| Page shape | `swath.page.raw_count`, `swath.page.raw_keys`, `swath.page.short_truncated` | Whether returned pages were full, sparse, or unexpectedly short. |
-| Throttling | `swath.throttle.events`, `swath.aimd.target_reductions`, `swath.aimd.freeze_gate_checks`, `swath.owner_split.demand_gated_t`, `swath.owner_split.demand_gated_t_min` | Whether the store pushed back and how the adaptive target responded. |
-| Waits | `swath.queue.wait`, `swath.rate_limit.wait`, `swath.rate_limit.api_wait` | Whether output admission, the concurrency gate, or a configured request-rate cap held work up. |
-| Process | `swath.process.memory.rss.bytes`, `swath.process.memory.heap.bytes`, `swath.process.cpu.time` | Live process resource use when the platform exposes it. |
-| Idle workers | `swath.idle_backoff.level`, `swath.idle_backoff.resets`, `swath.idle_backoff.slot_denied`, `swath.idle_backoff.park_time` | Whether idle workers repeatedly searched, backed off, or lacked probe slots. |
-| Checkpoint | `swath.checkpoint.commit.latency`, `swath.checkpoint.commit_batch_size`, `swath.checkpoint.queue.wait`, `swath.checkpoint.commit.wait`, `swath.checkpoint.queue.depth` | Whether SQLite durability is the limiting stage. |
-| Parquet | `swath.parquet.rotation`, `swath.parquet.parts`, `swath.parquet.finalize.latency`, `swath.parquet.write.latency` | How the managed Parquet sink rotated and finalized parts. |
-| Sorted output | `swath.sort.entries`, `swath.sort.segments.written`, `swath.sort.segment.bytes`, `swath.sort.merge.passes`, `swath.sort.merge.latency`, `swath.sort.merge.range.latency`, `swath.sort.merge.boundaries.latency`, `swath.sort.merge.boundaries.embedded.entries`, `swath.sort.merge.boundaries.embedded.bytes`, `swath.sort.merge.boundaries.scan.bytes`, `swath.sort.finalize.close.latency`, `swath.sort.manifest.md5.bytes`, `swath.sort.manifest.md5.latency`, `swath.sort.manifest.bounds.rows`, `swath.sort.manifest.bounds.bytes`, `swath.sort.manifest.bounds.latency`, `swath.sort.publication.latency`, `swath.sort.finalize.latency`, `swath.sort.finalize.parallelism`, `swath.sort.backpressure.wait`, `swath.sort.page_runs_per_buffer`, `swath.sort.staging.bytes.peak`, `swath.sort.handoff.queue.depth.peak`, `swath.sort.off_thread.buffers.peak` | How much staging and merge work sorting required, and what constrained it. |
-| Local resources | `swath.disk.free_bytes`, `swath.s3.pool.leased`, `swath.s3.pool.idle_available`, `swath.s3.pool.pending_acquisition`, `swath.s3.pool.max`, `swath.s3.pool.connection_aborted`, `swath.s3.pool.handshakes`, `swath.s3.socket_closure_recovered` | Whether disk, the connection pool, or connection churn constrained the client. |
-| Phase and output | `swath.phase`, `swath.output.files`, `swath.output.bytes`, `swath.output.broken_pipe`, `swath.emit.latency` | What phase is active and how the selected sink behaves. |
-| Run result | `swath.run.duration`, `swath.run.throughput` | Final wall time and lifetime-average throughput. These are end-of-run, not live, values. |
+| High API latency and many requests in flight | Object store or network | `fetch.latency.phase`, throttling, connection-pool waits, recovered errors |
+| Low API rate and few requests in flight while listing | Not enough useful ranges, or one long tail | splits, probes, tail occupancy, open-frontier share |
+| High `queue.wait` or `emit.latency` | Output formatting or storage | `dataset_writer`, format write/finalize time, output filesystem |
+| High checkpoint queue or commit waits | Checkpoint storage | checkpoint latency and `checkpoint.queue.depth` |
+| High sort backpressure or many merge passes | Sort memory, disk, or open-file limits | the `sort` block, staging peak, effective fan-in |
+| `progress.units` unchanged for more than five minutes | Potential stall | phase, thread dump, last error, disk, and connection-pool state |
 
-The discard profiling sink retains `swath.entries.emitted`, `swath.bytes.estimated`, progress, and
-`swath.emit.latency`, but intentionally creates no `swath.output.files` or
-`swath.output.bytes` series because it materializes no output. Its engagement is visible as
-`swath.steal_reason{outcome="OUTPUT",reason="discard"}` and the run report records zero output
-files/bytes.
-
-`swath.fetch.latency.phase` has bounded `call_class` values (`worker_page`,
-`pivot_probe`, `structure_probe`) and `phase` values (`connect_acquire`, `ttfb`,
-`sdk_unmarshal`, `total`, `response_parse`). Treat the phases as independent signals,
-not additive slices: SDK boundaries can overlap, and `sdk_unmarshal` includes draining the
-response body as well as SDK parsing. SDK-derived phases are best effort; absent samples
-are omitted, not recorded as zero. `total` includes failures, while `response_parse` exists
-only after a response was returned. The report's `probe_latency` block is the easiest way
-to read their percentiles.
-
-`swath.progress.units` is the phase-independent stuck signal. It advances for emitted rows
-and during sorted merge passes. Allow at least five minutes before declaring a stall: a
-final Parquet flush can legitimately leave it unchanged for a short window.
-
-Process and SDK-pool gauges may be unavailable or may hold the last reported value. In
-particular, pool gauges update on completed API attempts and freeze during a merge. Read
-them with the API-call rate. A live `swath.s3.pool.pending_acquisition > 0` indicates pool
-acquisition pressure; low in-flight work by itself does not.
-
-### 1.1 Proactive rate cap vs. reactive AIMD backoff
-
-Two independent mechanisms can delay a request:
-
-- `--request-rate` is a proactive, run-wide cap. Its wait time is
-  `swath.rate_limit.api_wait`; without a configured cap this stays zero.
-- AIMD reacts to service throttling by lowering the live concurrency target. Throttle
-  events and target reductions appear in `swath.throttle.events` and
-  `swath.aimd.target_reductions`. `swath.rate_limit.wait` measures waits at the shared
-  concurrency gate, so it can also be nonzero from ordinary slot contention.
-
-Read all four signals together before attributing a slowdown to the store.
+The sections below explain the report and logs in detail. Use the
+[Micrometer meter reference](#5-metric-export-and-micrometer-reference) when you need
+telemetry export or implementation-level diagnosis. For controlled
+performance comparisons, continue to the [performance guide](performance.md).
 
 <a id="2-list_run_summary-one-line-at-run-end"></a>
 
@@ -164,23 +118,24 @@ metrics identify the compatibility path that reopened a carried part.
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.
 
-`dataset_writer` is present for direct Parquet and parallel directory TSV/JSONL output; its
-`format` is `parquet`, `tsv`, or `jsonl`. It is absent for stdout, single-file text, discard, and
-sorted output, which do not construct the shared pool. Its aggregate resource fields report the
-configured writer count, total lane-queue capacity, JVM maximum heap, and—for Parquet—the pinned
-row-group target, its conservative allowance multiplier, and the heap-admission plan. It also reports
-the part-rotation configuration, streamed full-part digest work, and terminal complete-manifest
-write count/time. During listing the manifest count remains zero while periodic JSON summaries read
-the live part/byte counters directly; after successful publication it is normally one. The
-Parquet-only fields are null for text. Its aggregate
-`submit_blocked_*` fields measure full sticky-lane admission waits;
-`head_of_line_blocked_*` is the subset where another lane thread was waiting for work on an empty
-queue when that wait began. The bounded `lanes[]` array reports lane id, queue
-current/capacity/sampled peak, waiting state, rows, finalized bytes, batches, active elapsed time,
-blocked/HOL time, and part/finalize activity. Lane identifiers live
-only in this structured block, not in Micrometer tags. Every duration in the block is elapsed time,
-not CPU time; use the retained-JFR procedure in the [performance guide](performance.md#retain-a-jfr-cpu-profile)
-for actual CPU attribution.
+### Writer-pool details (advanced)
+
+`dataset_writer` is present for unsorted Parquet and parallel directory TSV/JSONL output.
+It is absent for stdout, text files, discard, and sorted output, which do not use this
+writer pool.
+
+| Fields | Meaning |
+| --- | --- |
+| `format`, `writer_count`, `total_queue_capacity` | Selected format, writer count, and aggregate queued-batch capacity. |
+| `jvm_max_heap_bytes`, `row_group_target_bytes_per_writer`, `row_group_allowance_multiplier`, `planned_heap_bytes`, `heap_admission_applied` | Parquet memory inputs and the result of its safety check. These fields are null for text. |
+| `part_rotation_interval_ms`, `part_rotation_max_rows`, `part_digest_*`, `manifest_write_*` | Part creation, checksum work, and the final manifest write. The manifest count is normally zero during listing and one after successful publication. |
+| `submit_blocked_*` | Time spent waiting because the selected writer's queue was full. |
+| `head_of_line_blocked_*` | The subset of waits that began while another writer had an empty queue and was waiting for work. |
+| `lanes[]` | Per-writer queue use, rows, bytes, batches, active time, waits, parts, and finalization activity. |
+
+Lane identifiers appear only in this structured block, not in Micrometer tags. Durations
+are elapsed time, not CPU time. For CPU attribution, use the
+[advanced JFR procedure](performance.md#retain-a-jfr-cpu-profile).
 
 ## 4. Progress and logs
 
@@ -198,20 +153,72 @@ Useful markers include startup configuration, first request, first page, phase c
 and the final result. DEBUG and TRACE logs add engine evidence; they are intended for
 short investigations rather than routine high-volume runs.
 
-## 5. Diagnosing a slow run
+## 5. Metric export and Micrometer reference
 
-| Evidence | Likely limiting stage | Check next |
+Configure OTLP with `--metrics-endpoint` or `SWATH_OTLP_ENDPOINT`; change its default `5s`
+step with `SWATH_OTLP_INTERVAL`. `--no-metrics` disables export. Bucket names are not used
+as default tags, avoiding an unbounded-cardinality series.
+
+This is the public instrument index. Counters are cumulative; timers include count, total,
+maximum, and configured percentiles; gauges are snapshots. The
+[instrumentation reference](internals/metrics-internals.md) owns exact engagement-reason
+values and implementation details.
+
+| Area | Meters | What they answer |
 | --- | --- | --- |
-| High API latency, high in-flight work | Store or network service time | `fetch.latency.phase`, throttles, pool pending, recovered errors |
-| Low API rate and low in-flight work while listing | Work supply or a long tail | steal reasons, probes, tail occupancy, open-frontier share |
-| High `queue.wait` or `emit.latency` | Output admission or sink | `dataset_writer` blocked/HOL time, lane balance, format write/finalize latency, output filesystem |
-| High checkpoint queue or commit waits | SQLite durability | checkpoint volume latency and queue depth |
-| High sort backpressure or many merge passes | Sort memory/disk/FD limits | `sort` report block, staging peak, effective fan-in |
-| `progress.units` flat for more than five minutes | Potential stall | phase, thread dump, last error, disk and pool state |
+| Store requests | `swath.api.calls`, `swath.api.latency`, `swath.fetch.latency.phase` | How many LIST attempts ran, how long they took, and where client-visible latency accumulated. |
+| Useful work | `swath.entries.emitted`, `swath.bytes.estimated`, `swath.progress.units` | How much output was accepted and whether any phase is still advancing. |
+| Scheduling | `swath.workers.active`, `swath.in_flight.avg`, `swath.tail_occupancy.avg_in_flight`, `swath.tail_occupancy.wall_share`, `swath.open_frontier.keys_emitted` | Whether workers stayed supplied and whether an open-ended tail dominated the run. |
+| Split and steal | `swath.steals`, `swath.errors`, `swath.steal_reason`, `swath.probe.fetches`, `swath.probe.structure_fetches`, `swath.probe.empty_upper_bisections`, `swath.split.unsplittable_victims`, `swath.split.guard_aborts` | Which work-discovery paths engaged, failed, or proved unproductive. |
+| Page shape | `swath.page.raw_count`, `swath.page.raw_keys`, `swath.page.short_truncated` | Whether returned pages were full, sparse, or unexpectedly short. |
+| Throttling | `swath.throttle.events`, `swath.aimd.target_reductions`, `swath.aimd.freeze_gate_checks`, `swath.owner_split.demand_gated_t`, `swath.owner_split.demand_gated_t_min` | Whether the store pushed back and how the adaptive target responded. |
+| Waits | `swath.queue.wait`, `swath.rate_limit.wait`, `swath.rate_limit.api_wait` | Whether output admission, the concurrency gate, or a configured request-rate cap held work up. |
+| Process | `swath.process.memory.rss.bytes`, `swath.process.memory.heap.bytes`, `swath.process.cpu.time` | Live process resource use when the platform exposes it. |
+| Idle workers | `swath.idle_backoff.level`, `swath.idle_backoff.resets`, `swath.idle_backoff.slot_denied`, `swath.idle_backoff.park_time` | Whether idle workers repeatedly searched, backed off, or lacked probe slots. |
+| Checkpoint | `swath.checkpoint.commit.latency`, `swath.checkpoint.commit_batch_size`, `swath.checkpoint.queue.wait`, `swath.checkpoint.commit.wait`, `swath.checkpoint.queue.depth` | Whether SQLite durability is the limiting stage. |
+| Parquet | `swath.parquet.rotation`, `swath.parquet.parts`, `swath.parquet.finalize.latency`, `swath.parquet.write.latency` | How the managed Parquet sink rotated and finalized parts. |
+| Sorted output | `swath.sort.entries`, `swath.sort.segments.written`, `swath.sort.segment.bytes`, `swath.sort.merge.passes`, `swath.sort.merge.latency`, `swath.sort.merge.range.latency`, `swath.sort.merge.boundaries.latency`, `swath.sort.merge.boundaries.embedded.entries`, `swath.sort.merge.boundaries.embedded.bytes`, `swath.sort.merge.boundaries.scan.bytes`, `swath.sort.finalize.close.latency`, `swath.sort.manifest.md5.bytes`, `swath.sort.manifest.md5.latency`, `swath.sort.manifest.bounds.rows`, `swath.sort.manifest.bounds.bytes`, `swath.sort.manifest.bounds.latency`, `swath.sort.publication.latency`, `swath.sort.finalize.latency`, `swath.sort.finalize.parallelism`, `swath.sort.backpressure.wait`, `swath.sort.page_runs_per_buffer`, `swath.sort.staging.bytes.peak`, `swath.sort.handoff.queue.depth.peak`, `swath.sort.off_thread.buffers.peak` | How much staging and merge work sorting required, and what constrained it. |
+| Local resources | `swath.disk.free_bytes`, `swath.s3.pool.leased`, `swath.s3.pool.idle_available`, `swath.s3.pool.pending_acquisition`, `swath.s3.pool.max`, `swath.s3.pool.connection_aborted`, `swath.s3.pool.handshakes`, `swath.s3.socket_closure_recovered` | Whether disk, the connection pool, or connection churn constrained the client. |
+| Phase and output | `swath.phase`, `swath.output.files`, `swath.output.bytes`, `swath.output.broken_pipe`, `swath.emit.latency` | What phase is active and how the selected sink behaves. |
+| Run result | `swath.run.duration`, `swath.run.throughput` | Final wall time and lifetime-average throughput. These are end-of-run, not live, values. |
 
-For repeatable performance experiments, use the
-[performance guide](performance.md). For implementation-level interpretation, use the
-[metrics internals](internals/metrics-internals.md).
+The discard profiling sink retains `swath.entries.emitted`, `swath.bytes.estimated`, progress,
+and `swath.emit.latency`, but creates no `swath.output.files` or `swath.output.bytes` series
+because it writes no output. Its engagement is visible as
+`swath.steal_reason{outcome="OUTPUT",reason="discard"}`, and the report records zero output
+files and bytes.
+
+`swath.fetch.latency.phase` has bounded `call_class` values (`worker_page`,
+`pivot_probe`, `structure_probe`) and `phase` values (`connect_acquire`, `ttfb`,
+`sdk_unmarshal`, `total`, `response_parse`). Treat the phases as independent signals,
+not additive slices: SDK boundaries can overlap, and `sdk_unmarshal` includes draining the
+response body as well as SDK parsing. SDK-derived phases are best effort; absent samples
+are omitted, not recorded as zero. `total` includes failures, while `response_parse` exists
+only after a response was returned. The report's `probe_latency` block is the easiest way
+to read their percentiles.
+
+`swath.progress.units` is the phase-independent stuck signal. It advances for emitted rows
+and during sorted merge passes. Allow at least five minutes before declaring a stall: a
+final Parquet flush can legitimately leave it unchanged for a short window.
+
+Process and SDK-pool gauges may be unavailable or may hold the last reported value. In
+particular, pool gauges update on completed API attempts and freeze during a merge. Read
+them with the API-call rate. A live `swath.s3.pool.pending_acquisition > 0` indicates pool
+acquisition pressure; low in-flight work by itself does not.
+
+### 5.1 Proactive rate cap vs. reactive adaptive backoff
+
+Two independent mechanisms can delay a request:
+
+- `--request-rate` is a proactive, run-wide cap. Its wait time is
+  `swath.rate_limit.api_wait`; without a configured cap this stays zero.
+- The additive-increase/multiplicative-decrease (AIMD) controller reacts to service
+  throttling by lowering the live concurrency target. Throttle events and target reductions
+  appear in `swath.throttle.events` and `swath.aimd.target_reductions`.
+  `swath.rate_limit.wait` measures waits at the shared concurrency gate, so it can also be
+  nonzero from ordinary slot contention.
+
+Read all four signals together before attributing a slowdown to the store.
 
 ## 6. Exit codes
 
