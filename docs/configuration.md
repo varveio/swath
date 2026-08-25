@@ -25,9 +25,9 @@ The resolution rules are deliberately independent:
 | Input | Resolution |
 | --- | --- |
 | No `-o`, or `-o -` | stdout; `auto` is table on a terminal and TSV when redirected |
-| `--format discard` | diagnostic stdout-shaped sink with no bytes written; rejects a real `-o` destination and gzip/Zstandard compression |
+| `--format discard` | diagnostic sink that counts rows without writing them; rejects a real `-o PATH` destination and gzip or Zstandard compression |
 | `-o` ending in `.tsv` or `.jsonl` | atomically published single file; the suffix supplies the format when `--format` is omitted |
-| `-o` ending in `.parquet` | FILE-kind, one-writer Parquet dataset directory containing one part; it is not one physical Parquet file |
+| `-o` ending in `.parquet` | by default, a one-part, non-resumable Parquet dataset directory; `--output-type dir` overrides that destination-kind inference |
 | A `.gz` or `.zst` outer suffix | stripped before format inference and implies gzip or Zstandard for text; for example, `rows.jsonl.gz` is a gzip JSONL file |
 | Any other real `-o` path | directory dataset; `--format` is required because the path supplies none |
 | `--output-type file` or `--output-type dir` | overrides only destination kind, never a path's implied format |
@@ -38,9 +38,8 @@ compression is internal. Table, TSV, and JSONL support optional compression as s
 or single-file streams. Only TSV and JSONL support bounded directory datasets; those
 datasets are non-resumable and require `--checkpoint none` in this release.
 
-Discard is also non-resumable. It uses the normal engine, checkpoint protocol, bounded listing
-channel, row tally, and metrics, but bypasses every material output component. Use `--report PATH`
-to retain its summary because the sink itself intentionally creates no destination.
+Discard is non-resumable. It runs the normal listing engine but writes no listing rows.
+Use `--report PATH` to retain its summary.
 
 Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). At startup, unless stdout or `-q` suppresses it,
@@ -51,25 +50,19 @@ effective choice is visible before listing begins.
 
 ## Choosing `--concurrency`
 
-`--concurrency` is the maximum listing width (`Tmax`), not a fixed request count and not
-a throughput target. The live AIMD target starts at 4, grows while the endpoint is healthy,
-and reduces on explicit store backpressure (503/5xx) or a sustained, progress-starved worker
-timeout storm. Successful-request latency inflation damps further growth but does not reduce
-an already-high target.
+`--concurrency` sets the maximum width of concurrent listing work; it is a ceiling, not a
+target. swath starts with a smaller live limit, raises it while the endpoint is healthy,
+and lowers it when the store pushes back or workers repeatedly time out without progress.
 
-That distinction matters on low-latency or replay endpoints: a very high ceiling can create
-queueing and consume more CPU, heap, connections, and server resources without increasing
-keys per second. Start with the default 64 (or a measured 128 for a known large workload), then
-increase in repeated matched runs. Compare `listing_duration_ms` and the report trajectory's
-`worker_keys_fetched_per_sec`, `worker_pages_per_sec`, `worker_latency_mean_ms`, `in_flight`,
-and `aimd_target_*` fields. Choose the smallest ceiling on the throughput plateau; do not use
-one short prefix or one replay latency as a universal S3 setting. Real S3's higher latency may
-need a larger ceiling than a local replay, and AIMD will still adapt downward when S3 emits an
-actual stress signal.
+Start with the default of 64. Increase it only in repeated, otherwise identical runs, and
+choose the smallest value at which throughput stops improving. A higher ceiling can consume
+more CPU, memory, and connections without making the listing faster. Results from a short
+prefix or local replay server do not establish the right value for real S3.
 
-Output can be the bottleneck independently of listing width. Use `--format discard` only for
-diagnostic listing-engine measurements; validate the chosen ceiling again with the production
-output format and destination.
+The output destination can be a separate bottleneck. `--format discard` can isolate listing
+cost for diagnosis, but validate the final setting again with the output format and storage
+you will use in production. The [performance guide](performance.md#find-the-limiting-stage)
+explains which report fields to compare.
 
 ## Precedence
 
@@ -110,7 +103,7 @@ and similar environments.
 | `JAVA_TOOL_OPTIONS` | unset | JVM flags read by Java itself; works with the jar, launcher, and Docker image |
 | `NO_COLOR` | unset | Disables automatic color when set to any value |
 | `TERM=dumb` | environment | Disables automatic color and terminal redraws |
-| `CLICOLOR_FORCE` | unset | Forces automatic color on outside a terminal |
+| `CLICOLOR_FORCE` | unset | Forces color even when stderr is not connected to a terminal |
 
 An explicit `--color=always` or `--color=never` wins over terminal environment signals.
 
@@ -131,7 +124,7 @@ The following table is machine-checked against the code registry.
 | --- | --- | --- | --- | --- | --- | --- |
 | `engine.readahead` | `on or off` | `off` | experimental | free | fresh list | Speculatively fetch ahead on sustained dense tails; can trade API calls and memory for lower wall time. |
 | `seed.mode` | `shallow, none, or hints` | `shallow` | stable (`hints` reserved) | identity | fresh list | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
-| `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the bounded direct (unsorted) Parquet writer pool. Counts 2–4 retain the measured release envelope; 5–64 require the JVM maximum heap to cover the conservative writer-memory plan. Higher counts are an expert experiment: they shrink each lane's share of the fixed queue budget and can multiply time-rotated parts and final-manifest metadata. FILE-kind Parquet still resolves to one writer. Sorted staging/finalization does not construct this pool, so this setting is inert under `--sort`. |
+| `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the writer count for unsorted Parquet output. For counts above four, swath checks that the configured heap is large enough. Counts 2–4 are the tested range. Higher counts can use more memory and create more small parts; benchmark before adopting them. Unless `--output-type dir` overrides the default inference, a path ending in `.parquet` uses one writer. `--sort` does not use this writer pool, so the setting has no effect under `--sort`. |
 | `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
 | `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass sorted-output free-space checks. Size the staging volume independently first. |
 

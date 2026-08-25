@@ -194,9 +194,9 @@ The setup, shape mix, resource sweep, and limitations are retained in the
 
 ## Reading a running server's meters (`--metrics-port`)
 
-`serve` keeps every meter in the table under "Metrics And Tuning" below, but a
-long-running server has no `bench` report to print them into. `--metrics-port`
-exposes them over HTTP for as long as the server runs:
+`serve` keeps every meter in the "Metrics and tuning" table below, but a long-running
+server does not produce a `bench` report. `--metrics-port` exposes the meters over HTTP
+for as long as the server runs:
 
 ```bash
 swath-replay serve ... --metrics-port 19192
@@ -204,13 +204,12 @@ swath-replay serve ... --metrics-port 19192
 curl -s http://127.0.0.1:19192/metrics | jq .
 ```
 
-Three paths and nothing else: `GET /metrics` returns the whole registry as JSON,
-`GET /runtime-attestation` returns the resource limits visible inside this
-server process, and `GET /healthz` returns `ok` once the server is listening —
-which is also the readiness signal to poll before starting a client, since a
-large fixture's index derive is not instant. A negative port (the default)
-disables the endpoint; `0` binds a free port and reports it in the startup line,
-which carries `metrics_endpoint=` whenever the endpoint is on.
+The endpoint exposes only three paths. `GET /metrics` returns the whole registry as JSON;
+`GET /runtime-attestation` returns the resource limits visible to the server process; and
+`GET /healthz` returns `ok` once the server is listening. Poll the health endpoint before
+starting a client because building the index for a large fixture can take time. A negative
+port (the default) disables the endpoint; `0` binds a free port and reports it in the
+startup line, which carries `metrics_endpoint=` whenever the endpoint is on.
 
 The attestation uses `schema_version: runtime-attestation-v1`. Its `cgroup_v2`
 object names the resolved directory and records `cpuset.cpus.effective`,
@@ -236,14 +235,11 @@ Read server headroom from `swath.replay.request.latency{shape}` per request shap
 against the injected profile for that same shape. A pooled average would hide the
 important case because clients issue different mixtures of differently priced requests.
 
-**It is a second port on purpose.** A metrics or runtime-attestation scrape never
-enters the serving path: it takes no read permit, receives no injected latency,
-and increments no listing request counter, so polling cannot perturb what it
-measures — and it still answers while every serving thread is parked in an
-injected sleep, which is exactly when an answer is most wanted. Its thread pool
-is deliberately tiny (4), because taxing
-the box to answer a diagnostic would tax the measurement the diagnostic exists
-to validate.
+**It is a second port on purpose.** A metrics or runtime-attestation request does not
+enter the serving path, take a read permit, receive injected latency, or increment a
+listing counter. It therefore remains available while serving threads are delayed and
+does not directly alter the request measurements. Its thread pool is limited to four
+threads so diagnostics do not consume significant capacity from the workload being measured.
 
 **Poll it; do not wait for shutdown.** There is no dump-on-exit, by design: a
 server run as a sidecar is typically *killed* when the process it serves exits,
@@ -289,8 +285,8 @@ Injected latency is the request's total target time. After serving the page, the
 waits only for the remainder, so the client observes `max(server_cost, profile)`, not
 `server_cost + profile`. Requests that exceed their profile increment
 `swath.replay.inject.overrun{shape}` and record the excess in
-`swath.replay.inject.overrun.ms{shape}`; a run with material overruns measured the replay
-server rather than the intended profile.
+`swath.replay.inject.overrun.ms{shape}`. If overruns are substantial, the benchmark is
+measuring replay-server overhead rather than the configured latency profile.
 
 ### Compressed time (`--latency-scale`)
 
@@ -379,7 +375,7 @@ Names above omit the common `swath.replay.` prefix for compactness. Fallback rea
 `mixed_row_types`, and `sanity_failed`.
 
 Tune on your fixture and machine. More conformance parallelism or DuckDB connections can
-reduce wall time until scans contend; after that it increases per-query latency. Warm the
+reduce wall time until scans contend; after that they increase per-query latency. Warm the
 JVM, connection pool, and filesystem cache before recording a benchmark.
 
 ## Fidelity limits
@@ -393,6 +389,6 @@ JVM, connection pool, and filesystem cache before recording a benchmark.
 - Differential tests and the conformance harness establish behavior; the repository does
   not yet publish a versioned, portable corridor benchmark bundle.
 
-Retain fixture provenance, source revision, machine, configuration, and report with any
-published result. Keep captures, HARs, checkpoints, and mismatch artifacts in `/tmp` or
-another ignored location; never commit real bucket data.
+Whenever you publish benchmark results, retain the fixture provenance, source revision,
+machine details, configuration, and report. Keep captures, HARs, checkpoints, and
+mismatch artifacts in `/tmp` or another ignored location; never commit real bucket data.

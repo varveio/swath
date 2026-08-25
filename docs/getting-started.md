@@ -1,8 +1,10 @@
 # Getting started
 
 This guide uses Docker to run the same public listing as the README video, query its
-managed Parquet dataset, and resume it after an interruption. This is a real large-bucket
-run: the recording listed 39,585,029 objects.
+managed Parquet dataset, and resume it after an interruption. This is a full-scale
+demonstration, not a lightweight smoke test: the recording listed 39,585,029 objects,
+made 41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked at about 1.7 GB of resident
+memory (RSS). Review the [request-cost guidance](operating.md#request-cost) before running it.
 
 **Shell note:** the commands use a Bash-compatible shell on Linux or macOS. On Windows
 PowerShell, create the directory with `New-Item -ItemType Directory -Force out`, replace
@@ -25,8 +27,9 @@ This should print the swath version and exit without contacting S3.
 
 ## 2. Run the public demo
 
-Create a host directory and run the exact listing command shown in the demo. Running the
-container as your current user avoids root-owned output on Linux:
+If you want to reproduce the full demo, create a host directory first.
+Then run the exact listing command shown in the demo. Running the container as your
+current user avoids root-owned output on Linux:
 
 ```bash
 mkdir -p out
@@ -38,13 +41,14 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
   --format parquet -o /out/noaa-gestofs-pds
 ```
 
+Sections 3 and 4 use the resulting dataset. If you skip the full demo, continue to
+[List your bucket](#5-list-your-bucket).
+
 The command is anonymous and needs no AWS credentials. If the exact command fails, use
 the [troubleshooting guide](faq.md) for the reported access, network, or Docker error
 instead of adding credentials to this public example.
 
-swath reads listing metadata; it never downloads object contents. The recorded run made
-41,582 S3 API calls, wrote 790.8 MB of Parquet, and peaked around 1.7 GB RSS. Read the
-[request-cost guidance](operating.md#request-cost) before reproducing it.
+swath reads listing metadata; it never downloads object contents.
 
 ## 3. Query the Parquet dataset
 
@@ -83,9 +87,8 @@ Sorted output uses temporary disk space; read
 
 ## 4. Resume an interrupted run
 
-The output directory is also the run handle. While a listing is active, swath keeps its
-checkpoint under `<output>/.swath/`. After Ctrl+C, a crash, or a stopped container, resume
-the same directory:
+While a listing is active, swath keeps its checkpoint under `<output>/.swath/`. After
+Ctrl+C, a crash, or a stopped container, pass the same output directory to `resume`:
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \

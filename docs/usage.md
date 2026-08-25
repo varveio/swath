@@ -40,41 +40,31 @@ history and delete-marker listing are not implemented yet.
 | Keep globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
 
 `--format auto` is the default. It chooses an aligned table when stdout is a terminal
-and TSV when stdout is redirected. Explicit formats are `table`, `tsv`, `jsonl`, `parquet`,
-and the diagnostic `discard` sink. Discard accepts no `-o` destination or compression: it drains
-and tallies the normal engine pipeline without formatting rows or constructing a writer, writer
-pool, compressor, or file. It still includes S3 response parsing, Swath model/filter work,
-checkpoint commits, bounded-channel handoff, and the normal emission metrics.
-`--compression none|gzip|zstd` compresses table, TSV, or JSONL output to a
-file or stdout, and TSV/JSONL parts in a directory dataset. For files it is also
-inferred from `.gz` or `.zst`; stdout needs the explicit option. Parquet uses its own
-compression and rejects this option.
+and TSV when stdout is redirected. Serialization formats are `table`, `tsv`, `jsonl`,
+and `parquet`; `discard` is the diagnostic format. `--compression none|gzip|zstd`
+compresses table, TSV, or JSONL output to a file or stdout, and TSV/JSONL parts in a
+directory dataset. For files, compression is also inferred from `.gz` or `.zst`; stdout
+needs the explicit option. Parquet uses its own compression and rejects this option.
 
-TSV and JSONL directory datasets use 2–64 bounded writer lanes (`--text-writers`,
-default `3`) and rotate independent parts at `--text-part-size` (default `256mb`).
-Each compressed part is a complete gzip or Zstandard frame. The dataset publishes a
-manifest and writes `_SUCCESS` last, but is non-resumable in this release and therefore
-requires `--checkpoint none`. A failed or timed-out text-dataset run has no `_SUCCESS`, although a
-manifest may already exist; its already-finalized part files are diagnostic leftovers, not a
-resumable dataset.
-Counts above four are an expert tuning surface: per-lane queue shares
-shrink and per-lane rotation can multiply small parts and final-manifest metadata, so benchmark the
-`dataset_writer` blocked-time, part, digest, and manifest fields before adopting them.
+Use a managed Parquet directory when you need checkpoint and resume. Text files are
+published atomically but are one-shot outputs. TSV and JSONL can also write a parallel
+directory dataset, but that dataset is not resumable in this release and requires
+`--checkpoint none`.
 
-Use a managed Parquet directory when checkpoint/resume matters. Text file destinations
-are published atomically but are not resumable; compressed files are published only
-after their gzip or Zstandard frame finishes. TSV/JSONL directories are bounded,
-parallel, one-shot datasets.
+For every directory dataset, `_SUCCESS` is the completion marker. Do not consume its
+parts until that file exists. An interrupted text run may leave diagnostic files that
+are not a usable dataset and cannot be resumed. An interrupted managed Parquet run
+retains finalized parts and can be resumed from its checkpoint.
 
-An interrupted or timed-out managed Parquet run has no complete consumer snapshot until `_SUCCESS`
-exists, although a manifest may already exist. Its finalized parts and live/terminal summary metrics
-may also exist, but SQLite remains the resume authority; do not treat those parts as a published
-dataset.
+The diagnostic `discard` format runs and measures the listing pipeline without writing
+listing rows. It rejects a real `-o PATH` destination and gzip or Zstandard compression,
+is not resumable, and should be used with `--report PATH` when you want to keep its results.
+Omitting `-o` or passing `-o -` both select stdout and are valid.
 
-Do not use `-o inventory.parquet` when you expect one physical Parquet file. In the
-current release that FILE-kind path creates a one-writer, non-resumable dataset directory
-and requires `--checkpoint none`. Write a normal managed dataset and combine it
-downstream when a consumer requires one file.
+Do not use `-o inventory.parquet` when you expect one physical Parquet file. Unless you
+override the default inference with `--output-type dir`, that path creates a one-part,
+non-resumable dataset directory and requires `--checkpoint none`. Write a normal managed
+dataset and combine it downstream when a consumer requires one file.
 
 ### Directory dataset layout
 
@@ -159,7 +149,7 @@ swath list s3://my-bucket/ --format parquet --sort -o sorted/
 
 Sorted output has three important constraints:
 
-1. It requires a directory-shaped Parquet destination and a durable checkpoint.
+1. It requires a managed Parquet directory and a durable checkpoint.
 2. It writes compressed page-run segments under `_staging/`, then merges them into the
    final Parquet parts. During the merge, staging and final output coexist.
 3. Disk usage therefore scales with captured data. Measure a representative prefix and
@@ -172,7 +162,7 @@ the volume has been sized independently.
 
 Large merges use several contiguous key ranges by default and reduce that parallelism
 when heap or file-descriptor limits cannot carry it. Small merges remain serial. For
-resource sizing, staging codecs, merge controls, and how to recognize the binding limit,
+resource sizing, staging codecs, merge controls, and how to identify the bottleneck,
 see [Performance](performance.md#the-sorted-merge) and
 [Advanced configuration](configuration.md#sorted-output-jvm-properties).
 
@@ -181,8 +171,9 @@ see [Performance](performance.md#the-sorted-merge) and
 
 ## Checkpoint and resume
 
-The output directory is the run handle. With the default `--checkpoint auto`, a managed
-Parquet dataset stores its live checkpoint at `<output>/.swath/checkpoint.sqlite`:
+The output directory identifies the resumable run. With the default `--checkpoint auto`,
+a managed Parquet dataset stores its live checkpoint at
+`<output>/.swath/checkpoint.sqlite`:
 
 ```bash
 swath list s3://my-bucket/ --format parquet -o out/
@@ -210,10 +201,10 @@ managed output directory, not an arbitrary SQLite path.
 | --- | --- |
 | Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
 | stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
-| Discard | Profiling-only and non-resumable; a clean completion means every committed page was drained and tallied, but no listing-output artifact exists. A requested JSON report is still written. |
-| FILE-kind text | One-shot and non-resumable; successful publication atomically replaces the destination. |
+| Discard | Diagnostic and non-resumable; it counts rows but creates no listing-output artifact. A requested JSON report is still written. |
+| Text file | One-shot and non-resumable; successful publication atomically replaces the destination. |
 | Directory-dataset TSV/JSONL | Non-resumable; bounded parallel parts are published with `_SUCCESS` last, and a failed run has no success marker. |
-| FILE-kind Parquet | One-writer, non-resumable dataset directory in the current release. |
+| Parquet path ending in `.parquet` | By default, a one-part, non-resumable dataset directory. `--output-type dir` overrides this inference. |
 
 The exact commit, split, and sink contracts are in
 [Contracts and data model](internals/contracts.md#5-resume-args_hash-and-per-sink-guarantees).
@@ -285,6 +276,12 @@ Everyday runs should use the defaults. `--tune`, diagnostic engine ablations, JV
 properties, environment precedence, and bearer-token behavior are documented in
 [Configuration](configuration.md). The engine-toggle surface is for controlled A/B work,
 not ordinary tuning.
+
+TSV and JSONL directory datasets use three background writers by default
+(`--text-writers 3`) and rotate parts at 256 MiB (`--text-part-size 256mb`). Higher writer
+counts can use more memory and produce more small files; change either setting only after
+a matched performance comparison. See
+[Performance](performance.md#find-the-limiting-stage) for the measurements to compare.
 
 <a id="tuning---tune"></a>
 <a id="diagnostic-tier-ablation---engine-toggle"></a>

@@ -5,8 +5,8 @@ internals to use swath.
 
 ## Start
 
-1. [Getting started](getting-started.md) — try a public listing with Docker, save a
-   managed Parquet dataset, query it, and learn how resume works.
+1. [Getting started](getting-started.md) — check the Docker image, optionally reproduce
+   the full public demo, query its managed Parquet dataset, and learn how to resume a run.
 2. [Installation](install.md) — choose Docker, the self-contained jar, a release archive,
    or a source build.
 3. [Common workflows](usage.md) — choose an output, filter rows, sort Parquet, resume a
@@ -42,8 +42,8 @@ For the repository-level technical model, continue with
 [the internals overview](internals/overview.md), then go only as deep as you need:
 
 - [Architecture](internals/architecture.md) — components and the flow of a run.
-- [Listing algorithms](internals/algorithms.md) — seeding, pivots, stealing, AIMD,
-  sorting, and the correctness argument.
+- [Listing algorithms](internals/algorithms.md) — seeding, pivots, stealing, adaptive
+  concurrency, sorting, and the correctness argument.
 - [Contracts and data model](internals/contracts.md) — invariants I1–I12, types,
   persistence schemas, output schemas, and delivery guarantees.
 - [Worked bucket shapes](internals/walkthroughs.md) — step-by-step traces through

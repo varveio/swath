@@ -21,70 +21,6 @@ Bucket shape, client location, output disk, filters, CPU architecture, and servi
 all affect the result. Absolute numbers from another bucket are rarely useful; the
 relationships among your own report fields are.
 
-To measure the listing engine without row serialization or listing-sink I/O, run the same fixture
-and configuration through the diagnostic discard sink:
-
-```bash
-swath list s3://bucket/prefix/ --format discard --checkpoint none --report discard.json
-```
-
-This is not a parser-free HTTP benchmark. It retains response parsing and model construction,
-filters, checkpoint/engine coordination, the bounded listing channel, row tally, internal metrics,
-and the small diagnostic write requested by `--report`. Compare it with an otherwise identical
-TSV/Parquet arm to quantify the removable listing-output cost. If discard drives the replay service
-to its own CPU or latency ceiling, the result is a server limit rather than Swath's client ceiling;
-retain the server metrics beside the client report.
-
-### Retain a JFR CPU profile
-
-Elapsed timers cannot attribute CPU: a Parquet lane's active stretch can contain encoding,
-filesystem writes, fsync, checkpoint work, and time waiting to serialize a manifest update.
-For CPU attribution on Linux/JDK 25, derive a profile that explicitly enables the CPU-time
-sampler. The stock `profile.jfc` enables execution sampling but leaves `jdk.CPUTimeSample`
-disabled, so `cpu-time-hot-methods` would otherwise have no events:
-
-```bash
-jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output swath-cpu-profile.jfc \
-  jdk.CPUTimeSample#enabled=true
-JAVA_OPTS="-XX:StartFlightRecording=filename=$PWD/swath.jfr,settings=$PWD/swath-cpu-profile.jfc,disk=true,dumponexit=true,maxsize=2g" \
-  swath list s3://bucket/prefix/ --format parquet -o out/ --report run.json
-```
-
-The Gradle/application launcher honors `JAVA_OPTS`. For the runnable jar or container use the
-same option on `java` directly or through `JAVA_TOOL_OPTIONS`. `dumponexit=true` retains the
-recording on a normal exit, a handled signal, or an uncaught Java failure. `SIGKILL`, host loss,
-and swath's deliberate `Runtime.halt()` safety paths (the terminal liveness-watchdog escalation and
-sort disk guard) cannot run the exit dump. For a suspected hard wedge, use an external `jcmd
-<pid> JFR.dump filename=...` before the halt deadline. Give each arm a different filename and keep
-its JFR beside its JSON report.
-
-JDK 25's `jfr` tool provides useful first passes:
-
-```bash
-jfr summary swath.jfr
-jfr view cpu-time-hot-methods swath.jfr
-jfr view thread-cpu-load swath.jfr
-jfr view gc-cpu-time swath.jfr
-jfr view file-writes-by-path swath.jfr
-jfr view jdk.CPUTimeSamplesLost swath.jfr
-```
-
-`cpu-time-hot-methods` uses `jdk.CPUTimeSample` for CPU-time attribution. On a platform where that
-event is unavailable, retain the stock `profile` configuration and use `jfr view hot-methods` for
-execution samples instead; do not describe those elapsed execution samples as measured CPU time.
-Check `jdk.CPUTimeSamplesLost` before comparing attribution between arms. If losses are material,
-adjust `jdk.CPUTimeSample#throttle` in the generated configuration and rerun both arms identically;
-more frequent sampling can increase profiler overhead.
-
-Attribute execution samples by both thread and stack. Direct Parquet lanes are named
-`parquet-writer-*`; the checkpoint writer is `swath-checkpoint-writer`. Listing workers are
-virtual threads, so group their samples by `io.varve.swath.engine`, `io.varve.swath.store`, and
-AWS SDK frames rather than expecting a stable platform-thread name. Sorted staging/merge work is
-recognizable from `io.varve.swath.sort` frames and `*-encoder-*` platform threads. The
-[JDK 25 troubleshooting guide](https://docs.oracle.com/en/java/javase/25/troubleshoot/troubleshooting-guide.pdf)
-reports less than 2% overhead for most profiling recordings, but overhead is application-specific:
-measure it on the fixture, and use the same JFR settings and recording size limit in every arm.
-
 ### In-flight utilisation
 
 `--concurrency N` is a ceiling. The achieved request concurrency is
@@ -95,8 +31,8 @@ utilisation = engine.avg_in_flight / configured concurrency
 ```
 
 Use the configured ceiling, not `peak_in_flight`. High utilisation means the ceiling may
-be binding. Low utilisation means useful ranges, CPU, or another stage could not keep it
-full; raising the ceiling usually adds overhead.
+be the bottleneck. Low utilisation means useful ranges, CPU, or another stage could not
+keep it full; raising the ceiling usually adds overhead.
 
 For a sorted run, the report's whole-run average includes the post-listing merge, where
 API in-flight is zero. Rescale it to the listing phase with:
@@ -120,54 +56,65 @@ listing throughput ≈ average in-flight * page size / request latency
 Across a concurrency sweep:
 
 - Rising latency with rising in-flight suggests remote, network, client CPU, or queue
-  saturation. Check `fetch.latency.phase`, throttle/AIMD counters, pool pending, and CPU.
-- Flat latency while in-flight and splits plateau suggests work-supply starvation. Check
+  saturation. Check `fetch.latency.phase`, throttling and adaptive-concurrency counters,
+  connection-pool waits, and CPU.
+- Flat request latency together with plateaus in in-flight requests and split count
+  suggests work-supply starvation. Check
   `engine.splits`, steals, probe reasons, tail occupancy, and the shape block.
-- High `queue.wait`, Parquet latency, or checkpoint waits identifies a local downstream
-  stage rather than the object store.
-- Falling utilisation, falling throughput, and rising CPU per key is the signature of an
-  overshot ceiling, regardless of which resource ran out first.
+- High `queue.wait`, Parquet latency, or checkpoint waits identify a local downstream stage
+  rather than the object store.
+- The combination of falling utilisation, falling throughput, and rising CPU per key is a
+  sign of an overshot ceiling, regardless of which resource ran out first.
 
 Treat `shape.divergence_depth_histogram`, `mass_skew_gini`, and `delimiter_fanout` as clues,
 not diagnoses. Direct engagement and wait counters show what actually constrained the run.
 
-For direct Parquet or a parallel TSV/JSONL directory dataset, read the report's
-format-labelled `dataset_writer` block with `client_cost`:
+To isolate output cost, repeat the same run with the diagnostic discard sink:
 
-- `submit_blocked_ms` is the consumer's time waiting for sticky lane admission; it is contained
-  in `client_cost[].emit`, not additional time to add to it.
-- `head_of_line_blocked_ms` is the subset that began while another lane was waiting for work with
-  an empty queue. Material time confirms that sticky routing stranded an idle writer; zero means
-  that stronger condition was not observed at the start of a blocked admission, not that every
-  possible transient imbalance is ruled out.
+```bash
+swath list s3://bucket/prefix/ --format discard --checkpoint none --report discard.json
+```
+
+Discard still performs S3 response parsing, filtering, checkpoint coordination, and row
+counting; it only removes formatting and output I/O. Compare it with an otherwise identical
+TSV or Parquet run. When using a replay server, retain its metrics too so a server bottleneck
+is not mistaken for a client limit.
+
+For unsorted Parquet or a parallel TSV/JSONL directory dataset, each batch is assigned
+to one background writer, called a lane. Read the report's `dataset_writer` block with
+`client_cost`:
+
+- `submit_blocked_ms` is time spent waiting because the selected writer's queue was full.
+  It is already included in `client_cost[].emit`; do not add it again.
+- `head_of_line_blocked_ms` is the blocked time for waits that began while another writer
+  had an empty queue and was waiting for work. A material value shows that assigning each
+  batch to a fixed writer left capacity unused. Zero means that condition was not observed
+  when a wait began.
 - Per-lane rows, finalized bytes, batches, active elapsed time, queue peak, and finalize activity
   show load imbalance. `active_elapsed_ms` is elapsed service time and can overlap across lanes.
-- Rising lane-submit blocking followed by rising `client_cost[].writer_backpressure` confirms the
-  full causal chain into listing workers. A full queue peak without blocked time is not a
+- If `submit_blocked_ms` rises and `client_cost[].writer_backpressure` follows, output is slowing
+  the listing workers. A queue reaching capacity without measurable blocked time is not a
   bottleneck by itself.
 
 Do not infer writer capacity from an I/O-bound run whose lanes are mostly idle. Validate a writer
-count against the fastest expected listing regime: sustained submit blocking means the sink is
-binding; material head-of-line blocking with idle lanes means dispatch coupling is binding. If
-neither appears, raising the writer count would only add memory and file-part overhead for that
-workload.
+count against the fastest expected listing regime. Sustained submit blocking means output is
+the bottleneck. Material head-of-line blocking means writer assignment is leaving capacity
+unused. If neither appears, raising the writer count would only add memory and file-part
+overhead for that workload.
 
-Direct Parquet uses `--tune parquet.writers=N`; counts 2–4 are the measured release envelope and
-5–64 must pass the JVM heap-admission plan described in the contracts. Directory TSV/JSONL uses
-`--text-writers N` over the independent 2–64 text range. Both retain the same 256-batch aggregate
-whole-pool submission ceiling as concurrency rises. Confirm the resolved `writer_count`,
-`total_queue_capacity`, rotation settings, and Parquet memory-plan fields in `dataset_writer` before
-comparing runs.
+Unsorted managed Parquet directory output uses `--tune parquet.writers=N`; 2–4 is the
+tested range. Counts 5–64 require enough JVM heap to pass the safety check described in
+the contracts. Directory TSV/JSONL uses `--text-writers N`, also in the range 2–64. Both
+limit the total queued work to 256 batches. Confirm `writer_count`,
+`total_queue_capacity`, rotation settings, and the Parquet memory-plan fields in
+`dataset_writer` before comparing runs.
 
-Higher counts are not monotonic throughput scaling. Dividing the fixed budget gives each lane fewer
-queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
-rotation is also per lane: more active lanes can create more sub-target parts, each of which maintains
-a streamed full-part digest and incurs its own close/checkpoint work. The complete manifest is written
-once after all lanes join. For text, first bracket the default with matched 2/3/4-writer arms; keep
-direct Parquet comparisons inside its measured 2–4 release envelope. Compare `part_digest_ms`,
-finalize/checkpoint time, terminal `manifest_write_ms`, part count, `submit_blocked_ms`, and
-`head_of_line_blocked_ms` before adopting an expert count. If small-file overhead or HOL blocking
-rises faster than throughput, more writers are making the sink worse.
+More writers do not guarantee more throughput. Because the total queue budget is fixed,
+each writer gets fewer queue slots. More writers can also create more small parts, and every
+part adds close, checkpoint, and digest work. For text, compare otherwise identical runs
+with 2, 3, and 4 writers first; keep unsorted Parquet within its tested 2–4 range. Adopt a
+higher count only when throughput improves without disproportionate growth in part count,
+finalization time, `submit_blocked_ms`, or `head_of_line_blocked_ms`.
 
 ### Size CPU and memory empirically
 
@@ -182,13 +129,63 @@ either the CPU budget or the request-latency/concurrency budget. Add headroom be
 coordination cost rises with core and concurrency count.
 
 Active page, queue, writer, and merge buffers are configuration-bounded, but the complete
-process is not strictly constant-memory: direct Parquet retains `O(parts)` metadata and
+process is not strictly constant-memory: unsorted Parquet retains `O(parts)` metadata and
 sorted output retains `O(segments)` metadata. Larger part/segment targets reduce those
 counts. The public PERF-2 gate covers 100,000 keys and requires peak heap below 1 GiB under
 its default Parquet fixture; it does not establish a billion-object memory envelope.
 
 For production sizing, sweep realistic concurrency under an explicit `-Xmx`, watch peak
 heap/RSS and disk, and keep the setting below the point where utilisation collapses.
+
+<a id="retain-a-jfr-cpu-profile"></a>
+
+### Advanced: retain a JFR CPU profile
+
+Elapsed timers show how long work took, but not how much CPU it consumed. For CPU
+attribution on Linux with JDK 25, create a Java Flight Recorder (JFR) configuration that
+enables CPU-time sampling. The stock `profile.jfc` enables execution sampling but leaves
+`jdk.CPUTimeSample` disabled:
+
+```bash
+jfr configure --input "$JAVA_HOME/lib/jfr/profile.jfc" --output swath-cpu-profile.jfc \
+  jdk.CPUTimeSample#enabled=true
+JAVA_OPTS="-XX:StartFlightRecording=filename=$PWD/swath.jfr,settings=$PWD/swath-cpu-profile.jfc,disk=true,dumponexit=true,maxsize=2g" \
+  swath list s3://bucket/prefix/ --format parquet -o out/ --report run.json
+```
+
+The application launcher honors `JAVA_OPTS`. For the runnable jar or container, pass the
+same option through `JAVA_TOOL_OPTIONS` or directly to `java`. `dumponexit=true` retains
+the recording after a normal exit, handled signal, or uncaught Java failure. It cannot run
+after `SIGKILL`, host loss, or a deliberate `Runtime.halt()`. When investigating a process
+that may be forcibly halted, dump the recording first with
+`jcmd <pid> JFR.dump filename=...`. Give each comparison run a different filename and keep
+its JFR recording beside its JSON report.
+
+Useful first commands are:
+
+```bash
+jfr summary swath.jfr
+jfr view cpu-time-hot-methods swath.jfr
+jfr view thread-cpu-load swath.jfr
+jfr view gc-cpu-time swath.jfr
+jfr view file-writes-by-path swath.jfr
+jfr view jdk.CPUTimeSamplesLost swath.jfr
+```
+
+`cpu-time-hot-methods` uses `jdk.CPUTimeSample`. If that event is unavailable, use the
+stock `profile` configuration and `jfr view hot-methods` instead, and describe the result
+as execution samples rather than measured CPU time. Check `jdk.CPUTimeSamplesLost` before
+comparing runs. If losses are material, adjust `jdk.CPUTimeSample#throttle` and rerun each
+configuration with identical profiler settings; more frequent sampling can add overhead.
+
+Attribute samples by both thread and stack. Unsorted Parquet writers are named
+`parquet-writer-*`, and the checkpoint writer is `swath-checkpoint-writer`. Listing workers
+are virtual threads, so group them by `io.varve.swath.engine`, `io.varve.swath.store`, and
+AWS SDK frames. Sorted work appears under `io.varve.swath.sort` frames and `*-encoder-*`
+platform threads. Oracle's
+[JDK 25 troubleshooting guide](https://docs.oracle.com/en/java/javase/25/troubleshoot/troubleshooting-guide.pdf)
+reports less than 2% overhead for most profiling recordings, but measure the overhead on
+your workload and use the same settings for every comparison.
 
 ## Current field observations
 
@@ -234,25 +231,27 @@ cores, observed roughly 118,000–136,000 keys/s per busy core for objects-mode 
 CPU cost rose about 7–8% from one/two cores to eight. Derive an equivalent value on your
 hardware rather than importing this ARM-specific constant.
 
-The 32-concurrency arm stayed below 1 GiB heap at 96 million objects, while smaller runs at
-higher concurrency used more. That supports the buffer-sizing design, but it is one host,
-one bucket, one run per point, and unsorted output only.
+The 32-concurrency run stayed below 1 GiB heap. Every run used the same 96-million-object
+input, but the higher-concurrency runs used more heap. That supports the buffer-sizing
+design, but it is one host, one bucket, one run per point, and unsorted output only.
 
 ### Local replay tuning takeaways
 
 Controlled replay runs reinforce the sizing procedure above: keep the default concurrency ceiling
 for an unknown endpoint, and raise it only when repeated matched runs show that more in-flight work
 still buys throughput. Higher ceilings can add queueing, latency, CPU, memory, and connections after
-keys/s has plateaued; AIMD reacts to explicit store stress but does not search an already-high target
-back down to the throughput knee. Higher-latency endpoints may still need a larger ceiling, so no
-single replay result is a universal S3 setting.
+keys/s has plateaued. The adaptive-concurrency controller reacts to explicit store stress, but it
+does not automatically lower a healthy but unnecessarily high limit to find the most efficient
+setting. Higher-latency endpoints may still need a larger ceiling, so no single replay
+result is a universal S3 setting.
 
-For TSV/JSONL directory output, bracket the default with 2/3/4 writers before trying expert counts.
-If output is limiting, compare otherwise identical discard, tmpfs, and destination-volume arms to
-separate listing, encoding, and filesystem/finalization cost. Part size is also storage-specific:
-compare 64/128/256 MiB while watching finalize/force time, part count, submit blocking, and
-head-of-line blocking rather than assuming that larger parts are faster. Keep the 256 MiB default
-unless the destination's own measurements justify an override.
+For TSV/JSONL directory output, compare the default with otherwise identical runs using
+2 and 4 writers before trying expert counts. If output is the suspected bottleneck,
+compare discard, a memory-backed filesystem, and the production destination to separate
+listing, encoding, and storage costs. Part size is also storage-specific: compare 64,
+128, and 256 MiB while watching file-finalization time, part count, submit blocking, and
+head-of-line blocking. Keep the 256 MiB default unless measurements on the destination
+justify an override.
 
 ## The sorted merge
 
@@ -283,7 +282,7 @@ The tested SHA was `2bd24c2f33df35341a497a91e24e7633a224b941`. The focused
 serial A, zero descending physical-key transitions, eight effective ranges, and no clamp,
 cascade, or failure reason. Peak heap was 3.598 GiB of `-Xmx12g`.
 
-GEFS and MRMS corroborate scale only. MRMS mutated across arms and its physical order was
+GEFS and MRMS corroborate scale only. MRMS mutated between runs and its physical order was
 not independently checked. Merge-object rate is not listing throughput; do not combine the
 campaign's phase rates with the unsorted sweep.
 
@@ -303,19 +302,20 @@ pages, or resume overhead.
   concurrency ceiling under-filled.
 - Aggressive concurrency can increase scheduling, allocation, and connection churn while
   producing no more work.
-- Direct Parquet with very small part targets grows retained part metadata and makes the one
+- Unsorted Parquet with very small part targets grows retained part metadata and makes the one
   terminal `O(parts)` manifest larger; per-part finalization/checkpoint/digest overhead can still
   dominate even though the manifest is no longer rewritten per part.
 - Sorted output depends on staging disk, heap, and descriptor headroom. Small or constrained
   runs fall back to serial merge.
-- Remote throttling reduces the AIMD target and may dominate a run even when the engine can
-  supply work.
+- Remote throttling reduces the adaptive concurrency target and may dominate a run even
+  when the engine can supply work.
 
 ## Methodology and missing evidence
 
 Current observations are mostly n=1, from one ARM host and one cross-cloud vantage. Live
-buckets can mutate between arms. Runs were serial and read from their JSON reports; the
-merge comparison bracketed the default arm with two serial arms on the same idle filesystem.
+buckets can mutate between comparison runs. Runs were serial and read from their JSON reports;
+the merge comparison bracketed the default configuration with two serial runs on the same
+idle filesystem.
 
 Raise this evidence to release-candidate quality with repeated runs and reported variance,
 an in-region client, an x86 comparison, a fixed-shape object-count sweep, and a documented
