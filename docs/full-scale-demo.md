@@ -9,8 +9,8 @@ public example.
 
 ## What the recording shows
 
-The embedded README recording was captured with **swath v0.2.1** against the full public
-`s3://noaa-gestofs-pds/` bucket in `us-east-1`.
+The embedded README recording was captured with **swath v0.2.1** against the full public bucket
+`s3://noaa-gestofs-pds/` in `us-east-1`.
 
 That observed run:
 
