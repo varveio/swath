@@ -130,21 +130,31 @@ one looked like, and what the seed step decided to do about it) without re-deriv
 Absent (an empty array, never omitted) on `--tune seed.mode=none` (no probe ever runs) and — like the rest of
 `seed` — the whole `seed` block is omitted on `swath resume` (seeding never re-runs).
 
-**`trajectory`**: the bounded time-bin rollup of in-flight concurrency + progress rate over
-the run, plus four derived scalars — reconstructs a dense-shape bucket's fan-out trajectory (did it
-ramp up and stay parallel, or collapse to a near-serial tail, and when) without a separate metrics
-backend. `in_flight[]`/`progress_rate[]` are parallel arrays, one entry per **time bin actually
-used** (never zero-padded to a fixed length): the average in-flight listing count and the keys/sec
-observed in that bin. Bounded memory regardless of run length — a fixed **30-bin** rollup that
+**`trajectory`**: the bounded time-bin rollup of in-flight concurrency, downstream progress and
+upstream worker-page/AIMD observations over the run, plus four derived scalars — reconstructs a
+dense-shape bucket's fan-out trajectory (did it ramp up and stay parallel, or collapse to a
+near-serial tail, and when) and makes the concurrency controller's evidence auditable without a
+separate metrics backend. Every array is parallel and has one entry per **time bin actually used**
+(never zero-padded to a fixed length). `in_flight[]` is average in-flight LIST calls and
+`progress_rate[]` is committed/emitted keys/sec; the worker fields below are deliberately upstream
+store-completion observations and can include rows later filtered or replayed. Bounded memory
+regardless of run length — a fixed **30-bin** rollup that
 halves its live bin count (merging adjacent pairs) and doubles its bin width whenever the run's
 elapsed time would otherwise need more bins, the classic ring/doubling-bucket downsample; a window
 between two in-flight transitions is attributed to the bin containing the window's END instant (a
 documented approximation — this is a diagnostic rollup, not a correctness measurement). Folded on
-the SAME "sample on every transition" seam `swath.in_flight.avg` (§1) already uses, so it costs
-nothing extra on the healthy path beyond a few array writes per LIST call.
+the same rollup/lock as `swath.in_flight.avg` (§1); each successful slot-gated worker page adds one
+short O(1) locked observation. The retained ceiling-512 discard A/B measured 3.113M keys/s with the
+fields versus the 3.106M/s pre-change median, so this cost was below run scatter.
 
 | field | meaning |
 |---|---|
+| `worker_pages_per_sec` | successful slot-gated worker LIST pages completed per second in the bin; excludes probes, returned 503s and timed-out attempts. |
+| `worker_keys_fetched_per_sec` | raw `ListPage.entries().size()` per second at worker HTTP completion. Non-durable and upstream of filtering/checkpoint/output; never use it as an exactly-once output count. |
+| `worker_latency_min_ms` / `worker_latency_mean_ms` | minimum/mean uncensored successful worker-attempt latency in the bin; `null` when no latency sample was available. |
+| `aimd_target_min` / `aimd_target_max` / `aimd_target_last` | minimum, maximum and last effective controller target observed on successful worker completions in the bin; `null` if the bin has no such completion. |
+| `aimd_latency_baseline_ms` / `aimd_latency_ewma_ms` | last rolling-min baseline and EWMA observed in the bin after applying the completed attempt's latency and controller decision; `null` before a successful latency sample exists. |
+| `aimd_latency_inflated_frac` | fraction of sampled successful worker completions whose post-sample EWMA exceeded the current latency-freeze threshold. This is interval evidence/diagnostics, not a controller vote. |
 | `serial_frac` | fraction of total wall-time spent at `<= 2` in-flight (time-weighted over the bins actually used). |
 | `collapse_at_frac` | the fractional bin index where a TRAILING run of `<= 2` in-flight began (e.g. `0.5` = the back half of the run ran serial) — `null` when the run never permanently collapsed (its last bin is still `> 2`, the good outcome). |
 | `peak_workers` | the existing `peak_in_flight` counter, reused here (not a second measurement). |
@@ -235,8 +245,11 @@ decomposition. Two of the five phases now sit inside it:
   protocol response handler returning. Bridged in by `S3CallClassLatencyPublisher` from the SDK's own
   per-attempt stamps, not measured by swath. On the sync `ApacheHttpClient` path the body is still a
   live socket stream when that handler runs, so it spans draining the remaining response bytes off the
-  wire **plus** the XML parse and POJO construction. It is the DOMINANT term of the residual on a full
-  1000-key page.
+  wire **plus** the XML parse and POJO construction. Successful `ListObjectsV2` calls take
+  `StreamingListObjectsV2Interceptor` here: it constructs the SDK model directly with StAX and gives
+  the generated generic unmarshaller a minimal empty result, avoiding the SDK's intermediate
+  `XmlElement` tree. Error bodies stay entirely on the SDK handler. This phase remains the complete
+  response-body handling bound, not a parser-specific timer.
 
   **Why it is derived rather than read.** `CoreMetric.UNMARSHALLING_DURATION` is the exact boundary and
   was this phase's first implementation — but it is never published for an S3 `ListObjectsV2`, and that
@@ -293,7 +306,7 @@ a span with zero observations is omitted, never a fabricated all-zero row.
 | `checkpoint_commit_wait` | `swath.checkpoint.commit.wait` | the FETCH WORKER's own blocking wait for its page commit to become durable (the I1 commit-before-emit await) — **one observation per page**. This is what a page actually paid; the two writer-thread spans below decompose the same work as the single writer sees it. |
 | `checkpoint_queue_wait` | `swath.checkpoint.queue.wait` | per checkpoint TASK: enqueue → the batch drain that picked it up. **Not page-scoped**: the queue also carries the run's lifecycle tasks (`openRun`/`insertNode`/`completeNode`), so its count is `>=` the page count, never exactly it. |
 | `checkpoint_commit` | `swath.checkpoint.commit.latency` | per writer-thread BATCH: op execution + `conn.commit()` (the WAL-fsync critical path). |
-| `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. |
+| `emit` | `swath.emit.latency` | per page: the consumer stage's whole sink write (format+write for text, pool dispatch for Parquet, lane admission for `--sort`), including that stage's own row tally. For `--format discard`, this is only the retained row tally/emission accounting; there is no formatter or write. |
 | `writer_backpressure` | `swath.queue.wait` | per page: the fetch worker blocked handing the page onto a full downstream channel. |
 | `parquet_write` | `swath.parquet.write.latency` | per stretch of Parquet WRITER-LANE work: the encode+write of a batch's rows into the open part, plus any part finalize it triggered (footer fsync + checkpoint callback), timed on the lane's own thread between two waits on its queue. Part MD5 is incrementally maintained on this write path, not reread after close. The one completion-manifest write runs after all lanes join and is therefore outside this span. **Elapsed time, not CPU time**: lane work can include filesystem/checkpoint I/O. **Not page-scoped** and **not on the page's critical path**: one observation per batch written, plus one per idle-cadence rotation and one per lane's drain-time finalize/discard, so its count is `>=` the page count on a clean run (an aborted/failed run drains its queued batches without writing them, and those record nothing). Parquet-sink runs only. |
 | `text_dataset_write` | `swath.text_dataset.write.latency` | the equivalent WRITER-LANE stretch for a partitioned TSV/JSONL dataset: format+compress+write, plus any close/trailer/fsync it triggers. The byte-exact part MD5 is incrementally maintained below the compressor, not reread after close; the one completion-manifest write runs after all lanes join. It has the same off-page-critical-path and observation-count semantics as `parquet_write`; ordinary single-stream text output remains fully represented by `emit`. |
@@ -919,6 +932,11 @@ retired — its emitter was deleted in the same change that added the annotation
 | `RETRY` | `probe_retry_cap_failfast` | the probe fail-fast cap's steal-side twin (`Thief.steal`): the `TRANSIENT.probe_retry_cap_failfast` `ThrottleException` above, caught and folded into the SAME non-productive-steal `RETRY` outcome an ordinary retry takes — frees the sole `IdleStealBackoff` in-flight slot immediately instead of camping on it | |
 | `PROBE` | `slow_` | a probe fetch (never a worker page) was slow (>1 s) or failed — the reason is suffixed with the request's `call_class` (`slow_pivot_probe`/`slow_structure_probe`). Fired on EVERY such probe, where the `slow_probe_exemplar` DEBUG line beside it is rate-limited (first 20, then powers of two), so the count is the honest engagement figure and the line is only a reproducible sample of it. The exemplar's request identity (prefix/`start_after`) is deliberately NOT a tag — an object key is unbounded cardinality — and stays log-only | |
 | `REDIRECT` | `region` | a 301 `PermanentRedirect` — the bucket lives in a region other than the passed `--region` — surfaced as a typed `RegionRedirectException` naming the correct region (never an untyped crash) | |
+| `S3_RESPONSE` | `direct_page` | one successful `ListObjectsV2` call issued by production `S3PageFetcher` took the request-scoped direct-page carrier: swath's StAX parser populated the internal page model, preserving last-modified text without constructing/parsing the SDK timestamp field. Compare with successful `ListObjectsV2` calls to prove production-path coverage. The carrier is owned by one request and has no static response map or thread-local lifetime | |
+| `S3_RESPONSE` | `direct_page_absent` | a production `S3PageFetcher` call returned without its request-scoped direct-page carrier populated and therefore used the compatibility SDK response model. Expected for injected/fake clients that do not execute the interceptor; unexpected on the configured production client. A nonzero production count identifies the timestamp-parsing/canonicalizing fallback explicitly instead of mixing it invisibly into a raw-text run | |
+| `S3_RESPONSE` | `streaming_xml` | one successful public/client `ListObjectsV2` response without a direct-page carrier took swath's bounded streaming StAX parser instead of the AWS SDK's generic `XmlElement` tree materialization. The complete SDK response model is preserved, including typed timestamps. This is the compatibility fallback, not the expected production-fetcher counter | |
+| `S3_RESPONSE` | `sdk_error_in_success` | a nominally successful HTTP response contained an S3 `<Error>` root, so the streaming parser reconstructed that rare XML tree and returned it to the SDK's error-could-be-in-body handler rather than turning it into an empty successful page. Such responses never co-fire `direct_page` or `streaming_xml` | |
+| `FATAL` | `streaming_xml_unparseable` | the streaming `ListObjectsV2` response path rejected malformed XML or a value it could not decode and wrapped the cause in `SdkClientException("Unable to stream ListObjectsV2 XML response")`; terminal for that attempt and distinct from a service error document | |
 | `FATAL` | `access_denied` | a seed/fetch 403 `AccessDenied` — a permanent permissions/config failure (e.g. an anonymous or under-privileged LIST of a bucket that denies it) — surfaced as a typed `AccessDeniedException` with `error_class=access_denied`, exit 1, `stop_reason=seed_failure`; terminal, never retried/AIMD-fed (a transient 403-coded throttle is caught by `isThrottle` first) | |
 | `FATAL` | `no_such_bucket` | a seed/fetch 404 `NoSuchBucket` — the bucket does not exist — typed `NoSuchBucketException`, `error_class=no_such_bucket`, exit 1, terminal (a sibling 404 `NoSuchKey` is NOT reclassified) | |
 | `FATAL` | `unauthorized` | a seed/fetch HTTP 401 — missing/invalid credentials — typed `UnauthorizedException`, `error_class=unauthorized`, exit 1, terminal | |
@@ -993,6 +1011,10 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_boundary_fallback_invalid_bounds` | one otherwise valid page-run extension did not begin at the trailer's exact `segMinKey`, ended above `segMaxKey`, or disagreed with empty-segment bounds; its provisional keys were discarded and that segment was authoritatively scanned | |
 | `SORT` | `finalize_progress_tick` | the finalize/publish tail emitted a liveness-progress tick at each final part's footer boundary (`ProgressMarkingSortedFileWriter` ticks pre-fsync in both `markFinal()` and `close()`). Newly produced finals compute MD5 incrementally on the write stream and need no post-close readback ticks; the once-per-64-MiB byte-keyed ticks remain on the compatibility path that validates a metadata-less carried final with `md5HexWithLivenessProgress`. A true stalled fallback read emits no tick | |
 | `OUTPUT` | `partitioned_text_dataset` | the TSV/JSONL directory-dataset route engaged its bounded parallel writer pool | |
+| `OUTPUT` | `discard` | the diagnostic discard consumer drained and tallied the normal listing pipeline without a formatter, writer queue, compressor, or filesystem output. Fires once per run; the summary reports zero output files/bytes and no `swath.output.*` materialization meter | |
+| `OUTPUT` | `tsv_byte_encoder` | the partitioned TSV dataset used the direct UTF-8 row encoder: valid key bytes were copied without a String decode/re-encode and each lane reused one byte buffer instead of routing rows through `StringBuilder`/`String`/`StreamEncoder`. Fires once per run; absent for JSONL and single-stream TSV, which retain the character formatter | |
+| `OUTPUT` | `tsv_escape_on` | cheap classification companion to `tsv_byte_encoder`: control-byte escaping was enabled. Exactly one of this reason or `tsv_raw_output` fires with each `tsv_byte_encoder` engagement | |
+| `OUTPUT` | `tsv_raw_output` | cheap classification companion to `tsv_byte_encoder`: `--raw-output` selected verbatim controls. Exactly one of this reason or `tsv_escape_on` fires with each `tsv_byte_encoder` engagement | |
 | `SORT` | `manifest_metadata_trusted` | manifest publication used close-gated metadata captured inline by a freshly written final part. Fires once per such part | |
 | `SORT` | `manifest_metadata_fallback_scan` | manifest publication received a metadata-less carried or third-party final part and used the compatibility full-file MD5 and exact-bounds validation reads. Fires once per such part, before validation begins | |
 | `SORT` | `page_whole_emitted` | the page-run merge fast path: the final page-aware merge (`PageAwareMerger`, engaged when every survivor is a page-run segment) emitted a whole page decode-free-planned — its current page's `maxKey` was strictly `<` (unsigned) the `minKey` of every other segment's current page AND of its OWN next page, so the page was globally next with no interleaving and was streamed in order without a heap merge. Fires once per page so emitted; the count is "how many pages the disjoint fast path carried" — the page-oriented analogue of `merge_fastpath` (which stays the entry-level `StreamingMerger` same-reader signal). High on a well-formed OBJECTS run (work-stealing nodes own disjoint key ranges ⇒ range-disjoint pages) | |

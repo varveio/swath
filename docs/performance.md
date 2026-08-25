@@ -21,6 +21,20 @@ Bucket shape, client location, output disk, filters, CPU architecture, and servi
 all affect the result. Absolute numbers from another bucket are rarely useful; the
 relationships among your own report fields are.
 
+To measure the listing engine without row serialization or listing-sink I/O, run the same fixture
+and configuration through the diagnostic discard sink:
+
+```bash
+swath list s3://bucket/prefix/ --format discard --checkpoint none --report discard.json
+```
+
+This is not a parser-free HTTP benchmark. It retains response parsing and model construction,
+filters, checkpoint/engine coordination, the bounded listing channel, row tally, internal metrics,
+and the small diagnostic write requested by `--report`. Compare it with an otherwise identical
+TSV/Parquet arm to quantify the removable listing-output cost. If discard drives the replay service
+to its own CPU or latency ceiling, the result is a server limit rather than Swath's client ceiling;
+retain the server metrics beside the client report.
+
 ### Retain a JFR CPU profile
 
 Elapsed timers cannot attribute CPU: a Parquet lane's active stretch can contain encoding,
@@ -149,10 +163,11 @@ Higher counts are not monotonic throughput scaling. Dividing the fixed budget gi
 queue slots, which can expose sticky-dispatch head-of-line blocking sooner. The default time/row
 rotation is also per lane: more active lanes can create more sub-target parts, each of which maintains
 a streamed full-part digest and incurs its own close/checkpoint work. The complete manifest is written
-once after all lanes join. Compare `part_digest_ms`, finalize/checkpoint time, terminal
-`manifest_write_ms`, part count, `submit_blocked_ms`, and `head_of_line_blocked_ms` at 4/8/16 before
-adopting an expert count. If small-file overhead or HOL blocking rises faster than throughput, more
-writers are making the sink worse.
+once after all lanes join. For text, first bracket the default with matched 2/3/4-writer arms; keep
+direct Parquet comparisons inside its measured 2–4 release envelope. Compare `part_digest_ms`,
+finalize/checkpoint time, terminal `manifest_write_ms`, part count, `submit_blocked_ms`, and
+`head_of_line_blocked_ms` before adopting an expert count. If small-file overhead or HOL blocking
+rises faster than throughput, more writers are making the sink worse.
 
 ### Size CPU and memory empirically
 
@@ -222,6 +237,22 @@ hardware rather than importing this ARM-specific constant.
 The 32-concurrency arm stayed below 1 GiB heap at 96 million objects, while smaller runs at
 higher concurrency used more. That supports the buffer-sizing design, but it is one host,
 one bucket, one run per point, and unsorted output only.
+
+### Local replay tuning takeaways
+
+Controlled replay runs reinforce the sizing procedure above: keep the default concurrency ceiling
+for an unknown endpoint, and raise it only when repeated matched runs show that more in-flight work
+still buys throughput. Higher ceilings can add queueing, latency, CPU, memory, and connections after
+keys/s has plateaued; AIMD reacts to explicit store stress but does not search an already-high target
+back down to the throughput knee. Higher-latency endpoints may still need a larger ceiling, so no
+single replay result is a universal S3 setting.
+
+For TSV/JSONL directory output, bracket the default with 2/3/4 writers before trying expert counts.
+If output is limiting, compare otherwise identical discard, tmpfs, and destination-volume arms to
+separate listing, encoding, and filesystem/finalization cost. Part size is also storage-specific:
+compare 64/128/256 MiB while watching finalize/force time, part count, submit blocking, and
+head-of-line blocking rather than assuming that larger parts are faster. Keep the 256 MiB default
+unless the destination's own measurements justify an override.
 
 ## The sorted merge
 

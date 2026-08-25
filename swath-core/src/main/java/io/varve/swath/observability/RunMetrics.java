@@ -1809,8 +1809,9 @@ public final class RunMetrics {
      * The per-page entries-emitted bump: {@code swath.entries.emitted} plus universal progress
      * (§3.2). Called from exactly ONE of {@link io.varve.swath.output.OutputStage} ("the single
      * output stage" — its own class javadoc), {@link
-     * io.varve.swath.output.dataset.DatasetOutputStage} or {@code SortOutputStage} per run — the
-     * three are mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
+     * io.varve.swath.output.dataset.DatasetOutputStage}, {@link
+     * io.varve.swath.output.DiscardOutputStage} or {@code SortOutputStage} per run — the four are
+     * mutually-exclusive {@code Pipeline.Consumer<PageBatch>} implementations, and a run
      * wires up exactly one depending on the sink, never more than one concurrently. That makes this
      * call site THE already-serialized point for this run: no extra synchronization is needed for a
      * caller (like the tail-occupancy sampler below) to treat "cumulative keys emitted" and "current
@@ -1962,6 +1963,18 @@ public final class RunMetrics {
      */
     public long currentInFlight() {
         return inFlightGauge.current();
+    }
+
+    /**
+     * Record one successful slot-gated worker page at HTTP completion. This is deliberately an
+     * upstream, non-durable store-service signal: it may include rows later filtered or replayed and
+     * must never be confused with {@code entriesEmitted} or fed back into the controller.
+     */
+    public void recordAimdWorkerSuccess(int keysOnPage, long latencyNanos, int targetT,
+                                        long baselineNanos, long ewmaNanos,
+                                        boolean latencyInflated, boolean latencySampled) {
+        trajectory.recordAimdWorkerSuccess(nanoClock.getAsLong() - runStartNanos.get(), keysOnPage,
+                latencyNanos, targetT, baselineNanos, ewmaNanos, latencyInflated, latencySampled);
     }
 
     /**

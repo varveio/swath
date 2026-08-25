@@ -38,6 +38,17 @@ final class TrajectoryRollup {
     private final double[] inFlightArea;
     private final long[] dtNanos;
     private final long[] keysDelta;
+    private final long[] workerSuccessCount;
+    private final long[] workerKeysFetched;
+    private final long[] workerLatencySampleCount;
+    private final long[] workerLatencySumNanos;
+    private final long[] workerLatencyMinNanos;
+    private final long[] latencyInflatedCount;
+    private final int[] aimdTargetMin;
+    private final int[] aimdTargetMax;
+    private final int[] aimdTargetLast;
+    private final long[] latencyBaselineLastNanos;
+    private final long[] latencyEwmaLastNanos;
     private long lastKeys = 0L;
 
     TrajectoryRollup(int bins) {
@@ -45,6 +56,17 @@ final class TrajectoryRollup {
         this.inFlightArea = new double[bins];
         this.dtNanos = new long[bins];
         this.keysDelta = new long[bins];
+        this.workerSuccessCount = new long[bins];
+        this.workerKeysFetched = new long[bins];
+        this.workerLatencySampleCount = new long[bins];
+        this.workerLatencySumNanos = new long[bins];
+        this.workerLatencyMinNanos = new long[bins];
+        this.latencyInflatedCount = new long[bins];
+        this.aimdTargetMin = new int[bins];
+        this.aimdTargetMax = new int[bins];
+        this.aimdTargetLast = new int[bins];
+        this.latencyBaselineLastNanos = new long[bins];
+        this.latencyEwmaLastNanos = new long[bins];
     }
 
     /**
@@ -90,6 +112,46 @@ final class TrajectoryRollup {
     }
 
     /**
+     * Record one successful slot-gated worker page at the same bounded time-bin resolution as the
+     * in-flight trajectory. These are store-completion observations, deliberately upstream of
+     * checkpointing, filtering and output; they are diagnostic only and never feed the controller.
+     */
+    void recordAimdWorkerSuccess(long elapsedNanos, int keysOnPage, long latencyNanos,
+                                 int targetT, long baselineNanos, long ewmaNanos,
+                                 boolean latencyInflated, boolean latencySampled) {
+        if (elapsedNanos < 0L || keysOnPage < 0 || targetT <= 0) {
+            return;
+        }
+        lock.lock();
+        try {
+            while (elapsedNanos / binWidthNanos >= bins) {
+                mergeBinsForDoubling();
+            }
+            int idx = (int) Math.min(bins - 1, elapsedNanos / binWidthNanos);
+            workerSuccessCount[idx]++;
+            workerKeysFetched[idx] += keysOnPage;
+            aimdTargetMin[idx] = aimdTargetMin[idx] == 0
+                    ? targetT : Math.min(aimdTargetMin[idx], targetT);
+            aimdTargetMax[idx] = Math.max(aimdTargetMax[idx], targetT);
+            aimdTargetLast[idx] = targetT;
+            latencyBaselineLastNanos[idx] = baselineNanos;
+            latencyEwmaLastNanos[idx] = ewmaNanos;
+            if (latencySampled && latencyNanos > 0L) {
+                workerLatencySampleCount[idx]++;
+                workerLatencySumNanos[idx] += latencyNanos;
+                workerLatencyMinNanos[idx] = workerLatencyMinNanos[idx] == 0L
+                        ? latencyNanos : Math.min(workerLatencyMinNanos[idx], latencyNanos);
+                if (latencyInflated) {
+                    latencyInflatedCount[idx]++;
+                }
+            }
+            binsUsed = Math.max(binsUsed, idx + 1);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Halves the live bin count by merging adjacent pairs (bin {@code i} = old bins {@code 2i}/
      * {@code 2i+1}) and doubles the bin width — the classic ring-doubling downsample that keeps the
      * trajectory rollup at a fixed {@code bins}-bin memory footprint no matter how long the run runs.
@@ -101,14 +163,57 @@ final class TrajectoryRollup {
             inFlightArea[i] = inFlightArea[2 * i] + inFlightArea[2 * i + 1];
             dtNanos[i] = dtNanos[2 * i] + dtNanos[2 * i + 1];
             keysDelta[i] = keysDelta[2 * i] + keysDelta[2 * i + 1];
+            workerSuccessCount[i] = workerSuccessCount[2 * i] + workerSuccessCount[2 * i + 1];
+            workerKeysFetched[i] = workerKeysFetched[2 * i] + workerKeysFetched[2 * i + 1];
+            workerLatencySampleCount[i] =
+                    workerLatencySampleCount[2 * i] + workerLatencySampleCount[2 * i + 1];
+            workerLatencySumNanos[i] =
+                    workerLatencySumNanos[2 * i] + workerLatencySumNanos[2 * i + 1];
+            workerLatencyMinNanos[i] = minPresent(
+                    workerLatencyMinNanos[2 * i], workerLatencyMinNanos[2 * i + 1]);
+            latencyInflatedCount[i] = latencyInflatedCount[2 * i] + latencyInflatedCount[2 * i + 1];
+            aimdTargetMin[i] = minPresent(aimdTargetMin[2 * i], aimdTargetMin[2 * i + 1]);
+            aimdTargetMax[i] = Math.max(aimdTargetMax[2 * i], aimdTargetMax[2 * i + 1]);
+            aimdTargetLast[i] = lastPresent(aimdTargetLast[2 * i], aimdTargetLast[2 * i + 1]);
+            latencyBaselineLastNanos[i] = lastPresent(
+                    latencyBaselineLastNanos[2 * i], latencyBaselineLastNanos[2 * i + 1]);
+            latencyEwmaLastNanos[i] = lastPresent(
+                    latencyEwmaLastNanos[2 * i], latencyEwmaLastNanos[2 * i + 1]);
         }
         for (int i = half; i < bins; i++) {
             inFlightArea[i] = 0.0;
             dtNanos[i] = 0L;
             keysDelta[i] = 0L;
+            workerSuccessCount[i] = 0L;
+            workerKeysFetched[i] = 0L;
+            workerLatencySampleCount[i] = 0L;
+            workerLatencySumNanos[i] = 0L;
+            workerLatencyMinNanos[i] = 0L;
+            latencyInflatedCount[i] = 0L;
+            aimdTargetMin[i] = 0;
+            aimdTargetMax[i] = 0;
+            aimdTargetLast[i] = 0;
+            latencyBaselineLastNanos[i] = 0L;
+            latencyEwmaLastNanos[i] = 0L;
         }
         binWidthNanos *= 2;
         binsUsed = Math.min(bins, (binsUsed + 1) / 2);
+    }
+
+    private static int minPresent(int left, int right) {
+        return left == 0 ? right : right == 0 ? left : Math.min(left, right);
+    }
+
+    private static long minPresent(long left, long right) {
+        return left == 0L ? right : right == 0L ? left : Math.min(left, right);
+    }
+
+    private static int lastPresent(int left, int right) {
+        return right != 0 ? right : left;
+    }
+
+    private static long lastPresent(long left, long right) {
+        return right != 0L ? right : left;
     }
 
     /**
@@ -126,6 +231,16 @@ final class TrajectoryRollup {
     RunSummary.TrajectorySummary buildSummary(IntSupplier peakWorkers) {
         double[] inFlightAvg;
         double[] rate;
+        double[] workerPageRate;
+        double[] workerKeyRate;
+        double[] workerLatencyMinMs;
+        double[] workerLatencyMeanMs;
+        double[] targetMin;
+        double[] targetMax;
+        double[] targetLast;
+        double[] baselineLastMs;
+        double[] ewmaLastMs;
+        double[] inflatedFrac;
         long[] dt;
         int used;
         lock.lock();
@@ -133,11 +248,38 @@ final class TrajectoryRollup {
             used = binsUsed;
             inFlightAvg = new double[used];
             rate = new double[used];
+            workerPageRate = new double[used];
+            workerKeyRate = new double[used];
+            workerLatencyMinMs = new double[used];
+            workerLatencyMeanMs = new double[used];
+            targetMin = new double[used];
+            targetMax = new double[used];
+            targetLast = new double[used];
+            baselineLastMs = new double[used];
+            ewmaLastMs = new double[used];
+            inflatedFrac = new double[used];
             dt = new long[used];
             for (int i = 0; i < used; i++) {
                 dt[i] = dtNanos[i];
                 inFlightAvg[i] = dt[i] > 0L ? inFlightArea[i] / dt[i] : 0.0;
                 rate[i] = dt[i] > 0L ? keysDelta[i] / (dt[i] / 1_000_000_000.0) : 0.0;
+                double seconds = dt[i] / 1_000_000_000.0;
+                workerPageRate[i] = seconds > 0.0 ? workerSuccessCount[i] / seconds : 0.0;
+                workerKeyRate[i] = seconds > 0.0 ? workerKeysFetched[i] / seconds : 0.0;
+                long latencySamples = workerLatencySampleCount[i];
+                workerLatencyMinMs[i] = latencySamples > 0L
+                        ? workerLatencyMinNanos[i] / 1_000_000.0 : -1.0;
+                workerLatencyMeanMs[i] = latencySamples > 0L
+                        ? workerLatencySumNanos[i] / (double) latencySamples / 1_000_000.0 : -1.0;
+                targetMin[i] = aimdTargetMin[i] > 0 ? aimdTargetMin[i] : -1.0;
+                targetMax[i] = aimdTargetMax[i] > 0 ? aimdTargetMax[i] : -1.0;
+                targetLast[i] = aimdTargetLast[i] > 0 ? aimdTargetLast[i] : -1.0;
+                baselineLastMs[i] = latencyBaselineLastNanos[i] > 0L
+                        ? latencyBaselineLastNanos[i] / 1_000_000.0 : -1.0;
+                ewmaLastMs[i] = latencyEwmaLastNanos[i] > 0L
+                        ? latencyEwmaLastNanos[i] / 1_000_000.0 : -1.0;
+                inflatedFrac[i] = latencySamples > 0L
+                        ? latencyInflatedCount[i] / (double) latencySamples : -1.0;
             }
         } finally {
             lock.unlock();
@@ -162,6 +304,9 @@ final class TrajectoryRollup {
         double collapseAtFrac = (collapseIdx >= used || used == 0) ? -1.0 : (double) collapseIdx / used;
         int finalWorkers = used > 0 ? (int) Math.round(inFlightAvg[used - 1]) : 0;
         return new RunSummary.TrajectorySummary(
-                inFlightAvg, rate, serialFrac, collapseAtFrac, peakWorkers.getAsInt(), finalWorkers);
+                inFlightAvg, rate, workerPageRate, workerKeyRate, workerLatencyMinMs,
+                workerLatencyMeanMs, targetMin, targetMax, targetLast, baselineLastMs,
+                ewmaLastMs, inflatedFrac, serialFrac, collapseAtFrac,
+                peakWorkers.getAsInt(), finalWorkers);
     }
 }

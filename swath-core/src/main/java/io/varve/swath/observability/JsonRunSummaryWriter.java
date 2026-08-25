@@ -709,6 +709,19 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         for (double v : trajectory.progressRate()) {
             rateNode.add(v);
         }
+        writeNullableDoubleArray(trajectoryNode, "worker_pages_per_sec", trajectory.workerPagesPerSec());
+        writeNullableDoubleArray(
+                trajectoryNode, "worker_keys_fetched_per_sec", trajectory.workerKeysFetchedPerSec());
+        writeNullableDoubleArray(trajectoryNode, "worker_latency_min_ms", trajectory.workerLatencyMinMs());
+        writeNullableDoubleArray(trajectoryNode, "worker_latency_mean_ms", trajectory.workerLatencyMeanMs());
+        writeNullableDoubleArray(trajectoryNode, "aimd_target_min", trajectory.aimdTargetMin());
+        writeNullableDoubleArray(trajectoryNode, "aimd_target_max", trajectory.aimdTargetMax());
+        writeNullableDoubleArray(trajectoryNode, "aimd_target_last", trajectory.aimdTargetLast());
+        writeNullableDoubleArray(
+                trajectoryNode, "aimd_latency_baseline_ms", trajectory.aimdLatencyBaselineMs());
+        writeNullableDoubleArray(trajectoryNode, "aimd_latency_ewma_ms", trajectory.aimdLatencyEwmaMs());
+        writeNullableDoubleArray(
+                trajectoryNode, "aimd_latency_inflated_frac", trajectory.aimdLatencyInflatedFrac());
         trajectoryNode.put("serial_frac", trajectory.serialFrac());
         double collapseAtFrac = trajectory.collapseAtFrac();
         if (collapseAtFrac < 0) {
@@ -718,6 +731,17 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         }
         trajectoryNode.put("peak_workers", trajectory.peakWorkers());
         trajectoryNode.put("final_workers", trajectory.finalWorkers());
+    }
+
+    private static void writeNullableDoubleArray(ObjectNode parent, String name, double[] values) {
+        ArrayNode node = parent.putArray(name);
+        for (double value : values) {
+            if (value < 0.0 || !Double.isFinite(value)) {
+                node.addNull();
+            } else {
+                node.add(value);
+            }
+        }
     }
 
     private void writeSlowRanges(ArrayNode slowRangesNode, List<RunSummary.SlowRange> slowRanges) {

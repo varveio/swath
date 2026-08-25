@@ -13,9 +13,11 @@ import io.varve.swath.concurrent.Scope;
 import io.varve.swath.engine.policy.OwnerSplitGateInputs;
 import io.varve.swath.engine.policy.OwnerSplitGovernor;
 import io.varve.swath.error.CancelledException;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.LastModifiedParseException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.PackedPage;
@@ -756,7 +758,12 @@ public final class WorkStealingScan implements Pipeline.Producer<PageBatch> {
                             PagePacker packer = pagePacker;
                             PageBatch pageBatch;
                             if (packer != null) {
-                                PackedPage packed = packer.pack(kept);
+                                PackedPage packed;
+                                try {
+                                    packed = packer.pack(kept);
+                                } catch (LastModifiedParseException parseFailure) {
+                                    throw new OutputException("sort segment encode failed", parseFailure);
+                                }
                                 metrics.recordStealReason("SORT", "pack_on_fetch");
                                 pageBatch = PageBatch.ofPacked(claim.nodeId(), pageSeq.getAndIncrement(), packed);
                             } else {

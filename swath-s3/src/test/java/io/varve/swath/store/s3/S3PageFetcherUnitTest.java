@@ -24,6 +24,7 @@ import io.varve.swath.store.PageRequest;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.exception.ApiCallAttemptTimeoutException;
 import software.amazon.awssdk.core.exception.ApiCallTimeoutException;
@@ -119,8 +120,9 @@ class S3PageFetcherUnitTest {
      * {@link PageRequest#attemptTimeoutEscalationLevel()}, when non-zero, must be mapped onto the
      * ListObjectsV2 request's per-request {@code overrideConfiguration} — this is the ONLY wiring
      * that lets the escalation retry loops (TransientRetryFetcher / GaugedFetcher) actually lengthen
-     * the SDK's per-attempt budget for a single retried attempt. At level 0 a scan-class call sets no
-     * {@code overrideConfiguration} at all (the client-level base timeout applies).
+     * the SDK's per-attempt budget for a single retried attempt. At level 0 a scan-class call still
+     * carries an {@code overrideConfiguration} for the direct-page carrier, but leaves {@code
+     * apiCallAttemptTimeout} unset so the client-level base timeout applies.
      */
     @Test
     void escalationLevelIsMappedOntoTheRequestAsAnAttemptTimeout() throws Exception {
@@ -128,7 +130,8 @@ class S3PageFetcherUnitTest {
 
         new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
         assertThat(client.lastRequest().overrideConfiguration())
-                .as("no override set on the request by default").isEmpty();
+                .as("the direct-page carrier does not change the default attempt timeout")
+                .hasValueSatisfying(o -> assertThat(o.apiCallAttemptTimeout()).isEmpty());
 
         // Level 1 on a scan-class call (worker page, 10s base) -> 10s * 2^1 = 20s.
         PageRequest escalated = PageRequest.objects(null, null, 1000)
@@ -164,6 +167,36 @@ class S3PageFetcherUnitTest {
         assertThat(entry.ownerDisplayName()).isEqualTo("Alice");
         assertThat(entry.checksumAlgorithm()).isEqualTo("SHA256");
         assertThat(entry.checksumType()).isEqualTo("FULL_OBJECT");
+    }
+
+    @Test
+    void preservesAnUnknownChecksumAlgorithmAsTheRawSdkString() throws Exception {
+        S3Object object = S3Object.builder()
+                .key("k")
+                .checksumAlgorithmWithStrings("FUTURE_CHECKSUM")
+                .build();
+        S3Client client = FakeS3Client.respondingWith(
+                ListObjectsV2Response.builder().isTruncated(false).contents(object).build());
+
+        ListPage page = new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
+
+        ObjectEntry entry = (ObjectEntry) page.entries().getFirst();
+        assertThat(entry.checksumAlgorithm()).isEqualTo("FUTURE_CHECKSUM");
+    }
+
+    @Test
+    void treatsAnExplicitlyEmptyChecksumAlgorithmListAsAbsent() throws Exception {
+        S3Object object = S3Object.builder()
+                .key("k")
+                .checksumAlgorithmWithStrings(List.of())
+                .build();
+        S3Client client = FakeS3Client.respondingWith(
+                ListObjectsV2Response.builder().isTruncated(false).contents(object).build());
+
+        ListPage page = new S3PageFetcher(client, "bucket").fetchPage(PageRequest.objects(null, null, 1000));
+
+        ObjectEntry entry = (ObjectEntry) page.entries().getFirst();
+        assertThat(entry.checksumAlgorithm()).isNull();
     }
 
     // ---- throttle classification (algorithms.md §5; THR-1 wiring) -------------------

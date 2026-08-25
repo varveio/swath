@@ -76,7 +76,8 @@ final class ConnectionOptions {
     final BearerTokenOptions bearer = new BearerTokenOptions();
 
     @Resume(ResumeClass.FREE)
-    @Option(names = "--concurrency", paramLabel = "N", description = "Maximum concurrent listing requests (default: 64).")
+    @Option(names = "--concurrency", paramLabel = "N",
+            description = "AIMD ceiling for concurrent listing requests (default: 64).")
     int maxParallelListings = S3Config.DEFAULT_MAX_PARALLEL;
 
     @Resume(ResumeClass.FREE)

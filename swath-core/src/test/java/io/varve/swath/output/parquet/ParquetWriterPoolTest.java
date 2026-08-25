@@ -13,6 +13,10 @@ import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.error.OutputException;
+import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.LastModifiedParseException;
+import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.model.PageBatch;
 import io.varve.swath.output.dataset.SharedDatasetWriterPool;
 import io.varve.swath.testkit.ParquetReads;
@@ -29,6 +33,21 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** Writer-pool unit checks: sticky routing, size rotation, manifest, exact-once parts. */
 class ParquetWriterPoolTest {
+
+    @Test
+    void invalidTimestampAbortsWithoutPublishingAPart(@TempDir Path dir) throws Exception {
+        var pool = new ParquetWriterPool(dir, ParquetSchema.canonical(), "hash", 1,
+                Long.MAX_VALUE, 8);
+        ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("bad-time"), 1L, "not-a-timestamp",
+                "etag", "STANDARD", null, true, null, null, null, null);
+        pool.submit(new PageBatch(0L, 0L, List.of(entry)));
+
+        assertThatThrownBy(pool::close)
+                .isInstanceOf(OutputException.class)
+                .hasCauseInstanceOf(LastModifiedParseException.class);
+        assertThat(parts(dir)).isEmpty();
+        assertThat(DatasetLayout.of(dir).manifest()).doesNotExist();
+    }
 
     @Test
     void eightLanePoolPublishesEveryRowAndUniquePart(@TempDir Path dir) throws Exception {

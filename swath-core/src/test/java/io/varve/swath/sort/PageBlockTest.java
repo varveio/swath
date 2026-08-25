@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
+import io.varve.swath.model.LastModifiedParseException;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.testkit.Keyspaces;
@@ -110,6 +111,16 @@ class PageBlockTest {
     void emptyPageIsRejected() {
         assertThatThrownBy(() -> PageBlock.pack(List.of(), CMP))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void invalidTimestampFailsBeforeAPackedBlockIsProduced() {
+        ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("bad-time"), 1L, "not-a-timestamp",
+                "etag", "STANDARD", null, true, null, null, null, null);
+
+        assertThatThrownBy(() -> PageBlock.pack(List.of(entry), CMP))
+                .isInstanceOf(LastModifiedParseException.class)
+                .hasRootCauseInstanceOf(java.time.format.DateTimeParseException.class);
     }
 
     @Test

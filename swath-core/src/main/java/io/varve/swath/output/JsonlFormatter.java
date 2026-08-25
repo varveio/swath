@@ -41,7 +41,7 @@ public final class JsonlFormatter implements EntryFormatter {
         switch (e) {
             case ObjectEntry o -> {
                 num("size", o.size());
-                time(o.lastModifiedEpochMicros());
+                time(o.lastModifiedText());
                 optStr("etag", o.etag());
                 optStr("storage_class", o.storageClass());
                 optStr("version_id", o.versionId());
@@ -56,7 +56,7 @@ public final class JsonlFormatter implements EntryFormatter {
             case DeleteMarkerEntry d -> {
                 optStr("version_id", d.versionId());
                 bool("is_latest", d.isLatest());
-                time(d.lastModifiedEpochMicros());
+                time(d.lastModifiedText());
                 optStr("owner_id", d.ownerId());
             }
             case CommonPrefixEntry ignored -> {
@@ -81,10 +81,9 @@ public final class JsonlFormatter implements EntryFormatter {
         sb.append(",\"").append(name).append("\":").append(value);
     }
 
-    private void time(long epochMicros) {
-        String iso = Fields.isoMicros(epochMicros);
-        if (!iso.isEmpty()) {
-            str("last_modified", iso);
+    private void time(String value) {
+        if (!value.isEmpty()) {
+            str("last_modified", value);
         }
     }
 

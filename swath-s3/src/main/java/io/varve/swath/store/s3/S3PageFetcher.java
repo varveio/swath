@@ -43,12 +43,11 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  * The S3 {@link PageFetcher}: AWS SDK v2 sync, {@code
  * encoding-type=url} ListObjectsV2 pagination purely by {@code start_after =
  * last key} (algorithms.md §2). The AWS SDK's own (always-on) {@code
- * DecodeUrlEncodedResponseInterceptor} already percent-decodes the response
- * key/prefix fields when {@code encoding-type=url} is requested, so {@code
- * o.key()} / {@code cp.prefix()} arrive as the fully-decoded key string; this
- * fetcher converts that decoded string straight to raw bytes via UTF-8 (no
- * second decode — see {@link #toEntry}). One {@code fetchPage} = one
- * ListObjectsV2 call.
+ * DecodeUrlEncodedResponseInterceptor} percent-decodes the compatibility SDK-model path. The
+ * production path attaches a request-scoped carrier and the streaming interceptor applies the
+ * SDK's own decoder while constructing swath's page directly. Both paths therefore use the same
+ * URL-decoding semantics; the direct path additionally preserves last-modified text without
+ * parsing it. One {@code fetchPage} = one ListObjectsV2 call.
  *
  * <p>VERSIONS (ListObjectVersions) is not implemented; only OBJECTS listing is supported here.
  */
@@ -188,19 +187,17 @@ public final class S3PageFetcher implements PageFetcher {
         // has, store-layer, never engine-aware (see #callClass's javadoc). Computed before the
         // attempt-timeout override below, which needs it to pick the right budget.
         String callClass = callClass(req);
-        if (req.attemptTimeoutEscalationLevel() > 0) {
-            // The engine escalated this logical fetch (see PageRequest#attemptTimeoutEscalationLevel):
-            // map the level onto THIS call class's own base budget.
-            Duration escalated = attemptTimeoutForLevel(callClass, req.attemptTimeoutEscalationLevel());
-            b.overrideConfiguration(o -> o.apiCallAttemptTimeout(escalated));
-        } else if (usesShortProbeBudget(callClass)) {
-            // A POINT probe (pivot) gets its own short per-attempt budget instead of the client-level
-            // scan budget -- see S3Config#DEFAULT_PROBE_ATTEMPT_TIMEOUT for why. A delimiter=/ structure
-            // probe deliberately does NOT: it is a scan-class call and keeps the client-level budget
-            // (see #usesShortProbeBudget).
-            Duration probeOverride = probeApiCallAttemptTimeout;
-            b.overrideConfiguration(o -> o.apiCallAttemptTimeout(probeOverride));
-        }
+        StreamingListObjectsV2Interceptor.DirectPageCarrier directPageCarrier =
+                new StreamingListObjectsV2Interceptor.DirectPageCarrier();
+        b.overrideConfiguration(o -> {
+            o.putExecutionAttribute(StreamingListObjectsV2Interceptor.DIRECT_PAGE_CARRIER, directPageCarrier);
+            if (req.attemptTimeoutEscalationLevel() > 0) {
+                o.apiCallAttemptTimeout(attemptTimeoutForLevel(
+                        callClass, req.attemptTimeoutEscalationLevel()));
+            } else if (usesShortProbeBudget(callClass)) {
+                o.apiCallAttemptTimeout(probeApiCallAttemptTimeout);
+            }
+        });
         S3CallClassLatencyPublisher.PhaseCapture phaseCapture = S3CallClassLatencyPublisher.begin();
         Timer.Sample sample = metrics.startS3PageTimer();
         long startedNs = System.nanoTime();
@@ -280,7 +277,12 @@ public final class S3PageFetcher implements PageFetcher {
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_TOTAL, latency.toNanos());
         maybeLogSlowProbeExemplar(callClass, req, latency.toNanos(), phaseCapture, false);
 
-        int keyCount = resp.contents().size() + resp.commonPrefixes().size();
+        StreamingListObjectsV2Interceptor.DirectPage directPage = directPageCarrier.page();
+        int objectCount = directPage == null ? resp.contents().size() : directPage.entries().size();
+        int commonPrefixCount = directPage == null
+                ? resp.commonPrefixes().size()
+                : directPage.commonPrefixes().size();
+        int keyCount = objectCount + commonPrefixCount;
         if (keyCount > req.maxKeys()) {
             // S3 bounds a page's KeyCount (objects + rolled-up common prefixes) by the requested
             // MaxKeys, but a hostile or broken --endpoint-url can simply ignore it, and everything
@@ -289,9 +291,9 @@ public final class S3PageFetcher implements PageFetcher {
             // transient would spin against an endpoint that answers the retry the same way.
             metrics.recordStealReason("FATAL", "oversized_page");
             log.warn("s3_oversized_page bucket={} max_keys={} keys={} common_prefixes={}",
-                    bucketForLog, req.maxKeys(), resp.contents().size(), resp.commonPrefixes().size());
+                    bucketForLog, req.maxKeys(), objectCount, commonPrefixCount);
             throw ProtocolViolationException.oversizedPage(bucketForLog, req.maxKeys(),
-                    resp.contents().size(), resp.commonPrefixes().size());
+                    objectCount, commonPrefixCount);
         }
 
         // Response parse: the client-side conversion of the SDK's already-unmarshalled response into
@@ -300,13 +302,21 @@ public final class S3PageFetcher implements PageFetcher {
         // response time -- the SDK's OWN response handling happens inside the call and is reported
         // separately, from the SDK's own per-attempt stamps, as the sdk_unmarshal phase above.
         long parseStartedNs = System.nanoTime();
-        List<ListEntry> entries = new ArrayList<>(resp.contents().size());
-        for (S3Object o : resp.contents()) {
-            entries.add(toEntry(o));
-        }
-        List<KeyBytes> commonPrefixes = new ArrayList<>(resp.commonPrefixes().size());
-        for (CommonPrefix cp : resp.commonPrefixes()) {
-            commonPrefixes.add(KeyBytes.of(cp.prefix().getBytes(StandardCharsets.UTF_8)));
+        List<ListEntry> entries;
+        List<KeyBytes> commonPrefixes;
+        if (directPage != null) {
+            entries = directPage.entries();
+            commonPrefixes = directPage.commonPrefixes();
+        } else {
+            metrics.recordStealReason("S3_RESPONSE", "direct_page_absent");
+            entries = new ArrayList<>(resp.contents().size());
+            for (S3Object o : resp.contents()) {
+                entries.add(toEntry(o));
+            }
+            commonPrefixes = new ArrayList<>(resp.commonPrefixes().size());
+            for (CommonPrefix cp : resp.commonPrefixes()) {
+                commonPrefixes.add(KeyBytes.of(cp.prefix().getBytes(StandardCharsets.UTF_8)));
+            }
         }
         metrics.recordCallClassLatency(callClass, RunMetrics.LATENCY_PHASE_RESPONSE_PARSE,
                 System.nanoTime() - parseStartedNs);
@@ -325,12 +335,15 @@ public final class S3PageFetcher implements PageFetcher {
             log.debug("s3_page_fetched run_id={} worker_id={} node_id={} bucket={} prefix={} start_after={} keys={} common_prefixes={} truncated={} status={} latency_ms={}",
                     RunContext.runIdOrNone(), RunContext.workerIdOrNone(), RunContext.nodeIdOrNone(),
                     bucketForLog, describe(req.prefix()), describe(req.startAfter()), entries.size(),
-                    commonPrefixes.size(), Boolean.TRUE.equals(resp.isTruncated()), httpStatus,
+                    commonPrefixes.size(), directPage != null
+                            ? directPage.truncated()
+                            : Boolean.TRUE.equals(resp.isTruncated()), httpStatus,
                     latency.toMillis());
         }
         return new ListPage(entries, commonPrefixes,
-                Boolean.TRUE.equals(resp.isTruncated()),
-                resp.nextContinuationToken(), null, null, httpStatus, latency);
+                directPage != null ? directPage.truncated() : Boolean.TRUE.equals(resp.isTruncated()),
+                directPage != null ? directPage.nextContinuationToken() : resp.nextContinuationToken(),
+                null, null, httpStatus, latency);
     }
 
     /**
@@ -375,20 +388,7 @@ public final class S3PageFetcher implements PageFetcher {
     private static ObjectEntry toEntry(S3Object o) {
         byte[] key = o.key().getBytes(StandardCharsets.UTF_8);
         long micros = toEpochMicros(o.lastModified());
-        String etag = stripEtagQuotes(o.eTag());
-        String storageClass = o.storageClassAsString();
-        String ownerId = o.owner() != null ? o.owner().id() : null;
-        String ownerDisplayName = o.owner() != null ? o.owner().displayName() : null;
-        String checksumAlgorithm = (o.checksumAlgorithm() != null && !o.checksumAlgorithm().isEmpty())
-                ? o.checksumAlgorithm().getFirst().toString()
-                : null;
-        String checksumType = (o.checksumTypeAsString() != null && !o.checksumTypeAsString().isBlank())
-                ? o.checksumTypeAsString()
-                : null;
-        return new ObjectEntry(KeyBytes.of(key),
-                o.size() != null ? o.size() : 0L,
-                micros, etag, storageClass, null, true, ownerId, ownerDisplayName,
-                checksumAlgorithm, checksumType);
+        return S3ObjectEntryMapper.map(o, KeyBytes.of(key), micros);
     }
 
     /** Strip the surrounding quotes S3 wraps ETags in; keep the multipart {@code hex-N} form verbatim (§4). */

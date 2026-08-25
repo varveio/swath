@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.text.TextCompression;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -64,6 +65,28 @@ class OutputDestinationResolutionTest {
         OutputOptions out = options();
         out.format = OutputFormat.JSONL;
         assertThat(out.resolveOutput(true).format()).isEqualTo(OutputFormat.JSONL);
+    }
+
+    @Test
+    void discardIsAStdoutOnlyUncompressedSink() throws Exception {
+        OutputOptions discard = options();
+        discard.format = OutputFormat.DISCARD;
+        assertThat(discard.resolveOutput(false)).isEqualTo(
+                new OutputOptions.Resolved(OutputFormat.DISCARD,
+                        OutputOptions.DestinationKind.STDOUT));
+
+        OutputOptions destination = destOnly("rows");
+        destination.format = OutputFormat.DISCARD;
+        assertThatThrownBy(() -> destination.resolveOutput(false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("does not accept -o rows");
+
+        OutputOptions compressed = options();
+        compressed.format = OutputFormat.DISCARD;
+        compressed.setCompression(TextCompression.GZIP);
+        assertThatThrownBy(() -> compressed.resolveOutput(false))
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("does not support --compression gzip");
     }
 
     // ---- extension inference ---------------------------------------------------------------

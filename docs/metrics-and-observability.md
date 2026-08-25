@@ -49,6 +49,12 @@ values and implementation details.
 | Phase and output | `swath.phase`, `swath.output.files`, `swath.output.bytes`, `swath.output.broken_pipe`, `swath.emit.latency` | What phase is active and how the selected sink behaves. |
 | Run result | `swath.run.duration`, `swath.run.throughput` | Final wall time and lifetime-average throughput. These are end-of-run, not live, values. |
 
+The discard profiling sink retains `swath.entries.emitted`, `swath.bytes.estimated`, progress, and
+`swath.emit.latency`, but intentionally creates no `swath.output.files` or
+`swath.output.bytes` series because it materializes no output. Its engagement is visible as
+`swath.steal_reason{outcome="OUTPUT",reason="discard"}` and the run report records zero output
+files/bytes.
+
 `swath.fetch.latency.phase` has bounded `call_class` values (`worker_page`,
 `pivot_probe`, `structure_probe`) and `phase` values (`connect_acquire`, `ttfb`,
 `sdk_unmarshal`, `total`, `response_parse`). Treat the phases as independent signals,

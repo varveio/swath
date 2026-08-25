@@ -5,6 +5,7 @@
  */
 package io.varve.swath.filter;
 
+import io.varve.swath.error.ListingException;
 import io.varve.swath.model.ListEntry;
 
 /**
@@ -20,7 +21,7 @@ public sealed interface Filter
         permits IncludeRegexFilter, ExcludeRegexFilter, SizeFilter, MtimeFilter,
                 StorageClassFilter, ExpressionFilter {
 
-    boolean matches(ListEntry e);
+    boolean matches(ListEntry e) throws ListingException;
 
     /** Lower = cheaper = evaluated first. */
     int cost();

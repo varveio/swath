@@ -32,8 +32,8 @@ Output:
                              Compress table/TSV/JSONL streams, files, or
                                dataset parts; inferred from .gz/.zst file names
                                when omitted (default: none).
-      --format=FORMAT        Output encoding: auto, table, tsv, jsonl, or
-                               parquet (default: auto).
+      --format=FORMAT        Output encoding/sink: auto, table, tsv, jsonl,
+                               parquet, or discard (default: auto).
   -o, --output=PATH          Write to PATH; known extension selects a file,
                                otherwise a dataset; - is stdout.
       --output-type=file|dir Override -o file/directory inference.
@@ -70,7 +70,8 @@ Connection:
                              How often to re-run --bearer-token-command for a
                                fresh token (default: 45m). Size it comfortably
                                under the token source's real expiry.
-      --concurrency=N        Maximum concurrent listing requests (default: 64).
+      --concurrency=N        AIMD ceiling for concurrent listing requests
+                               (default: 64).
       --endpoint-url=URL     Custom S3 endpoint (LocalStack/MinIO).
       --fetch-owner          Request object owner fields from S3.
       --[no-]force-path-style

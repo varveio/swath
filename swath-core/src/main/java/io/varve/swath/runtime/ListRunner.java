@@ -34,6 +34,7 @@ import io.varve.swath.observability.StopReason;
 import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.BrokenPipe;
 import io.varve.swath.output.CountingWriter;
+import io.varve.swath.output.DiscardOutputStage;
 import io.varve.swath.output.EntryFormatter;
 import io.varve.swath.output.Formatters;
 import io.varve.swath.output.ListingStatistics;
@@ -106,7 +107,8 @@ import org.slf4j.LoggerFactory;
  * {@link CheckpointedScanProducer} for the single-checkpoint-node path, or the
  * multi-worker {@code WorkStealingScan} engine for checkpointed, resumable multi-node
  * runs — all feed the same bounded {@link Pipeline}, drained by a text
- * {@link OutputStage} or the {@link ParquetWriterPool}.
+ * {@link OutputStage}, the profiling {@link DiscardOutputStage}, or the
+ * {@link ParquetWriterPool}.
  */
 public final class ListRunner {
 
@@ -122,7 +124,7 @@ public final class ListRunner {
      */
     private static final int CLASSIFIED_FATAL_EXIT_CODE = 1;
 
-    /** Text-sink spec. */
+    /** Streaming-text or diagnostic-discard listing spec. */
     public record Spec(byte[] prefix, OutputFormat format, boolean escape, int queueCapacity, int maxKeys,
                        FilterChain filters, Duration progressInterval, JsonRunSummaryWriter.Config jsonSummary) {
 
@@ -444,6 +446,45 @@ public final class ListRunner {
                             outputStage.wasBrokenPipe() ? RunStatus.FAILED : RunStatus.COMPLETED);
                 })
                 .epilogue(textOutputEpilogue(ctx, spec.format(), countingOut, outputStage))
+                .build());
+    }
+
+    /**
+     * Engine-backed profiling run that drains and tallies every emitted row without constructing a
+     * formatter, Writer, writer pool, compressor, or filesystem destination. The producer,
+     * checkpoint protocol, bounded channel, and emission metrics are identical to the material
+     * output paths, so this is a listing-engine ceiling rather than a parser- or bookkeeping-free
+     * synthetic benchmark.
+     */
+    public ListingStatistics runWorkStealingDiscard(
+            RunContext ctx, PageFetcher fetcher, Spec spec, CheckpointStore store, long runId,
+            int workerCount, List<Node> seeds, EngineToggles toggles, TraceSink trace,
+            RetryConfig retryConfig)
+            throws SwathException, InterruptedException {
+        if (spec.format() != OutputFormat.DISCARD) {
+            throw new IllegalArgumentException("discard runner requires OutputFormat.DISCARD");
+        }
+        WorkStealingScan producer = new WorkStealingScan(
+                new EngineContext(runId, spec.prefix(), ListingMode.OBJECTS,
+                        ctx.metrics(), toggles, trace, retryConfig),
+                fetcher, store, workerCount, spec.maxKeys(), seeds, spec.filters());
+        DiscardOutputStage stage = new DiscardOutputStage();
+        ctx.metrics().recordStealReason("OUTPUT", "discard");
+        Function<Duration, RunSummary> summary =
+                elapsed -> ctx.metrics().summary(elapsed, "WORK_STEALING", 0L, 0L);
+
+        return this.<RuntimeException>runLifecycle(ctx, LifecyclePlan.<RuntimeException>builder()
+                .strategy("WORK_STEALING").strategyWhy("discard_profiling_sink").runId(runId)
+                .prefix(spec.prefix()).queueCapacity(spec.queueCapacity())
+                .progressInterval(spec.progressInterval())
+                .startLog(() -> log.info(
+                        "list_run_start strategy={} checkpointed={} run_id={} output_format={} worker_count={}",
+                        "WORK_STEALING", false, runId, spec.format(), workerCount))
+                .producer(producer).consumerStage(stage)
+                .jsonSummaryConfig(spec.jsonSummary()).snapshotSummary(summary).terminalSummary(summary)
+                .statistics(stage::statistics).drain(discardDrain())
+                .complete(() -> store.markRunFinished(runId, RunStatus.COMPLETED))
+                .epilogue(() -> { })
                 .build());
     }
 
@@ -1692,6 +1733,21 @@ public final class ListRunner {
             @Override
             public void onFinally(boolean drained) throws OutputException {
                 closeQuietly(formatter, stage);
+            }
+        };
+    }
+
+    /** Discard has no sink resource to finalize or abort after the bounded channel drains. */
+    private static DrainStep discardDrain() {
+        return new DrainStep() {
+            @Override
+            public void onDrained() {
+                // Nothing to publish.
+            }
+
+            @Override
+            public void onFinally(boolean drained) {
+                // No writer, pool, compressor, or file was constructed.
             }
         };
     }

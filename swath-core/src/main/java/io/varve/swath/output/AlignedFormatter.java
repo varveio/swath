@@ -44,11 +44,11 @@ public final class AlignedFormatter implements EntryFormatter {
         switch (e) {
             case ObjectEntry o -> {
                 size = Long.toString(o.size());
-                time = Fields.isoMicros(o.lastModifiedEpochMicros());
+                time = escaped(o.lastModifiedText());
             }
             case DeleteMarkerEntry d -> {
                 size = "-";
-                time = Fields.isoMicros(d.lastModifiedEpochMicros());
+                time = escaped(d.lastModifiedText());
             }
             case CommonPrefixEntry ignored -> {
                 size = "PRE";
@@ -59,9 +59,13 @@ public final class AlignedFormatter implements EntryFormatter {
         sb.append("  ");
         pad(time, TIME_WIDTH, false);
         sb.append("  ");
-        sb.append(escape ? ControlCharEscaper.escape(e.key().asString()) : e.key().asString());
+        sb.append(escaped(e.key().asString()));
         sb.append('\n');
         out.write(sb.toString());
+    }
+
+    private String escaped(String value) {
+        return escape ? ControlCharEscaper.escape(value) : value;
     }
 
     private void pad(String value, int width, boolean right) {

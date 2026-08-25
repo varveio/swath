@@ -25,6 +25,7 @@ The resolution rules are deliberately independent:
 | Input | Resolution |
 | --- | --- |
 | No `-o`, or `-o -` | stdout; `auto` is table on a terminal and TSV when redirected |
+| `--format discard` | diagnostic stdout-shaped sink with no bytes written; rejects a real `-o` destination and gzip/Zstandard compression |
 | `-o` ending in `.tsv` or `.jsonl` | atomically published single file; the suffix supplies the format when `--format` is omitted |
 | `-o` ending in `.parquet` | FILE-kind, one-writer Parquet dataset directory containing one part; it is not one physical Parquet file |
 | A `.gz` or `.zst` outer suffix | stripped before format inference and implies gzip or Zstandard for text; for example, `rows.jsonl.gz` is a gzip JSONL file |
@@ -37,10 +38,38 @@ compression is internal. Table, TSV, and JSONL support optional compression as s
 or single-file streams. Only TSV and JSONL support bounded directory datasets; those
 datasets are non-resumable and require `--checkpoint none` in this release.
 
+Discard is also non-resumable. It uses the normal engine, checkpoint protocol, bounded listing
+channel, row tally, and metrics, but bypasses every material output component. Use `--report PATH`
+to retain its summary because the sink itself intentionally creates no destination.
+
 Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). At startup, unless stdout or `-q` suppresses it,
 swath echoes the resolved format, destination kind, compression, and destination so the
 effective choice is visible before listing begins.
+
+<a id="choosing-concurrency"></a>
+
+## Choosing `--concurrency`
+
+`--concurrency` is the maximum listing width (`Tmax`), not a fixed request count and not
+a throughput target. The live AIMD target starts at 4, grows while the endpoint is healthy,
+and reduces on explicit store backpressure (503/5xx) or a sustained, progress-starved worker
+timeout storm. Successful-request latency inflation damps further growth but does not reduce
+an already-high target.
+
+That distinction matters on low-latency or replay endpoints: a very high ceiling can create
+queueing and consume more CPU, heap, connections, and server resources without increasing
+keys per second. Start with the default 64 (or a measured 128 for a known large workload), then
+increase in repeated matched runs. Compare `listing_duration_ms` and the report trajectory's
+`worker_keys_fetched_per_sec`, `worker_pages_per_sec`, `worker_latency_mean_ms`, `in_flight`,
+and `aimd_target_*` fields. Choose the smallest ceiling on the throughput plateau; do not use
+one short prefix or one replay latency as a universal S3 setting. Real S3's higher latency may
+need a larger ceiling than a local replay, and AIMD will still adapt downward when S3 emits an
+actual stress signal.
+
+Output can be the bottleneck independently of listing width. Use `--format discard` only for
+diagnostic listing-engine measurements; validate the chosen ceiling again with the production
+output format and destination.
 
 ## Precedence
 
