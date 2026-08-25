@@ -1,109 +1,204 @@
 # Troubleshooting and FAQ
 
+## Does Swath read or modify object contents?
+
+No. Swath calls `ListObjectsV2` and writes the selected local output. It does not call
+`GetObject`, modify objects, delete objects, or change bucket configuration.
+
+The normal IAM permission is bucket-level `s3:ListBucket`.
+
+## Is the result a point-in-time snapshot?
+
+No. Swath publishes the complete result of the live listing it performed, but S3 does not
+provide one transaction across a long scan. Objects added, removed, or renamed during the
+run can affect which live state the result observes.
+
+`_SUCCESS` means the listing result was completely published. It does not turn a changing
+bucket into a historical snapshot.
+
+## Should I use S3 Inventory or S3 Metadata instead?
+
+Yes, when a fresh table already exists and you can query it. Reading a precomputed
+inventory is normally cheaper than any live `ListObjectsV2` scan.
+
+Use Swath when the inventory is missing, stale, inaccessible, or too slow to arrive and a
+serial live listing is too slow.
+
+## How much will a run cost?
+
+The ideal page count is approximately one LIST request per 1,000 returned keys, plus
+probes, retries, sparse pages, and any unfinished tail re-listed after interruption.
+
+Swath reports the actual request count. Calculate the bill with the provider's current
+price rather than an evergreen number in the documentation. See
+[Request cost](operating.md#request-cost).
+
+## Do I need Java?
+
+Not when using the Docker image; it includes the required runtime.
+
+The runnable JAR, application archive, and source build require JDK 25. Shipped artifacts
+do not require `--enable-preview`.
+
+## Which object stores are supported?
+
+AWS S3 general-purpose buckets are the supported backend.
+
+LocalStack and MinIO are used in compatibility and integration work, but any
+S3-compatible endpoint must provide globally ordered listings and correct `StartAfter`
+semantics. GCS through its XML API is experimental compatibility, not a native backend.
+S3 directory buckets are not supported.
+
+See [Operating Swath](operating.md#s3-compatible-endpoints).
+
+## Can every output resume?
+
+No. Durable resume is a managed Parquet directory feature.
+
+Stdout, text files, TSV/JSONL directory datasets, the diagnostic discard sink, and the
+legacy `.parquet`-looking one-writer layout are one-shot outputs.
+
 ## No AWS region
 
-Pass `--region`, set `AWS_REGION` / `AWS_DEFAULT_REGION`, or configure a region in
-the selected AWS profile. swath fails before opening a checkpoint when the SDK chain
-cannot resolve one.
+Pass `--region`, set `AWS_REGION` or `AWS_DEFAULT_REGION`, or configure a region in the
+selected AWS profile.
+
+Swath fails before opening a checkpoint or sending a request when the SDK chain cannot
+resolve a region.
 
 ## Credentials could not be loaded
 
-For a public bucket, add `--no-sign-request`. For a private bucket, verify the same
-profile, environment, web identity, container role, or instance role with the AWS CLI,
-then use `--profile` if needed. A container does not inherit host credentials unless you
-pass or mount them; see [Credentials in Docker](operating.md#credentials-in-docker).
+For a public bucket, add `--no-sign-request`.
+
+For a private bucket, verify the same profile, environment, web identity, container role,
+or instance role with the AWS CLI, then pass `--profile` if needed.
+
+A container does not inherit host credentials unless you pass variables or mount the
+required files. See [Credentials in Docker](operating.md#credentials-in-docker).
 
 ## Access denied
 
-The caller needs bucket-level `s3:ListBucket` on `arn:aws:s3:::bucket`, not an object
-permission on `arn:aws:s3:::bucket/*`. Requester-pays buckets also require
-`--requester-pays requester`. See [Least-privilege IAM](operating.md#least-privilege-iam).
+The caller normally needs bucket-level `s3:ListBucket` on:
+
+```text
+arn:aws:s3:::bucket
+```
+
+This is a bucket permission, not an object permission on `arn:aws:s3:::bucket/*`.
+Requester-pays buckets also require `--requester-pays requester`.
+
+See [Least-privilege IAM](operating.md#least-privilege-iam).
 
 ## Docker cannot write the output directory
 
-The published image runs as non-root UID 10001. Run it as your current user:
+The published image runs as non-root UID 10001. On Linux or macOS, run the container as
+the current user and mount the host output directory:
 
 ```bash
 mkdir -p out
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" \
-  ghcr.io/varveio/swath:latest list s3://my-bucket/ --format parquet -o /out
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/out:/out" \
+  ghcr.io/varveio/swath:latest \
+  list s3://my-bucket/ \
+  --format parquet -o /out/my-inventory
 ```
 
-The output path must be inside the mounted directory. See
-[the platform notes in Getting started](getting-started.md) and
-[Credentials in Docker](operating.md#credentials-in-docker).
+The output path must be inside the mounted directory.
+
+On Windows PowerShell, omit `--user "$(id -u):$(id -g)"` and use `${PWD}` for the mount.
+See the [platform notes](getting-started.md#prerequisites).
 
 ## The run was interrupted
 
-If the output is a managed Parquet dataset, resume by its output directory:
+If the output is a managed Parquet directory, resume by that directory:
 
 ```bash
 swath resume out/
 ```
 
-Stdout, text files, and TSV or JSONL directory datasets are one-shot outputs and cannot
-resume. A Parquet path ending in `.parquet` is also one-shot unless `--output-type dir`
-overrode the default destination-kind inference. Exit codes 74, 75, 124, 130, and 143
-only imply resumable state when a managed output directory exists. See
-[Checkpoint and resume](usage.md#checkpoint-and-resume).
+Swath retains finalized parts, removes an unfinished part, and continues after the last
+durable cursor.
+
+Exit codes 74, 75, 124, 130, and 143 imply resumable state only when a managed output
+directory exists. A deterministic error can recur after resume, so read the terminal
+error and `_swath_summary.json`.
 
 ## The output directory is refused
 
-swath does not silently mix runs. A directory can be refused because it is already
-complete, contains a different run identity, has an unfinished checkpoint, or contains a
-managed path that is a symlink.
+Swath does not silently mix or delete unrelated data. A directory can be refused because
+it is already complete, contains another run identity, has an unfinished checkpoint, is
+a symlinked managed path, or lacks durable evidence that Swath owns it.
 
 - Resume an interrupted matching run with `swath resume out/`.
 - Replace a completed result with a fresh `list ... -o out/ --overwrite`.
 - Discard an unfinished checkpoint and start again with `--restart`.
-- For a foreign directory or a symlink refusal, choose a clean destination.
+- For a foreign directory or symlink refusal, choose a clean destination.
+
+Do not edit the checkpoint or create files that imitate Swath's ownership markers.
+
+## A `.parquet` output path became a directory
+
+The current pre-1.0 CLI retains a legacy compatibility behavior: a destination such as
+`-o inventory.parquet` selects a one-writer, non-resumable directory layout under a path
+that looks like a file. It does not create one physical Parquet file.
+
+Use a directory path instead:
+
+```bash
+swath list s3://my-bucket/ --format parquet -o inventory/
+```
+
+Then query `inventory/data/*.parquet`. See [Managed Parquet](usage.md#managed-parquet).
 
 ## Sorted output reports insufficient disk
 
-During the final merge, compressed staging data and final Parquet coexist. Move the run
-to a larger device only if you can mount or bind it at the exact absolute output path
-recorded in the checkpoint; otherwise swath refuses the moved run. The simplest recovery
-is to free space or expand the current volume in place, then resume. If the original path
-cannot be preserved, start a fresh run at the new destination. The guard is conservative
-because a new run cannot know its final object count before listing. Bypass it with
-`--tune sort.ignore-disk-check=on` only after sizing independently. See
-[Sorted output](usage.md#sorted-output).
+During the final merge, compressed staging data and final Parquet coexist. The simplest
+recovery is to free space or expand the current volume in place, then resume.
 
-## The process used more or less concurrency than requested
+Moving an interrupted run works only when the exact absolute output path recorded in the
+checkpoint remains available, for example through the same mount or bind path. Otherwise
+Swath refuses the moved run and a fresh listing is required.
 
-`--concurrency` is a ceiling, not a fixed worker count. swath starts below it, increases
-after clean windows, and reduces the live target under S3 backpressure. A sparse or
-poorly divisible keyspace can also leave workers idle. Start with
-[Performance](performance.md#start-with-your-own-run) rather than raising the ceiling blindly.
+`--tune sort.ignore-disk-check=on` bypasses the guard. Use it only after sizing the volume
+independently. See [Sorted output](usage.md#sorted-output).
+
+## The process used less concurrency than requested
+
+`--concurrency` is a ceiling, not a fixed worker count. Swath begins below it, increases
+the live target after healthy windows, and reduces it under S3 backpressure.
+
+A sparse or poorly divisible keyspace can also leave workers idle. Raising the ceiling
+does not create useful ranges and can add CPU, memory, queueing, and connection overhead.
+Start with [Performance](performance.md#start-with-your-own-run).
 
 ## A `%` key fails on an S3-compatible endpoint
 
-Some implementations echo request cursors without AWS S3's required percent-encoding.
-The AWS SDK then rejects a lone or trailing `%` while decoding the response. swath never
-synthesizes `%` in an internal pivot, but a real key or user prefix can still expose the
-server deviation. See [S3 implementation compatibility](internals/s3-implementation-compatibility.md).
+Some implementations echo request cursors without the percent-encoding used by AWS S3.
+The AWS SDK can then reject a lone or trailing `%` while decoding the response.
+
+Swath avoids synthesizing `%` in an internal pivot, but a real key or user prefix can
+still expose the endpoint difference. See
+[S3 implementation compatibility](internals/s3-implementation-compatibility.md).
 
 ## Why is the output not sorted?
 
-Unsorted is the faster default. Parallel ranges finish independently, so part order is
-not key order. Add `--sort` when you need globally ordered Parquet, or sort with your
+Unsorted output is faster and is the default. Parallel ranges finish independently, so
+part order is not key order.
+
+Add `--sort` when a downstream consumer requires globally ordered Parquet, or sort in the
 query engine afterward. See [Sorted output](usage.md#sorted-output).
 
-## Why a JVM?
+## Where are all the options and exit codes?
 
-The engine uses JDK 25 virtual threads and final `ScopedValue` support to run many range
-tasks with structured runtime context. The tradeoff is a JVM process and a heap to size,
-in exchange for a concurrency substrate that does not require a callback-based engine.
-Shipped artifacts use no preview features.
+Run:
 
-## Should I use S3 Inventory or S3 Metadata instead?
+```bash
+swath list --help
+swath resume --help
+swath list --tune help
+```
 
-Yes, when a fresh table already exists and you can query it. Reading a precomputed
-inventory is cheaper than any live `ListObjectsV2` scan. swath is for buckets where the
-inventory is missing, stale, or controlled by somebody else.
-
-## Where are all the flags and exit codes?
-
-Run `swath list --help` for flags. The stable exit-code table and output contracts are in
-[Using swath](usage.md#exit-codes); progress, report, and metric fields are in
+The stable exit-code table and output contracts are in
+[Using Swath](usage.md#exit-codes). Progress, report, and metric fields are in
 [Metrics and observability](metrics-and-observability.md).

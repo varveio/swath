@@ -1,56 +1,59 @@
 # Installation
 
-Tagged releases provide a multi-architecture container image, a self-contained jar,
-and application archives. Use the [GitHub releases page](https://github.com/varveio/swath/releases)
+Tagged releases provide a multi-architecture container image, a runnable JAR, and
+application archives. Use the [GitHub releases page](https://github.com/varveio/swath/releases)
 for the current version.
 
-After installation, continue with [getting started](getting-started.md).
+Docker is the recommended way to try Swath because it includes the required Java runtime.
+After installation, continue with [Getting started](getting-started.md).
 
 | If you want to… | Choose | You need |
 | --- | --- | --- |
-| Try swath without installing Java | Docker | Docker with Linux-container support |
-| Run one downloadable file | Self-contained jar | JDK 25 |
+| Try Swath without installing Java | Docker | Docker with Linux-container support |
+| Run one downloadable Java artifact | Runnable JAR | JDK 25 |
 | Install a `swath` launcher and dependency directory | Application archive | JDK 25 |
-| Build or contribute to swath | Source build | JDK 25; Docker for the integration gate |
+| Build or contribute | Source build | JDK 25; Docker for the integration gate |
 
 ## Docker
-
-Docker includes the required Java runtime:
 
 ```bash
 docker pull ghcr.io/varveio/swath:latest
 docker run --rm ghcr.io/varveio/swath:latest --version
 ```
 
-Use a version tag or, for reproducible automation, the immutable digest printed on the
-GitHub release. The image supports `linux/amd64` and `linux/arm64` and runs as non-root
-UID 10001. The [getting-started guide](getting-started.md) shows writable output mounts
-for Linux, macOS, and Windows PowerShell.
+For reproducible automation, replace `latest` with a release tag or the immutable digest
+published with that release.
+
+The image supports `linux/amd64` and `linux/arm64` and runs as non-root UID 10001. The
+[getting-started guide](getting-started.md) shows writable output mounts for Linux, macOS,
+and Windows PowerShell.
 
 For private credentials and writable output mounts, see
 [Credentials in Docker](operating.md#credentials-in-docker). For image construction,
 multi-architecture publishing, and release internals, see
 [Packaging and release engineering](packaging-and-docker.md).
 
-## Self-contained jar
+## Runnable JAR
 
-Download `swath-X.Y.Z.jar` from the release page. It requires a JDK 25 runtime:
+Download `swath-X.Y.Z.jar` from the release page. It contains Swath and its Java
+dependencies, but it still requires a JDK 25 runtime:
 
 ```bash
 java -jar swath-X.Y.Z.jar --version
-java -jar swath-X.Y.Z.jar list s3://my-bucket/prefix/ --format parquet -o out/
+java -jar swath-X.Y.Z.jar \
+  list s3://my-bucket/prefix/ \
+  --format parquet -o out/
 ```
 
-The jar carries the runtime dependency classpath; nothing else needs to be installed.
-swath uses final JDK 25 APIs and does not require `--enable-preview`.
+Swath uses final JDK 25 APIs and does not require `--enable-preview`.
 
 ## Application archive
 
-The `distZip` and `distTar` release assets contain `bin/swath` launchers and a `lib/`
-directory. They also require JDK 25. Extract one, then add its `bin/` directory to
-`PATH` or invoke the launcher directly.
+The `distZip` and `distTar` release assets contain a `bin/swath` launcher and a `lib/`
+directory. They also require JDK 25. Extract one, then add its `bin/` directory to `PATH`
+or invoke the launcher directly.
 
-The launcher honors `SWATH_OPTS` and `JAVA_OPTS`. The jar and Docker image invoke Java
+The launcher honors `SWATH_OPTS` and `JAVA_OPTS`. The JAR and Docker image invoke Java
 directly; use `JAVA_TOOL_OPTIONS` with those forms.
 
 ## Build from source
@@ -65,37 +68,47 @@ export PATH="$PWD/swath-cli/build/install/swath/bin:$PATH"
 swath --version
 ```
 
-`./gradlew build` is the integration gate, including LocalStack tests. For contributor
-test tiers and a Docker-free inner loop, see [Testing](ops/dev/TESTING.md). The
-[packaging and release reference](packaging-and-docker.md) documents how contributors
-build and publish the jar, launcher archives, and image.
+`./gradlew build` is the integration gate and includes LocalStack tests. For the
+Docker-free contributor loop and opt-in test tiers, see
+[Testing](ops/dev/TESTING.md).
 
 <a id="verifying-a-download"></a>
 
 ## Verify a release
 
-Every release ships `SHA256SUMS`, a Sigstore bundle, an SPDX SBOM, and build-provenance
-attestations. Set `TAG` to the release you downloaded:
+Every release ships checksums, Sigstore bundles, an SPDX SBOM, and build-provenance
+attestations. Set `TAG` and `VERSION` to the release you downloaded:
 
 ```bash
-TAG=v0.2.4
+TAG=vX.Y.Z
+VERSION=X.Y.Z
 IDENTITY="https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/${TAG}"
 ISSUER=https://token.actions.githubusercontent.com
 
 sha256sum --check SHA256SUMS
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" SHA256SUMS
+  --certificate-identity "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  SHA256SUMS
+
 gh attestation verify SHA256SUMS --repo varveio/swath
+gh attestation verify "swath-${VERSION}.jar" --repo varveio/swath
 ```
 
-The signed checksum file covers the jar, archives, and other release assets. Verify a
-container by digest rather than by its mutable tag:
+The signed checksum file covers the JAR, application archives, SBOM, and other release
+assets.
+
+Verify a container by digest rather than by its mutable tag:
 
 ```bash
-cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" \
+cosign verify \
+  --certificate-identity "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
   ghcr.io/varveio/swath@sha256:<digest>
-gh attestation verify oci://ghcr.io/varveio/swath@sha256:<digest> \
+
+gh attestation verify \
+  oci://ghcr.io/varveio/swath@sha256:<digest> \
   --repo varveio/swath
 ```
 
-The release workflow runs these verification paths before publication.
+The release workflow exercises these verification paths before publication.

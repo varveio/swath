@@ -1,7 +1,7 @@
-# Using swath
+# Using Swath
 
 This page covers the choices that change a listing's output or durability. For every
-visible flag and its current default, use the CLI itself:
+visible option and its current default, use the installed CLI:
 
 ```bash
 swath list --help
@@ -9,7 +9,7 @@ swath resume --help
 ```
 
 For a first run, start with [Getting started](getting-started.md). Credentials, IAM,
-endpoints, and request cost are in [Operating swath](operating.md).
+endpoint compatibility, and request cost are in [Operating Swath](operating.md).
 
 ## Commands and targets
 
@@ -19,13 +19,17 @@ swath resume <output-directory> [options]
 ```
 
 Verbs are explicit: `swath s3://bucket` is an error and suggests `swath list`.
-Targets are `s3://bucket` or `s3://bucket/prefix`. The path is literal;
+
+Targets are `s3://bucket` or `s3://bucket/prefix`. The path is literal:
 `s3://bucket/a%20b` means the bytes `a%20b`, not `a b`.
 
-swath currently lists objects from general-purpose S3 buckets. It rejects directory
-buckets before the first request because their listing contract does not provide the
-global order and `StartAfter` primitive required by the parallel range scan. Version
-history and delete-marker listing are not implemented yet.
+Swath currently lists current objects from general-purpose S3 buckets. It rejects S3
+directory buckets before the first request because their listing contract does not
+provide the global ordering and `StartAfter` primitive required by the parallel range
+scan. Version history and delete-marker listing are planned but not implemented.
+
+A completed run is the complete result of the live listing Swath performed. It is not a
+point-in-time snapshot of a bucket that changed while the run was in progress.
 
 ## Choose an output
 
@@ -33,51 +37,49 @@ history and delete-marker listing are not implemented yet.
 | --- | --- | --- |
 | Inspect rows in a terminal | `swath list s3://bucket/prefix` | No |
 | Pipe TSV | `swath list ... \| command` | No |
-| Profile listing without materializing rows | `swath list ... --format discard --checkpoint none --report run.json` | No |
 | Write JSONL or TSV | `swath list ... --format jsonl -o rows.jsonl --checkpoint none` | No |
 | Write partitioned JSONL or TSV | `swath list ... --format jsonl --output-type dir -o rows/ --checkpoint none` | No |
-| Keep a managed Parquet dataset | `swath list ... --format parquet -o out/` | Yes |
-| Keep globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
+| Create a managed Parquet dataset | `swath list ... --format parquet -o out/` | Yes |
+| Create globally key-sorted Parquet | `swath list ... --format parquet --sort -o out/` | Yes |
+| Measure listing without writing rows | `swath list ... --format discard --checkpoint none --report run.json` | No |
 
-`--format auto` is the default. It chooses an aligned table when stdout is a terminal
-and TSV when stdout is redirected. Serialization formats are `table`, `tsv`, `jsonl`,
-and `parquet`; `discard` is the diagnostic format. `--compression none|gzip|zstd`
-compresses table, TSV, or JSONL output to a file or stdout, and TSV/JSONL parts in a
-directory dataset. For files, compression is also inferred from `.gz` or `.zst`; stdout
-needs the explicit option. Parquet uses its own compression and rejects this option.
+`--format auto` is the default. It selects an aligned table when stdout is a terminal and
+TSV when stdout is redirected. Available formats are `table`, `tsv`, `jsonl`, `parquet`,
+and the diagnostic `discard` sink.
 
-Use a managed Parquet directory when you need checkpoint and resume. Text files are
-published atomically but are one-shot outputs. TSV and JSONL can also write a parallel
-directory dataset, but that dataset is not resumable in this release and requires
-`--checkpoint none`.
+`--compression none|gzip|zstd` applies to table, TSV, and JSONL streams, files, or
+directory parts. File compression is also inferred from `.gz` or `.zst`; stdout needs the
+explicit option. Parquet uses its own compression and rejects this option.
 
-For TSV, JSONL, and Parquet directory datasets, including sorted Parquet final files,
-`--writeback-size SIZE` can
-periodically force physical bytes from an open part without flushing a text codec or
-Parquet row group, closing or publishing the part, or shortening the crash-recovery
-window. It is an off-by-default performance control; final close still performs the file
-and parent-directory durability barriers. Sorted staging, single-file, and cascade/spool paths
-remain outside the policy.
+`--writeback-size SIZE` is an off-by-default performance control for open TSV,
+JSONL, and Parquet dataset parts, including sorted Parquet final files. It can reduce a
+large final-close stall on some filesystems, but it does not finalize a part, publish the
+dataset, or shorten the crash-recovery window. Benchmark it before enabling it; see
+[Performance](performance.md#writeback-shaping).
 
-For every directory dataset, `_SUCCESS` is the completion marker. Do not consume its
-parts until that file exists. An interrupted text run may leave diagnostic files that
-are not a usable dataset and cannot be resumed. An interrupted managed Parquet run
-retains finalized parts and can be resumed from its checkpoint.
+### Managed Parquet
 
-The diagnostic `discard` format runs and measures the listing pipeline without writing
-listing rows. It rejects a real `-o PATH` destination and gzip or Zstandard compression,
-is not resumable, and should be used with `--report PATH` when you want to keep its results.
-Omitting `-o` or passing `-o -` both select stdout and are valid.
+Use a directory path such as `out/` when you need checkpoint and resume. A **managed
+Parquet dataset** contains data parts plus Swath's manifest, completion marker, run report,
+and temporary resume state.
 
-Do not use `-o inventory.parquet` when you expect one physical Parquet file. Unless you
-override the default inference with `--output-type dir`, that path creates a one-part,
-non-resumable dataset directory and requires `--checkpoint none`. Write a normal managed
-dataset and combine it downstream when a consumer requires one file.
+Avoid `-o inventory.parquet`. In the current pre-1.0 compatibility behavior, that spelling
+selects a one-writer, non-resumable directory layout under a path that looks like a file;
+it does **not** create one physical Parquet file. Use `-o inventory/` for a normal managed
+dataset and combine parts downstream only when a consumer requires one file.
+
+Text files are published atomically but are one-shot outputs. TSV and JSONL can also use
+several background writers to publish a directory dataset, but text directory datasets
+are not resumable in this release and require `--checkpoint none`.
+
+The `discard` sink runs and measures the listing pipeline without writing listing rows.
+Use `--report PATH` when you want to retain its summary. It does not accept a real output
+destination or text compression.
 
 ### Directory dataset layout
 
-A completed directory dataset has one common root layout. The parts below are Parquet
-for `--format parquet`, `.tsv[.gz|.zst]` for TSV, or `.jsonl[.gz|.zst]` for JSONL:
+A completed directory dataset uses one common layout. Parts under `data/` are Parquet,
+TSV, or JSONL according to the selected format:
 
 ```text
 out/
@@ -92,89 +94,91 @@ out/
 
 - `data/` contains only parts of the selected format, so a format-specific glob such as
   `out/data/*.parquet` or `out/data/*.jsonl.gz` is safe.
-- `manifest.json` lists the parts, row counts, checksums, and dataset metadata. Sorted
+- `manifest.json` lists parts, row counts, checksums, and dataset metadata. Sorted
   datasets also carry key-range metadata.
-- `.swath-state.json` is swath's internal ownership and run identity. It is written
-  durably before the first part and refreshed during publication; consumers should
-  ignore it.
-- `_swath_summary.json` is the machine-readable run report. It is automatic for
-  Parquet directories and available for text datasets through `--report`.
-- `_SUCCESS` is written last. Its presence means the complete snapshot was published.
+- `.swath-state.json` stores Swath's internal ownership and run identity. Consumers
+  should ignore it.
+- `_swath_summary.json` is the machine-readable run report. It is automatic for managed
+  Parquet and available elsewhere through `--report`.
+- `_SUCCESS` is written last. Its presence means Swath published the complete result of
+  the listing.
 - `symlink.txt` lists part paths for Hive-, Athena-, and Trino-style discovery.
 
 While a resumable Parquet run is active, `.swath/checkpoint.sqlite` is present. A sorted
 run also uses `_staging/`. Both are internal and disappear after successful publication.
-Text datasets never have a live checkpoint. Do not edit, move, or concurrently reuse an
-output directory. swath refuses symlinked managed paths and any non-empty directory that
-lacks durable swath ownership evidence; a filename such as `data/part-personal.jsonl`
-does not establish ownership and will never authorize deletion.
 
-Read the parts as one dataset:
+Do not edit, move, or concurrently reuse an active managed directory. Swath refuses
+symlinked managed paths and non-empty directories that lack durable Swath ownership
+evidence.
 
-```bash
-duckdb -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
-```
-
-Without a local DuckDB installation, run the same query with its
-[official container](https://duckdb.org/docs/current/operations_manual/duckdb_docker):
+Read all parts as one table:
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace duckdb/duckdb \
-  -c "SELECT count(*) FROM read_parquet('out/data/*.parquet')"
+duckdb -c "
+  SELECT count(*)
+  FROM read_parquet('out/data/*.parquet')
+"
 ```
 
-There is no required compaction step. Increase `--parquet-part-size` if you want fewer,
-larger parts.
+There is no required compaction step. Increase `--parquet-part-size` when a measured
+downstream workload benefits from fewer, larger parts.
 
 ## Filter rows
 
 ```bash
 swath list s3://my-bucket/archive/ \
-  --include '\.parquet$' --min-size 1mb \
+  --include '\.parquet$' \
+  --min-size 1mb \
   --modified-since 2026-01-01 \
   --format parquet -o out/
 ```
 
-Available filters cover include/exclude regexes, minimum and maximum size, modification
-time, and storage class. They compose as an AND chain. `--include` and `--exclude` use
-Java regular expressions as substring matches on the key's UTF-8 view; add `^` or `$`
-when you need an anchored match.
+Filters cover include/exclude regular expressions, minimum and maximum size,
+modification time, and storage class. They compose as an AND chain.
 
-Filters run after S3 returns a page. They reduce emitted rows, not LIST calls or the
-request bill. Changing a filter changes the run identity and is refused during resume.
+`--include` and `--exclude` use Java regular expressions as substring matches on a UTF-8
+view of the key. Add `^` or `$` when an anchored match is required.
+
+Filters run after S3 returns a page. They reduce emitted rows and output size, not LIST
+requests or request cost.
+
+The listing-scope `args_hash`, filter specification, and output/run identity are stored
+separately. Resume refuses a change to any identity field because combining different
+filters, targets, or outputs would produce an incoherent result. Operational settings
+classified as free or restorable may be re-supplied as documented by the CLI.
 
 ## Sorted output
 
-`--sort` produces a globally key-sorted managed Parquet dataset. The final parts are
+`--sort` produces a globally key-sorted managed Parquet dataset. Final parts are
 range-disjoint and named in key order: every key in an earlier part is lower than every
-key in a later part. Without `--sort`, each S3 page remains ordered but pages from
-independent workers may reach different parts in any order; neither a part nor the whole
-dataset should be treated as globally sorted.
+key in a later part.
+
+Without `--sort`, each S3 page remains ordered, but pages from independent workers can
+reach different parts in any order. Neither an individual part nor the complete dataset
+should be treated as globally sorted.
 
 ```bash
-swath list s3://my-bucket/ --format parquet --sort -o sorted/
+swath list s3://my-bucket/ \
+  --format parquet --sort \
+  -o sorted/
 ```
 
 Sorted output has three important constraints:
 
 1. It requires a managed Parquet directory and a durable checkpoint.
-2. It writes compressed page-run segments under `_staging/`, then merges them into the
-   final Parquet parts. During the merge, staging and final output coexist.
-3. Disk usage therefore scales with captured data. Measure a representative prefix and
-   provision for both staging and final output, with headroom.
+2. It writes compressed page-run segments under `_staging/`, then merges them into final
+   Parquet parts.
+3. Staging and final output coexist during the merge, so disk usage scales with captured
+   data.
 
-swath checks free space before and during a sorted run. It stops with resumable state
-rather than continue toward a merge that is already certain to run out of room. The
-diagnostic `--tune sort.ignore-disk-check=on` bypasses that protection; use it only when
-the volume has been sized independently.
+Swath checks free space before and during a sorted run. It stops with resumable state
+rather than continue toward a merge that is already certain to exhaust the device.
+`--tune sort.ignore-disk-check=on` bypasses that protection and is intended only for a
+volume sized independently.
 
 Large merges use several contiguous key ranges by default and reduce that parallelism
-when heap or file-descriptor limits cannot carry it. Small merges remain serial. For
-an explicitly measured topology, set the ceiling with
-`--tune sort.merge-parallelism=N`; each engaged range produces at least one final file,
-so compare merge time, peak memory, and file count together. The settled default remains
-core-derived and capped at eight. For resource sizing, staging codecs, merge controls,
-and how to identify the bottleneck, see [Performance](performance.md#the-sorted-merge) and
+when heap, staged-segment count, or file-descriptor limits cannot carry it. Small merges
+remain serial. See [Performance](performance.md#the-sorted-merge) and
 [Advanced configuration](configuration.md#sorted-output-jvm-properties).
 
 <a id="parallel-range-merge"></a>
@@ -182,55 +186,64 @@ and how to identify the bottleneck, see [Performance](performance.md#the-sorted-
 
 ## Checkpoint and resume
 
-The output directory identifies the resumable run. With the default `--checkpoint auto`,
-a managed Parquet dataset stores its live checkpoint at
-`<output>/.swath/checkpoint.sqlite`:
+The managed output directory is the public resume handle. With the default
+`--checkpoint auto`, Swath keeps the live SQLite checkpoint at:
+
+```text
+<output>/.swath/checkpoint.sqlite
+```
+
+Start and resume:
 
 ```bash
 swath list s3://my-bucket/ --format parquet -o out/
-# after Ctrl+C, a crash, or a timebox:
+
+# after Ctrl+C, a stopped process, a time limit, or a recoverable failure:
 swath resume out/
 ```
 
 The checkpoint records range ownership and committed cursors. Finalized Parquet parts
-remain durable. An unfinished part was never published in the manifest; swath deletes it
-and re-lists from the last durable cursor. On clean completion the checkpoint is removed,
-and `swath resume out/` reports that the dataset is already complete and exits 0.
+remain durable. An unfinished part was never published in the manifest; Swath removes it
+and re-lists from the last durable cursor.
 
-Resume restores the original bucket, prefix, output, filters, and run-shaping options.
+On clean completion the live checkpoint is removed. `swath resume out/` then reports that
+the dataset is already complete and exits successfully.
+
+Resume restores the original bucket, prefix, output, filters, and run-shaping identity.
 Changing an identity field is refused. Re-run with the original settings, or use
-`--restart` to discard the old checkpoint. To replace a completed dataset deliberately,
-start a new listing with `--overwrite`.
+`--restart` to discard an unfinished checkpoint. To replace a completed dataset
+deliberately, start a new listing with `--overwrite`.
 
-`--checkpoint none` uses ephemeral state. It runs the same work-stealing engine but
-cannot resume. Stdout also uses ephemeral state. The public `resume` command accepts the
-managed output directory, not an arbitrary SQLite path.
+`--checkpoint none` uses ephemeral state and cannot resume. Stdout, text files, the
+legacy `.parquet`-looking one-writer layout, and text directory datasets are one-shot
+outputs. The public `resume` command accepts the managed output directory, not an
+arbitrary SQLite path.
 
 ### Delivery guarantees
 
 | Sink | Interruption behavior |
 | --- | --- |
-| Managed Parquet dataset | Finalized parts are durable and retained exactly once; an unfinished tail may be re-listed. |
-| stdout | One-shot and non-resumable. Commit-before-emit means an interrupted stream can omit a page already committed internally. |
-| Discard | Diagnostic and non-resumable; it counts rows but creates no listing-output artifact. A requested JSON report is still written. |
+| Managed Parquet dataset | Finalized parts are retained exactly once; an unfinished tail may be re-listed. |
+| stdout | One-shot and non-resumable. An interrupted stream can omit a page committed internally before emission. |
 | Text file | One-shot and non-resumable; successful publication atomically replaces the destination. |
-| Directory-dataset TSV/JSONL | Non-resumable; bounded parallel parts are published with `_SUCCESS` last, and a failed run has no success marker. |
-| Parquet path ending in `.parquet` | By default, a one-part, non-resumable dataset directory. `--output-type dir` overrides this inference. |
+| TSV/JSONL directory dataset | Non-resumable; `_SUCCESS` is written last, and a failed run has no success marker. |
+| `discard` | Diagnostic and non-resumable; it counts rows and can write a JSON report but no listing-output artifact. |
+| Legacy `.parquet`-looking destination | One-writer directory layout, non-resumable; avoid this spelling. |
 
-The exact commit, split, and sink contracts are in
+The exact commit, split, and per-sink contracts are in
 [Contracts and data model](internals/contracts.md#5-resume-args_hash-and-per-sink-guarantees).
 
 ## Parquet schema
 
-Each object produces one row. The schema is a stable superset reserved for future
-versioned listing, so a few columns are present but unpopulated today.
+Each current object produces one row. The schema reserves columns for future versioned
+listing, so several columns are present but unpopulated today.
 
 | Column | Type | Nullable | Meaning |
 | --- | --- | --- | --- |
-| `key` | `BINARY` | no | Raw key bytes, preserved byte-for-byte rather than coerced to UTF-8 |
+| `key` | `BINARY` | no | Raw key bytes, preserved byte-for-byte |
 | `size` | `INT64` | yes | Object size in bytes |
 | `last_modified` | `TIMESTAMP(MICROS,UTC)` | yes | Last-modified time |
-| `etag` | `BINARY (UTF8)` | yes | Quotes removed; multipart form retained verbatim |
+| `etag` | `BINARY (UTF8)` | yes | Quotes removed; multipart form retained |
 | `storage_class` | `BINARY (UTF8)` | yes | For example `STANDARD` or `GLACIER` |
 | `version_id` | `BINARY (UTF8)` | yes | Reserved; null until versioned listing ships |
 | `is_latest` | `BOOLEAN` | yes | Reserved; null until versioned listing ships |
@@ -241,58 +254,53 @@ versioned listing, so a few columns are present but unpopulated today.
 | `checksum_type` | `BINARY (UTF8)` | yes | Present when returned by S3 |
 | `row_type` | `BINARY (UTF8)` | no | Currently `OBJECT`; other values are reserved |
 
-The normative schema, including common-prefix and future delete-marker semantics, is in
+The normative schema is in
 [Contracts](internals/contracts.md#4-parquet-output-schema--canonical-superset--etag-rule).
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success, an empty result, an already-complete resume, or a downstream reader closing stdout |
-| `1` | Unexpected runtime failure, or a resumable sorted-output disk guard (see the markers below) |
-| `2` | Bad arguments, URI, configuration, changed resume identity, or a guarded output refusal |
+| `0` | Success, empty result, already-complete resume, or downstream reader closing stdout |
+| `1` | Unexpected runtime failure, or a resumable sorted-output disk guard identified by its error marker |
+| `2` | Bad argument, URI, configuration, changed resume identity, or guarded output refusal |
 | `74` | Output filesystem full (`EX_IOERR`) |
-| `75` | A retryable stuck partial (`EX_TEMPFAIL`), such as exhausted transient retries or the liveness watchdog |
+| `75` | Retryable stuck partial (`EX_TEMPFAIL`), such as exhausted transient retries or a liveness watchdog |
 | `124` | `--max-duration` elapsed |
 | `130` | SIGINT / Ctrl+C |
 | `143` | SIGTERM |
 
-Codes 74, 75, 124, 130, and 143 leave resumable work only when the run uses a managed
-Parquet dataset. A deterministic failure may still recur when resumed; read the terminal
-error and `_swath_summary.json` rather than classifying from the code alone.
+Codes 74, 75, 124, 130, and 143 imply resumable work only when the run uses a managed
+Parquet directory. A deterministic failure may recur after resume; inspect the terminal
+error and `_swath_summary.json`.
 
-Code 1 is not always fatal. The sorted-output disk guards identify their resumable case in
-the terminal or logs with `sort_disk_precheck_refused` at startup or
-`sort_disk_exhaustion_imminent` during a run. Both markers carry
-`error_class=sort_disk_exhausted`, `stop_reason=sort_disk_exhausted`, and `resumable=true`.
-Do not rely on the JSON report for this distinction: a startup refusal may create no report,
-and the emergency in-run halt can leave only the last periodic heartbeat.
+The sorted-output disk guards use the markers `sort_disk_precheck_refused` and
+`sort_disk_exhaustion_imminent`, with `error_class=sort_disk_exhausted` and
+`resumable=true`.
 
 ## Progress and reports
 
-Progress and summaries go to stderr; stdout remains data. A terminal gets a redrawing
-progress line, while logs can opt into appended records. Parquet output writes
-`_swath_summary.json` by default. Use `--report PATH` for another destination and
-`--stats` / `--no-stats` to control the human summary.
+Progress and summaries go to stderr so stdout can remain listing data. An interactive
+terminal gets a redrawing progress line; appended logs can opt into progress records.
 
-Automation should parse the JSON report rather than scrape terminal text. The complete
-operator guide and field reference is [Metrics and observability](metrics-and-observability.md).
+Managed Parquet writes `_swath_summary.json` automatically. Use `--report PATH` for
+another destination or another output mode. Automation should parse the JSON report
+rather than scrape terminal text.
+
+The complete field reference is in
+[Metrics and observability](metrics-and-observability.md).
 
 <a id="progress"></a>
 <a id="end-of-run-summary"></a>
 
-## Advanced configuration
+## Advanced controls
 
-Everyday runs should use the defaults. `--tune`, diagnostic engine ablations, JVM sort
-properties, environment precedence, and bearer-token behavior are documented in
-[Configuration](configuration.md). The engine-toggle surface is for controlled A/B work,
-not ordinary tuning.
+Everyday runs should use the defaults. Expert `--tune` values, diagnostic engine
+ablations, environment precedence, text writer controls, writeback experiments, and
+sorted-output JVM properties are documented in [Configuration](configuration.md).
 
-TSV and JSONL directory datasets use three background writers by default
-(`--text-writers 3`) and rotate parts at 256 MiB (`--text-part-size 256mb`). Higher writer
-counts can use more memory and produce more small files; change either setting only after
-a matched performance comparison. See
-[Performance](performance.md#find-the-limiting-stage) for the measurements to compare.
+These controls are for measured operator investigations or development experiments, not
+a checklist of options to change before the first run.
 
 <a id="tuning---tune"></a>
 <a id="diagnostic-tier-ablation---engine-toggle"></a>

@@ -11,38 +11,95 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
-/** Parses the launch commands readers meet first; execution would require a real S3 endpoint. */
+/** Parses the commands a newcomer meets first; execution would require a real S3 endpoint. */
 class HeadlineDocsCommandSmokeTest {
 
-    private static final String PUBLIC_DEMO_BUCKET = "s3://noaa-gestofs-pds/";
+    private static final String SMALL_PUBLIC_PREFIX =
+            "s3://noaa-gestofs-pds/stofs_2d_glo.20230113/";
+    private static final String FULL_PUBLIC_BUCKET = "s3://noaa-gestofs-pds/";
 
     @Test
-    void readmeQuickstartUsesAnExplicitResumableFormatAndConsistentLauncher() throws Exception {
+    void readmeStartsWithTheSmallPublicWorkflow() throws Exception {
         String readme = Files.readString(Path.of("..", "README.md"));
-        assertThat(readme).contains("export PATH=\"$PWD/swath-cli/build/install/swath/bin:$PATH\"")
-                .contains("swath list " + PUBLIC_DEMO_BUCKET)
-                .contains("--no-sign-request --region us-east-1")
-                .contains("--concurrency 128")
-                .contains("--format parquet -o out/noaa-gestofs-pds")
-                .contains("swath resume out/noaa-gestofs-pds");
 
-        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
-                "--concurrency", "128", "--format", "parquet", "-o", "out/noaa-gestofs-pds");
-        parse("resume", "out/noaa-gestofs-pds");
+        assertThat(readme)
+                .contains("Turn a very large S3 bucket into a resumable, query-ready inventory")
+                .contains("list " + SMALL_PUBLIC_PREFIX)
+                .contains("--no-sign-request --region us-east-1")
+                .contains("--format parquet -o /out/stofs-20230113")
+                .contains("out/stofs-20230113/data/*.parquet")
+                .doesNotContain("--format parquet -o /out/stofs-20230113.parquet");
+
+        parse(
+                "list",
+                SMALL_PUBLIC_PREFIX,
+                "--no-sign-request",
+                "--region",
+                "us-east-1",
+                "--format",
+                "parquet",
+                "-o",
+                "/out/stofs-20230113");
     }
 
     @Test
     void gettingStartedCommandsParse() throws Exception {
-        String gettingStarted = Files.readString(Path.of("..", "docs", "getting-started.md"));
-        assertThat(gettingStarted).contains("exact listing command shown in the demo")
-                .contains("list " + PUBLIC_DEMO_BUCKET)
-                .contains("--no-sign-request --region us-east-1")
-                .contains("--concurrency 128")
-                .contains("resume /out/noaa-gestofs-pds")
-                .contains("--format parquet -o /out/noaa-gestofs-pds");
+        String gettingStarted =
+                Files.readString(Path.of("..", "docs", "getting-started.md"));
 
-        parse("list", PUBLIC_DEMO_BUCKET, "--no-sign-request", "--region", "us-east-1",
-                "--concurrency", "128", "--format", "parquet", "-o", "/out/noaa-gestofs-pds");
+        assertThat(gettingStarted)
+                .contains("list " + SMALL_PUBLIC_PREFIX)
+                .contains("--format tsv")
+                .contains("--format parquet -o /out/stofs-20230113")
+                .contains("resume /out/stofs-20230113");
+
+        parse(
+                "list",
+                SMALL_PUBLIC_PREFIX,
+                "--no-sign-request",
+                "--region",
+                "us-east-1",
+                "--format",
+                "tsv");
+
+        parse(
+                "list",
+                SMALL_PUBLIC_PREFIX,
+                "--no-sign-request",
+                "--region",
+                "us-east-1",
+                "--format",
+                "parquet",
+                "-o",
+                "/out/stofs-20230113");
+
+        parse("resume", "/out/stofs-20230113");
+    }
+
+    @Test
+    void fullScaleDemoKeepsTheRecordedCommandOutOfTheQuickstart() throws Exception {
+        String demo = Files.readString(Path.of("..", "docs", "full-scale-demo.md"));
+
+        assertThat(demo)
+                .contains("Swath v0.2.1")
+                .contains("list " + FULL_PUBLIC_BUCKET)
+                .contains("--concurrency 128")
+                .contains("--format parquet -o /out/noaa-gestofs-pds")
+                .contains("resume /out/noaa-gestofs-pds");
+
+        parse(
+                "list",
+                FULL_PUBLIC_BUCKET,
+                "--no-sign-request",
+                "--region",
+                "us-east-1",
+                "--concurrency",
+                "128",
+                "--format",
+                "parquet",
+                "-o",
+                "/out/noaa-gestofs-pds");
+
         parse("resume", "/out/noaa-gestofs-pds");
     }
 

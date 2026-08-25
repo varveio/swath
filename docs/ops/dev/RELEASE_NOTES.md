@@ -1,79 +1,89 @@
-# swath 0.2.4
+# swath 0.2.5
 
 ## User-facing changes
 
-- S3 requests now identify themselves in the HTTP User-Agent as `swath/<version>` (plain
-  `swath/development` outside a packaged build), prepended ahead of the AWS SDK's own
-  `aws-sdk-java/…` and `api/S3#…` markers. No request behaviour changes; this is so
-  swath's traffic is attributable in S3 access logs, CloudTrail, and any endpoint that
-  logs its callers by User-Agent.
-- Several summary and progress figures on a `--sort` run were silently computed over the
-  *whole* run — merge and publish tail included — while being read as listing-phase
-  numbers. All are now scoped to the phase they claim to describe:
-  - `tail_occupancy.wall_share`'s window end and wall-time denominator now freeze at the
-    listing→merge boundary instead of at gauge-read time, so the merge tail can no longer
-    inflate it.
-  - A new additive `listing_duration_ms` field (schema v2) reports the listing-and-staging
-    span alone, so a listing-only rate no longer has to be reconstructed as
-    `duration_ms - sort.merge_ms`.
-  - A new additive `recovered_objects` field reports how many of a resumed run's rows were
-    backfilled from an earlier attempt rather than listed by this process — needed to
-    compute a corrected listing-phase rate from `summary.json` alone, without scraping the
-    `-v` progress line.
-  - `freeze_gate_checks` is now published as the denominator for `latency_freezes` and
-    `growth_freezes`, so a healthy, saturated run (which returns before the freeze gates
-    run at all) is distinguishable from one whose gates simply never engaged.
-  - `regime.worker_page_latency_p50_ms`/`_p99_ms` now measure data-page latency only,
-    rather than every API call class including cheap probes, so they read as an honest
-    serial-baseline estimate.
-  - A merge-only `--sort --resume` run — one that issues zero LIST calls — now attributes
-    its merged row count to `recovered_objects` rather than to this process's own `objects`
-    and `keys_per_sec`.
-  - The stderr progress headline no longer labels a figure "listing" on a `--sort` run
-    whose duration includes the merge/publish tail.
-  - `keys_per_sec`, `cpu_efficiency`, and `avg_in_flight` are unchanged and deliberately
-    keep whole-run semantics for compatibility — see Limits below.
-- Fixed a rare, flaky failure in the sort engine's own test suite
-  (`maxDurationWithProgress_staysPlainMaxDuration`); test-only, no production behaviour
-  changed.
+- **A clearer first-run path.** The README and Getting Started guide now begin with one
+  historical-day prefix from NOAA's public `noaa-gestofs-pds` bucket. The 39.6-million-
+  object whole-bucket run remains available as a separate full-scale demonstration rather
+  than being the first command a newcomer is asked to run.
+- **Compressed and partitioned text output.** TSV and JSONL can use gzip or Zstandard, and
+  can publish bounded multi-writer directory datasets with manifests and `_SUCCESS`
+  completion markers. Text outputs remain one-shot and non-resumable.
+- **A diagnostic discard sink.** `--format discard --checkpoint none --report run.json`
+  runs the normal listing pipeline without materializing listing rows, making it easier to
+  separate object-store/listing cost from output cost.
+- **Faster listing and text encoding.** S3 responses are streamed, canonical timestamps are
+  parsed through a faster path, redundant checksum conversion was removed, and partitioned
+  TSV writes UTF-8 bytes directly. The AWS XML parser was upgraded and compatibility guards
+  cover streamed error and response handling.
+- **Resource-aware dataset writers.** Direct Parquet and partitioned text output share a
+  bounded writer-pool model with a process-wide queue budget. Expert writer counts are
+  checked against available heap, and run reports expose aggregate saturation, sticky-lane
+  head-of-line blocking, per-lane work, finalization, and publication evidence.
+- **Safer dataset publication.** Manifests are published at completion rather than during an
+  incomplete run. Part digests are computed while writing, publication ownership is
+  centralized, and shutdown/failure paths have stronger liveness and cleanup coverage.
+- **Optional writeback shaping.** `--writeback-size` can periodically force bytes already
+  emitted to open TSV, JSONL, or direct-Parquet dataset parts and sorted Parquet final
+  files. Writeback does not finalize a part, publish a manifest, or shorten the
+  crash-recovery window.
+- **Faster sorted Parquet finalization.** Sorted output shares the physical Parquet writer
+  boundary, avoids repeated final-file work, exposes merge-parallelism controls, and uses a
+  faster canonical timestamp conversion path. Final sorted parts retain the same global
+  ordering and completeness contracts.
+- **`swath-replay` is a published toolkit.** The replay module and container now have a
+  stable name, release packaging, runtime attestation, and improved sorted-fixture serving,
+  reader admission, metrics, and reproducibility guidance.
+- **Newcomer and operator documentation was consolidated.** Public terminology now
+  distinguishes a complete live listing from a point-in-time snapshot, defines managed
+  Parquet once, labels S3 as the supported backend and GCS XML access as experimental, and
+  separates the small quickstart, full-scale evidence, ordinary operation, and contributor
+  internals.
 
 ## Evidence
 
-- `S3ClientFactoryTest#realApacheRequestPrependsSwathUserAgentToSdkMarkers` runs a real
-  HTTP server and inspects the actual request header: the User-Agent starts with
-  `swath/development aws-sdk-java/2.31.78 `, contains the SDK's `api/S3#2.31.78` marker,
-  and contains exactly one `swath/` token — not a byte of the SDK's own value is
-  disturbed.
-- The size of the mislabelling this release fixes is measured, not assumed: the
-  [PR #99 field-campaign table](../../performance.md#the-sorted-merge) recorded the merge tail
-  at 20-39% of session wall time across three sorted buckets on the shipped-default merge
-  arm (median ~32%), rising to as much as ~72% of session wall on the explicit-serial-merge
-  arm. That is how much of "listing" was actually merge before this fix.
-- Each fix is pinned by a dedicated test: `TailOccupancyListingScopeTest`,
-  `ConcurrencyGaugeFreezeGateDenominatorTest`, `JsonRunSummaryWriterTest`,
-  `ListRunnerObservabilityTest`, `SortMergeReentryContractTest`,
-  `SortResumeListingContractTest`, plus the OTLP and simple-registry series-identity
-  suites for the renamed/rescoped meters.
-- The flaky-test fix was verified directly against the failure it targets: 500 in-JVM
-  iterations of the original repro shape ran clean (the pre-fix code failed 3 times in
-  300), and 15 Gradle invocations of the test task ran clean under load, including with 12
-  spinner threads saturating the box (the pre-fix code failed 1 time in 8 Gradle runs).
-- CI's fast tier, CodeQL, and the container-build check were green on each of the three
-  merged pull requests (#101, #103, #104).
+- PR #118 added gzip/Zstandard text compression and bounded parallel TSV/JSONL directory
+  datasets, with publication, interruption, compression, and CLI-contract coverage.
+- PR #123 renamed and published `swath-replay`, added release/container verification, and
+  retained replay conformance and runtime-attestation checks.
+- PRs #124, #125, #128, #129, #130, and #131 exercised writer-pool telemetry, heap
+  admission, streaming digests, shutdown liveness, publication ownership, and
+  completion-only manifest publication through focused unit and integration tests.
+- PR #135 measured the streaming S3 and TSV paths and recorded the diagnosis method in
+  `docs/performance.md`; the discard sink provides a matched output-free comparison for a
+  user's own endpoint and bucket shape.
+- PR #139's local replay gate measured direct Parquet at 1.516 million rows/s with
+  32 MiB writeback versus 1.440 million rows/s without it across five matched runs. The
+  result is host- and filesystem-specific, so writeback remains disabled by default.
+- PR #140 retained byte-identical sorted output and the existing completeness contract
+  while sharing the physical writer boundary, adding final writeback control, and
+  exercising merge/finalization paths with focused sorted-output tests.
+- The release documentation's headline commands are parsed in
+  `HeadlineDocsCommandSmokeTest`; the newcomer entry points also have local-link and
+  release-wording regression coverage.
 
 ## Limits and known issues
 
-- `listing_duration_ms` is not a bare API-calls-only span: on a `--sort` run it still
-  includes the sort lane's final drain/encode of its staged segments, which happens after
-  the last LIST response. It is the listing-*and-staging* span.
-- `keys_per_sec`, `cpu_efficiency`, and `engine.avg_in_flight` are unchanged by this
-  release and still divide by the whole-run `duration_ms` for backward compatibility — on
-  a `--sort` run they remain diluted by the merge tail. Use the new
-  `listing_duration_ms`/`recovered_objects` fields to recompute a listing-only rate
-  yourself if that is what you need; the formula is in
-  [`metrics-and-observability.md`](../../metrics-and-observability.md).
-- The 20-39%/median ~32%/up to ~72% merge-share figures above are a measurement from a
-  three-bucket field campaign, not a bound — the actual ratio on any given run depends on
-  its segment count and the merge parallelism actually used.
-- No public schema version bump: `listing_duration_ms` and `recovered_objects` are
-  additive under the existing schema v2 contract, not a v3.
+- Swath remains pre-1.0; CLI options, schemas, and experimental controls can still change.
+- Durable resume is available for managed Parquet directory datasets. Stdout, text files,
+  partitioned text datasets, the discard sink, and the legacy `.parquet`-looking one-writer
+  layout are non-resumable.
+- A destination such as `-o inventory.parquet` still uses the pre-1.0 compatibility layout:
+  a one-writer directory under a file-looking path, not one physical Parquet file. Use a
+  directory path for managed output.
+- `--writeback-size` is a performance control only. A crash can still lose and re-list the
+  current unfinished part because the durability boundary remains final close and
+  publication.
+- S3 general-purpose buckets are the supported backend. GCS through the XML API is
+  experimental S3-compatible access rather than a native GCS implementation. S3 directory
+  buckets are not supported.
+- A long live listing is not a point-in-time snapshot of a bucket that changes during the
+  run. `_SUCCESS` means Swath completed and published the result it observed.
+- Existing managed Parquet consumers should continue to wait for `_SUCCESS` and read all
+  parts listed by the manifest or a `data/*.parquet` glob.
+- Automation should parse `_swath_summary.json` rather than terminal prose. The report is
+  additive within its current major schema, and 0.2.5 adds writer-pool, trajectory,
+  writeback, and sorted-finalization evidence.
+- Re-run performance comparisons after upgrading. Streaming response handling, text
+  encoding, writer-pool admission, writeback, and sorted-finalization changes can move the
+  bottleneck even when listing semantics are unchanged.

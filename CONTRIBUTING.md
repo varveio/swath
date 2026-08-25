@@ -1,69 +1,71 @@
-# Contributing to swath
+# Contributing to Swath
 
-Thanks for your interest in swath. This guide covers how to build, test, and
-submit changes.
+Thanks for your interest in Swath. This guide covers the normal build, test, and pull
+request workflow.
 
 ## Ground rules
 
-- Be respectful — this project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
-- For anything security-sensitive, follow [SECURITY.md](SECURITY.md) and report
-  privately rather than opening a public issue.
-- Open an issue to discuss a substantial change before writing it, so we can
-  agree on the approach.
+- Be respectful. This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Report security-sensitive findings through [SECURITY.md](SECURITY.md), not a public
+  issue.
+- Open an issue before a substantial behavioral or architectural change so the intended
+  user contract and implementation approach can be discussed first.
+- Keep user documentation and code behavior in the same change. Use
+  [the documentation style guide](docs/style.md) for product casing, terminology,
+  consistency claims, evidence, and ownership.
 
-## Building and testing
+## Build and test
 
-swath is a multi-module Gradle build that requires **JDK 25**. The Gradle wrapper
-selects the project's toolchain, but you must have JDK 25 available to Gradle.
+Swath is a multi-module Gradle build and requires **JDK 25**. The wrapper supplies Gradle,
+but JDK 25 must be available to it.
 
-```sh
-./gradlew build -PnoIntegration  # Docker-free fast contributor gate
-./gradlew build                  # ordinary integration gate (requires Docker/LocalStack)
-./gradlew test                   # fast test tier only
-./gradlew spotlessApply          # apply the SPDX license header to new/changed sources
+```bash
+./gradlew build -PnoIntegration  # Docker-free per-commit gate
+./gradlew build                  # full integration gate (Docker/LocalStack)
+./gradlew test                   # fast test tier
+./gradlew spotlessApply          # format sources and add SPDX headers
 ```
 
-Some tests are gated behind opt-in tiers (`-Pdeep`, `-Pperf`, integration tests
-via Testcontainers). The Docker-free contributor gate is what to run per commit; see
-`docs/ops/dev/TESTING.md` for the full tier map.
+Deep, performance, kill-9 resume, replay-conformance, and other opt-in tiers are not all
+part of a plain build. The canonical tier map is in
+[`docs/ops/dev/TESTING.md`](docs/ops/dev/TESTING.md).
 
 ## License headers
 
-Every source file carries an SPDX license header, enforced by Spotless and
-checked in CI (`./gradlew spotlessCheck`, part of `check`). If you add a file,
-run `./gradlew spotlessApply` to stamp it — the build will otherwise fail with a
-missing-header error.
+Every source file carries an SPDX license header. Spotless applies and checks it. Run
+`./gradlew spotlessApply` after adding a source file; the build rejects a missing header.
 
-## Developer Certificate of Origin (DCO)
+## Developer Certificate of Origin
 
-Contributions are accepted under the [Developer Certificate of Origin][dco]. It
-is a lightweight statement that you wrote the patch or otherwise have the right
-to submit it under the project's license. You certify the DCO by adding a
-`Signed-off-by` line to each commit:
+Contributions are accepted under the [Developer Certificate of Origin][dco]. Add a
+`Signed-off-by` line to every commit to certify that you wrote the patch or otherwise have
+the right to submit it under the project's license:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-Git adds this line for you when you commit with `-s`:
+Git adds the line when committing with `-s`:
 
-```sh
-git commit -s -m "your message"
+```bash
+git commit -s -m "Describe the change"
 ```
 
-The name and email must match your commit author identity. Every commit in a
-pull request needs the sign-off.
+The sign-off must match the commit author identity.
 
 [dco]: https://developercertificate.org/
 
 ## Licensing of contributions
 
-By contributing, you agree that your contributions are licensed under the
+By contributing, you agree that your contribution is licensed under the
 [Apache License 2.0](LICENSE), the same license as the project.
 
-## Submitting a pull request
+## Pull requests
 
-1. Fork the repository and create a topic branch.
-2. Make your change with tests; keep commits focused and signed off (`-s`).
-3. Run `./gradlew build -PnoIntegration` and confirm the per-commit Docker-free gate is green.
-4. Open a pull request describing what changed and why.
+1. Fork the repository or create a topic branch.
+2. Keep the change focused and add tests for behavior that could regress.
+3. Update the canonical documentation owner rather than adding a second detailed copy.
+4. Run `./gradlew build -PnoIntegration`; run the full integration gate when the change
+   touches S3 behavior, packaging, or an integration boundary.
+5. Open a pull request explaining the user-visible change, technical rationale, and the
+   checks you ran.
