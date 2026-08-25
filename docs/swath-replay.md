@@ -140,9 +140,10 @@ pool per file (`connections × files` readers). Its independent row-group pool o
 file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
 the conservative fully engaged resident bound remains `2 × connections × files`. An ordinary range
 fill uses only the range pool. An engaged skip-scan uses one row-group reader, including when it
-materializes a bare object: the bounded full-row read reuses the cursor's reader and already-loaded
-page index. Concurrent ordinary and delimiter requests can still engage both independent pools. The
-first delimiter-pool engagement for each file is visible through `delimiter.reader_pool.open.latency`.
+materializes a bare object: the bounded full-row read reuses the cursor's reader and the row-group
+page index that reader primed under its maximal object projection. Concurrent ordinary and delimiter
+requests can still engage both independent pools. The first delimiter-pool engagement for each file
+is visible through `delimiter.reader_pool.open.latency`.
 
 ### Resource sizing for sorted serving
 
