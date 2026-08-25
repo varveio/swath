@@ -1,11 +1,11 @@
-# Swath agent guide
+# swath agent guide
 
-Read this before changing Swath. General contribution rules are in
+Read this before changing swath. General contribution rules are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-## What Swath is
+## What swath is
 
-Swath is a Java 25 CLI for high-performance object-store listing. The supported product
+swath is a Java 25 CLI for high-performance object-store listing. The supported product
 currently targets general-purpose S3 buckets and uses an adaptive work-stealing scan with
 bounded active buffers, crash-safe checkpoint/resume, and optional globally sorted
 Parquet output.
@@ -29,7 +29,7 @@ algorithm explanation.
   Narrative documentation teaches choices and exceptional constraints instead of
   maintaining another exhaustive option list.
 
-Use [`docs/style.md`](docs/style.md) for public terminology, product casing, consistency
+Use [`docs/style.md`](docs/style.md) for public terminology, project casing, consistency
 language, evidence claims, and documentation ownership.
 
 ## Correctness spine
