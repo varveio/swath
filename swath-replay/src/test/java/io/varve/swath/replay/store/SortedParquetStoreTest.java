@@ -171,7 +171,7 @@ class SortedParquetStoreTest {
     }
 
     /**
-     * A rollup whose entries are <b>bare objects</b>, deep inside a large row group, must carry every
+     * A rollup whose entries are <b>bare objects</b>, spanning many row groups, must carry every
      * served field of each one.
      *
      * <p>The skip-scan used to answer this hop by bulk-decoding the whole row group and indexing into
@@ -187,7 +187,8 @@ class SortedParquetStoreTest {
         for (int i = 0; i < 2000; i++) {
             keys.add(String.format("flat/obj-%05d", i));   // no further '/': every one is a bare object
         }
-        Fixture fixture = writeSorted(dir, SortConfigs.pagesOf(64), keys);
+        Fixture fixture = writeSorted(dir, SortConfigs.manySmallRowGroups().withFinalPageRows(64), keys);
+        assertThat(fixture.index).hasSizeGreaterThan(4);   // lookahead must refill across groups
 
         try (SortedParquetStore store = store(fixture)) {
             List<ListingStore.DelimitedEntry> rollup = store.delimitedRollup(
@@ -353,7 +354,7 @@ class SortedParquetStoreTest {
     }
 
     @Test
-    void delimiterBareObjectOwnsRowGroupAndRangeReadersSimultaneously(@TempDir Path dir) throws IOException {
+    void delimiterBareObjectReusesItsOwnedRowGroupReader(@TempDir Path dir) throws IOException {
         ReplayMetrics metrics = new ReplayMetrics();
         Fixture fixture = writeSorted(dir, manySmallGroups(), "bare-1", "bare-2", "dir/child");
 
@@ -364,11 +365,11 @@ class SortedParquetStoreTest {
         }
 
         assertThat(metrics.registry().find("swath.replay.parquet.queries.peak").gauge().value())
-                .as("one delimiter request owns its row-group cursor while reading a bare object's full row")
-                .isEqualTo(2.0);
+                .as("the bare-object batch reuses the delimiter reader instead of borrowing a second reader")
+                .isEqualTo(1.0);
         assertThat(metrics.registry().find("swath.replay.parquet.queries.in_flight").gauge().value()).isZero();
         assertThat(metrics.registry().find("swath.replay.page.read.latency").timer().count())
-                .as("only the post-borrow full-row range decode is sampled; the outer query times the skip-scan")
+                .as("the full-row page decode remains sampled; the outer query times the skip-scan")
                 .isEqualTo(1L);
     }
 

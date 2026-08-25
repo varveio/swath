@@ -423,8 +423,8 @@ public final class SortedParquetStore implements ListingStore {
      *       this, since every later cursor is already past the previous entry) and jump the cursor to
      *       {@link ByteKeys#successor}{@code (P)} inclusive, past {@code P}'s whole subtree in one hop.
      *   <li>No {@code /} after the prefix → a bare object directly under it. The only hop that pays
-     *       for the full row rather than just the key column, read through the same pooled
-     *       page-index reader the range path uses, a run of rows at a time ({@link #objectAt}).
+     *       for the full row rather than just the key column, read through the pooled row-group
+     *       reader the cursor already owns, a run of rows at a time ({@link #objectAt}).
      *       Advance the cursor past this exact key (exclusive) and continue.
      *   <li>The cursor lands past every key in its row group (a gap — {@code successor(P)} is rarely an
      *       actual key) → jump straight to the next group's first key; the last group exhausting the
@@ -557,7 +557,8 @@ public final class SortedParquetStore implements ListingStore {
                     }
                 } else {
                     out.add(new DelimitedEntry(null, toListedObject(objectAt(
-                            lookahead, entry, key, upper, limit + 1 - out.size(), projection.owner()))));
+                            lookahead, reader, entry, key, upper,
+                            limit + 1 - out.size(), projection.owner()))));
                     cursor = key;
                     inclusive = false;
                 }
@@ -583,8 +584,8 @@ public final class SortedParquetStore implements ListingStore {
     }
 
     /**
-     * The full row at {@code key} — every listing column — read through the pooled page-index reader
-     * the range path uses, <b>a run of rows at a time</b>.
+     * The full row at {@code key} — every listing column — read through the pooled row-group reader
+     * the delimiter cursor already owns, <b>a run of rows at a time</b>.
      *
      * <p>A bare object is one hop, and hops are what the scan is O(). Reading one row per hop is
      * correct and, on a directory that is mostly bare objects, a thousand separate page-index seeks
@@ -596,12 +597,18 @@ public final class SortedParquetStore implements ListingStore {
      * refills, so the buffer is a saving and never a source of truth.
      */
     private SortedRowGroupReader.ObjectRow objectAt(Deque<SortedRowGroupReader.ObjectRow> lookahead,
-                                                    IndexEntry entry, byte[] key, byte[] upper, int want,
+                                                    SortedRowGroupReader reader, IndexEntry entry,
+                                                    byte[] key, byte[] upper, int want,
                                                     boolean includeOwner) throws IOException {
         if (lookahead.isEmpty() || !Arrays.equals(lookahead.peek().keyUnsafe(), key)) {
             lookahead.clear();
-            lookahead.addAll(rangeReader(entry.file())
-                    .range(entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
+            var sample = metrics.startTimer();
+            try {
+                lookahead.addAll(reader.objectRange(
+                        entry.rowGroup(), key, true, upper, Math.max(1, want), includeOwner));
+            } finally {
+                metrics.recordPageRead(sample);
+            }
         }
         SortedRowGroupReader.ObjectRow row = lookahead.poll();
         if (row != null && Arrays.equals(row.keyUnsafe(), key)) {

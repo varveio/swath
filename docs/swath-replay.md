@@ -138,10 +138,11 @@ injected sleep. Each sorted slot holds an open reader and decoded footer per fil
 very large pools can waste file descriptors and heap. Sorted mode eagerly opens the range-reader
 pool per file (`connections × files` readers). Its independent row-group pool opens lazily, one
 file at a time, only when a native `delimiter=/` skip-scan cannot answer from routing-index bounds;
-the conservative fully engaged bound remains `2 × connections × files`. An ordinary range fill
-uses only the range pool; an engaged skip-scan holds one row-group reader while it may briefly
-borrow a range reader to materialize a bare object. The first engagement for each file is visible
-through `delimiter.reader_pool.open.latency`.
+the conservative fully engaged resident bound remains `2 × connections × files`. An ordinary range
+fill uses only the range pool. An engaged skip-scan uses one row-group reader, including when it
+materializes a bare object: the bounded full-row read reuses the cursor's reader and already-loaded
+page index. Concurrent ordinary and delimiter requests can still engage both independent pools. The
+first delimiter-pool engagement for each file is visible through `delimiter.reader_pool.open.latency`.
 
 ### Resource sizing for sorted serving
 
@@ -350,10 +351,10 @@ swath-replay bench \
 reports startup, client request latency, server list/read latency, page/key counts, and
 throughput. Multiple modes walk the same fixture and report ratios. Keep startup time
 separate from walk time, and client round-trip latency separate from the store-level
-`page.read.latency` backing-decode signal. In sorted mode that timer counts acquired reader
-leases, not HTTP pages: cache hits and routing-index-only delimiter hops add no sample, while a
-delimiter request adds a sample only when it needs a range read to materialize a bare object; the
-row-group cursor work remains in `parquet.query.latency`.
+`page.read.latency` backing-decode signal. In sorted mode that timer counts bounded page decodes,
+not HTTP pages: cache hits and routing-index-only delimiter hops add no sample, while a delimiter
+request adds a sample only when it materializes a bare object through its already-owned row-group
+reader. The key-cursor work remains in `parquet.query.latency`.
 
 ## Metrics and tuning
 
@@ -365,8 +366,8 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.reader_pool.open.latency` | Rollup vs walk, skip-scan I/O, routing-index-only whole-group engagements, and lazy per-file delimiter-pool first touch (timer count = files opened). |
-| `page.read.latency`, `fixture.list.latency` | Post-borrow range-decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
-| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving eagerly holds `connections × files` range readers and has the conservative fully engaged bound `2 × connections × files` after every lazy row-group pool opens. |
+| `page.read.latency`, `fixture.list.latency` | Post-borrow bounded-page decode service time (pool wait excluded) and complete pager operation. Cache hits add no page-read sample. |
+| `parquet.queries.in_flight`, `parquet.queries.peak` | Current and run-peak acquired backing readers. DuckDB is bounded by `connections`; sorted serving has independent `connections`-wide range and lazy row-group pools per file. One request owns one reader, while concurrent ordinary and delimiter requests can engage both pools. |
 | `request.latency{shape}` | Server request cost, including reader-pool wait but excluding injected delay, separated into `worker_page`, `pivot_probe`, and `structure_probe`. |
 | `inject.overrun{shape}`, `inject.overrun.ms{shape}` | Requests exceeding the injected profile and their excess latency. Absent when injection is off; zero overruns is the healthy state. |
 | `prefetch.window.fill`, `prefetch.window.hit`, `prefetch.window.miss{reason}`, `prefetch.fill.rows` | Window-cache cost, effectiveness, and ramp behavior. |
