@@ -5,7 +5,7 @@ not release commitments; issues track work that is actionable now.
 
 ## Current shipped scope
 
-Swath currently provides:
+swath currently provides:
 
 - parallel current-object listing for general-purpose S3 buckets;
 - table, TSV, JSONL, and managed Parquet output;
@@ -43,7 +43,7 @@ committed.
 
 ### S3 directory buckets
 
-Directory buckets do not provide the one global lexicographic order required by Swath's
+Directory buckets do not provide the one global lexicographic order required by swath's
 range-splitting engine. Supporting them needs a separate sequential continuation-token
 path rather than pretending the current algorithm applies.
 
