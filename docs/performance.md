@@ -120,20 +120,22 @@ finalization time, `submit_blocked_ms`, or `head_of_line_blocked_ms`.
 
 ### Writeback shaping for large dataset parts
 
-`--writeback-size SIZE` is an off-by-default experiment for unsorted TSV/JSONL/Parquet directory datasets.
+`--writeback-size SIZE` is an off-by-default experiment for TSV/JSONL/Parquet directory datasets,
+including sorted Parquet final files.
 It periodically forces physical bytes already emitted to each open part while keeping its format
 writer and final part open. It exists to test whether bounding the dirty-page backlog
 reduces the final close stall enough to support large published parts efficiently.
 
-The cadence policy and pool hooks are format-neutral. Text and direct Parquet provide narrow
+The cadence policy and pool hooks are format-neutral. Text, direct Parquet, and sorted-final Parquet provide narrow
 transport adapters: text does not flush its compression codec, while Parquet flushes only the
 bottom 4 KiB transport buffer after parquet-mr has naturally completed a row group. It never asks
 Parquet to flush a row group, page, or column store, so row-group geometry and file boundaries do
-not change. Sorted staging/final writers, single-file output, and spool/merge paths are not wired to
-this option; they need separate lifecycle and benchmark gates, not duplicated cadence policy.
+not change. Sorted PageRun staging, cascade intermediates, and single-file output are not wired to
+this option; the measured staging path keeps its existing strict seal-order close barrier.
 
-This option has **no crash-recovery benefit**. A text dataset is still non-resumable, and direct
-Parquet still advances its checkpoint only at finalized-part boundaries. I6 is unchanged: rows
+This option has **no crash-recovery benefit**. A text dataset is still non-resumable, direct
+Parquet still advances its checkpoint only at finalized-part boundaries, and a sorted final remains
+rebuildable rather than authoritative until its durable close and publish sequence. I6 is unchanged: rows
 become durable and publishable only after the part is finalized and its full
 file-plus-parent barrier succeeds. A periodic force does not write a compression trailer, manifest,
 Parquet footer, checkpoint record, or `_SUCCESS` marker. Positive values below `4mb` are rejected.

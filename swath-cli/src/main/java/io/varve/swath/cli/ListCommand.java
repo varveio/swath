@@ -1672,7 +1672,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 datasetWriterQueueCapacityPerLane(writers), argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
                 rotationIntervalNanos, rotationMaxRows, s3uri.bucket(),
-                singleFile || sorting.sort ? 0L : output.writebackSizeBytes());
+                singleFile ? 0L : output.writebackSizeBytes());
     }
 
     /** Equal per-lane share whose pool-wide product never exceeds the fixed production budget. */

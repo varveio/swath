@@ -58,19 +58,36 @@ public final class ListEntryParquetWriters {
     /** Builds a final-file writer with byte/digest tracking and an optional data-sync cadence. */
     public static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
             long rowGroupBytes, PageLayout layout, long writebackBytes) throws IOException {
-        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, null);
+        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, null, null);
     }
 
-    static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
+    /** Test seam for a data-only force that does not need to inspect the underlying channel. */
+    public static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
+            long rowGroupBytes, PageLayout layout, long writebackBytes, DataForcer dataForcer)
+            throws IOException {
+        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, dataForcer, null);
+    }
+
+    static TrackedWriter buildTrackedWithChannelForcer(Path path, WriteSupport<ListEntry> writeSupport,
             long rowGroupBytes, PageLayout layout, long writebackBytes,
             SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
+        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, null, dataForcer);
+    }
+
+    private static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
+            long rowGroupBytes, PageLayout layout, long writebackBytes, DataForcer dataForcer,
+            SyncableLocalOutputFile.DataForcer channelForcer) throws IOException {
         PeriodicDataSync periodicSync = new PeriodicDataSync(writebackBytes);
         SyncableLocalOutputFile syncableOutput = null;
         OutputFile physicalOutput;
         if (periodicSync.enabled()) {
-            syncableOutput = dataForcer == null
-                    ? new SyncableLocalOutputFile(path)
-                    : new SyncableLocalOutputFile(path, dataForcer);
+            if (channelForcer != null) {
+                syncableOutput = new SyncableLocalOutputFile(path, channelForcer);
+            } else if (dataForcer != null) {
+                syncableOutput = new SyncableLocalOutputFile(path, ignored -> dataForcer.force());
+            } else {
+                syncableOutput = new SyncableLocalOutputFile(path);
+            }
             physicalOutput = syncableOutput;
         } else {
             physicalOutput = new LocalOutputFile(path);
@@ -171,6 +188,11 @@ public final class ListEntryParquetWriters {
                 // The owner deletes this unfinalized file immediately afterwards.
             }
         }
+    }
+
+    @FunctionalInterface
+    public interface DataForcer {
+        void force() throws IOException;
     }
 
     /** Finalizes the footer, then fsyncs the file and its parent directory (I6). */

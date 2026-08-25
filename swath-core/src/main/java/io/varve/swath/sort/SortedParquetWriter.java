@@ -6,6 +6,8 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
 import io.varve.swath.output.parquet.ListEntryParquetWriters;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
@@ -48,6 +50,8 @@ import org.apache.parquet.schema.MessageType;
  */
 public final class SortedParquetWriter implements SortedFileWriter {
 
+    private static final int DATA_SYNC_CHECK_ROWS = 1024;
+
     /** Footer KV key naming the total order the file is sorted by. */
     public static final String ORDER_KEY = "swath.sort.order";
 
@@ -78,7 +82,9 @@ public final class SortedParquetWriter implements SortedFileWriter {
 
     private final ParquetWriter<ListEntry> writer;
     private final ListEntryParquetWriters.TrackedWriter tracked;
+    private final DatasetDataSyncMetrics syncMetrics;
     private long rows;
+    private int rowsSinceSyncCheck;
     private long boundsBytes;
     private byte[] firstKey;
     private byte[] lastKey;
@@ -88,7 +94,28 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private FinalPartMetadata finalMetadata;
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
+        this(path, config, mode, fileIndex, 0L, (DatasetDataSyncMetrics) null, null);
+    }
+
+    SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
+            long writebackBytes, DatasetDataSyncMetrics syncMetrics) throws IOException {
+        this(path, config, mode, fileIndex, writebackBytes, syncMetrics, null);
+    }
+
+    SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
+            long writebackBytes, RunMetrics metrics, ListEntryParquetWriters.DataForcer dataForcer)
+            throws IOException {
+        this(path, config, mode, fileIndex, writebackBytes,
+                metrics == null ? null : new DatasetDataSyncMetrics(
+                        metrics, "parquet", DatasetDataSyncMetrics.Classification.SORTED_PARQUET),
+                dataForcer);
+    }
+
+    private SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
+            long writebackBytes, DatasetDataSyncMetrics syncMetrics,
+            ListEntryParquetWriters.DataForcer dataForcer) throws IOException {
         this.fileIndex = fileIndex;
+        this.syncMetrics = syncMetrics;
         Map<String, String> stamp = Map.of(
                 ORDER_KEY, ORDER_VALUE,
                 MODE_KEY, mode.value(),
@@ -102,9 +129,12 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // the range-local stamp the parallel path exists to fix.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
-        ListEntryParquetWriters.TrackedWriter tracked =
-                ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
-                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
+        ListEntryParquetWriters.TrackedWriter tracked = dataForcer == null
+                ? ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
+                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()), writebackBytes)
+                : ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
+                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()), writebackBytes,
+                        dataForcer);
         this.tracked = tracked;
         this.writer = tracked.writer();
     }
@@ -120,6 +150,14 @@ public final class SortedParquetWriter implements SortedFileWriter {
         lastKey = key;
         boundsBytes += key.length;
         rows++;
+        if (tracked.periodicSyncEnabled() && ++rowsSinceSyncCheck >= DATA_SYNC_CHECK_ROWS) {
+            rowsSinceSyncCheck = 0;
+            long syncStartedAt = System.nanoTime();
+            long syncedBytes = tracked.maybeSyncData();
+            if (syncedBytes > 0 && syncMetrics != null) {
+                syncMetrics.recordSync(System.nanoTime() - syncStartedAt, syncedBytes);
+            }
+        }
     }
 
     @Override
@@ -179,6 +217,9 @@ public final class SortedParquetWriter implements SortedFileWriter {
                 firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),
                 lastKey == null ? null : new String(lastKey, StandardCharsets.UTF_8),
                 closeNanos, tracked.digestNanos(), boundsBytes);
+        if (syncMetrics != null) {
+            tracked.periodicSyncResidualBytes().ifPresent(syncMetrics::recordResidual);
+        }
         closed = true;
     }
 

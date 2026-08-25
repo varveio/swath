@@ -5,6 +5,8 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
 import java.io.IOException;
 import java.nio.file.Path;
 
@@ -20,14 +22,24 @@ public final class SortedParquetWriterFactory implements SortedFileWriterFactory
 
     private final SortConfig config;
     private final SortMode mode;
+    private final long writebackBytes;
+    private final DatasetDataSyncMetrics syncMetrics;
 
     public SortedParquetWriterFactory(SortConfig config, SortMode mode) {
+        this(config, mode, 0L, null);
+    }
+
+    public SortedParquetWriterFactory(
+            SortConfig config, SortMode mode, long writebackBytes, RunMetrics metrics) {
         this.config = config;
         this.mode = mode;
+        this.writebackBytes = writebackBytes;
+        this.syncMetrics = metrics == null ? null : new DatasetDataSyncMetrics(
+                metrics, "parquet", DatasetDataSyncMetrics.Classification.SORTED_PARQUET);
     }
 
     @Override
     public SortedFileWriter create(Path path, int fileIndex) throws IOException {
-        return new SortedParquetWriter(path, config, mode, fileIndex);
+        return new SortedParquetWriter(path, config, mode, fileIndex, writebackBytes, syncMetrics);
     }
 }

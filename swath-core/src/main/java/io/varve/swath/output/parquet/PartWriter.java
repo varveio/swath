@@ -42,7 +42,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     PartWriter(Path path, MessageType schema, long writebackBytes,
                SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
         this.path = path;
-        tracked = ListEntryParquetWriters.buildTracked(path, new ListEntryWriteSupport(schema),
+        tracked = ListEntryParquetWriters.buildTrackedWithChannelForcer(path, new ListEntryWriteSupport(schema),
                 ROW_GROUP_BYTES, ListEntryParquetWriters.PageLayout.staging(),
                 writebackBytes, dataForcer);
         writer = tracked.writer();

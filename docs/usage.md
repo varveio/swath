@@ -51,11 +51,13 @@ published atomically but are one-shot outputs. TSV and JSONL can also write a pa
 directory dataset, but that dataset is not resumable in this release and requires
 `--checkpoint none`.
 
-For unsorted TSV, JSONL, and Parquet directory datasets, `--writeback-size SIZE` can
+For TSV, JSONL, and Parquet directory datasets, including sorted Parquet final files,
+`--writeback-size SIZE` can
 periodically force physical bytes from an open part without flushing a text codec or
 Parquet row group, closing or publishing the part, or shortening the crash-recovery
 window. It is an off-by-default performance control; final close still performs the file
-and parent-directory durability barriers. Sorted, single-file, and spool/merge paths reject it.
+and parent-directory durability barriers. Sorted staging, single-file, and cascade/spool paths
+remain outside the policy.
 
 For every directory dataset, `_SUCCESS` is the completion marker. Do not consume its
 parts until that file exists. An interrupted text run may leave diagnostic files that

@@ -172,4 +172,15 @@ class PartRotationCliTest {
         assertThat(spec.rotationMaxRows()).isEqualTo(500L);
         assertThat(spec.writebackBytes()).isEqualTo(4L * 1024 * 1024);
     }
+
+    @Test
+    void sortedParquetFinalsRetainTheConfiguredWritebackCadence() throws Exception {
+        ListCommand list = parse("--sort", "--writeback-size", "4mb");
+
+        S3Uri s3uri = S3Uri.parse("s3://bucket/prefix");
+        ListRunner.ParquetSpec spec =
+                list.parquetSpec(s3uri, 1000, 1000, FilterChain.EMPTY, "hash", TEST_CONFIG);
+
+        assertThat(spec.writebackBytes()).isEqualTo(4L * 1024 * 1024);
+    }
 }

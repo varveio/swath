@@ -43,8 +43,8 @@ Use `--report PATH` to retain its summary.
 
 Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). `--writeback-size SIZE` is an off-by-default performance
-experiment for unsorted TSV/JSONL/Parquet directory datasets; it shapes dirty-page writeback without
-rotating parts or changing the crash-recovery boundary. Positive values below `4mb` are rejected,
+experiment for TSV/JSONL/Parquet directory datasets, including sorted Parquet final files; it shapes
+dirty-page writeback without rotating parts or changing the crash-recovery boundary. Positive values below `4mb` are rejected,
 and unsupported formats are rejected rather than silently ignoring it. See
 [Writeback shaping for large dataset parts](performance.md#writeback-shaping).
 The independent time/row rotation triggers can still close a part before its size target; disable
