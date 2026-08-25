@@ -46,11 +46,16 @@ class ParquetWriterPoolTest {
                 Long.MAX_VALUE, 8);
         ObjectEntry entry = new ObjectEntry(KeyBytes.ofUtf8("bad-time"), 1L, "not-a-timestamp",
                 "etag", "STANDARD", null, true, null, null, null, null);
-        pool.submit(new PageBatch(0L, 0L, List.of(entry)));
-
-        assertThatThrownBy(pool::close)
-                .isInstanceOf(OutputException.class)
-                .hasCauseInstanceOf(LastModifiedParseException.class);
+        try {
+            assertThatThrownBy(() -> {
+                pool.submit(new PageBatch(0L, 0L, List.of(entry)));
+                pool.close();
+            })
+                    .isInstanceOf(OutputException.class)
+                    .hasCauseInstanceOf(LastModifiedParseException.class);
+        } finally {
+            pool.abort();
+        }
         assertThat(parts(dir)).isEmpty();
         assertThat(DatasetLayout.of(dir).manifest()).doesNotExist();
     }
@@ -117,8 +122,12 @@ class ParquetWriterPoolTest {
         DatasetLayout crashedLayout = DatasetLayout.of(crashedDir);
         Path crashedPart = crashedLayout.dataFile(openPart.getFileName().toString());
         Files.createDirectories(crashedPart.getParent());
+        long forcedPrefixBytes = Files.size(openPart);
+        assertThat(forcedPrefixBytes).isPositive();
         Files.copy(openPart, crashedPart);
-        assertThat(crashedPart).exists();
+        assertThat(Files.size(crashedPart))
+                .as("the crash residue contains the full forced prefix")
+                .isEqualTo(forcedPrefixBytes);
 
         pool.abort();
 
