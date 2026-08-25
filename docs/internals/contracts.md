@@ -399,6 +399,16 @@ This schema is a canonical **superset**: a consumer selects the columns it
 needs. Writer settings are **pinned** (not defaults): `parquet.block.size`,
 `parquet.page.size`, dictionary on, ZSTD-3.
 
+All final Parquet producers use one physical-writer contract in `output.parquet`: pinned common
+configuration plus caller-selected row-group/page geometry and `WriteSupport`, streamed
+emitted-byte and optional digest accounting, an optional data-only sync on the same output
+channel, and a close that makes metadata publishable only after the file fsync and parent-directory
+durability attempt complete. This is a low-level byte/durability boundary, not a shared lifecycle:
+direct output still owns sticky lanes, rolling parts, checkpoint callbacks, and direct publication;
+sorted output still owns staging/merge, late global footer stamps, ordered rolling, and sorted
+publication. A periodic data sync never substitutes for either lifecycle's final close or advances
+its checkpoint/publication state.
+
 ### 4.1 Multi-writer + manifest — **own manifest, not parquet `_metadata`**
 
 - **2–64 writers**, default 3, decoupled from listing concurrency (not one per worker).

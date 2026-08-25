@@ -109,6 +109,20 @@ The output consumer determines the delivery contract:
 - sorted Parquet packs pages into bounded segments and performs a resource-bounded external
   merge before publication.
 
+Direct and sorted Parquet deliberately have separate lifecycle owners but one physical writer
+boundary in `output.parquet`. That lower layer owns the pinned parquet-mr configuration, the
+caller-supplied geometry and `WriteSupport`, emitted-byte and digest accounting, optional
+data-only sync on the writer's existing channel, and the final file-plus-parent durability step.
+Above it, direct output retains sticky lanes, part rotation, checkpoint callbacks, and monotone
+manifest publication; sorted output retains staging, range merge, late global footer stamps,
+ordered final-file rolling, and sorted publication. Sharing the byte transport must not merge
+those state machines or let a physical sync advance either one's durable checkpoint boundary.
+
+Page-run staging is outside that Parquet boundary. It remains a checkpoint-tracked framed format
+with its own strict seal-order durability protocol; any periodic writeback there is an adapter to
+the shared cadence policy, admitted only by measurement, not a reason to route page-run bytes
+through the Parquet writer abstraction.
+
 The terminal output stage is observed first so broken pipes, full disks, and writer failures
 cancel producers promptly. On shutdown, downstream receivers close before producer joins;
 executors receive `shutdownNow()` before `close()` (I8).
