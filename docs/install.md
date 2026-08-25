@@ -4,12 +4,12 @@ Tagged releases provide a multi-architecture container image, a runnable JAR, an
 application archives. Use the [GitHub releases page](https://github.com/varveio/swath/releases)
 for the current version.
 
-Docker is the recommended way to try Swath because it includes the required Java runtime.
+Docker is the recommended way to try swath because it includes the required Java runtime.
 After installation, continue with [Getting started](getting-started.md).
 
 | If you want to… | Choose | You need |
 | --- | --- | --- |
-| Try Swath without installing Java | Docker | Docker with Linux-container support |
+| Try swath without installing Java | Docker | Docker with Linux-container support |
 | Run one downloadable Java artifact | Runnable JAR | JDK 25 |
 | Install a `swath` launcher and dependency directory | Application archive | JDK 25 |
 | Build or contribute | Source build | JDK 25; Docker for the integration gate |
@@ -35,7 +35,7 @@ multi-architecture publishing, and release internals, see
 
 ## Runnable JAR
 
-Download `swath-X.Y.Z.jar` from the release page. It contains Swath and its Java
+Download `swath-X.Y.Z.jar` from the release page. It contains swath and its Java
 dependencies, but it still requires a JDK 25 runtime:
 
 ```bash
@@ -45,7 +45,7 @@ java -jar swath-X.Y.Z.jar \
   --format parquet -o out/
 ```
 
-Swath uses final JDK 25 APIs and does not require `--enable-preview`.
+swath uses final JDK 25 APIs and does not require `--enable-preview`.
 
 ## Application archive
 
