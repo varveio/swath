@@ -293,7 +293,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             PrintWriter commandErr = spec != null
                     ? spec.commandLine().getErr() : new PrintWriter(System.err, true);
             commandErr.println("tune effective: " + tune.effectiveConfiguration(
-                    liveness.resolveEffectiveProgressInterval().toString()));
+                    liveness.resolveEffectiveProgressInterval().toString(),
+                    sorting.resolveConfig().mergeParallelism()));
             commandErr.flush();
         }
         if (uri == null) {
@@ -1496,7 +1497,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             clearSortStagingContents(outputDir, stagingDir);
         }
         Files.createDirectories(stagingDir);
-        SortConfig sortConfig = SortConfig.fromSystemProperties();
+        SortConfig sortConfig = sorting.resolveConfig();
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
 
@@ -1672,7 +1673,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 datasetWriterQueueCapacityPerLane(writers), argsHash,
                 liveness.resolveProgressInterval(), buildJsonSummaryConfig(OutputFormat.PARQUET, config, argsHash),
                 rotationIntervalNanos, rotationMaxRows, s3uri.bucket(),
-                singleFile || sorting.sort ? 0L : output.writebackSizeBytes());
+                singleFile ? 0L : output.writebackSizeBytes());
     }
 
     /** Equal per-lane share whose pool-wide product never exceeds the fixed production budget. */
@@ -1860,12 +1861,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         Duration flushInterval = resolveSummaryJsonInterval();
         Duration resolvedMaxDuration = liveness.resolveMaxDuration();
         Long maxDurationMs = resolvedMaxDuration == null ? null : resolvedMaxDuration.toMillis();
-        // Sort observability polish: SortConfig.fromSystemProperties() is a cheap, idempotent
-        // re-read of the same -D knobs runSortedParquet() reads independently — echoing
+        // Sort observability polish: resolveConfig() is a cheap, idempotent re-read of the same -D
+        // knobs plus the typed --tune override runSortedParquet() reads independently — echoing
         // effectiveFanIn() here makes the binding merge-pass-width knob self-describing in the
         // summary without threading a SortConfig through the whole call chain.
         Integer sortEffectiveFanIn = sorting.sort
-                ? SortConfig.fromSystemProperties().effectiveFanIn() : null;
+                ? sorting.resolveConfig().effectiveFanIn() : null;
         JsonRunSummaryWriter.RunConfig runConfig =
                 new JsonRunSummaryWriter.RunConfig(
                         uri, config.region() == null ? null : config.region().id(),

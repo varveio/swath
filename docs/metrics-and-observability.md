@@ -141,7 +141,7 @@ When `--writeback-size` is enabled, `swath.data_sync.residual.bytes` may be emit
 a writeback-enabled part closes even if no periodic force was due. Only an actual
 successful force emits `swath.data_sync.latency`, `swath.data_sync.bytes`,
 `OUTPUT.data_sync`, and the corresponding format meter: `data_sync_text_uncompressed`,
-`data_sync_text_compressed`, or `data_sync_parquet`. These measure writeback shaping;
+`data_sync_text_compressed`, `data_sync_parquet`, or `data_sync_sorted_parquet`. These measure writeback shaping;
 they do not indicate publication or an earlier crash-recovery boundary.
 
 ## 4. Progress and logs

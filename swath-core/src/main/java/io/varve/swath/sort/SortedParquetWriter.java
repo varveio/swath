@@ -6,7 +6,9 @@
 package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.output.parquet.DigestingOutputFile;
+import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.DatasetDataSyncMetrics;
+import io.varve.swath.output.parquet.ListEntryParquetWriters;
 import io.varve.swath.output.parquet.ListEntryWriteSupport;
 import io.varve.swath.output.parquet.ParquetSchema;
 import java.io.IOException;
@@ -48,6 +50,8 @@ import org.apache.parquet.schema.MessageType;
  */
 public final class SortedParquetWriter implements SortedFileWriter {
 
+    private static final int DATA_SYNC_CHECK_ROWS = 1024;
+
     /** Footer KV key naming the total order the file is sorted by. */
     public static final String ORDER_KEY = "swath.sort.order";
 
@@ -76,10 +80,11 @@ public final class SortedParquetWriter implements SortedFileWriter {
     /** The only value {@link #FILE_FINAL_KEY} is ever written with — its absence is the negative case. */
     public static final String FILE_FINAL_VALUE = "true";
 
-    private final Path path;
     private final ParquetWriter<ListEntry> writer;
-    private final DigestingOutputFile output;
+    private final ListEntryParquetWriters.TrackedWriter tracked;
+    private final DatasetDataSyncMetrics syncMetrics;
     private long rows;
+    private int rowsSinceSyncCheck;
     private long boundsBytes;
     private byte[] firstKey;
     private byte[] lastKey;
@@ -89,8 +94,29 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private FinalPartMetadata finalMetadata;
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
-        this.path = path;
+        this(path, config, mode, fileIndex, WriterOptions.DEFAULT);
+    }
+
+    static SortedParquetWriter withWriteback(Path path, SortConfig config, SortMode mode,
+            int fileIndex, long writebackBytes, DatasetDataSyncMetrics syncMetrics)
+            throws IOException {
+        return new SortedParquetWriter(path, config, mode, fileIndex,
+                new WriterOptions(writebackBytes, syncMetrics, null));
+    }
+
+    static SortedParquetWriter withDataForcer(Path path, SortConfig config, SortMode mode, int fileIndex,
+            long writebackBytes, RunMetrics metrics, ListEntryParquetWriters.DataForcer dataForcer)
+            throws IOException {
+        DatasetDataSyncMetrics syncMetrics = metrics == null ? null : new DatasetDataSyncMetrics(
+                metrics, "parquet", DatasetDataSyncMetrics.Classification.SORTED_PARQUET);
+        return new SortedParquetWriter(path, config, mode, fileIndex,
+                new WriterOptions(writebackBytes, syncMetrics, dataForcer));
+    }
+
+    private SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
+            WriterOptions options) throws IOException {
         this.fileIndex = fileIndex;
+        this.syncMetrics = options.syncMetrics();
         Map<String, String> stamp = Map.of(
                 ORDER_KEY, ORDER_VALUE,
                 MODE_KEY, mode.value(),
@@ -104,11 +130,14 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // the range-local stamp the parallel path exists to fix.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
+        ListEntryParquetWriters.TrackedSpec trackedSpec = new ListEntryParquetWriters.TrackedSpec(
+                config.finalRowGroupBytes(),
+                ListEntryParquetWriters.PageLayout.served(config.finalPageRows()),
+                options.writebackBytes(), options.dataForcer());
         ListEntryParquetWriters.TrackedWriter tracked =
-                ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
-                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()));
+                ListEntryParquetWriters.buildTracked(path, writeSupport, trackedSpec);
+        this.tracked = tracked;
         this.writer = tracked.writer();
-        this.output = tracked.output();
     }
 
     @Override
@@ -122,6 +151,14 @@ public final class SortedParquetWriter implements SortedFileWriter {
         lastKey = key;
         boundsBytes += key.length;
         rows++;
+        if (tracked.periodicSyncEnabled() && ++rowsSinceSyncCheck >= DATA_SYNC_CHECK_ROWS) {
+            rowsSinceSyncCheck = 0;
+            long syncStartedAt = System.nanoTime();
+            long syncedBytes = tracked.maybeSyncData();
+            if (syncedBytes > 0 && syncMetrics != null) {
+                syncMetrics.recordSync(System.nanoTime() - syncStartedAt, syncedBytes);
+            }
+        }
     }
 
     @Override
@@ -175,19 +212,26 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // look completed, so a retry would silently skip a file whose footer was never written --
         // publishing a part with no stamp at all.
         long closeStart = System.nanoTime();
-        ListEntryParquetWriters.closeWithDurability(path, writer);
-        output.markDurable();
+        tracked.closeWithDurability();
         long closeNanos = System.nanoTime() - closeStart;
-        finalMetadata = new FinalPartMetadata(rows, output.bytes(), output.md5(),
+        finalMetadata = new FinalPartMetadata(rows, tracked.bytes(), tracked.md5(),
                 firstKey == null ? null : new String(firstKey, StandardCharsets.UTF_8),
                 lastKey == null ? null : new String(lastKey, StandardCharsets.UTF_8),
-                closeNanos, output.digestNanos(), boundsBytes);
+                closeNanos, tracked.digestNanos(), boundsBytes);
+        if (syncMetrics != null) {
+            tracked.periodicSyncResidualBytes().ifPresent(syncMetrics::recordResidual);
+        }
         closed = true;
     }
 
     @Override
     public synchronized Optional<FinalPartMetadata> finalMetadata() {
         return Optional.ofNullable(finalMetadata);
+    }
+
+    private record WriterOptions(long writebackBytes, DatasetDataSyncMetrics syncMetrics,
+                                 ListEntryParquetWriters.DataForcer dataForcer) {
+        private static final WriterOptions DEFAULT = new WriterOptions(0L, null, null);
     }
 
     /**

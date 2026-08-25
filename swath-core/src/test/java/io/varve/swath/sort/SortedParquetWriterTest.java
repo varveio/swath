@@ -6,16 +6,22 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
@@ -202,10 +208,135 @@ class SortedParquetWriterTest {
         }
     }
 
+    @Test
+    void enabledWritebackIsByteIdenticalWhenNoRowGroupHasEmitted(@TempDir Path dir)
+            throws IOException {
+        Path controlPath = dir.resolve("control.parquet");
+        Path candidatePath = dir.resolve("candidate.parquet");
+        AtomicInteger forces = new AtomicInteger();
+        SortConfig config = config(Map.of());
+
+        try (SortedFileWriter control =
+                        new SortedParquetWriter(controlPath, config, SortMode.OBJECTS, 1);
+             SortedFileWriter candidate = SortedParquetWriter.withDataForcer(candidatePath, config,
+                     SortMode.OBJECTS, 1, PeriodicDataSync.MIN_INTERVAL_BYTES, null,
+                     ignored -> forces.incrementAndGet())) {
+            for (int i = 0; i < 100; i++) {
+                ListEntry entry = object(String.format("%08d", i));
+                control.write(entry);
+                candidate.write(entry);
+            }
+            control.markFinal();
+            candidate.markFinal();
+        }
+
+        assertThat(forces).hasValue(0);
+        assertThat(Files.readAllBytes(candidatePath)).containsExactly(Files.readAllBytes(controlPath));
+    }
+
+    @Test
+    void writebackEngagesAfterNaturalRowGroupsAndConservesPhysicalBytes(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        AtomicInteger forces = new AtomicInteger();
+        SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
+        SortedParquetWriter writer = SortedParquetWriter.withDataForcer(
+                path, smallGroups, SortMode.OBJECTS, 1,
+                PeriodicDataSync.MIN_INTERVAL_BYTES, metrics,
+                ignored -> forces.incrementAndGet());
+        Random random = new Random(0x50A7EDL);
+
+        int rows = 0;
+        while (forces.get() == 0 && rows < 100_000) {
+            writer.write(randomObject(rows++, random));
+        }
+        assertThat(forces).hasValue(1);
+        writer.markFinal();
+        writer.close();
+
+        double synced = registry.get("swath.data_sync.bytes")
+                .tag("format", "parquet").summary().totalAmount();
+        double residual = registry.get("swath.data_sync.residual.bytes")
+                .tag("format", "parquet").summary().totalAmount();
+        assertThat((long) (synced + residual)).isEqualTo(Files.size(path));
+        assertThat(registry.get("swath.steal_reason")
+                .tags("outcome", "OUTPUT", "reason", "data_sync").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("swath.steal_reason")
+                .tags("outcome", "OUTPUT", "reason", "data_sync_sorted_parquet")
+                .counter().count()).isEqualTo(1.0);
+        assertThat(SortStamp.read(path)).hasValueSatisfying(stamp -> {
+            assertThat(stamp.fileIndex()).isEqualTo(1);
+            assertThat(stamp.fileFinal()).isTrue();
+        });
+    }
+
+    @Test
+    void failedWritebackPoisonsTheFinalAndPreventsMetadataPublication(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("part-00001.parquet");
+        SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
+        SortedParquetWriter writer = SortedParquetWriter.withDataForcer(
+                path, smallGroups, SortMode.OBJECTS, 1,
+                PeriodicDataSync.MIN_INTERVAL_BYTES, null,
+                ignored -> { throw new IOException("injected data force failure"); });
+        Random random = new Random(0xBADF0ACEL);
+
+        assertThatThrownBy(() -> {
+            for (int row = 0; row < 100_000; row++) {
+                writer.write(randomObject(row, random));
+            }
+        }).isInstanceOf(IOException.class).hasMessageContaining("injected data force failure");
+        assertThat(writer.finalMetadata()).isEmpty();
+        assertThatThrownBy(writer::close)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("refusing to publish after periodic data-sync failure");
+        assertThat(writer.finalMetadata()).isEmpty();
+    }
+
+    @Test
+    void productionFactoryClassifiesWritebackEngagementOnceAcrossFinalFiles(@TempDir Path dir)
+            throws IOException {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        RunMetrics metrics = new RunMetrics(registry);
+        SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
+        SortedParquetWriterFactory factory = SortedParquetWriterFactory.withWriteback(
+                smallGroups, SortMode.OBJECTS, PeriodicDataSync.MIN_INTERVAL_BYTES, metrics);
+        Random random = new Random(0xFAC70A1L);
+
+        for (int part = 1; part <= 2; part++) {
+            try (SortedFileWriter writer = factory.create(dir.resolve("part-0000" + part + ".parquet"), part)) {
+                for (int row = 0; row < 8_000; row++) {
+                    writer.write(randomObject(row, random));
+                }
+            }
+        }
+
+        assertThat(registry.get("swath.data_sync.latency").tag("format", "parquet").timer().count())
+                .isGreaterThanOrEqualTo(2);
+        assertThat(registry.get("swath.steal_reason")
+                .tags("outcome", "OUTPUT", "reason", "data_sync").counter().count()).isEqualTo(1.0);
+        assertThat(registry.get("swath.steal_reason")
+                .tags("outcome", "OUTPUT", "reason", "data_sync_sorted_parquet")
+                .counter().count()).isEqualTo(1.0);
+    }
+
     private static String padded(int i) {
         // Fixed-width ascending keys, ~200 bytes each, so accumulated bytes cross the tiny row-group
         // threshold well before 200 rows.
         return String.format("%08d", i) + "x".repeat(190);
+    }
+
+    private static ListEntry randomObject(int row, Random random) {
+        byte[] key = new byte[1024];
+        byte[] prefix = String.format("%08d-", row).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] suffix = new byte[key.length - prefix.length];
+        random.nextBytes(suffix);
+        System.arraycopy(prefix, 0, key, 0, prefix.length);
+        System.arraycopy(suffix, 0, key, prefix.length, suffix.length);
+        return new ObjectEntry(KeyBytes.of(key), row, 1_700_000_000_000_000L + row,
+                "etag", "STANDARD", null, true, null, null, null, null);
     }
 
     private static Map<String, String> footerKv(Path path) throws IOException {

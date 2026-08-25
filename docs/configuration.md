@@ -43,8 +43,8 @@ Use `--report PATH` to retain its summary.
 
 Text directory datasets use `--text-writers` (default `3`, range `2..64`) and
 `--text-part-size` (default `256mb`). `--writeback-size SIZE` is an off-by-default performance
-experiment for unsorted TSV/JSONL/Parquet directory datasets; it shapes dirty-page writeback without
-rotating parts or changing the crash-recovery boundary. Positive values below `4mb` are rejected,
+experiment for TSV/JSONL/Parquet directory datasets, including sorted Parquet final files; it shapes
+dirty-page writeback without rotating parts or changing the crash-recovery boundary. Positive values below `4mb` are rejected,
 and unsupported formats are rejected rather than silently ignoring it. See
 [Writeback shaping for large dataset parts](performance.md#writeback-shaping).
 The independent time/row rotation triggers can still close a part before its size target; disable
@@ -133,11 +133,12 @@ The following table is machine-checked against the code registry.
 | `seed.mode` | `shallow, none, or hints` | `shallow` | stable (`hints` reserved) | identity | fresh list | Choose initial keyspace discovery. `hints` is reserved but not implemented. |
 | `parquet.writers` | `integer 2..64 (heap-admitted above 4)` | `3` | stable | free | fresh list | Set the writer count for unsorted Parquet output. For counts above four, swath checks that the configured heap is large enough. Counts 2–4 are the tested range. Higher counts can use more memory and create more small parts; benchmark before adopting them. Unless `--output-type dir` overrides the default inference, a path ending in `.parquet` uses one writer. `--sort` does not use this writer pool, so the setting has no effect under `--sort`. |
 | `summary.interval` | `positive duration` | `--progress-interval`, otherwise `30s` | stable | free | fresh list | Set `_swath_summary.json` heartbeat cadence; accepts values such as `2s`, `500ms`, or `PT2S`. |
+| `sort.merge-parallelism` | `integer 1..16` | core-derived, capped at `8` | stable | free | fresh list and resume | Set the maximum number of contiguous key ranges in the final sorted merge. Runtime heap, fan-in, staged-size, and file-descriptor gates may lower it. Each engaged range produces at least one final file, so benchmark merge wall, peak memory, and consumer-visible file count together. A pre-publication resume may change this value because partial range finals are disposable staging files and the merge is rerun from durable PageRuns. |
 | `sort.ignore-disk-check` | `on or off` | `off` | diagnostic | free | fresh list and resume | Bypass sorted-output free-space checks. Size the staging volume independently first. |
 
-`seed.mode` contributes to the run identity and cannot change on resume. Of the current
-keys, only `sort.ignore-disk-check` applies to `swath resume`; the others affect fresh-list
-construction or output lanes.
+`seed.mode` contributes to the run identity and cannot change on resume.
+`sort.merge-parallelism` and `sort.ignore-disk-check` apply to `swath resume`; the other
+keys affect fresh-list construction or output lanes.
 
 ## Diagnostic engine toggles
 
@@ -193,7 +194,7 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by memory and open files. |
 | `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Heap budget for open merge streams. |
 | `swath.sort.merge-per-stream-bytes` | `64 KiB` | Conservative per-stream divisor used by the merge planner. |
-| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum contiguous key ranges in the final merge; `1` forces serial. |
+| `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum contiguous key ranges in the final merge; `1` forces serial. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
 | `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller merges serial. |
 | `swath.sort.final-file-bytes` | `1 GiB` | Roll threshold for final sorted parts. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |

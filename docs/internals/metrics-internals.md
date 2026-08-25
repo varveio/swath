@@ -316,7 +316,7 @@ Periodic data-sync evidence remains in `meters[]`, not `client_cost[]`: the form
 `swath.data_sync.bytes` records physical bytes newly covered by those calls, and
 `swath.data_sync.residual.bytes` records the physical tail left for each part's final close barrier.
 These are overlapping writer work, never page-serial costs. Text cadence is driven by physical
-post-compression bytes; direct Parquet uses bytes naturally emitted after completed row groups.
+post-compression bytes; direct and sorted-final Parquet use bytes naturally emitted after completed row groups.
 The generic meter family is reserved for separately benchmarked format adapters; its presence does
 not imply every output path currently syncs.
 
@@ -1028,6 +1028,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `OUTPUT` | `data_sync_text_uncompressed` | classification companion to `data_sync`: the engaged adapter was an uncompressed TSV/JSONL dataset. Exactly one text compressed/uncompressed reason fires on its first engagement | |
 | `OUTPUT` | `data_sync_text_compressed` | classification companion to `data_sync`: the engaged adapter was gzip/Zstandard TSV/JSONL and physical post-compression bytes drove the cadence without flushing the codec. Exactly one text compressed/uncompressed reason fires on its first engagement | |
 | `OUTPUT` | `data_sync_parquet` | classification companion to `data_sync`: the engaged adapter was direct unsorted Parquet. Physical emitted bytes drive the cadence; the adapter flushes only its transport buffer after a natural parquet-mr row-group emission and never flushes a row group/page/column store | |
+| `OUTPUT` | `data_sync_sorted_parquet` | classification companion to `data_sync`: the engaged adapter was a sorted final Parquet file. It has the same physical-byte and natural-row-group rules as direct Parquet, but never applies to PageRun staging or cascade intermediates | |
 | `SORT` | `manifest_metadata_trusted` | manifest publication used close-gated metadata captured inline by a freshly written final part. Fires once per such part | |
 | `SORT` | `manifest_metadata_fallback_scan` | manifest publication received a metadata-less carried or third-party final part and used the compatibility full-file MD5 and exact-bounds validation reads. Fires once per such part, before validation begins | |
 | `SORT` | `page_whole_emitted` | the page-run merge fast path: the final page-aware merge (`PageAwareMerger`, engaged when every survivor is a page-run segment) emitted a whole page decode-free-planned — its current page's `maxKey` was strictly `<` (unsigned) the `minKey` of every other segment's current page AND of its OWN next page, so the page was globally next with no interleaving and was streamed in order without a heap merge. Fires once per page so emitted; the count is "how many pages the disjoint fast path carried" — the page-oriented analogue of `merge_fastpath` (which stays the entry-level `StreamingMerger` same-reader signal). High on a well-formed OBJECTS run (work-stealing nodes own disjoint key ranges ⇒ range-disjoint pages) | |

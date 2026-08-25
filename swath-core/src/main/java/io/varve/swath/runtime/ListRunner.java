@@ -819,7 +819,7 @@ public final class ListRunner {
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
                     merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
                             sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
-                            spec.argsHash(), runId, spec.progressInterval(), false);
+                            spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(), false);
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
                 })
@@ -868,7 +868,7 @@ public final class ListRunner {
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
             SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
                     segRows, sortConfig, mode, spec.bucket(),
-                    spec.argsHash(), runId, spec.progressInterval(), true);
+                    spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(), true);
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
 
@@ -932,7 +932,8 @@ public final class ListRunner {
      */
     private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, boolean identityVerifiedWideSweep) throws SwathException {
+            Duration progressInterval, long writebackBytes, boolean identityVerifiedWideSweep)
+            throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the
         // rows those very segments hold (see RunMetrics#recordSortStaged).
@@ -947,7 +948,9 @@ public final class ListRunner {
         // ProgressMarkingSortedFileWriter (never per key).
         FinalizeWallClock finalizeClock = new FinalizeWallClock();
         SortedFileWriterFactory writerFactory = progressMarkingFactory(
-                new SortedParquetWriterFactory(config, mode), ctx.metrics(), finalizeClock);
+                SortedParquetWriterFactory.withWriteback(
+                        config, mode, writebackBytes, ctx.metrics()),
+                ctx.metrics(), finalizeClock);
         // The WIDE stale-finals sweep (ALL data/*.parquet, not
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path
         // (ListCommand#isPublishedByThisRun gates whether runSortMergeOnly is ever reached) — see

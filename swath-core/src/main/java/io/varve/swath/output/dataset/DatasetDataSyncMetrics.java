@@ -14,7 +14,8 @@ public final class DatasetDataSyncMetrics {
     public enum Classification {
         TEXT_UNCOMPRESSED,
         TEXT_COMPRESSED,
-        PARQUET
+        PARQUET,
+        SORTED_PARQUET
     }
 
     private final RunMetrics metrics;
@@ -39,6 +40,8 @@ public final class DatasetDataSyncMetrics {
                 case TEXT_COMPRESSED ->
                         metrics.recordStealReason("OUTPUT", "data_sync_text_compressed");
                 case PARQUET -> metrics.recordStealReason("OUTPUT", "data_sync_parquet");
+                case SORTED_PARQUET ->
+                        metrics.recordStealReason("OUTPUT", "data_sync_sorted_parquet");
             }
         }
     }

@@ -120,20 +120,22 @@ finalization time, `submit_blocked_ms`, or `head_of_line_blocked_ms`.
 
 ### Writeback shaping for large dataset parts
 
-`--writeback-size SIZE` is an off-by-default experiment for unsorted TSV/JSONL/Parquet directory datasets.
+`--writeback-size SIZE` is an off-by-default experiment for TSV/JSONL/Parquet directory datasets,
+including sorted Parquet final files.
 It periodically forces physical bytes already emitted to each open part while keeping its format
 writer and final part open. It exists to test whether bounding the dirty-page backlog
 reduces the final close stall enough to support large published parts efficiently.
 
-The cadence policy and pool hooks are format-neutral. Text and direct Parquet provide narrow
+The cadence policy and pool hooks are format-neutral. Text, direct Parquet, and sorted-final Parquet provide narrow
 transport adapters: text does not flush its compression codec, while Parquet flushes only the
 bottom 4 KiB transport buffer after parquet-mr has naturally completed a row group. It never asks
 Parquet to flush a row group, page, or column store, so row-group geometry and file boundaries do
-not change. Sorted staging/final writers, single-file output, and spool/merge paths are not wired to
-this option; they need separate lifecycle and benchmark gates, not duplicated cadence policy.
+not change. Sorted PageRun staging, cascade intermediates, and single-file output are not wired to
+this option; the measured staging path keeps its existing strict seal-order close barrier.
 
-This option has **no crash-recovery benefit**. A text dataset is still non-resumable, and direct
-Parquet still advances its checkpoint only at finalized-part boundaries. I6 is unchanged: rows
+This option has **no crash-recovery benefit**. A text dataset is still non-resumable, direct
+Parquet still advances its checkpoint only at finalized-part boundaries, and a sorted final remains
+rebuildable rather than authoritative until its durable close and publish sequence. I6 is unchanged: rows
 become durable and publishable only after the part is finalized and its full
 file-plus-parent barrier succeeds. A periodic force does not write a compression trailer, manifest,
 Parquet footer, checkpoint record, or `_SUCCESS` marker. Positive values below `4mb` are rejected.
@@ -299,7 +301,9 @@ max(1, min(8, availableProcessors / 2))
 
 The runtime may lower it for segment count, heap, fan-in, or file descriptors. Fewer than
 two effective ranges uses the serial path. Set
-`-Dswath.sort.merge-parallelism=1` for an explicit serial comparison. See
+`--tune sort.merge-parallelism=1` for an explicit serial comparison. The JVM property
+`-Dswath.sort.merge-parallelism=N` remains available for benchmark and development harnesses;
+an explicit `--tune` value wins. See
 [configuration](configuration.md#sorted-output-jvm-properties) and
 [using sorted output](usage.md#sorted-output).
 
@@ -320,6 +324,24 @@ cascade, or failure reason. Peak heap was 3.598 GiB of `-Xmx12g`.
 GEFS and MRMS corroborate scale only. MRMS mutated between runs and its physical order was
 not independently checked. Merge-object rate is not listing throughput; do not combine the
 campaign's phase rates with the unsorted sweep.
+
+A later fixed 56,311,145-row local replay on eight assigned CPUs compared the shipped
+core-derived ceiling (`R=4`) with `--tune sort.merge-parallelism=8`. The two R4 merges
+took 40.5 and 41.1 seconds; three R8 screens took 27.4–28.0 seconds, about 32% less merge
+wall. Whole-run wall improved 13–19% while peak RSS remained approximately 3.22–3.27 GiB.
+Every arm passed exact row, manifest, inventory, MD5, sorted-readback, and replay-error
+checks. The tradeoff was consumer-visible: four final files at R4 and eight at R8. This
+supports the typed override for measured topologies, not a universal default change.
+
+The R8 CPU profile attributed 4,256 of 9,097 range-thread samples (46.8%) to
+timestamp parsing or formatting. PageRun staging already stores epoch microseconds, but rebuilding
+the text-backed entry and then writing typed Parquet repeated the canonical conversion in both
+directions. A byte-exact arithmetic fast path for canonical UTC text, with the previous general
+fallback retained for every alternate accepted spelling, reduced two matched R8 range merges from
+21.5–21.6 seconds to 14.0 seconds. Whole-run report time fell from 57.6–57.8 seconds to
+44.2–44.9 seconds, and peak RSS fell from 3.27–3.31 GiB to 3.21–3.22 GiB. Both candidate arms
+passed the same exact output and replay-error gates. The source text model, PageRun encoding, and
+Parquet schema did not change.
 
 The remaining serial fractions are boundary sampling, small/resource-limited fallbacks,
 and final publication. A serial fraction becomes more visible as listing gets faster, so

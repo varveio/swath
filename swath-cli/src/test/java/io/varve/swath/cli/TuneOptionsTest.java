@@ -7,14 +7,17 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.sort.SortConfig;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import picocli.CommandLine;
 
 class TuneOptionsTest {
@@ -26,6 +29,7 @@ class TuneOptionsTest {
                 "--tune", "seed.mode=none",
                 "--tune", "parquet.writers=4",
                 "--tune", "summary.interval=2s",
+                "--tune", "sort.merge-parallelism=16",
                 "--tune", "sort.ignore-disk-check=on");
 
         assertThat(cmd.tune.apply(cmd.output, cmd.engine, cmd.sorting,
@@ -34,6 +38,7 @@ class TuneOptionsTest {
         assertThat(cmd.engine.resolveSeedMode().name()).isEqualTo("NONE");
         assertThat(cmd.output.parquetWriters).isEqualTo(4);
         assertThat(cmd.resolveSummaryJsonInterval()).isEqualTo(Duration.ofSeconds(2));
+        assertThat(cmd.sorting.resolveConfig().mergeParallelism()).isEqualTo(16);
         assertThat(cmd.sorting.forceSort).isTrue();
     }
 
@@ -60,6 +65,8 @@ class TuneOptionsTest {
                 {"seed.mode=random", "shallow|none|hints"},
                 {"parquet.writers=65", "integer 2..64"},
                 {"summary.interval=zero", "positive duration"},
+                {"sort.merge-parallelism=0", "integer 1..16"},
+                {"sort.merge-parallelism=17", "integer 1..16"},
                 {"sort.ignore-disk-check=yes", "on|off"},
         };
         for (String[] example : bad) {
@@ -128,9 +135,45 @@ class TuneOptionsTest {
 
         assertThat(exit).isEqualTo(2); // no URI: stops after tune validation/echo, before store I/O
         assertThat(err.toString()).contains(
-                "tune effective: engine.readahead=off, seed.mode=shallow, "
+                        "tune effective: engine.readahead=off, seed.mode=shallow, "
                         + "parquet.writers=4, summary.interval=PT30S, "
+                        + "sort.merge-parallelism=" + SortConfig.DEFAULT.mergeParallelism() + ", "
                         + "sort.ignore-disk-check=off");
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void verboseModeReportsSystemPropertyMergeParallelismUsedByTheRun() {
+        String key = "swath.sort.merge-parallelism";
+        String previous = System.getProperty(key);
+        try {
+            System.setProperty(key, "7");
+            CommandLine cli = App.commandLine();
+            StringWriter err = new StringWriter();
+            cli.setErr(new PrintWriter(err));
+
+            int exit = cli.execute("list", "-v");
+
+            assertThat(exit).isEqualTo(2); // no URI: stops after tune validation/echo
+            assertThat(err.toString()).contains("sort.merge-parallelism=7");
+        } finally {
+            if (previous == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, previous);
+            }
+        }
+    }
+
+    @Test
+    void mergeParallelismIsResumeSafeAndOverridesTheResolvedSortConfig() throws Exception {
+        TuneOptions tune = new TuneOptions();
+        // The computed default is capped at 8, so 16 proves that the typed value wins.
+        tune.entries = List.of("sort.merge-parallelism=16");
+        SortOptions sorting = new SortOptions();
+
+        assertThat(tune.applyForResume(sorting, new PrintWriter(new StringWriter()))).isFalse();
+        assertThat(sorting.resolveConfig().mergeParallelism()).isEqualTo(16);
     }
 
     @Test

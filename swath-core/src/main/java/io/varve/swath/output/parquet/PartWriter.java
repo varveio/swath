@@ -7,19 +7,10 @@ package io.varve.swath.output.parquet;
 
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.dataset.DatasetPartWriter;
-import io.varve.swath.output.dataset.DurableFiles;
-import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.OptionalLong;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.parquet.column.ParquetProperties;
-import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
-import org.apache.parquet.hadoop.api.WriteSupport;
-import org.apache.parquet.hadoop.metadata.CompressionCodecName;
-import org.apache.parquet.io.LocalOutputFile;
-import org.apache.parquet.io.OutputFile;
 import org.apache.parquet.schema.MessageType;
 
 /**
@@ -32,14 +23,12 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
 
     /** Pinned writer settings. */
     public static final long ROW_GROUP_BYTES = 64L * 1024 * 1024;
-    public static final int PAGE_BYTES = 1024 * 1024;
-    public static final int ZSTD_LEVEL = 3;
+    public static final int PAGE_BYTES = ListEntryParquetWriters.PAGE_BYTES;
+    public static final int ZSTD_LEVEL = ListEntryParquetWriters.ZSTD_LEVEL;
 
     private final Path path;
     private final ParquetWriter<ListEntry> writer;
-    private final DigestingOutputFile output;
-    private final SyncableLocalOutputFile syncableOutput;
-    private final PeriodicDataSync periodicSync;
+    private final ListEntryParquetWriters.TrackedWriter tracked;
     private long rows;
 
     public PartWriter(Path path, MessageType schema) throws IOException {
@@ -53,27 +42,14 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     PartWriter(Path path, MessageType schema, long writebackBytes,
                SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
         this.path = path;
-        Configuration conf = new Configuration(false);
-        conf.setInt("parquet.compression.codec.zstd.level", ZSTD_LEVEL);
-        periodicSync = new PeriodicDataSync(writebackBytes);
-        if (periodicSync.enabled()) {
-            syncableOutput = dataForcer == null
-                    ? new SyncableLocalOutputFile(path)
-                    : new SyncableLocalOutputFile(path, dataForcer);
-            output = new DigestingOutputFile(syncableOutput);
-        } else {
-            syncableOutput = null;
-            output = new DigestingOutputFile(new LocalOutputFile(path));
-        }
-        this.writer = new Builder(output, schema)
-                .withConf(conf)
-                .withCompressionCodec(CompressionCodecName.ZSTD)
-                .withRowGroupSize(ROW_GROUP_BYTES)
-                .withPageSize(PAGE_BYTES)
-                .withDictionaryEncoding(true)
-                .withWriterVersion(ParquetProperties.WriterVersion.PARQUET_2_0)
-                .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
-                .build();
+        ListEntryParquetWriters.DataForcer selectedForcer =
+                dataForcer == null ? null : dataForcer::force;
+        ListEntryParquetWriters.TrackedSpec spec = new ListEntryParquetWriters.TrackedSpec(
+                ROW_GROUP_BYTES, ListEntryParquetWriters.PageLayout.staging(),
+                writebackBytes, selectedForcer);
+        tracked = ListEntryParquetWriters.buildTracked(
+                path, new ListEntryWriteSupport(schema), spec);
+        writer = tracked.writer();
     }
 
     public void write(ListEntry e) throws IOException {
@@ -94,13 +70,10 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
         return path;
     }
 
-    @Override public boolean periodicSyncEnabled() { return periodicSync.enabled(); }
+    @Override public boolean periodicSyncEnabled() { return tracked.periodicSyncEnabled(); }
 
     @Override public long maybeSyncData() throws IOException {
-        if (!periodicSync.enabled()) {
-            return 0L;
-        }
-        return periodicSync.maybeSync(output.physicalBytes(), syncableOutput::syncData);
+        return tracked.maybeSyncData();
     }
 
     /**
@@ -110,19 +83,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
      */
     @Override
     public void close() throws IOException {
-        try {
-            periodicSync.requirePublishable();
-        } catch (IOException failure) {
-            try {
-                writer.close();
-            } catch (IOException closeFailure) {
-                failure.addSuppressed(closeFailure);
-            }
-            throw failure;
-        }
-        writer.close();
-        DurableFiles.fileAndParent(path);
-        output.markDurable();
+        tracked.closeWithDurability();
     }
 
     /**
@@ -138,46 +99,20 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
      * the file is about to be deleted.
      */
     public void discard() {
-        try {
-            writer.close();
-        } catch (IOException ignored) {
-            // about to be deleted — releasing the handle is all that matters
-        }
+        tracked.discard();
     }
 
     @Override
     public String md5() {
-        return output.md5();
+        return tracked.md5();
     }
 
     @Override
     public long digestNanos() {
-        return output.digestNanos();
+        return tracked.digestNanos();
     }
 
     @Override public OptionalLong periodicSyncResidualBytes() {
-        return periodicSync.enabled()
-                ? OptionalLong.of(periodicSync.residualBytes(output.bytes()))
-                : OptionalLong.empty();
-    }
-
-    private static final class Builder extends ParquetWriter.Builder<ListEntry, Builder> {
-        private final MessageType schema;
-
-        Builder(OutputFile file, MessageType schema) {
-            super(file);
-            this.schema = schema;
-        }
-
-        @Override
-        protected Builder self() {
-            return this;
-        }
-
-        @Override
-        @SuppressWarnings("deprecation")   // getWriteSupport(Configuration) is the abstract method in parquet 1.15
-        protected WriteSupport<ListEntry> getWriteSupport(Configuration conf) {
-            return new ListEntryWriteSupport(schema);
-        }
+        return tracked.periodicSyncResidualBytes();
     }
 }
