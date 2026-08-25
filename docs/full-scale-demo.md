@@ -1,7 +1,7 @@
 # Full-scale public demonstration
 
 This page reproduces the large public listing shown in the README. It is evidence that
-Swath can recover from severe key-distribution skew and resume a long run; it is not the
+swath can recover from severe key-distribution skew and resume a long run; it is not the
 recommended first command.
 
 Start with [Getting started](getting-started.md) if you have not yet completed the small
@@ -9,7 +9,7 @@ public example.
 
 ## What the recording shows
 
-The embedded README recording was captured with **Swath v0.2.1** against the full public
+The embedded README recording was captured with **swath v0.2.1** against the full public
 `s3://noaa-gestofs-pds/` bucket in `us-east-1`.
 
 That observed run:
@@ -20,7 +20,7 @@ That observed run:
 - peaked at about 1.7 GB of resident memory; and
 - began with 513 seed ranges, one of which contained 68% of the objects later found.
 
-Swath discovered the imbalance while listing and split busy remaining ranges so idle
+swath discovered the imbalance while listing and split busy remaining ranges so idle
 workers could help. The [interactive run trace](https://swath.varve.io/runs/noaa-gestofs-pds/)
 shows the seed guesses, live ranges, split pivots, and long-tail behavior.
 
@@ -54,7 +54,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 ```
 
 `--concurrency 128` is part of the recorded demonstration, not a universal
-recommendation. It is an adaptive ceiling: Swath starts below it, raises the live target
+recommendation. It is an adaptive ceiling: swath starts below it, raises the live target
 while the endpoint is healthy, and reduces it under service backpressure. For your own
 bucket, begin with the default and increase the ceiling only when repeated comparable
 runs still gain throughput. See [Choosing concurrency](configuration.md#choosing-concurrency).
@@ -74,7 +74,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   resume /out/noaa-gestofs-pds
 ```
 
-Swath discards any unfinished part, re-lists only the non-durable tail, and continues from
+swath discards any unfinished part, re-lists only the non-durable tail, and continues from
 the saved range ownership. A deterministic error can recur after resume, so read the
 terminal error and `_swath_summary.json` rather than treating every interrupted run as
 automatically recoverable.
@@ -111,7 +111,7 @@ Compare the result with the recording only after accounting for:
 - available CPU and JVM heap;
 - output filesystem performance;
 - configured concurrency; and
-- Swath version and commit.
+- swath version and commit.
 
 Use the relationships inside your own run report before relying on absolute numbers from
 another machine. The [performance guide](performance.md) explains request utilization,
@@ -122,5 +122,5 @@ work-supply starvation, output backpressure, and sorted-merge sizing.
 - [Interactive trace for the recorded NOAA run](https://swath.varve.io/runs/noaa-gestofs-pds/)
 - [Visual field guide](https://swath.varve.io/field-guide/)
 - [Getting started](getting-started.md)
-- [Operating Swath and request cost](operating.md)
+- [Operating swath and request cost](operating.md)
 - [Performance and resource sizing](performance.md)
