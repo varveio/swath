@@ -4,7 +4,7 @@ This guide gets from a Docker image to a small queryable Parquet inventory. The 
 example lists one historical day from NOAA's `noaa-gestofs-pds` bucket, so it is a quick
 functional check rather than the 39.6-million-object demonstration shown in the README.
 
-Swath reads object metadata only. It never downloads or modifies object contents. A run is
+swath reads object metadata only. It never downloads or modifies object contents. A run is
 a live listing, not a point-in-time snapshot of a bucket that changes while the scan is in
 progress.
 
@@ -29,7 +29,7 @@ directly.
 docker run --rm ghcr.io/varveio/swath:latest --version
 ```
 
-This prints the Swath version and exits without contacting object storage.
+This prints the swath version and exits without contacting object storage.
 
 For reproducible automation, replace `latest` with a release tag or the immutable digest
 published with that release.
@@ -67,7 +67,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --format parquet -o /out/stofs-20230113
 ```
 
-A **managed Parquet dataset** is a directory of Parquet parts plus Swath's manifest,
+A **managed Parquet dataset** is a directory of Parquet parts plus swath's manifest,
 completion marker, run report, and temporary resume state. Use a directory path such as
 `/out/stofs-20230113`, not a filename ending in `.parquet`.
 
@@ -84,7 +84,7 @@ out/stofs-20230113/
 ```
 
 Do not consume a directory dataset until `_SUCCESS` exists. During a resumable run,
-Swath also keeps `<output>/.swath/checkpoint.sqlite`; the live checkpoint is removed after
+swath also keeps `<output>/.swath/checkpoint.sqlite`; the live checkpoint is removed after
 successful publication.
 
 ## 4. Query it with DuckDB
@@ -133,7 +133,7 @@ successfully.
 
 To observe real recovery, use the optional
 [full-scale demonstration](full-scale-demo.md), stop it with Ctrl+C, and pass the same
-output directory to `resume`. Swath retains finalized Parquet parts, discards an
+output directory to `resume`. swath retains finalized Parquet parts, discards an
 unfinished part, and continues after the last durable cursor.
 
 Do not edit the checkpoint or move an interrupted managed dataset. To replace a completed
@@ -160,13 +160,13 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 For shared profiles, workload roles, web identity, requester-pays buckets, custom
 endpoints, and least-privilege IAM, use
-[Operating Swath against object storage](operating.md). The normal S3 permission is
-bucket-level `s3:ListBucket`; Swath does not need permission to read object bodies.
+[Operating swath against object storage](operating.md). The normal S3 permission is
+bucket-level `s3:ListBucket`; swath does not need permission to read object bodies.
 
 ## Cost and consistency
 
 A live scan ideally uses approximately one `ListObjectsV2` request per 1,000 returned
-keys, plus probes, retries, and any unfinished tail re-listed after interruption. Swath
+keys, plus probes, retries, and any unfinished tail re-listed after interruption. swath
 reports its actual request count. Pricing varies by provider, region, and time, so
 calculate from the current provider price rather than from an evergreen number in these
 docs.
@@ -175,16 +175,16 @@ If a fresh S3 Inventory or S3 Metadata table already exists and is accessible, q
 instead. A precomputed inventory is normally cheaper than any live scan.
 
 Because S3 does not give a point-in-time transaction across a long listing, concurrent
-bucket changes can affect which live state the result observes. `_SUCCESS` means Swath
+bucket changes can affect which live state the result observes. `_SUCCESS` means swath
 finished and published the complete result of its listing; it does not turn that listing
 into a historical snapshot.
 
 ## Next steps
 
 - Choose output forms, filters, sorting, and automation behavior in
-  [Using Swath](usage.md).
+  [Using swath](usage.md).
 - Review credentials, IAM, endpoint compatibility, and request cost in
-  [Operating Swath](operating.md).
+  [Operating swath](operating.md).
 - Understand the range model through the
   [visual field guide](https://swath.varve.io/field-guide/).
 - Go directly to [Troubleshooting and FAQ](faq.md) when a command fails.
