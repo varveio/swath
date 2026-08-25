@@ -1087,6 +1087,11 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             node.put("count", timer.count());
             node.put("total_ms", timer.totalTime(TimeUnit.MILLISECONDS));
             node.put("max_ms", timer.max(TimeUnit.MILLISECONDS));
+        } else if (meter instanceof DistributionSummary summary) {
+            node.put("count", summary.count());
+            node.put("total", summary.totalAmount());
+            node.put("max", summary.max());
+            node.put("mean", summary.mean());
         } else if (meter instanceof FunctionCounter fc) {
             node.put("value", fc.count());
         } else if (meter instanceof Counter c) {

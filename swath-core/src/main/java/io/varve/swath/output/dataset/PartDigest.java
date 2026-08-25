@@ -64,6 +64,14 @@ public final class PartDigest {
         return bytes;
     }
 
+    /**
+     * Physical bytes accepted by the file stream so far. This is write-progress only, never proof
+     * that the part is durable or eligible for publication; durable metadata remains gated below.
+     */
+    public synchronized long physicalBytes() {
+        return bytes;
+    }
+
     /** Digest CPU time accrued on the physical-write path, not a post-close reread. */
     public synchronized long digestNanos() {
         requireDurable();

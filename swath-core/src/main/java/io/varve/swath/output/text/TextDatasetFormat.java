@@ -17,19 +17,25 @@ import io.varve.swath.output.dataset.DatasetPartWriter;
 import io.varve.swath.output.dataset.DigestingOutputStream;
 import io.varve.swath.output.dataset.DurableFiles;
 import io.varve.swath.output.dataset.PartDigest;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Locale;
+import java.util.OptionalLong;
 import java.util.zip.GZIPOutputStream;
 
 /** TSV/JSONL encoding adapter; scheduling, rotation and publication stay in the shared pool. */
-public record TextDatasetFormat(OutputFormat format, TextCompression compression, boolean escape)
+public record TextDatasetFormat(
+        OutputFormat format, TextCompression compression, boolean escape, long writebackBytes)
         implements DatasetFormat {
 
     private static final int COMPRESSED_ENCODER_BUFFER_BYTES = 64 * 1024;
@@ -38,6 +44,7 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         if (format != OutputFormat.TSV && format != OutputFormat.JSONL) {
             throw new IllegalArgumentException("partitioned text output requires tsv or jsonl");
         }
+        PeriodicDataSync.requireValidInterval(writebackBytes);
     }
 
     @Override public String partSuffix() {
@@ -60,31 +67,74 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
         PartEncoderFactory factory = format == OutputFormat.TSV
                 ? TextDatasetFormat::openTsvEncoder
                 : TextDatasetFormat::openWriterEncoder;
-        return new TextPartWriter(path, factory);
+        return new TextPartWriter(path, factory, channel -> channel.force(false));
     }
 
-    DatasetPartWriter openPart(Path path, EncoderFactory encoderFactory) throws IOException {
+    DatasetPartWriter openPartWithEncoder(Path path, EncoderFactory encoderFactory)
+            throws IOException {
         return new TextPartWriter(path, (stream, compression, escape) ->
-                new WriterPartEncoder(encoderFactory.open(stream, compression), format, escape));
+                new WriterPartEncoder(encoderFactory.open(stream, compression), format, escape),
+                channel -> channel.force(false));
+    }
+
+    DatasetPartWriter openPartWithForcer(Path path, DataForcer dataForcer) throws IOException {
+        PartEncoderFactory factory = format == OutputFormat.TSV
+                ? TextDatasetFormat::openTsvEncoder
+                : TextDatasetFormat::openWriterEncoder;
+        return new TextPartWriter(path, factory, dataForcer);
+    }
+
+    DatasetFormat withDataForcer(DataForcer dataForcer) {
+        TextDatasetFormat delegate = this;
+        return new DatasetFormat() {
+            @Override public String partSuffix() { return delegate.partSuffix(); }
+            @Override public String manifestFormat() { return delegate.manifestFormat(); }
+            @Override public String manifestSchema() { return delegate.manifestSchema(); }
+            @Override public DatasetPartWriter openPart(Path path) throws IOException {
+                return delegate.openPartWithForcer(path, dataForcer);
+            }
+        };
     }
 
     private final class TextPartWriter implements DatasetPartWriter {
         private final Path path;
         private final PartEncoder encoder;
         private final PartDigest digest;
+        private final FileChannel channel;
+        private final DataForcer dataForcer;
+        private final PeriodicDataSync periodicSync;
         private long rows;
 
-        TextPartWriter(Path path, PartEncoderFactory encoderFactory) throws IOException {
+        TextPartWriter(Path path, PartEncoderFactory encoderFactory, DataForcer dataForcer)
+                throws IOException {
             this.path = path;
+            this.dataForcer = dataForcer;
             digest = new PartDigest();
-            encoder = open(path, encoderFactory, digest);
+            periodicSync = new PeriodicDataSync(writebackBytes);
+            OpenedPart opened = open(path, encoderFactory, digest);
+            encoder = opened.encoder();
+            channel = opened.channel();
         }
 
         @Override public Path path() { return path; }
         @Override public long rows() { return rows; }
         @Override public long bufferedDataSize() { return encoder.bytesWritten(); }
         @Override public void write(ListEntry entry) throws IOException { encoder.write(entry); rows++; }
+        @Override public boolean periodicSyncEnabled() { return periodicSync.enabled(); }
+        @Override public long maybeSyncData() throws IOException {
+            return periodicSync.maybeSync(digest.physicalBytes(), () -> dataForcer.force(channel));
+        }
         @Override public void close() throws IOException {
+            try {
+                periodicSync.requirePublishable();
+            } catch (IOException failure) {
+                try {
+                    encoder.close();
+                } catch (IOException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+                throw failure;
+            }
             IOException failure = null;
             try {
                 encoder.finish();
@@ -115,31 +165,46 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
 
         @Override public String md5() { return digest.md5(); }
         @Override public long digestNanos() { return digest.digestNanos(); }
+        @Override public OptionalLong periodicSyncResidualBytes() {
+            return periodicSync.enabled()
+                    ? OptionalLong.of(periodicSync.residualBytes(digest.bytes()))
+                    : OptionalLong.empty();
+        }
     }
 
     /** Open the whole encoder stack transactionally so constructor failure cannot leak the file. */
-    private PartEncoder open(Path path, PartEncoderFactory encoderFactory, PartDigest digest) throws IOException {
+    private OpenedPart open(Path path, PartEncoderFactory encoderFactory, PartDigest digest)
+            throws IOException {
+        FileChannel channel = null;
         OutputStream stream = null;
         PartEncoder encoder = null;
+        boolean created = false;
         try {
-            stream = new BufferedOutputStream(new DigestingOutputStream(Files.newOutputStream(path), digest));
+            channel = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            created = true;
+            stream = new BufferedOutputStream(
+                    new DigestingOutputStream(Channels.newOutputStream(channel), digest));
             encoder = encoderFactory.open(stream, compression, escape);
             encoder.writeHeader();
-            return encoder;
+            return new OpenedPart(encoder, channel);
         } catch (IOException | RuntimeException | Error failure) {
             try {
                 if (encoder != null) {
                     encoder.close();
                 } else if (stream != null) {
                     stream.close();
+                } else if (channel != null) {
+                    channel.close();
                 }
             } catch (Throwable cleanupFailure) {
                 failure.addSuppressed(cleanupFailure);
             }
-            try {
-                Files.deleteIfExists(path);
-            } catch (Throwable cleanupFailure) {
-                failure.addSuppressed(cleanupFailure);
+            if (created) {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (Throwable cleanupFailure) {
+                    failure.addSuppressed(cleanupFailure);
+                }
             }
             throw failure;
         }
@@ -182,6 +247,14 @@ public record TextDatasetFormat(OutputFormat format, TextCompression compression
     @FunctionalInterface
     interface EncoderFactory {
         CountingWriter open(OutputStream stream, TextCompression compression) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface DataForcer {
+        void force(FileChannel channel) throws IOException;
+    }
+
+    private record OpenedPart(PartEncoder encoder, FileChannel channel) {
     }
 
     @FunctionalInterface

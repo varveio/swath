@@ -212,6 +212,9 @@ public final class RunMetrics {
     private final ConcurrentMap<String, Counter> textDatasetParts = new ConcurrentHashMap<>();
     private final AtomicReference<Timer> textDatasetFinalizeLatency = new AtomicReference<>();
     private final AtomicReference<Timer> textDatasetWriteLatency = new AtomicReference<>();
+    private final ConcurrentMap<String, Timer> datasetDataSyncLatency = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, DistributionSummary> datasetDataSyncBytes = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, DistributionSummary> datasetDataSyncResidualBytes = new ConcurrentHashMap<>();
 
     // Output-completeness meters — the Micrometer surface was blind to written output
     // beyond the Parquet main path (JSONL/TSV/TABLE/sort-final all passed 0 bytes / hardcoded
@@ -1725,6 +1728,17 @@ public final class RunMetrics {
         textDatasetWriteTimer().record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
+    /** One byte-inert data-only force of an open partitioned-text part. */
+    public void recordDatasetDataSync(String format, long nanos, long bytes) {
+        datasetDataSyncTimer(format).record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+        datasetDataSyncBytesSummary(format).record(Math.max(0L, bytes));
+    }
+
+    /** Physical tail bytes left for the final close barrier after the last periodic sync. */
+    public void recordDatasetDataSyncResidual(String format, long bytes) {
+        datasetDataSyncResidualBytesSummary(format).record(Math.max(0L, bytes));
+    }
+
     private Timer textDatasetFinalizeTimer() {
         Timer existing = textDatasetFinalizeLatency.get();
         if (existing != null) {
@@ -1743,6 +1757,23 @@ public final class RunMetrics {
         Timer created = clientCostSpanTimer("swath.text_dataset.write.latency").register(registry);
         textDatasetWriteLatency.compareAndSet(null, created);
         return textDatasetWriteLatency.get();
+    }
+
+    private Timer datasetDataSyncTimer(String format) {
+        return datasetDataSyncLatency.computeIfAbsent(format, tag ->
+                runScopedTimer("swath.data_sync.latency").tag("format", tag).register(registry));
+    }
+
+    private DistributionSummary datasetDataSyncBytesSummary(String format) {
+        return datasetDataSyncBytes.computeIfAbsent(format, tag ->
+                runScopedSummary("swath.data_sync.bytes")
+                        .baseUnit("bytes").tag("format", tag).register(registry));
+    }
+
+    private DistributionSummary datasetDataSyncResidualBytesSummary(String format) {
+        return datasetDataSyncResidualBytes.computeIfAbsent(format, tag ->
+                runScopedSummary("swath.data_sync.residual.bytes")
+                        .baseUnit("bytes").tag("format", tag).register(registry));
     }
 
     // ---- Output-completeness + run-level aggregate meters ----------------

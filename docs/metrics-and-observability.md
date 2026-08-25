@@ -137,6 +137,11 @@ Lane identifiers appear only in this structured block, not in Micrometer tags. D
 are elapsed time, not CPU time. For CPU attribution, use the
 [advanced JFR procedure](performance.md#retain-a-jfr-cpu-profile).
 
+When `--writeback-size` engages, `meters` also includes
+`swath.data_sync.latency`, `swath.data_sync.bytes`, and
+`swath.data_sync.residual.bytes`. These measure writeback shaping; they do not indicate
+publication or an earlier crash-recovery boundary.
+
 ## 4. Progress and logs
 
 One reporter spans seeding, listing, merging, and writing. Its default cadence is 30

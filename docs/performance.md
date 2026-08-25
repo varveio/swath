@@ -116,6 +116,28 @@ with 2, 3, and 4 writers first; keep unsorted Parquet within its tested 2–4 ra
 higher count only when throughput improves without disproportionate growth in part count,
 finalization time, `submit_blocked_ms`, or `head_of_line_blocked_ms`.
 
+<a id="writeback-shaping"></a>
+
+### Writeback shaping for large text parts
+
+`--writeback-size SIZE` is an off-by-default experiment for unsorted TSV/JSONL directory datasets.
+It periodically forces physical bytes already emitted to each open part while keeping the encoder,
+compression frame, and final part open. It exists to test whether bounding the dirty-page backlog
+reduces the final close stall enough to support large published parts efficiently.
+
+This option has **no crash-recovery benefit**. A text dataset is still non-resumable, and I6 is
+unchanged: rows become durable and publishable only after the part is finalized and its full
+file-plus-parent barrier succeeds. A periodic force does not write a compression trailer, manifest,
+or `_SUCCESS` marker. Positive values below `4mb` are rejected; Parquet and sorted outputs are also
+rejected until their own adapters have passed matched benchmarks and byte-identity/failure tests.
+
+Benchmark it against an otherwise identical disabled arm. For a size-only comparison, explicitly
+pass `--part-rotation-interval 0 --part-rotation-max-rows 0`; otherwise the default 30-second or
+2-million-row trigger may rotate before the requested part size. Compare wall time,
+`swath.data_sync.latency`, `.bytes`, `.residual.bytes`, text finalize latency, part count, and exact
+manifest row/MD5 totals. If writeback cost does not recover the large-part throughput loss, leave it
+disabled rather than treating a smaller residual as a throughput win by itself.
+
 ### Size CPU and memory empirically
 
 CPU cost per million keys is:

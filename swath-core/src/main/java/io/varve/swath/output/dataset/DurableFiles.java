@@ -22,11 +22,13 @@ public final class DurableFiles {
 
     /** Force a completed file's bytes and then the parent entry that names it. */
     public static void fileAndParent(Path file) throws IOException {
-        fileAndParent(file, path -> {
-            try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
-                channel.force(true);
-            }
-        }, path -> directory(path));
+        fileAndParent(file, path -> forceFile(path, true), DurableFiles::directory);
+    }
+
+    private static void forceFile(Path file, boolean metadata) throws IOException {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
+            channel.force(metadata);
+        }
     }
 
     @FunctionalInterface

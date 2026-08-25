@@ -9,6 +9,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.error.InvalidConfigException;
+import io.varve.swath.output.OutputFormat;
+import io.varve.swath.output.dataset.PeriodicDataSync;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import org.junit.jupiter.api.Test;
 
@@ -20,6 +22,42 @@ final class OutputDatasetConfigValidationTest {
 
         assertThat(options.partSizeBytes()).isEqualTo(OutputOptions.DEFAULT_PART_SIZE_BYTES);
         assertThat(options.textPartSizeBytes()).isEqualTo(OutputOptions.DEFAULT_PART_SIZE_BYTES);
+        assertThat(options.writebackSizeBytes()).isZero();
+    }
+
+    @Test
+    void writebackSizeHasAnExplicitDisabledStateAndFourMibFloor() throws Exception {
+        OutputOptions disabled = new OutputOptions();
+        disabled.writebackSize = "0";
+        assertThat(disabled.writebackSizeBytes()).isZero();
+
+        OutputOptions minimum = new OutputOptions();
+        minimum.writebackSize = "4mb";
+        assertThat(minimum.writebackSizeBytes()).isEqualTo(PeriodicDataSync.MIN_INTERVAL_BYTES);
+
+        OutputOptions below = new OutputOptions();
+        below.writebackSize = "1mb";
+        assertThatThrownBy(below::writebackSizeBytes)
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("--writeback-size")
+                .hasMessageContaining("at least 4mb");
+    }
+
+    @Test
+    void writebackRejectsFormatsWhoseAdaptersHaveNotBeenBenchmarked() {
+        OutputOptions parquet = new OutputOptions();
+        parquet.writebackSize = "4mb";
+        parquet.resolvedKind = OutputOptions.DestinationKind.DIRECTORY;
+        assertThatThrownBy(() -> parquet.validateWritebackTarget(OutputFormat.PARQUET, false))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only unsorted TSV/JSONL directory datasets");
+
+        OutputOptions sortedText = new OutputOptions();
+        sortedText.writebackSize = "4mb";
+        sortedText.resolvedKind = OutputOptions.DestinationKind.DIRECTORY;
+        assertThatThrownBy(() -> sortedText.validateWritebackTarget(OutputFormat.TSV, true))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only unsorted TSV/JSONL directory datasets");
     }
 
     @Test

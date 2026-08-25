@@ -1380,7 +1380,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     argsHash, s3uri.bucket(), writers, output.textPartSizeBytes(),
                     datasetWriterQueueCapacityPerLane(writers),
                     output.resolvePartRotationInterval().toNanos(),
-                    output.resolvePartRotationMaxRows());
+                    output.resolvePartRotationMaxRows(), output.writebackSizeBytes(), null);
         } catch (IllegalArgumentException e) {
             throw new InvalidConfigException(e.getMessage(), e);
         }
@@ -1685,7 +1685,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * names both bounded resources this knob can stress: heap and per-finalize publication work.
      */
     private void validateDatasetWriterConfiguration(OutputFormat format)
-            throws InvalidConfigException {
+            throws InvalidConfigException, InvalidArgsException {
+        output.validateWritebackTarget(format, sorting.sort);
         if (sorting.sort) {
             return;
         }

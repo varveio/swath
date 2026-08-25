@@ -16,6 +16,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -101,6 +102,10 @@ final class JsonRunSummaryWriterTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Counter.builder("swath.api.calls").tag("strategy", "work_stealing").register(registry).increment(118);
         Timer.builder("swath.api.latency").tag("op", "listObjectsV2").register(registry);
+        DistributionSummary writebackBytes = DistributionSummary.builder("swath.data_sync.bytes")
+                .baseUnit("bytes").tag("format", "tsv").register(registry);
+        writebackBytes.record(32L * 1024 * 1024);
+        writebackBytes.record(64L * 1024 * 1024);
         Gauge.builder("swath.process.memory.rss.bytes", () -> Double.NaN).tag("kind", "current").register(registry);
         return registry;
     }
@@ -280,7 +285,8 @@ final class JsonRunSummaryWriterTest {
         assertThat(meters.isArray()).isTrue();
         List<String> meterNames = new ArrayList<>();
         meters.forEach(m -> meterNames.add(m.get("name").asText()));
-        assertThat(meterNames).contains("swath.api.calls", "swath.api.latency", "swath.process.memory.rss.bytes");
+        assertThat(meterNames).contains("swath.api.calls", "swath.api.latency",
+                "swath.data_sync.bytes", "swath.process.memory.rss.bytes");
 
         JsonNode apiCallsMeter = findMeter(meters, "swath.api.calls");
         assertThat(apiCallsMeter.get("type").asText()).isEqualTo("counter");
@@ -292,6 +298,14 @@ final class JsonRunSummaryWriterTest {
         assertThat(latencyMeter.has("count")).isTrue();
         assertThat(latencyMeter.has("total_ms")).isTrue();
         assertThat(latencyMeter.has("max_ms")).isTrue();
+
+        JsonNode writebackMeter = findMeter(meters, "swath.data_sync.bytes");
+        assertThat(writebackMeter.get("type").asText()).isEqualTo("distribution_summary");
+        assertThat(writebackMeter.get("tags").get("format").asText()).isEqualTo("tsv");
+        assertThat(writebackMeter.get("count").asLong()).isEqualTo(2L);
+        assertThat(writebackMeter.get("total").asDouble()).isEqualTo(96L * 1024 * 1024);
+        assertThat(writebackMeter.get("max").asDouble()).isEqualTo(64L * 1024 * 1024);
+        assertThat(writebackMeter.get("mean").asDouble()).isEqualTo(48L * 1024 * 1024);
 
         JsonNode nanGaugeMeter = findMeter(meters, "swath.process.memory.rss.bytes");
         assertThat(nanGaugeMeter.get("type").asText()).isEqualTo("gauge");

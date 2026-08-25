@@ -270,7 +270,7 @@ final class ListRunnerWorkStealingTest {
                     8000, 1000, FilterChain.EMPTY, null, null);
             TextWriterPoolConfig writer = new TextWriterPoolConfig(
                     output, OutputFormat.JSONL, TextCompression.NONE, true,
-                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200);
+                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200, 0L, null);
 
             ListingStatistics stats = new ListRunner().runToTextDatasetWorkStealing(
                     RunContext.create(), fetcher, new ListRunner.TextDatasetSpec(listing, writer),
@@ -313,7 +313,7 @@ final class ListRunnerWorkStealingTest {
                     8000, 1000, FilterChain.EMPTY, null, null);
             TextWriterPoolConfig writer = new TextWriterPoolConfig(
                     output, OutputFormat.JSONL, TextCompression.NONE, true,
-                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200);
+                    "ws-text-hash", "bucket", 2, Long.MAX_VALUE, 64, 0, 200, 0L, null);
 
             assertThatThrownBy(() -> new ListRunner().runToTextDatasetWorkStealing(
                     ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
