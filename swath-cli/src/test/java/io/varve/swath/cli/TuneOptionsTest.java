@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import picocli.CommandLine;
 
 class TuneOptionsTest {
@@ -138,6 +139,30 @@ class TuneOptionsTest {
                         + "parquet.writers=4, summary.interval=PT30S, "
                         + "sort.merge-parallelism=" + SortConfig.DEFAULT.mergeParallelism() + ", "
                         + "sort.ignore-disk-check=off");
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void verboseModeReportsSystemPropertyMergeParallelismUsedByTheRun() {
+        String key = "swath.sort.merge-parallelism";
+        String previous = System.getProperty(key);
+        try {
+            System.setProperty(key, "7");
+            CommandLine cli = App.commandLine();
+            StringWriter err = new StringWriter();
+            cli.setErr(new PrintWriter(err));
+
+            int exit = cli.execute("list", "-v");
+
+            assertThat(exit).isEqualTo(2); // no URI: stops after tune validation/echo
+            assertThat(err.toString()).contains("sort.merge-parallelism=7");
+        } finally {
+            if (previous == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, previous);
+            }
+        }
     }
 
     @Test

@@ -94,28 +94,29 @@ public final class SortedParquetWriter implements SortedFileWriter {
     private FinalPartMetadata finalMetadata;
 
     public SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex) throws IOException {
-        this(path, config, mode, fileIndex, 0L, (DatasetDataSyncMetrics) null, null);
+        this(path, config, mode, fileIndex, WriterOptions.DEFAULT);
     }
 
-    SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
-            long writebackBytes, DatasetDataSyncMetrics syncMetrics) throws IOException {
-        this(path, config, mode, fileIndex, writebackBytes, syncMetrics, null);
+    static SortedParquetWriter withWriteback(Path path, SortConfig config, SortMode mode,
+            int fileIndex, long writebackBytes, DatasetDataSyncMetrics syncMetrics)
+            throws IOException {
+        return new SortedParquetWriter(path, config, mode, fileIndex,
+                new WriterOptions(writebackBytes, syncMetrics, null));
     }
 
-    SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
+    static SortedParquetWriter withDataForcer(Path path, SortConfig config, SortMode mode, int fileIndex,
             long writebackBytes, RunMetrics metrics, ListEntryParquetWriters.DataForcer dataForcer)
             throws IOException {
-        this(path, config, mode, fileIndex, writebackBytes,
-                metrics == null ? null : new DatasetDataSyncMetrics(
-                        metrics, "parquet", DatasetDataSyncMetrics.Classification.SORTED_PARQUET),
-                dataForcer);
+        DatasetDataSyncMetrics syncMetrics = metrics == null ? null : new DatasetDataSyncMetrics(
+                metrics, "parquet", DatasetDataSyncMetrics.Classification.SORTED_PARQUET);
+        return new SortedParquetWriter(path, config, mode, fileIndex,
+                new WriterOptions(writebackBytes, syncMetrics, dataForcer));
     }
 
     private SortedParquetWriter(Path path, SortConfig config, SortMode mode, int fileIndex,
-            long writebackBytes, DatasetDataSyncMetrics syncMetrics,
-            ListEntryParquetWriters.DataForcer dataForcer) throws IOException {
+            WriterOptions options) throws IOException {
         this.fileIndex = fileIndex;
-        this.syncMetrics = syncMetrics;
+        this.syncMetrics = options.syncMetrics();
         Map<String, String> stamp = Map.of(
                 ORDER_KEY, ORDER_VALUE,
                 MODE_KEY, mode.value(),
@@ -129,12 +130,12 @@ public final class SortedParquetWriter implements SortedFileWriter {
         // the range-local stamp the parallel path exists to fix.
         WriteSupport<ListEntry> writeSupport = new StampedWriteSupport(
                 ParquetSchema.canonical(), stamp, () -> finalFile, () -> this.fileIndex);
-        ListEntryParquetWriters.TrackedWriter tracked = dataForcer == null
-                ? ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
-                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()), writebackBytes)
-                : ListEntryParquetWriters.buildTracked(path, writeSupport, config.finalRowGroupBytes(),
-                        ListEntryParquetWriters.PageLayout.served(config.finalPageRows()), writebackBytes,
-                        dataForcer);
+        ListEntryParquetWriters.TrackedSpec trackedSpec = new ListEntryParquetWriters.TrackedSpec(
+                config.finalRowGroupBytes(),
+                ListEntryParquetWriters.PageLayout.served(config.finalPageRows()),
+                options.writebackBytes(), options.dataForcer());
+        ListEntryParquetWriters.TrackedWriter tracked =
+                ListEntryParquetWriters.buildTracked(path, writeSupport, trackedSpec);
         this.tracked = tracked;
         this.writer = tracked.writer();
     }
@@ -226,6 +227,11 @@ public final class SortedParquetWriter implements SortedFileWriter {
     @Override
     public synchronized Optional<FinalPartMetadata> finalMetadata() {
         return Optional.ofNullable(finalMetadata);
+    }
+
+    private record WriterOptions(long writebackBytes, DatasetDataSyncMetrics syncMetrics,
+                                 ListEntryParquetWriters.DataForcer dataForcer) {
+        private static final WriterOptions DEFAULT = new WriterOptions(0L, null, null);
     }
 
     /**

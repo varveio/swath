@@ -42,9 +42,13 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
     PartWriter(Path path, MessageType schema, long writebackBytes,
                SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
         this.path = path;
-        tracked = ListEntryParquetWriters.buildTrackedWithChannelForcer(path, new ListEntryWriteSupport(schema),
+        ListEntryParquetWriters.DataForcer selectedForcer =
+                dataForcer == null ? null : dataForcer::force;
+        ListEntryParquetWriters.TrackedSpec spec = new ListEntryParquetWriters.TrackedSpec(
                 ROW_GROUP_BYTES, ListEntryParquetWriters.PageLayout.staging(),
-                writebackBytes, dataForcer);
+                writebackBytes, selectedForcer);
+        tracked = ListEntryParquetWriters.buildTracked(
+                path, new ListEntryWriteSupport(schema), spec);
         writer = tracked.writer();
     }
 

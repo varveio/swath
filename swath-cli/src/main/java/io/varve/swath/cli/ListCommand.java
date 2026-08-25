@@ -293,7 +293,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             PrintWriter commandErr = spec != null
                     ? spec.commandLine().getErr() : new PrintWriter(System.err, true);
             commandErr.println("tune effective: " + tune.effectiveConfiguration(
-                    liveness.resolveEffectiveProgressInterval().toString()));
+                    liveness.resolveEffectiveProgressInterval().toString(),
+                    sorting.resolveConfig().mergeParallelism()));
             commandErr.flush();
         }
         if (uri == null) {

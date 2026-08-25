@@ -948,7 +948,8 @@ public final class ListRunner {
         // ProgressMarkingSortedFileWriter (never per key).
         FinalizeWallClock finalizeClock = new FinalizeWallClock();
         SortedFileWriterFactory writerFactory = progressMarkingFactory(
-                new SortedParquetWriterFactory(config, mode, writebackBytes, ctx.metrics()),
+                SortedParquetWriterFactory.withWriteback(
+                        config, mode, writebackBytes, ctx.metrics()),
                 ctx.metrics(), finalizeClock);
         // The WIDE stale-finals sweep (ALL data/*.parquet, not
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path

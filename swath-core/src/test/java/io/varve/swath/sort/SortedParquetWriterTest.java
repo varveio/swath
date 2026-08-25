@@ -218,9 +218,9 @@ class SortedParquetWriterTest {
 
         try (SortedFileWriter control =
                         new SortedParquetWriter(controlPath, config, SortMode.OBJECTS, 1);
-             SortedFileWriter candidate = new SortedParquetWriter(candidatePath, config,
+             SortedFileWriter candidate = SortedParquetWriter.withDataForcer(candidatePath, config,
                      SortMode.OBJECTS, 1, PeriodicDataSync.MIN_INTERVAL_BYTES, null,
-                     forces::incrementAndGet)) {
+                     ignored -> forces.incrementAndGet())) {
             for (int i = 0; i < 100; i++) {
                 ListEntry entry = object(String.format("%08d", i));
                 control.write(entry);
@@ -242,8 +242,10 @@ class SortedParquetWriterTest {
         RunMetrics metrics = new RunMetrics(registry);
         AtomicInteger forces = new AtomicInteger();
         SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
-        SortedParquetWriter writer = new SortedParquetWriter(path, smallGroups, SortMode.OBJECTS, 1,
-                PeriodicDataSync.MIN_INTERVAL_BYTES, metrics, forces::incrementAndGet);
+        SortedParquetWriter writer = SortedParquetWriter.withDataForcer(
+                path, smallGroups, SortMode.OBJECTS, 1,
+                PeriodicDataSync.MIN_INTERVAL_BYTES, metrics,
+                ignored -> forces.incrementAndGet());
         Random random = new Random(0x50A7EDL);
 
         int rows = 0;
@@ -275,9 +277,10 @@ class SortedParquetWriterTest {
             throws IOException {
         Path path = dir.resolve("part-00001.parquet");
         SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
-        SortedParquetWriter writer = new SortedParquetWriter(path, smallGroups, SortMode.OBJECTS, 1,
+        SortedParquetWriter writer = SortedParquetWriter.withDataForcer(
+                path, smallGroups, SortMode.OBJECTS, 1,
                 PeriodicDataSync.MIN_INTERVAL_BYTES, null,
-                () -> { throw new IOException("injected data force failure"); });
+                ignored -> { throw new IOException("injected data force failure"); });
         Random random = new Random(0xBADF0ACEL);
 
         assertThatThrownBy(() -> {
@@ -298,7 +301,7 @@ class SortedParquetWriterTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         RunMetrics metrics = new RunMetrics(registry);
         SortConfig smallGroups = config(Map.of("final-row-group-bytes", "1048576"));
-        SortedParquetWriterFactory factory = new SortedParquetWriterFactory(
+        SortedParquetWriterFactory factory = SortedParquetWriterFactory.withWriteback(
                 smallGroups, SortMode.OBJECTS, PeriodicDataSync.MIN_INTERVAL_BYTES, metrics);
         Random random = new Random(0xFAC70A1L);
 

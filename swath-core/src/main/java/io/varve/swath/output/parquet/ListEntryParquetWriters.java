@@ -9,7 +9,9 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.output.dataset.DurableFiles;
 import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.OptionalLong;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.column.ParquetProperties;
@@ -38,6 +40,14 @@ public final class ListEntryParquetWriters {
         }
     }
 
+    /** Complete construction options for a tracked final-file writer. */
+    public record TrackedSpec(long rowGroupBytes, PageLayout layout, long writebackBytes,
+                              DataForcer dataForcer) {
+        public TrackedSpec {
+            Objects.requireNonNull(layout, "layout");
+        }
+    }
+
     private ListEntryParquetWriters() {
     }
 
@@ -48,52 +58,23 @@ public final class ListEntryParquetWriters {
         return build(writeSupport, rowGroupBytes, layout, new LocalOutputFile(path));
     }
 
-    /** Builds a final-file writer with byte/digest tracking and periodic data sync disabled. */
+    /** Builds a final-file writer with byte/digest tracking and optional same-channel data sync. */
     public static TrackedWriter buildTracked(
-            Path path, WriteSupport<ListEntry> writeSupport, long rowGroupBytes, PageLayout layout)
-            throws IOException {
-        return buildTracked(path, writeSupport, rowGroupBytes, layout, 0L, null);
-    }
-
-    /** Builds a final-file writer with byte/digest tracking and an optional data-sync cadence. */
-    public static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
-            long rowGroupBytes, PageLayout layout, long writebackBytes) throws IOException {
-        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, null, null);
-    }
-
-    /** Test seam for a data-only force that does not need to inspect the underlying channel. */
-    public static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
-            long rowGroupBytes, PageLayout layout, long writebackBytes, DataForcer dataForcer)
-            throws IOException {
-        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, dataForcer, null);
-    }
-
-    static TrackedWriter buildTrackedWithChannelForcer(Path path, WriteSupport<ListEntry> writeSupport,
-            long rowGroupBytes, PageLayout layout, long writebackBytes,
-            SyncableLocalOutputFile.DataForcer dataForcer) throws IOException {
-        return buildTracked(path, writeSupport, rowGroupBytes, layout, writebackBytes, null, dataForcer);
-    }
-
-    private static TrackedWriter buildTracked(Path path, WriteSupport<ListEntry> writeSupport,
-            long rowGroupBytes, PageLayout layout, long writebackBytes, DataForcer dataForcer,
-            SyncableLocalOutputFile.DataForcer channelForcer) throws IOException {
-        PeriodicDataSync periodicSync = new PeriodicDataSync(writebackBytes);
+            Path path, WriteSupport<ListEntry> writeSupport, TrackedSpec spec) throws IOException {
+        PeriodicDataSync periodicSync = new PeriodicDataSync(spec.writebackBytes());
         SyncableLocalOutputFile syncableOutput = null;
         OutputFile physicalOutput;
         if (periodicSync.enabled()) {
-            if (channelForcer != null) {
-                syncableOutput = new SyncableLocalOutputFile(path, channelForcer);
-            } else if (dataForcer != null) {
-                syncableOutput = new SyncableLocalOutputFile(path, ignored -> dataForcer.force());
-            } else {
-                syncableOutput = new SyncableLocalOutputFile(path);
-            }
+            syncableOutput = spec.dataForcer() == null
+                    ? new SyncableLocalOutputFile(path)
+                    : new SyncableLocalOutputFile(path, spec.dataForcer()::force);
             physicalOutput = syncableOutput;
         } else {
             physicalOutput = new LocalOutputFile(path);
         }
         DigestingOutputFile output = new DigestingOutputFile(physicalOutput);
-        return new TrackedWriter(path, build(writeSupport, rowGroupBytes, layout, output), output,
+        return new TrackedWriter(path,
+                build(writeSupport, spec.rowGroupBytes(), spec.layout(), output), output,
                 syncableOutput, periodicSync);
     }
 
@@ -192,7 +173,7 @@ public final class ListEntryParquetWriters {
 
     @FunctionalInterface
     public interface DataForcer {
-        void force() throws IOException;
+        void force(FileChannel channel) throws IOException;
     }
 
     /** Finalizes the footer, then fsyncs the file and its parent directory (I6). */

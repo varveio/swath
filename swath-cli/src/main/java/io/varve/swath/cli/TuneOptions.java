@@ -30,7 +30,9 @@ final class TuneOptions {
             new KeySpec("summary.interval", "duration",
                     "positive duration (for example 2s, 500ms, or PT2S)", "--progress-interval",
                     "stable", ResumeClass.FREE, "fresh list"),
-            new KeySpec("sort.merge-parallelism", "integer", "1..16",
+            new KeySpec("sort.merge-parallelism", "integer",
+                    SortOptions.MIN_MERGE_PARALLELISM + ".."
+                            + SortOptions.MAX_MERGE_PARALLELISM,
                     Integer.toString(SortConfig.DEFAULT.mergeParallelism()), "stable", ResumeClass.FREE,
                     "fresh list and resume"),
             new KeySpec("sort.ignore-disk-check", "boolean", "on|off", "off",
@@ -100,11 +102,14 @@ final class TuneOptions {
     }
 
     /** Registry-ordered effective configuration, including defaults for settings not supplied. */
-    String effectiveConfiguration(String resolvedSummaryInterval) {
+    String effectiveConfiguration(String resolvedSummaryInterval, int resolvedMergeParallelism) {
         return REGISTRY.stream()
                 .map(spec -> spec.key() + "=" + effectiveValues.getOrDefault(spec.key(),
                         "summary.interval".equals(spec.key())
-                                ? resolvedSummaryInterval : spec.defaultValue()))
+                                ? resolvedSummaryInterval
+                                : "sort.merge-parallelism".equals(spec.key())
+                                        ? Integer.toString(resolvedMergeParallelism)
+                                        : spec.defaultValue()))
                 .collect(Collectors.joining(", "));
     }
 
