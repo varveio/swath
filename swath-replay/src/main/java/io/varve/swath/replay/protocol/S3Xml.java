@@ -36,10 +36,11 @@ public final class S3Xml {
         xml.appendAscii("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
         element(xml, "Name", request.bucket());
         byteElement(xml, "Prefix", request.prefix(), request.encodingTypeUrl());
-        if (request.continuationToken() != null) {
+        // A token and a start-after can both arrive; the pager resumes at the token, so the response
+        // echoes the token and omits the start-after S3 ignored.
+        if (request.hasContinuationToken()) {
             element(xml, "ContinuationToken", request.continuationToken());
-        }
-        if (request.startAfter() != null) {
+        } else if (request.startAfter() != null) {
             byteElement(xml, "StartAfter", request.startAfter(), request.encodingTypeUrl());
         }
         if (result.nextContinuationToken() != null) {

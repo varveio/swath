@@ -316,6 +316,12 @@ Supported parameters are `list-type=2`, `prefix`, `delimiter`, `start-after`,
 `continuation-token`, `max-keys`, `encoding-type=url`, and `fetch-owner`. Replay tokens and
 real S3 continuation tokens are intentionally not interchangeable.
 
+A request may carry both `continuation-token` and `start-after`, which some clients do because
+they keep their opening `start-after` in the request template and add the token as they page.
+Replay resumes at the token and ignores the `start-after`, as real S3 does, and omits the ignored
+value from the response. A malformed token is still rejected, `start-after` present or not:
+precedence chooses which boundary applies, it does not make one a fallback for the other.
+
 ## Run real-S3 conformance
 
 The harness can capture S3 traffic through Dockerized mitmproxy, create a fixture, replay

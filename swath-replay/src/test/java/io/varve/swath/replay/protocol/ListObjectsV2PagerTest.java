@@ -93,13 +93,82 @@ class ListObjectsV2PagerTest {
                 .hasMessageContaining("invalid continuation-token");
     }
 
+    /** Precedence resumes at a token; it does not make a valid start-after a fallback for a broken one. */
     @Test
-    void rejectsContinuationTokenAndStartAfterTogether() {
+    void rejectsBadContinuationTokenEvenWhenStartAfterCouldHaveServed() {
         ListObjectsV2Pager pager = pager("a/1");
         assertThatThrownBy(() -> pager.list(new S3ListRequest(
-                "bucket", null, null, bytes("a/1"), "v2:AGEvMg", 1000, true, false)))
+                "bucket", null, null, bytes("a/1"), "not-a-token", 1000, true, false)))
                 .isInstanceOf(S3Error.class)
-                .hasMessageContaining("mutually exclusive");
+                .hasMessageContaining("invalid continuation-token");
+    }
+
+    /**
+     * Real S3 accepts both parameters and resumes at the token. The start-after here sorts AFTER the
+     * token's boundary, so honoring it — or taking the later of the two — would drop {@code a/3}: a
+     * client that keeps its original start-after while paging would silently lose keys.
+     */
+    @Test
+    void continuationTokenTakesPrecedenceOverALaterStartAfter() {
+        ListObjectsV2Pager pager = pager("a/1", "a/2", "a/3", "a/4");
+        S3ListResult first = pager.list(new S3ListRequest(
+                "bucket", null, null, null, null, 2, true, false));
+
+        S3ListResult resumed = pager.list(new S3ListRequest(
+                "bucket", null, null, bytes("a/3"), first.nextContinuationToken(), 1000, true, false));
+
+        assertThat(keys(resumed)).containsExactly("a/3", "a/4");
+    }
+
+    /**
+     * The mirror case: a start-after sorting BEFORE the token's boundary. Honoring it — or taking the
+     * earlier of the two — re-emits {@code a/2}, which the first page already returned, so a full walk
+     * would report duplicates. Together with the later-start-after case this pins the resume boundary
+     * to the token itself rather than to any combination of the two.
+     */
+    @Test
+    void continuationTokenTakesPrecedenceOverAnEarlierStartAfter() {
+        ListObjectsV2Pager pager = pager("a/1", "a/2", "a/3", "a/4");
+        S3ListResult first = pager.list(new S3ListRequest(
+                "bucket", null, null, null, null, 2, true, false));
+
+        S3ListResult resumed = pager.list(new S3ListRequest(
+                "bucket", null, null, bytes("a/1"), first.nextContinuationToken(), 1000, true, false));
+
+        assertThat(keys(resumed)).containsExactly("a/3", "a/4");
+    }
+
+    /** Precedence holds on the delimiter path too, where the boundary drives CommonPrefix rollup. */
+    @Test
+    void continuationTokenTakesPrecedenceOverStartAfterOnTheDelimiterPath() {
+        ListObjectsV2Pager pager = pager("d/a1/c1", "d/a1/c2", "d/a2/c1", "d/a3/c1");
+        S3ListResult first = pager.list(new S3ListRequest(
+                "bucket", bytes("d/"), bytes("/"), null, null, 1, true, false));
+        assertThat(render(first.entries())).containsExactly("P:d/a1/");
+
+        S3ListResult resumed = pager.list(new S3ListRequest(
+                "bucket", bytes("d/"), bytes("/"), bytes("d/a3/"), first.nextContinuationToken(), 1000, true, false));
+
+        assertThat(render(resumed.entries())).containsExactly("P:d/a2/", "P:d/a3/");
+    }
+
+    /**
+     * {@code continuation-token=} arrives as an empty string, not as an absent parameter.
+     * {@link ContinuationToken#decode} reads blank as absent, so the pager must too: treating it as a
+     * present-but-empty token would discard the start-after and restart a walk from the top, handing
+     * the client keys it already has instead of an error.
+     */
+    @Test
+    void blankContinuationTokenLeavesStartAfterAsTheBoundary() {
+        ListObjectsV2Pager pager = pager("a/1", "a/2", "a/3", "a/4");
+
+        for (String blank : new String[]{"", "   "}) {
+            S3ListResult result = pager.list(new S3ListRequest(
+                    "bucket", null, null, bytes("a/2"), blank, 1000, true, false));
+
+            assertThat(keys(result)).as("blank token %s", blank.isEmpty() ? "<empty>" : "<whitespace>")
+                    .containsExactly("a/3", "a/4");
+        }
     }
 
     @Test

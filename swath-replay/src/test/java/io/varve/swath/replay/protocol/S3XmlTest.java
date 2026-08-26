@@ -91,6 +91,36 @@ class S3XmlTest {
                 .contains("<CommonPrefixes><Prefix>/%20%FF%26%3C%3E</Prefix></CommonPrefixes>");
     }
 
+    /** The response reports the boundary the pager actually resumed at, so the ignored one is omitted. */
+    @Test
+    void continuationTokenSuppressesIgnoredStartAfterInResponse() {
+        S3ListRequest request = new S3ListRequest(
+                "bucket", null, null, bytes("conflicting-boundary"), "opaque-token", 1000, true, false);
+        S3ListResult result = new S3ListResult(request, List.of(), false, null);
+
+        assertThat(S3Xml.listBucket(result))
+                .contains("<ContinuationToken>opaque-token</ContinuationToken>")
+                .doesNotContain("<StartAfter>");
+    }
+
+    /**
+     * A blank {@code continuation-token=} is not a resume point, so it neither suppresses the
+     * start-after the pager honored nor gets echoed back as an empty element the client never sent.
+     */
+    @Test
+    void blankContinuationTokenNeitherSuppressesNorEchoes() {
+        for (String blank : new String[]{"", "   "}) {
+            S3ListRequest request = new S3ListRequest(
+                    "bucket", null, null, bytes("a/2"), blank, 1000, true, false);
+            S3ListResult result = new S3ListResult(request, List.of(), false, null);
+
+            assertThat(S3Xml.listBucket(result))
+                    .as("blank token %s", blank.isEmpty() ? "<empty>" : "<whitespace>")
+                    .contains("<StartAfter>a/2</StartAfter>")
+                    .doesNotContain("<ContinuationToken>");
+        }
+    }
+
     @Test
     void boundedBufferGrowthPreservesEveryResponseByte() {
         List<S3ResultEntry> entries = new ArrayList<>();

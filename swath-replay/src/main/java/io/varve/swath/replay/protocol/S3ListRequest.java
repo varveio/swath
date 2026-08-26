@@ -23,4 +23,14 @@ public record S3ListRequest(
         this(bucket, prefix, delimiter, startAfter, continuationToken, maxKeys,
                 Math.min(Math.max(maxKeys, 0), S3_MAX_KEYS), encodingTypeUrl, fetchOwner);
     }
+
+    /**
+     * Whether the request carries a continuation token that actually resumes something. A blank
+     * {@code continuation-token=} query value is not a resume point — {@link ContinuationToken#decode}
+     * reads it as absent — so it must not suppress {@code start-after} either, in the boundary the
+     * pager resolves or in the response the renderer echoes. Both ask here so the two cannot drift.
+     */
+    public boolean hasContinuationToken() {
+        return continuationToken != null && !continuationToken.isBlank();
+    }
 }

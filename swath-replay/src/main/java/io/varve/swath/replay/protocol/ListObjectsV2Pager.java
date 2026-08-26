@@ -19,9 +19,10 @@ import org.slf4j.LoggerFactory;
  * Owns every S3 ListObjectsV2 protocol rule once, driving a range-only {@link ListingStore}:
  * max-keys accounting (objects and common prefixes counted together, emit-then-check;
  * {@code max-keys=0} ⇒ empty, non-truncated), truncation, delimiter rollup, common-prefix resume,
- * prefix/start-after interplay, and continuation-token encode/decode. Because both the DuckDB and
- * the sorted-Parquet stores are driven through this one pager, a differential test attributes any
- * disagreement to a store by construction.
+ * prefix/start-after interplay, continuation-token precedence over start-after, and
+ * continuation-token encode/decode. Because both the DuckDB and the sorted-Parquet stores are
+ * driven through this one pager, a differential test attributes any disagreement to a store by
+ * construction.
  *
  * <p>The pager translates S3 semantics into byte ranges: the prefix window is
  * {@code [prefix, prefixUpper(prefix))} ({@link ByteKeys#prefixUpper}), a resume boundary is the
@@ -260,13 +261,17 @@ public final class ListObjectsV2Pager implements ListingFixture {
         return filtered;
     }
 
+    /**
+     * Resolves the resume boundary S3 would use. A continuation token wins over a conflicting
+     * {@code start-after} — real S3 accepts both and resumes at the token — but only a token that
+     * decodes to a real resume point does; a blank one is absent, not an empty boundary that would
+     * silently restart a walk the client asked to resume. A malformed token still throws: precedence
+     * does not turn token validation into a fallback.
+     */
     private Boundary resolveBoundary(S3ListRequest request) {
-        if (request.continuationToken() != null && request.startAfter() != null) {
-            throw new S3Error(400, "InvalidArgument", "continuation-token and start-after are mutually exclusive");
-        }
-        if (request.continuationToken() != null) {
+        if (request.hasContinuationToken()) {
             ContinuationToken token = ContinuationToken.decode(request.continuationToken());
-            return token == null ? null : new Boundary(token.boundary(), token.inclusive());
+            return new Boundary(token.boundary(), token.inclusive());
         }
         if (request.startAfter() != null) {
             return new Boundary(request.startAfter(), false);
