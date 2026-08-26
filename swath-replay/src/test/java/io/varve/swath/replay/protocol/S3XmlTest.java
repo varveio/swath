@@ -92,6 +92,17 @@ class S3XmlTest {
     }
 
     @Test
+    void continuationTokenSuppressesIgnoredStartAfterInResponse() {
+        S3ListRequest request = new S3ListRequest(
+                "bucket", null, null, bytes("conflicting-boundary"), "opaque-token", 1000, true, false);
+        S3ListResult result = new S3ListResult(request, List.of(), false, null);
+
+        assertThat(S3Xml.listBucket(result))
+                .contains("<ContinuationToken>opaque-token</ContinuationToken>")
+                .doesNotContain("<StartAfter>");
+    }
+
+    @Test
     void boundedBufferGrowthPreservesEveryResponseByte() {
         List<S3ResultEntry> entries = new ArrayList<>();
         String longKey = "x".repeat(1_024);

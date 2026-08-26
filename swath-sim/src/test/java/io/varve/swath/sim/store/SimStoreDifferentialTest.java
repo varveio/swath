@@ -386,8 +386,8 @@ class SimStoreDifferentialTest {
         String token = null;
         for (int guard = 0; guard <= 4096; guard++) {
             S3ListResult result = pager.list(new S3ListRequest(BUCKET, scenario.prefix(), scenario.delimiter(),
-                    // continuation-token and start-after are mutually exclusive: from page 2 on,
-                    // the token is the resume boundary.
+                    // This walk sends only the token after page one; when both are supplied, the
+                    // shared pager follows S3 and gives the token precedence.
                     token == null ? scenario.startAfter() : null,
                     token, scenario.maxKeys(), true, scenario.fetchOwner()));
             StringBuilder page = new StringBuilder();

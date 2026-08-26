@@ -39,7 +39,7 @@ public final class S3Xml {
         if (request.continuationToken() != null) {
             element(xml, "ContinuationToken", request.continuationToken());
         }
-        if (request.startAfter() != null) {
+        if (request.continuationToken() == null && request.startAfter() != null) {
             byteElement(xml, "StartAfter", request.startAfter(), request.encodingTypeUrl());
         }
         if (result.nextContinuationToken() != null) {

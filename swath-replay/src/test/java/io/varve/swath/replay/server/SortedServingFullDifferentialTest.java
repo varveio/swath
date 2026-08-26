@@ -119,6 +119,28 @@ class SortedServingFullDifferentialTest {
     }
 
     @Test
+    void continuationTokenWinsOverConflictingStartAfterOnHttp(@TempDir Path dir) throws Exception {
+        Fixture fixture = writeSorted(dir, List.of(
+                utf8("a/1"), utf8("a/2"), utf8("a/3"), utf8("a/4")), manySmallGroups());
+        try (ReplayServer sorted = new ReplayServer(
+                "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.SORTED);
+             ReplayServer duck = new ReplayServer(
+                     "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.DUCKDB)) {
+            sorted.start();
+            duck.start();
+            HttpClient client = HttpClient.newHttpClient();
+
+            String sortedResponse = resumeWithConflictingStartAfter(sorted, client);
+            String duckResponse = resumeWithConflictingStartAfter(duck, client);
+
+            assertThat(sortedResponse).isEqualTo(duckResponse);
+            assertThat(sortedResponse)
+                    .contains("<Key>a/3</Key>", "<Key>a/4</Key>")
+                    .doesNotContain("<Key>a/1</Key>", "<Key>a/2</Key>", "<StartAfter>");
+        }
+    }
+
+    @Test
     void giantSinglePrefixSpanningManyRowGroupsIsByteIdentical(@TempDir Path dir) throws Exception {
         List<byte[]> keys = new ArrayList<>();
         for (int i = 0; i < 220; i++) {
@@ -304,8 +326,8 @@ class SortedServingFullDifferentialTest {
             if (scenario.delimiter() != null) {
                 q.append("&delimiter=").append(HttpProbe.percentEncode(scenario.delimiter()));
             }
-            // start-after and continuation-token are mutually exclusive (a real client drops
-            // start-after once it holds a token); prefix/delimiter carry across every page.
+            // This walk sends only the token after page one; separate pager coverage proves that a
+            // request carrying both follows S3 and gives the token precedence.
             if (token != null) {
                 q.append("&continuation-token=").append(HttpProbe.percentEncode(token));
             } else if (scenario.startAfter() != null) {
@@ -320,6 +342,17 @@ class SortedServingFullDifferentialTest {
             assertThat(token).as("a truncated page must carry a continuation token").isNotNull();
         }
         throw new AssertionError("listing did not terminate for " + describe(scenario));
+    }
+
+    private static String resumeWithConflictingStartAfter(ReplayServer server, HttpClient client)
+            throws Exception {
+        String first = HttpProbe.body(server, client, "/bucket?list-type=2&max-keys=2");
+        String token = HttpProbe.extractTag(first, "NextContinuationToken");
+        assertThat(token).as("the first page must carry a continuation token").isNotNull();
+        return HttpProbe.body(server, client,
+                "/bucket?list-type=2&max-keys=1000&continuation-token="
+                        + HttpProbe.percentEncode(token) + "&start-after="
+                        + HttpProbe.percentEncode("a/3"));
     }
 
     private static String describe(Scenario s) {

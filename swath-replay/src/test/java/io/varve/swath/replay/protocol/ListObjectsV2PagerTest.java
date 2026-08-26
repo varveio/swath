@@ -88,18 +88,21 @@ class ListObjectsV2PagerTest {
     void rejectsBadContinuationToken() {
         ListObjectsV2Pager pager = pager("a/1");
         assertThatThrownBy(() -> pager.list(new S3ListRequest(
-                "bucket", null, null, null, "not-a-token", 1000, true, false)))
+                "bucket", null, null, bytes("a/1"), "not-a-token", 1000, true, false)))
                 .isInstanceOf(S3Error.class)
                 .hasMessageContaining("invalid continuation-token");
     }
 
     @Test
-    void rejectsContinuationTokenAndStartAfterTogether() {
-        ListObjectsV2Pager pager = pager("a/1");
-        assertThatThrownBy(() -> pager.list(new S3ListRequest(
-                "bucket", null, null, bytes("a/1"), "v2:AGEvMg", 1000, true, false)))
-                .isInstanceOf(S3Error.class)
-                .hasMessageContaining("mutually exclusive");
+    void continuationTokenTakesPrecedenceOverConflictingStartAfter() {
+        ListObjectsV2Pager pager = pager("a/1", "a/2", "a/3", "a/4");
+        S3ListResult first = pager.list(new S3ListRequest(
+                "bucket", null, null, null, null, 2, true, false));
+
+        S3ListResult resumed = pager.list(new S3ListRequest(
+                "bucket", null, null, bytes("a/3"), first.nextContinuationToken(), 1000, true, false));
+
+        assertThat(keys(resumed)).containsExactly("a/3", "a/4");
     }
 
     @Test
