@@ -28,6 +28,9 @@ import net.jqwik.api.statistics.Statistics;
  * mutated body is either rejected with the S3 400 or decodes to an observably DIFFERENT (boundary,
  * inclusive) pair — never a silent wrong-equal decode of a corrupted token; only a base64-aliasing
  * no-op (same decoded payload bytes) is exempt.
+ *
+ * <p>The last property covers the other end of the contract: which strings count as a token at all,
+ * which is what decides whether a request resumes at its token or at its {@code start-after}.
  */
 class ContinuationTokenPropertyTest {
 
@@ -163,5 +166,36 @@ class ContinuationTokenPropertyTest {
         } catch (IllegalArgumentException e) {
             return false;   // one side is not valid base64 at all — not a no-op
         }
+    }
+
+    @Provide
+    Arbitrary<String> tokenStrings() {
+        return Arbitraries.oneOf(
+                Arbitraries.strings().ascii().ofMinLength(0).ofMaxLength(20),
+                Arbitraries.of("", " ", "   ", "\t", "\n", " \t\n "),
+                boundaries().map(boundary -> ContinuationToken.encode(boundary, true)));
+    }
+
+    /**
+     * {@link S3ListRequest#hasContinuationToken} decides whether a continuation token takes precedence
+     * over a conflicting {@code start-after}; {@link ContinuationToken#decode} decides what that token
+     * resumes at. The two must classify every string the same way. Were a string ever "present" here
+     * and absent there, the request would discard its start-after in favor of a token that resolves to
+     * no boundary — restarting from the top a walk the client asked to resume, silently and with no
+     * error to notice.
+     */
+    @Property(tries = 500)
+    void hasContinuationTokenAgreesWithDecodeOnEveryString(@ForAll("tokenStrings") String token) {
+        boolean decodeReadsAToken;
+        try {
+            decodeReadsAToken = ContinuationToken.decode(token) != null;
+        } catch (S3Error rejected) {
+            decodeReadsAToken = true;   // structurally invalid is still a token the client meant to send
+        }
+
+        assertThat(new S3ListRequest("bucket", null, null, null, token, 1000, true, false)
+                .hasContinuationToken())
+                .as("token %s", token.isEmpty() ? "<empty>" : "'" + token + "'")
+                .isEqualTo(decodeReadsAToken);
     }
 }

@@ -4,17 +4,6 @@ Deviations between real AWS S3 and S3-compatible implementations (LocalStack, Mi
 similar) that swath has had to design around, because they are not visible from the S3 API
 contract alone — only from running against the real thing.
 
-## `continuation-token` together with `start-after`
-
-Real S3 accepts a `ListObjectsV2` request that supplies both parameters and uses the
-`continuation-token` as the resume boundary, ignoring the conflicting `start-after`. The replay
-server previously rejected this request shape with `400 InvalidArgument`, which stopped clients
-that retain their initial `start-after` while walking subsequent pages. `ListObjectsV2Pager` now
-matches S3: a present continuation token takes precedence, while `start-after` remains the boundary
-when no token is supplied, and the response omits the ignored `StartAfter` value. A malformed
-continuation token is still rejected even if the request also supplies a valid `start-after`;
-precedence does not turn token validation into fallback.
-
 ## `%` in an echoed `start-after`/`prefix`/`marker`
 
 **The deviation.** When a `ListObjectsV2` request is made with `encoding-type=url`, S3 percent-

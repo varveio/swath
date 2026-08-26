@@ -40,6 +40,10 @@ import org.junit.jupiter.api.io.TempDir;
  * runs the {@code encoding-type=url} on/off × {@code fetch-owner} on/off matrix, and the whole thing
  * runs once more over a <b>rolled multi-file</b> sorted fixture (tiny {@code final-file-bytes}) to
  * prove the file-aware index serves identically.
+ *
+ * <p>Two request shapes cannot come from the page walk, which drops {@code start-after} once it holds
+ * a token, so they are driven directly: a token sent alongside a conflicting {@code start-after}, and
+ * a blank {@code continuation-token=} that only the query string can express.
  */
 class SortedServingFullDifferentialTest {
 
@@ -118,26 +122,52 @@ class SortedServingFullDifferentialTest {
         differential(dir, keys, manySmallGroups(), scenarios);
     }
 
+    /**
+     * A client that keeps its original {@code start-after} while paging sends both parameters from
+     * page two on; real S3 resumes at the token and ignores the start-after. Both conflict directions
+     * run here: {@code a/1} sorts before the token's boundary (honoring it would re-emit keys page one
+     * already returned) and {@code a/3} sorts after it (honoring it would drop {@code a/3}). The
+     * walk-based tests cannot cover this — they drop start-after once they hold a token — so it is
+     * proven over the whole query-parser-to-XML path instead of the pager alone.
+     */
     @Test
     void continuationTokenWinsOverConflictingStartAfterOnHttp(@TempDir Path dir) throws Exception {
         Fixture fixture = writeSorted(dir, List.of(
                 utf8("a/1"), utf8("a/2"), utf8("a/3"), utf8("a/4")), manySmallGroups());
-        try (ReplayServer sorted = new ReplayServer(
-                "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.SORTED);
-             ReplayServer duck = new ReplayServer(
-                     "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.DUCKDB)) {
-            sorted.start();
-            duck.start();
-            HttpClient client = HttpClient.newHttpClient();
+        withServers(fixture, (sorted, duck, client) -> {
+            for (String conflicting : new String[]{"a/1", "a/3"}) {
+                String response = agreedResume(sorted, duck, client,
+                        "&start-after=" + HttpProbe.percentEncode(utf8(conflicting)));
 
-            String sortedResponse = resumeWithConflictingStartAfter(sorted, client);
-            String duckResponse = resumeWithConflictingStartAfter(duck, client);
+                assertThat(response).as("start-after=%s must not move the token's boundary", conflicting)
+                        .contains("<Key>a/3</Key>", "<Key>a/4</Key>")
+                        .doesNotContain("<Key>a/1</Key>", "<Key>a/2</Key>", "<StartAfter>");
+            }
+        });
+    }
 
-            assertThat(sortedResponse).isEqualTo(duckResponse);
-            assertThat(sortedResponse)
-                    .contains("<Key>a/3</Key>", "<Key>a/4</Key>")
-                    .doesNotContain("<Key>a/1</Key>", "<Key>a/2</Key>", "<StartAfter>");
-        }
+    /**
+     * {@code continuation-token=} reaches the pager as an empty string rather than an absent
+     * parameter, which only the wire can produce. Blank is absent: {@code start-after} stays the
+     * boundary and is still echoed. Treating blank as a present token would restart the listing at
+     * {@code a/1} and hand back keys the client asked to skip.
+     */
+    @Test
+    void blankContinuationTokenLeavesStartAfterAsTheBoundaryOnHttp(@TempDir Path dir) throws Exception {
+        Fixture fixture = writeSorted(dir, List.of(
+                utf8("a/1"), utf8("a/2"), utf8("a/3"), utf8("a/4")), manySmallGroups());
+        withServers(fixture, (sorted, duck, client) -> {
+            String query = "/bucket?list-type=2&max-keys=1000&continuation-token=&start-after="
+                    + HttpProbe.percentEncode(utf8("a/1"));
+
+            String response = HttpProbe.body(sorted, client, query);
+
+            assertThat(response).isEqualTo(HttpProbe.body(duck, client, query));
+            assertThat(response)
+                    .contains("<Key>a/2</Key>", "<Key>a/3</Key>", "<Key>a/4</Key>",
+                            "<StartAfter>a/1</StartAfter>")
+                    .doesNotContain("<Key>a/1</Key>", "<ContinuationToken>");
+        });
     }
 
     @Test
@@ -216,27 +246,14 @@ class SortedServingFullDifferentialTest {
         }
         Fixture fixture = writeSorted(dir, keys, manySmallGroups());
         List<Scenario> scenarios = new ArrayList<>(projectionMatrix(null, utf8("/"), null, new int[]{1, 2, 3, 5}));
-        try (ReplayServer sorted = new ReplayServer(
-                "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.SORTED);
-             ReplayServer duck = new ReplayServer(
-                     "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.DUCKDB)) {
-            sorted.start();
-            duck.start();
-            assertThat(sorted.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
-            assertThat(duck.resolvedServingMode()).isEqualTo(ServingMode.DUCKDB);
-
-            HttpClient client = HttpClient.newHttpClient();
-            for (Scenario scenario : scenarios) {
-                assertThat(walk(sorted, client, scenario))
-                        .as("sorted vs duckdb differ for %s", describe(scenario))
-                        .isEqualTo(walk(duck, client, scenario));
-            }
+        withServers(fixture, (sorted, duck, client) -> {
+            walkAll(sorted, duck, client, scenarios);
             assertThat(sorted.metrics().registry().find("swath.replay.delimiter.path")
                     .tag("path", ReplayMetrics.DELIMITER_PATH_ROLLUP).counter().count())
                     .as("no-prefix delimiter requests must be served by the store's native rollup, "
                             + "not silently fall back to the range walk")
                     .isGreaterThan(0.0);
-        }
+        });
     }
 
     @Test
@@ -290,6 +307,22 @@ class SortedServingFullDifferentialTest {
     }
 
     private void runAll(Fixture fixture, List<Scenario> scenarios) throws Exception {
+        withServers(fixture, (sorted, duck, client) -> walkAll(sorted, duck, client, scenarios));
+    }
+
+    /** The body of a differential: both servers started over one fixture, plus the client driving them. */
+    @FunctionalInterface
+    private interface Differential {
+        void run(ReplayServer sorted, ReplayServer duck, HttpClient client) throws Exception;
+    }
+
+    /**
+     * Serves one fixture through both stores and hands both servers to {@code body}. The resolved-mode
+     * assertions live here rather than in each caller because they are what makes a differential one:
+     * were either server to resolve to the other's store, every comparison below would be a response
+     * against itself and would pass for the wrong reason.
+     */
+    private static void withServers(Fixture fixture, Differential body) throws Exception {
         try (ReplayServer sorted = new ReplayServer(
                 "127.0.0.1", 0, "bucket", fixture.path(), 2, ServingMode.SORTED);
              ReplayServer duck = new ReplayServer(
@@ -298,13 +331,16 @@ class SortedServingFullDifferentialTest {
             duck.start();
             assertThat(sorted.resolvedServingMode()).isEqualTo(ServingMode.SORTED);
             assertThat(duck.resolvedServingMode()).isEqualTo(ServingMode.DUCKDB);
+            body.run(sorted, duck, HttpClient.newHttpClient());
+        }
+    }
 
-            HttpClient client = HttpClient.newHttpClient();
-            for (Scenario scenario : scenarios) {
-                assertThat(walk(sorted, client, scenario))
-                        .as("sorted vs duckdb differ for %s", describe(scenario))
-                        .isEqualTo(walk(duck, client, scenario));
-            }
+    private static void walkAll(ReplayServer sorted, ReplayServer duck, HttpClient client,
+                                List<Scenario> scenarios) throws Exception {
+        for (Scenario scenario : scenarios) {
+            assertThat(walk(sorted, client, scenario))
+                    .as("sorted vs duckdb differ for %s", describe(scenario))
+                    .isEqualTo(walk(duck, client, scenario));
         }
     }
 
@@ -326,8 +362,8 @@ class SortedServingFullDifferentialTest {
             if (scenario.delimiter() != null) {
                 q.append("&delimiter=").append(HttpProbe.percentEncode(scenario.delimiter()));
             }
-            // This walk sends only the token after page one; separate pager coverage proves that a
-            // request carrying both follows S3 and gives the token precedence.
+            // This walk sends only the token after page one, the shape a well-behaved client uses.
+            // continuationTokenWinsOverConflictingStartAfterOnHttp covers the shape that carries both.
             if (token != null) {
                 q.append("&continuation-token=").append(HttpProbe.percentEncode(token));
             } else if (scenario.startAfter() != null) {
@@ -344,15 +380,22 @@ class SortedServingFullDifferentialTest {
         throw new AssertionError("listing did not terminate for " + describe(scenario));
     }
 
-    private static String resumeWithConflictingStartAfter(ReplayServer server, HttpClient client)
-            throws Exception {
+    /** Resumes through both stores and returns the response they must agree on byte for byte. */
+    private static String agreedResume(ReplayServer sorted, ReplayServer duck, HttpClient client,
+                                       String extraQuery) throws Exception {
+        String response = resume(sorted, client, extraQuery);
+        assertThat(response).as("sorted vs duckdb differ for resume%s", extraQuery)
+                .isEqualTo(resume(duck, client, extraQuery));
+        return response;
+    }
+
+    /** Takes a real token from a truncated first page, then resends it with {@code extraQuery} appended. */
+    private static String resume(ReplayServer server, HttpClient client, String extraQuery) throws Exception {
         String first = HttpProbe.body(server, client, "/bucket?list-type=2&max-keys=2");
         String token = HttpProbe.extractTag(first, "NextContinuationToken");
         assertThat(token).as("the first page must carry a continuation token").isNotNull();
-        return HttpProbe.body(server, client,
-                "/bucket?list-type=2&max-keys=1000&continuation-token="
-                        + HttpProbe.percentEncode(token) + "&start-after="
-                        + HttpProbe.percentEncode("a/3"));
+        return HttpProbe.body(server, client, "/bucket?list-type=2&max-keys=1000&continuation-token="
+                + HttpProbe.percentEncode(token) + extraQuery);
     }
 
     private static String describe(Scenario s) {

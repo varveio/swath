@@ -261,10 +261,17 @@ public final class ListObjectsV2Pager implements ListingFixture {
         return filtered;
     }
 
+    /**
+     * Resolves the resume boundary S3 would use. A continuation token wins over a conflicting
+     * {@code start-after} — real S3 accepts both and resumes at the token — but only a token that
+     * decodes to a real resume point does; a blank one is absent, not an empty boundary that would
+     * silently restart a walk the client asked to resume. A malformed token still throws: precedence
+     * does not turn token validation into a fallback.
+     */
     private Boundary resolveBoundary(S3ListRequest request) {
-        if (request.continuationToken() != null) {
+        if (request.hasContinuationToken()) {
             ContinuationToken token = ContinuationToken.decode(request.continuationToken());
-            return token == null ? null : new Boundary(token.boundary(), token.inclusive());
+            return new Boundary(token.boundary(), token.inclusive());
         }
         if (request.startAfter() != null) {
             return new Boundary(request.startAfter(), false);
