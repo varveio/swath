@@ -110,6 +110,8 @@ class SortTransformParallelMergeTest {
 
         // 3 distinct first-keys ⇒ 3 ranges ⇒ the counter total is the range count.
         assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(3);
+        assertThat(metrics.count("SORT.merge_scoped_frontier_validated_trailer")).isPositive();
+        assertThat(metrics.count("SORT.merge_scoped_frontier_trailer_reread")).isZero();
     }
 
     @Test

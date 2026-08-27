@@ -73,6 +73,16 @@ class PageBlockSerdeTest {
     }
 
     @Test
+    void persistedCursorOverreadRemainsAnIteratorProtocolError() {
+        PageBlock original = PageBlock.pack(List.of(object("only")), CMP);
+        PageBlock.Cursor cursor = PageBlock.deserialize(original.serialize(), Path.of("only.pageseg"))
+                .cursor();
+
+        assertThat(cursor.next()).isEqualTo(object("only"));
+        assertThatThrownBy(cursor::next).isInstanceOf(java.util.NoSuchElementException.class);
+    }
+
+    @Test
     void roundTripsKeysWithNulAndFfBytes() {
         List<ListEntry> in = List.of(
                 new CommonPrefixEntry(KeyBytes.of(new byte[] {0x00, 0x00, (byte) 0xFF})),

@@ -558,10 +558,10 @@ final class PageBlock {
         }
 
         ListEntry next() {
+            if (emitted >= count) {
+                throw new NoSuchElementException();
+            }
             try {
-                if (emitted >= count) {
-                    throw new NoSuchElementException();
-                }
                 emitted++;
                 byte tag = payload[pos++];
                 ListEntry entry = switch (tag) {

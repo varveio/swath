@@ -654,9 +654,13 @@ final class ParallelRangeMerge {
             /** The range-scoped page frontier for {@code segment}, registered for its skip counters. */
             private PageFrontierStream openScopedFrontier(Path segment) throws IOException {
                 PageRunSegmentReader.Trailer trailer = validatedTrailers.get(segment);
-                long totalPages = trailer != null
-                        ? trailer.totalRecords()
-                        : PageRunSegmentReader.readTrailer(segment).totalRecords();
+                if (trailer != null) {
+                    metrics.recordStealReason("SORT", "merge_scoped_frontier_validated_trailer");
+                } else {
+                    metrics.recordStealReason("SORT", "merge_scoped_frontier_trailer_reread");
+                    trailer = PageRunSegmentReader.readTrailer(segment);
+                }
+                long totalPages = trailer.totalRecords();
                 RangeScopedPageFrontier scoped = new RangeScopedPageFrontier(
                         new PageFrontierReader(segment, metrics), lo, hi, totalPages, metrics);
                 pageFrontiers.add(scoped);
