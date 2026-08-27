@@ -62,8 +62,8 @@ import java.util.Set;
  *
  * <p>Unlike {@link DuckDbListingStore}, this store assumes the <b>canonical</b> current schema
  * unconditionally (no {@code owner_display_name}/{@code checksum_type} legacy-column backfill): every
- * sorted file is produced by the in-tree writer ({@code SortedParquetWriter} / {@code
- * SegmentParquetSink}), which always writes the full canonical schema, so there is no legacy-schema
+ * sorted file is produced by the in-tree {@code SortedParquetWriter}, which always writes the full
+ * canonical schema, so there is no legacy-schema
  * sorted file for this store to tolerate — unlike {@code DuckDbListingStore}, which must also serve
  * arbitrary pre-existing unsorted captures written by older schema versions.
  *

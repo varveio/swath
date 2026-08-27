@@ -486,7 +486,11 @@ its checkpoint/publication state.
   last key (never derived from Parquet footer min/max statistics, for the
   same truncation reason as `SortedFileIndex`) — a consumer can verify
   `files[i].maxKey < files[i+1].minKey` (unsigned byte, strict) across the
-  whole dataset without opening a single Parquet file. Committed atomically exactly once at
+  whole dataset without opening a single Parquet file. Final rolling preserves that strictness by
+  treating every equal-raw-key group as one indivisible file atom: once a part reaches its byte
+  target, rotation waits for the next distinct key. A version-heavy key can therefore make one part
+  exceed `final-file-bytes`; the merge remains streaming and retains only the previous key while it
+  waits. Committed atomically exactly once at
   successful consumer publication (`manifest.json.tmp`, fsync, rename), after every writer lane
   has joined. A finalized part updates the publication owner's live counters for periodic JSON
   summaries but does not emit an incomplete consumer manifest. The retained file list and terminal
@@ -709,8 +713,8 @@ CRC32C-framed, min/max-headed, codec-compressed page records (§7
 `InvalidArgsException` (a sorted text sink is deferred to `--resume-output`,
 which owns the at-most-once-text durability questions it would reopen):
 
-- **Spill vehicle: checkpoint-tracked page-run segments**, not a custom
-  run-file format and not columnar Parquet either. The sort lane
+- **Spill vehicle: checkpoint-tracked page-run segments**, a custom merge-oriented
+  run-file format rather than Parquet. The sort lane
   buffers admitted pages up to a heap-adaptive segment gate (§7), then flushes the
   sealed buffer as an internally-sorted page-run segment (a `.pageseg` file: header
   magic/version, one CRC32C-framed page record per page carrying `[minKey, maxKey,
@@ -728,13 +732,17 @@ which owns the at-most-once-text durability questions it would reopen):
   finalize exactly as it does for parts (§4.1) — out-of-order finalize would
   let `durable_cursor` over-advance past keys still sitting in an earlier
   unfinalized buffer and silently lose them on resume.
-- **Comparator** equals the in-memory comparator exactly, including the
-  `(key, version_id)` tiebreak when `--all-versions` (else sort is
-  non-deterministic across versions of one key).
+- **Comparator** equals the in-memory comparator exactly. The dormant `VERSIONS` plumbing currently
+  uses `(key, version_id)` with null first and then unsigned UTF-8 `version_id`, and stamps that exact
+  order. This is an implementation order for synthetic tests, not the planned `--all-versions`
+  product contract: S3 supplies a key's versions newest-first, and an opaque `version_id` does not
+  encode chronology. `VERSIONS` must remain unreachable until algorithms.md §9's ordering gate is
+  resolved and the comparator, footer/manifest order value, compatibility version, and independent
+  chronological tests change together.
 - **Cascaded multi-pass merge:** with fan-in `F` (default 10000, §7), merge runs
   in passes so open file descriptors never exceed `F`. The effective width is
   further clamped at runtime by the fd budget (`ulimit -n` headroom) and by the
-  per-open-stream memory bound (`merge-per-stream-bytes`, §7) — if that clamp
+  per-open-stream planning price (`merge-per-stream-bytes`, §7) — if that clamp
   forces the width below the segment count, the cascade engages. Segments are
   sized (heap-adaptive gate, §7) so a single pass is the design point at the
   heap you grant; the cascade remains only as a correctness backstop for
@@ -854,6 +862,11 @@ issuing per-key writes; the reader streams the bounded extension with O(extensio
 positioned reads. Reader peak storage is the retained sample-key arrays plus one 64 KiB scratch
 buffer, never a second full-extension copy.
 
+Across all segments, boundary selection deduplicates candidates and retains the deterministic
+bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
+retained boundary state independent of segment
+count and input order; it can change range balance only, never key inclusion or global ordering.
+
 The embedded sample replaces only the boundary prologue's integrity pass. The last unbounded
 parallel range still drains every page of every original segment and performs the authoritative
 page CRC, min-monotonicity, and trailer-count checks before publication can succeed. A late failure
@@ -889,14 +902,13 @@ published.
 | `swath.sort.segment-entries` | secondary cap alongside `segment-bytes` | backstop entry-count cap on a sealed buffer |
 | `swath.sort.heap-fraction` | `0.08` | the adaptive ratio `segment-bytes` derives from `Runtime.maxMemory()`; raise only after measurement, never unattended |
 | `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that record |
-| `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream memory bound**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
+| `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
 | `swath.sort.segment-codec` | `LZ4` | payload compression for page-run STAGING segments — `NONE` \| `LZ4` \| `ZSTD1`. Trades staging-disk ratio for pack/merge CPU: `LZ4` (default) is fast; `ZSTD1` is smaller-on-disk but slower; `NONE` skips compression. Governs staging only, never the final Parquet output |
-| `swath.sort.merge-per-stream-bytes` | ≈64 KiB fixed per-open-stream estimate (`DEFAULT_MERGE_PER_STREAM_BYTES`, to be validated at the perf gate) | the per-open-page-run-stream memory a merge holds (≈ one decoded page's worth); `merge-budget-bytes / merge-per-stream-bytes` bounds `effectiveFanIn` (above) so realized merge peak memory stays within `merge-budget-bytes` regardless of segment count (I11). For page-run input the exact bound is read O(1) from each segment's trailer (`maxRecordLen`) |
-| `swath.sort.final-file-bytes` | 1 GiB | roll threshold for multi-file sorted output — the final Parquet output rolls ~1 GiB parts by default; files are range-disjoint and named in key order |
+| `swath.sort.merge-per-stream-bytes` | ≈64 KiB fixed per-open-stream estimate (`DEFAULT_MERGE_PER_STREAM_BYTES`, to be validated at the perf gate) | planning estimate for one open page-run stream. The runtime planner prices a stream at `max(merge-per-stream-bytes, maxRecordLen)`, reading the largest encoded record O(1) from each trailer, so an unusually large frame can tighten but never relax the configured estimate. `maxRecordLen` is not a byte-exact heap bound: the current/next encoded bodies, decoded payload, metadata, and a legal overlap cluster add resident state. Active state remains a function of segment/fan-in knobs rather than total object count (I11), but this property is a capacity estimate, not a JVM heap meter |
+| `swath.sort.final-file-bytes` | 1 GiB | soft roll target for multi-file sorted output — after a part reaches the target, rotation waits until the next distinct raw key so an equal-key/version group never straddles files. Parts are strictly key-disjoint and named in key order; one key with many versions can exceed the target by the size of that indivisible group. The wait is streaming/O(1) in rows, and each deferred group records `SORT.final_roll_equal_key_deferred` once |
 | `swath.sort.final-row-group-bytes` | ≈4–8 MB | the served file's seek granularity (row-group size) |
-| `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs the FINAL output only: a staging segment is read once front to back by the merge and keeps parquet's defaults. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
-| `swath.sort.segment-row-group-bytes` | 1 MB | governs ONLY the legacy columnar-Parquet staging path (the equivalence-fixture path); the default page-run staging is row-oriented and does not use it. (Columnar path: row-group size for internal Parquet staging segments — deliberately small, unlike `final-row-group-bytes` — because a `SegmentReader` preloads one full row group per open merge stream, so a bigger segment row group multiplied into merge-phase peak memory) |
-| `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | the merge-phase memory budget: caps `effectiveFanIn` (above) so realized merge-phase peak memory is `streams/pass × merge-per-stream-bytes ≤ merge-budget-bytes` for any budget `>= 2 × merge-per-stream-bytes` — a function of the budget knob, never of segment count (I11), even where `fan-in` alone would have allowed more streams open at once. **The `effectiveFanIn` floor of 2 streams is documented, not rejected**: a merge needs at least 2 streams to merge anything, so a budget below `2 × merge-per-stream-bytes` still realizes exactly the 2-stream floor (the minimum realizable merge memory) rather than a smaller peak |
+| `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
+| `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | capacity budget used to cap `effectiveFanIn` as `budget / per-stream planning price`; it bounds the priced stream slots, not every allocation made while decoding or resolving page overlap. **The `effectiveFanIn` floor of 2 streams is documented, not rejected**: a merge needs at least 2 streams to merge anything, so a smaller budget still admits the minimum two-stream merge. Page-aware overlap remains bounded by staged segment geometry (and therefore the configured segment gate), while arbitrary capture chunks use the bounded entry-stream policy rather than this frontier optimization |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | the configured maximum number of contiguous key ranges in the final sorted merge; `1` is the explicit serial opt-out. `--tune sort.merge-parallelism=N` exposes the supported operator override (`1..16`) and wins over the JVM property without changing this default. The tune is resume-free because range finals remain disposable staging files until the complete manifest barrier; a pre-publication resume reruns the merge from durable PageRuns. For an admitted run, the effective range count is clamped to the minimum of this configured/core-derived maximum, configured-`fan-in` viability (`fan-in >= segments`, else 1), the heap/per-stream/segment bound, and the fd bound that reserves one initial output part per candidate range (`usableFds / (segments + 1)`); additional rolled output writers are hard-bounded during execution after reserving the range fleet's input streams. A result below 2 takes the untouched serial path. Reason attribution follows the binding constraint with an explicit tie rule: FD wins an exact partial heap/FD tie (`byFd <= byBudget`), recording `SORT.merge_range_fd_limited` for final `R>1`; heap or configured fan-in records `SORT.merge_range_would_cascade` when it alone tightens the result further, including to `R=1`; an FD final bound of `R=1` records `SORT.merge_range_fd_exhausted`. `SORT.merge_range_unsplittable` remains reserved for boundary sampling that finds fewer than two distinct keys |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
 | `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`); a resume whose checkpoint records any other staging format is refused (§6) — informational, not user-tunable |

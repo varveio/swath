@@ -34,8 +34,8 @@ import org.slf4j.LoggerFactory;
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
  * RUNTIME-clamped fan-in {@link SortTransform} computes — the MIN of the static
  * {@link SortConfig#effectiveFanIn()} budget derived from {@link SortConfig#mergePerStreamBytes()},
- * the fd clamp ({@link MergeFdBudget}), and the exact per-segment page-size bound — so realized peak
- * memory scales with the configured budget, never with segment count. Passing the raw {@code
+ * the fd clamp ({@link MergeFdBudget}), and the per-segment encoded-record refinement. Active merge
+ * state remains bounded by configured segment/fan-in knobs rather than total object count. Passing the raw {@code
  * fan-in} knob straight through instead would violate I11. See contracts.md §6 / §7 for the full
  * fan-in/memory-budget derivation. {@code fanIn} alone remains only the fd/correctness bound (I2),
  * never a memory promise by itself.
@@ -97,7 +97,7 @@ final class KWayMerge<S> {
          * frontier ({@link #openFrontier}) so the FINAL merge pass can take {@link PageAwareMerger}'s
          * page-whole fast path. Default {@code false} — a non-page-run store keeps the entry-typed
          * {@link StreamingMerger}. The final pass uses {@link PageAwareMerger} only when EVERY survivor
-         * reports {@code true}; a mixed/Parquet survivor set stays on {@link StreamingMerger}.
+         * reports {@code true}; generic non-page-frontier stores stay on {@link StreamingMerger}.
          */
         default boolean supportsPageFrontier(S segment) {
             return false;
@@ -166,8 +166,8 @@ final class KWayMerge<S> {
         // The final pass selects its merger via the SAME openMerger factory every cascade
         // pass uses (below) — one place decides PageAware-vs-Streaming. If every survivor is a page-run
         // segment it runs the page-aware merger (decode-free frontier + page-whole fast path + both
-        // overlap guards); any Parquet/mixed survivor keeps the entry-typed StreamingMerger. The two
-        // produce byte-identical output.
+        // overlap guards); a generic non-frontier store keeps the entry-typed StreamingMerger. The
+        // two produce byte-identical output.
         return openMerger(current, this::recordDisjoint);
     }
 
@@ -177,8 +177,8 @@ final class KWayMerge<S> {
      * {@code group} exposes a {@link PageFrontierStream}, open a {@link PageAwareMerger} — so the
      * page-whole fast path AND both of its overlap guards (cross-segment disjointness and
      * intra-segment monotonicity) apply, and even a cascade intermediate is written from a
-     * correctly-guarded cursor. Otherwise (a Parquet/mixed group, e.g. CaptureSorter's
-     * columnar fixtures) fall back to the entry-typed {@link StreamingMerger}. Routing every pass —
+     * correctly-guarded cursor. Otherwise a generic segment store falls back to the entry-typed
+     * {@link StreamingMerger}. Routing every pass —
      * not only the final one — through this factory keeps an all-page-run cascade group on the
      * page-whole fast path (and {@link PageAwareMerger}'s cross-segment guard) rather than decoding
      * every page through the entry heap; it is not an ordering requirement. A page-run input handed

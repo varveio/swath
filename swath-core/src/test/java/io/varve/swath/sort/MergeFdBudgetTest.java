@@ -47,7 +47,7 @@ class MergeFdBudgetTest {
     }
 
     @Test
-    void clampedFanInTakesTheExactMemoryBoundWhenItIsTighter() {
+    void clampedFanInTakesTheRecordSizedPlanningBoundWhenItIsTighter() {
         // fd healthy (bound 9872), static 512, but the exact per-segment memory bound is 40 ⇒ 40 wins.
         int clamped = MergeFdBudget.clampedFanIn(512, 10_000, 128, 40);
         assertThat(clamped).isEqualTo(40);

@@ -164,7 +164,7 @@ final class PageRunRawFixtures {
      * <b>trusting</b> that the pages ascend — exactly what {@link PageRunSegmentReader#readNext()} did
      * with no monotonicity check. This is the {@link StreamingMerger}-route sibling of
      * {@link TrustingPageFrontier}: driving the real {@link StreamingMerger} through it (as
-     * {@code KWayMerge} does whenever a merge group also holds a columnar Parquet segment, so
+     * the generic {@code KWayMerge} entry-stream seam does for a non-frontier store, so
      * {@code allSupportPageFrontier} is false) shows what the merge does when a page-run input is not
      * actually a sorted run — it silently misorders, which is why the guard lives in the shared IO layer
      * rather than in the frontier reader alone.

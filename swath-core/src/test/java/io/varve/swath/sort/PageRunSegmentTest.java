@@ -118,11 +118,29 @@ class PageRunSegmentTest {
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition
 
         Path path = dir.resolve("seg.pgr");
-        writer().flush(sealed, path);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE)
+                .flush(sealed, path);
 
         List<ListEntry> out = readBack(path);
         assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("d"));
         assertThat(isAscending(out)).isTrue();
+        assertThat(metrics.count("SORT.buffer_page_repacked"))
+                .as("the real seal-time reorder path is observable once per affected buffer")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void byteGateFlushRemainsObservable(@TempDir Path dir) throws IOException {
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a"), object("b")));
+        SealedBuffer sealed = buffer.seal(SealTrigger.BYTE_GATE);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE)
+                .flush(sealed, dir.resolve("seg.pgr"));
+
+        assertThat(metrics.count("SORT.buffer_byte_gated")).isEqualTo(1);
     }
 
     @Test
@@ -336,13 +354,13 @@ class PageRunSegmentTest {
         // drop 2 rows).
         assertThatThrownBy(() -> driveFrontierToEnd(path))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("entry count mismatch");
+                .hasMessageContaining("inconsistent empty page-run trailer counts");
 
         // The entry-typed reader rejects the same corruption too, since it drives the same frontier
         // reader underneath.
         assertThatThrownBy(() -> readBack(path))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("entry count mismatch");
+                .hasMessageContaining("inconsistent empty page-run trailer counts");
     }
 
     private static void driveFrontierToEnd(Path path) throws IOException {

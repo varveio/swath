@@ -121,6 +121,23 @@ final class PageRunSegmentIo implements AutoCloseable {
             if (trailerMagic != PageRunSegmentWriter.MAGIC) {
                 throw failFor(path, "bad or missing page-run trailer (truncated segment?)");
             }
+            long fixedTailStart = size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            if (trailerStart < PageRunSegmentWriter.HEADER_BYTES
+                    || trailerStart > fixedTailStart - 4) {
+                throw failFor(path, "invalid page-run trailer offset " + trailerStart);
+            }
+            long recordBytes = trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            if (totalRecords == 0) {
+                if (recordBytes != 0 || totalEntries != 0 || maxRecordLen != 0) {
+                    throw failFor(path, "inconsistent empty page-run trailer counts");
+                }
+            } else if (totalEntries < totalRecords
+                    || maxRecordLen == 0
+                    || recordBytes < 9
+                    || totalRecords > recordBytes / 9
+                    || maxRecordLen > recordBytes - 8) {
+                throw failFor(path, "inconsistent page-run trailer record metadata");
+            }
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
             return new PageRunSegmentIo(channel, path, metrics, maxRecordLen, totalRecords, totalEntries,
@@ -150,10 +167,9 @@ final class PageRunSegmentIo implements AutoCloseable {
      * min-monotonicity invariant. Returning the parsed fields alongside the body costs the entry-typed
      * reader nothing (the leading min/max/count parse is a few bytes of the body it already holds) and buys
      * the guarantee that a third reader added later CANNOT skip the LOGICAL guard the way a bare
-     * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} — the fallback
-     * whenever any segment in a merge group is a columnar Parquet fixture — assumes each input run is
-     * sorted, so an unguarded page-run reader on that path silently misorders the merged output exactly as
-     * the frontier path would.
+     * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} assumes each
+     * input run is sorted, so an unguarded page-run reader on that generic seam silently misorders output
+     * exactly as the frontier path would.
      */
     Page nextPage() throws IOException {
         byte[] body = nextBody();

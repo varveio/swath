@@ -28,11 +28,11 @@ public final class ListEntryParquetWriters {
     public static final int PAGE_BYTES = 1024 * 1024;
     public static final int ZSTD_LEVEL = 3;
     public static final int SERVED_DICTIONARY_BYTES = 8 * 1024;
-    public static final int SEGMENT_PAGE_ROWS = ParquetProperties.DEFAULT_PAGE_ROW_COUNT_LIMIT;
+    public static final int DEFAULT_PAGE_ROWS = ParquetProperties.DEFAULT_PAGE_ROW_COUNT_LIMIT;
 
     public record PageLayout(int pageRows, int dictionaryBytes) {
-        public static PageLayout staging() {
-            return new PageLayout(SEGMENT_PAGE_ROWS, ParquetProperties.DEFAULT_DICTIONARY_PAGE_SIZE);
+        public static PageLayout direct() {
+            return new PageLayout(DEFAULT_PAGE_ROWS, ParquetProperties.DEFAULT_DICTIONARY_PAGE_SIZE);
         }
 
         public static PageLayout served(int pageRows) {
@@ -49,13 +49,6 @@ public final class ListEntryParquetWriters {
     }
 
     private ListEntryParquetWriters() {
-    }
-
-    /** Builds an untracked writer for the legacy internal Parquet staging path. */
-    public static ParquetWriter<ListEntry> build(
-            Path path, WriteSupport<ListEntry> writeSupport, long rowGroupBytes, PageLayout layout)
-            throws IOException {
-        return build(writeSupport, rowGroupBytes, layout, new LocalOutputFile(path));
     }
 
     /** Builds a final-file writer with byte/digest tracking and optional same-channel data sync. */

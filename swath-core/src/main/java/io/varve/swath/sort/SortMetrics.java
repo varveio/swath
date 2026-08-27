@@ -13,10 +13,9 @@ package io.varve.swath.sort;
  *
  * <p>Null-safe by construction: the {@link #NO_OP} null object is the default whenever no recorder
  * is injected (nearly every unit test), so the hot paths never branch on {@code null} (§1 idiom).
- * The categories this library emits are all {@code outcome = "SORT"}: {@code segment_flushed},
- * {@code buffer_byte_gated}, {@code merge_fastpath}, {@code buffer_sort_fallback},
- * {@code merge_pass_cascaded}. The pipeline adds the §5a drift-table rows and the first-class
- * Micrometer meters; this library only emits through the hook.
+ * This library's engagement categories all use {@code outcome = "SORT"}; the authoritative reason
+ * registry is the §5a drift table rather than an independently maintained list here. The pipeline
+ * adds first-class Micrometer meters; this library only emits through the hook.
  */
 @FunctionalInterface
 public interface SortMetrics {

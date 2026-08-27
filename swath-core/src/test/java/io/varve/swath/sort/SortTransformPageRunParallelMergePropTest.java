@@ -51,13 +51,9 @@ import org.slf4j.LoggerFactory;
  * format, and therefore the only one that decides whether {@code swath.sort.merge-parallelism}
  * does anything on a real run.
  *
- * <p>{@link SortTransformParallelMergePropTest} is the sibling guard over columnar Parquet staging.
- * The two paths differ in every mechanism that could lose a row — a page skip
- * ({@link RangeScopedPageFrontier}) instead of a row-group skip, {@link PageAwareMerger}'s
- * decode-free page-whole fast path instead of the entry-typed {@link StreamingMerger}, the
- * {@code [lo, hi)} trim applied ABOVE the merge ({@link RangeFilteredCursor}) instead of around each
- * input, and page-run cascade intermediates instead of Parquet ones — so the Parquet guard says
- * nothing about this one.
+ * The suite exercises every mechanism that could lose a row: page skipping through {@link
+ * RangeScopedPageFrontier}, {@link PageAwareMerger}'s decode-free page-whole fast path, the {@code
+ * [lo, hi)} trim above the merge ({@link RangeFilteredCursor}), and page-run cascade intermediates.
  *
  * <p>The core property is the same and is checked against TWO independent oracles: byte-exact
  * equivalence to the serial merge of the same segments, and the exact input multiset (so two
@@ -146,9 +142,8 @@ class SortTransformPageRunParallelMergePropTest {
 
     /**
      * Drive {@link ParallelRangeMerge} directly, past {@link SortTransform}'s clamp, so the cascade
-     * branches are genuinely reached — see the twin in {@code SortTransformParallelMergePropTest}.
-     * Cascade intermediates on this path keep the page-run format, which is what makes it worth
-     * exercising separately from the columnar one.
+     * branches are genuinely reached. Cascade intermediates keep the page-run format, which is what
+     * makes this worth exercising separately from the shallow single-page cases.
      */
     private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
                                             long mergeBudgetBytes) throws IOException {
@@ -206,6 +201,58 @@ class SortTransformPageRunParallelMergePropTest {
             @ForAll long seed) throws IOException {
         assertParallelMatchesSerial(build(segmentCount, entryCount, style, seed), ranges, 4096L,
                 Long.MAX_VALUE);
+    }
+
+    @Example
+    void serialPageRunRollingKeepsCrossSegmentVersionClustersKeyAtomic() throws IOException {
+        Scenario scenario = versionClustersAcrossSegments();
+        Path root = Files.createTempDirectory("serial-pagerun-key-atomic-roll-");
+        try {
+            CountingMetrics metrics = new CountingMetrics();
+            SortTransformResult serial = run(scenario, 1, root, "serial", 1L, Long.MAX_VALUE,
+                    DuplicateHook.NO_OP, metrics);
+
+            List<ListEntry> rows = readAll(serial.finalFiles());
+            assertThat(metrics.count("SORT.final_roll_equal_key_deferred"))
+                    .as("one bounded deferral signal per oversized key group")
+                    .isEqualTo(4);
+            assertThat(serial.finalFiles()).hasSize(4);
+            assertKeyAtomicAndStrictlyDisjoint(serial.finalFiles());
+            assertThat(rows).isSortedAccordingTo(cmp);
+            assertThat(rows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
+        } finally {
+            deleteRecursively(root);
+        }
+    }
+
+    @Example
+    void parallelPageRunRollingKeepsCrossSegmentVersionClustersKeyAtomic() throws IOException {
+        int ranges = 4;
+        Scenario scenario = versionClustersAcrossSegments();
+        Path root = Files.createTempDirectory("prange-pagerun-key-atomic-roll-");
+        try {
+            SortTransformResult serial = run(scenario, 1, root, "serial", 1L, Long.MAX_VALUE,
+                    DuplicateHook.NO_OP, SortMetrics.NO_OP);
+            CountingMetrics metrics = new CountingMetrics();
+            SortTransformResult parallel = run(scenario, ranges, root, "parallel", 1L,
+                    Long.MAX_VALUE, DuplicateHook.NO_OP, metrics);
+
+            List<ListEntry> serialRows = readAll(serial.finalFiles());
+            List<ListEntry> parallelRows = readAll(parallel.finalFiles());
+            assertThat(metrics.count("SORT.merge_range_parallel"))
+                    .as("the page-run parallel path genuinely engaged for every requested range")
+                    .isEqualTo(ranges);
+            assertThat(metrics.count("SORT.final_roll_equal_key_deferred"))
+                    .as("one bounded deferral signal per range-local oversized key group")
+                    .isEqualTo(ranges);
+            assertThat(parallel.finalFiles()).hasSize(ranges);
+            assertKeyAtomicAndStrictlyDisjoint(parallel.finalFiles());
+            assertThat(parallelRows).isSortedAccordingTo(cmp);
+            assertThat(parallelRows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
+            assertThat(parallelRows).containsExactlyElementsOf(serialRows);
+        } finally {
+            deleteRecursively(root);
+        }
     }
 
     /**
@@ -282,14 +329,14 @@ class SortTransformPageRunParallelMergePropTest {
         Path root = Files.createTempDirectory("prange-pagerun-clamp-");
         ListAppender<ILoggingEvent> appender = attachTransformLog();
         try {
-            // Price an open page-run stream exactly as the merge does — the trailer's maxRecordLen —
-            // so the budget below is the real bound rather than a guess that could drift with the
-            // page format.
+            // Price an open page-run stream as the planner does: the larger of the configured
+            // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
             long perStream = 0;
             for (Path seg : stage(probeDir, s.segments())) {
                 perStream = Math.max(perStream, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
             }
+            perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
             long budget = perStream * segmentCount * allowed;
 
             CountingMetrics metrics = new CountingMetrics();
@@ -599,7 +646,7 @@ class SortTransformPageRunParallelMergePropTest {
 
     /**
      * The completeness stamp, on the LIVE staging format and with ranges that ROLL. This is the case
-     * the stamp exists for and the one the columnar sibling test cannot reach: several ranges each
+     * the stamp exists for and the one shallow fixtures cannot reach: several ranges each
      * emit several parts, so a range-local {@code file_index} would repeat (1,2,1,2,…) and no reader
      * could tell a complete set from a truncated one. Asserts the published set carries a contiguous
      * global {@code 1..N} in filename order with exactly one {@code file_final}, on {@code N}.
@@ -802,6 +849,28 @@ class SortTransformPageRunParallelMergePropTest {
         return new Scenario(segs, all);
     }
 
+    /** Four splittable key ranges, with every key's versions divided across two page-run segments. */
+    private Scenario versionClustersAcrossSegments() {
+        List<List<ListEntry>> segments = new ArrayList<>();
+        List<ListEntry> all = new ArrayList<>();
+        for (char key = 'a'; key <= 'd'; key++) {
+            List<ListEntry> even = new ArrayList<>();
+            List<ListEntry> odd = new ArrayList<>();
+            for (int version = 0; version < 32; version++) {
+                ListEntry entry = new ObjectEntry(KeyBytes.ofUtf8(String.valueOf(key)), version, 0L,
+                        null, null, String.format("v%04d", version), version == 31,
+                        null, null, null, null);
+                (version % 2 == 0 ? even : odd).add(entry);
+                all.add(entry);
+            }
+            even.sort(cmp);
+            odd.sort(cmp);
+            segments.add(even);
+            segments.add(odd);
+        }
+        return new Scenario(segments, all);
+    }
+
     private void assertParallelMatchesSerial(Scenario s, int ranges, long finalFileBytes,
                                              long mergeBudgetBytes) throws IOException {
         Path root = Files.createTempDirectory("prange-pagerun-");
@@ -914,6 +983,24 @@ class SortTransformPageRunParallelMergePropTest {
             }
         }
         return out;
+    }
+
+    private void assertKeyAtomicAndStrictlyDisjoint(List<Path> files) throws IOException {
+        byte[] previousMax = null;
+        for (Path file : files) {
+            List<ListEntry> rows = readAll(List.of(file));
+            assertThat(rows).isNotEmpty();
+            byte[] min = rows.getFirst().key().rawUnsafe();
+            byte[] max = rows.getLast().key().rawUnsafe();
+            assertThat(rows).allSatisfy(row ->
+                    assertThat(KeyBytes.compareUnsigned(row.key().rawUnsafe(), min)).isZero());
+            if (previousMax != null) {
+                assertThat(KeyBytes.compareUnsigned(previousMax, min))
+                        .as("adjacent rolled page-run files have strict maxKey < minKey")
+                        .isNegative();
+            }
+            previousMax = max;
+        }
     }
 
     /** {@link SortMetrics} that counts engagement reasons; ranges record from several threads. */

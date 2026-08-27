@@ -43,29 +43,10 @@ final class SegmentReader implements EntryStream {
     private long rowsLeftInGroup;
     private ListEntry head;
 
-    // Row-group skip: when non-null, read ONLY these physical row-group block indices (in the
-    // given order) via ParquetFileReader.readRowGroup(int), instead of the whole-file
-    // readNextRowGroup() scan. null ⇒ the whole-file sequential mode.
-    private final int[] blockIndices;
-    private int nextBlock;
-
     SegmentReader(Path path) throws IOException {
-        this(path, null);
-    }
-
-    /**
-     * Row-group skip: read only the physical row-group {@code blockIndices} (ordinals into
-     * {@link ParquetFileReader#getRowGroups()}), in the given order, decoding each with
-     * {@link ParquetFileReader#readRowGroup(int)}. Passing {@code null} is the whole-file sequential
-     * mode ({@link #SegmentReader(Path)}); an empty array reads nothing (an immediately-exhausted
-     * stream). The indices must be valid physical block ordinals for {@code path}; deriving them from
-     * non-overlapping key ranges is the caller's job ({@link ParallelRangeMerge}).
-     */
-    SegmentReader(Path path, int[] blockIndices) throws IOException {
         this.reader = ParquetFileReader.open(new LocalInputFile(path));
         this.schema = reader.getFooter().getFileMetaData().getSchema();
         this.columnIo = new ColumnIOFactory().getColumnIO(schema);
-        this.blockIndices = blockIndices == null ? null : blockIndices.clone();
         this.head = readNext();
     }
 
@@ -88,7 +69,7 @@ final class SegmentReader implements EntryStream {
 
     private ListEntry readNext() throws IOException {
         while (rowsLeftInGroup == 0) {
-            PageReadStore pages = nextRowGroup();
+            PageReadStore pages = reader.readNextRowGroup();
             if (pages == null) {
                 return null;   // exhausted
             }
@@ -97,22 +78,6 @@ final class SegmentReader implements EntryStream {
         }
         rowsLeftInGroup--;
         return toEntry(rowGroup.read());
-    }
-
-    /**
-     * The next row group's pages: the whole-file sequential {@code readNextRowGroup()} in the default
-     * mode, or the next selected physical block via {@code readRowGroup(int)} in row-group-skip
-     * mode. A selected block with zero rows returns a {@code rowCount==0} store, which {@link
-     * #readNext}'s loop transparently skips — so an omitted-empty group never stalls the stream.
-     */
-    private PageReadStore nextRowGroup() throws IOException {
-        if (blockIndices == null) {
-            return reader.readNextRowGroup();
-        }
-        if (nextBlock >= blockIndices.length) {
-            return null;   // all selected blocks consumed
-        }
-        return reader.readRowGroup(blockIndices[nextBlock++]);
     }
 
     private static ListEntry toEntry(Group g) {

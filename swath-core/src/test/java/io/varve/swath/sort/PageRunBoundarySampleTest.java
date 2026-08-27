@@ -10,7 +10,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -20,6 +19,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,7 @@ class PageRunBoundarySampleTest {
         CountingMetrics metrics = new CountingMetrics();
         assertThat(hex(ParallelRangeMerge.boundaries(List.of(extended), 3, metrics))).hasSize(2);
         assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_boundary_global_capped")).isZero();
         assertThat(metrics.scanBytes.sum()).isZero();
         assertThat(metrics.embeddedEntries.sum()).isEqualTo(4);
         assertThat(metrics.progress.sum()).isEqualTo(1);
@@ -124,18 +126,34 @@ class PageRunBoundarySampleTest {
             assertThat(metrics.count("SORT." + mutation.reason)).as(mutation.name()).isEqualTo(1);
             assertThat(metrics.count("SORT.merge_boundary_source_scan")).isEqualTo(1);
             assertThat(metrics.embeddedEntries.sum()).isZero();
-            long expectedScanBytes = mutation == Mutation.LOW_TRAILER_START
-                            || mutation == Mutation.HIGH_TRAILER_START ? 0
-                    : originalLayout.trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            long expectedScanBytes = originalLayout.trailerStart
+                    - PageRunSegmentWriter.HEADER_BYTES;
             assertThat(metrics.scanBytes.sum()).isEqualTo(expectedScanBytes);
             long expectedAttemptBytes = switch (mutation) {
                 case UNKNOWN, LENGTH, COUNT -> 16;
-                case EXTENSION_START, LOW_TRAILER_START, HIGH_TRAILER_START -> 0;
+                case EXTENSION_START -> 0;
                 case CRC, ORDER, KEY_LENGTH, TRAILING_PAYLOAD, BOUNDS ->
                         originalLayout.extensionBytes();
             };
             assertThat(metrics.embeddedBytes.sum()).as(mutation.name())
                     .isEqualTo(expectedAttemptBytes);
+        }
+    }
+
+    @Test
+    void invalidFixedTrailerOffsetsAreSegmentCorruptionNotExtensionFallback(@TempDir Path dir)
+            throws IOException {
+        for (boolean beforeHeader : List.of(true, false)) {
+            Path path = writePages(dir.resolve("bad-offset-" + beforeHeader + ".pageseg"), 5);
+            byte[] bytes = Files.readAllBytes(path);
+            int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            ByteBuffer.wrap(bytes).putLong(fixedTailStart, beforeHeader ? 0L : bytes.length);
+            Files.write(path, bytes);
+
+            assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
+                    List.of(path), 3, SortMetrics.NO_OP))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("invalid page-run trailer offset");
         }
     }
 
@@ -165,22 +183,6 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
-    void parquetBoundaryMetadataDoesNotClaimPageRunBytes(@TempDir Path dir) throws IOException {
-        List<ListEntry> entries = List.of(object("a"), object("b"), object("c"));
-        Path path = dir.resolve("segment.parquet");
-        try (SortedCursor cursor = new InMemoryCursor(entries, CMP, DuplicateHook.NO_OP)) {
-            new SegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1)
-                    .writeIntermediate(cursor, path);
-        }
-        CountingMetrics metrics = new CountingMetrics();
-
-        ParallelRangeMerge.boundaries(List.of(path), 3, metrics);
-        assertThat(metrics.count("SORT.merge_boundary_source_scan")).isEqualTo(1);
-        assertThat(metrics.embeddedBytes.sum()).isZero();
-        assertThat(metrics.scanBytes.sum()).isZero();
-    }
-
-    @Test
     void embeddedAndLegacyBoundariesMatchForRepeatedAndExtremeBinaryMinima(@TempDir Path dir)
             throws IOException {
         byte[] binary = {0x00, (byte) 0x80, (byte) 0xff};
@@ -198,6 +200,78 @@ class PageRunBoundarySampleTest {
         assertThat(sample.keys().getLast()).hasSize(0xffff);
         assertByteExact(ParallelRangeMerge.boundaries(List.of(embedded), 32, SortMetrics.NO_OP),
                 ParallelRangeMerge.boundaries(List.of(legacy), 32, SortMetrics.NO_OP));
+    }
+
+    @Test
+    void wholeRunBoundaryCandidatesStayBoundedAndDistributionRepresentative() {
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        ParallelRangeMerge.BoundaryCandidates cloneGuard =
+                new ParallelRangeMerge.BoundaryCandidates();
+        byte[] mutable = KeyBytes.ofUtf8("k999999").rawUnsafe().clone();
+        cloneGuard.add(mutable);
+        mutable[0] = 'x';
+        for (int i = 0; i < 100_000; i++) {
+            byte[] key = KeyBytes.ofUtf8(String.format("k%06d", i)).rawUnsafe();
+            candidates.add(key);
+            candidates.add(key);   // repeated minima do not consume another retained slot
+        }
+
+        List<byte[]> retained = candidates.sortedKeys();
+        assertThat(candidates.capped()).isTrue();
+        assertThat(retained).hasSize(ParallelRangeMerge.MAX_BOUNDARY_CANDIDATES);
+        for (int i = 1; i < retained.size(); i++) {
+            assertThat(KeyBytes.compareUnsigned(retained.get(i - 1), retained.get(i))).isNegative();
+        }
+        int median = Integer.parseInt(KeyBytes.of(retained.get(retained.size() / 2))
+                .asString().substring(1));
+        assertThat(median).isBetween(45_000, 55_000);
+        assertThat(cloneGuard.sortedKeys().stream().map(KeyBytes::of).map(KeyBytes::asString))
+                .contains("k999999")
+                .doesNotContain("x999999");
+    }
+
+    @Test
+    void bottomHashRetentionIsOrderIndependentForLongKeys() {
+        int retainedLimit = 4_096;
+        List<byte[]> longKeys = new ArrayList<>();
+        for (int i = 0; i < 10_000; i++) {
+            byte[] key = new byte[1_024];
+            Arrays.fill(key, (byte) ('a' + i % 23));
+            ByteBuffer.wrap(key).putInt(i);
+            longKeys.add(key);
+        }
+
+        ParallelRangeMerge.BoundaryCandidates ascending =
+                new ParallelRangeMerge.BoundaryCandidates(retainedLimit);
+        ParallelRangeMerge.BoundaryCandidates descending =
+                new ParallelRangeMerge.BoundaryCandidates(retainedLimit);
+        longKeys.forEach(ascending::add);
+        Collections.reverse(longKeys);
+        longKeys.forEach(descending::add);
+
+        assertThat(ascending.capped()).isTrue();
+        assertThat(descending.capped()).isTrue();
+        assertByteExact(ascending.sortedKeys(), descending.sortedKeys());
+        assertThat(ascending.sortedKeys()).hasSize(retainedLimit).allMatch(key -> key.length == 1_024);
+    }
+
+    @Test
+    void boundarySelectionReportsWholeRunCapEngagement(@TempDir Path dir) throws IOException {
+        List<Path> segments = new ArrayList<>();
+        int segmentCount = ParallelRangeMerge.MAX_BOUNDARY_CANDIDATES
+                / PageRunBoundarySample.MAX_ENTRIES + 1;
+        for (int segment = 0; segment < segmentCount; segment++) {
+            List<byte[]> minima = new ArrayList<>();
+            for (int page = 0; page < PageRunBoundarySample.MAX_ENTRIES; page++) {
+                minima.add(bytes(String.format("s%02d-k%04d", segment, page)));
+            }
+            segments.add(writeBinaryPages(dir.resolve("segment-" + segment + ".pageseg"), minima));
+        }
+        CountingMetrics metrics = new CountingMetrics();
+
+        assertThat(ParallelRangeMerge.boundaries(segments, 8, metrics)).hasSize(7);
+        assertThat(metrics.count("SORT.merge_boundary_global_capped")).isEqualTo(1);
     }
 
     @Test
@@ -319,8 +393,6 @@ class PageRunBoundarySampleTest {
 
     private enum Mutation {
         EXTENSION_START("merge_boundary_fallback_invalid_length"),
-        LOW_TRAILER_START("merge_boundary_fallback_invalid_length"),
-        HIGH_TRAILER_START("merge_boundary_fallback_invalid_length"),
         UNKNOWN("merge_boundary_fallback_unknown"),
         LENGTH("merge_boundary_fallback_invalid_length"),
         COUNT("merge_boundary_fallback_invalid_count"),
@@ -348,10 +420,6 @@ class PageRunBoundarySampleTest {
                 ByteBuffer.wrap(bytes).putShort(Math.toIntExact(layout.trailerStart) + 2 + minLength,
                         (short) 0xffff);
             }
-            case LOW_TRAILER_START -> ByteBuffer.wrap(bytes)
-                    .putLong(Math.toIntExact(layout.fixedTailStart), 0L);
-            case HIGH_TRAILER_START -> ByteBuffer.wrap(bytes)
-                    .putLong(Math.toIntExact(layout.fixedTailStart), bytes.length);
             case UNKNOWN -> bytes[extension] ^= 1;
             case LENGTH -> ByteBuffer.wrap(bytes).putInt(extension + 8,
                     ByteBuffer.wrap(bytes).getInt(extension + 8) + 1);

@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
@@ -20,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * {@link SortTransform} end-to-end over real Parquet staging segments: single-file publish, rolled
+ * {@link SortTransform} end-to-end over real page-run staging segments: single-file publish, rolled
  * multi-file publish (range-disjoint, named in key order), cascade through the merge, the publish
  * callback ordering (renames done, staging still present), idempotent re-run, and stale-{@code .tmp}
  * cleanup.
@@ -200,11 +201,66 @@ class SortTransformTest {
     }
 
     @Test
+    void unsupportedStagingIsRejectedBeforeAnyDestructiveSweep(@TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path unsupported = Files.createFile(dirs.staging.resolve("fixture-0.parquet"));
+        Path staleTmp = Files.createFile(dirs.staging.resolve("part-00000.parquet.tmp"));
+        Path staleFinal = Files.createFile(dirs.output.resolve("part-00000.parquet"));
+
+        assertThatThrownBy(() -> transform(SortConfigs.base())
+                .transform(List.of(unsupported), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expected .pageseg");
+
+        assertThat(unsupported).exists();
+        assertThat(staleTmp).exists();
+        assertThat(staleFinal).exists();
+    }
+
+    @Test
+    void corruptPageRunIsRejectedBeforeAnyDestructiveSweep(@TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path corrupt = Files.writeString(dirs.staging.resolve("fixture-0.pageseg"), "not a page run");
+        Path staleTmp = Files.createFile(dirs.staging.resolve("part-00000.parquet.tmp"));
+        Path staleFinal = Files.createFile(dirs.output.resolve("part-00000.parquet"));
+
+        assertThatThrownBy(() -> transform(SortConfigs.base())
+                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("file too small to be a page-run segment");
+
+        assertThat(corrupt).exists();
+        assertThat(staleTmp).exists();
+        assertThat(staleFinal).exists();
+    }
+
+    @Test
+    void bodyCorruptionLeavesPriorPublishedFinalIntact(@TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path corrupt = writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b"));
+        byte[] segmentBytes = Files.readAllBytes(corrupt);
+        segmentBytes[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x01;
+        Files.write(corrupt, segmentBytes);
+        Path priorFinal = dirs.output.resolve("part-00000.parquet");
+        byte[] priorContents = "prior published output".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(priorFinal, priorContents);
+
+        assertThatThrownBy(() -> transform(SortConfigs.base())
+                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("CRC32C mismatch");
+
+        assertThat(Files.readAllBytes(priorFinal))
+                .as("replacement is generated completely before prior finals are swept")
+                .containsExactly(priorContents);
+    }
+
+    @Test
     void tinyMergeBudgetForcesACascadeEvenUnderAGenerousFanInAndStillProducesCorrectOutput(
             @TempDir Path root) throws IOException {
         // SortTransform must bound the merge pass width by SortConfig#effectiveFanIn() (I11), not
         // the raw fan-in knob — otherwise a generous raw fan-in (512 default) lets a merge hold many
-        // segment-row-group-preloading readers open at once, making merge-phase memory a function of
+        // page-run readers open at once, making merge-phase memory a function of
         // segment count rather than the budget knob. Prove the WIRING is live (not just the formula)
         // by giving a tiny merge-budget alongside a generous raw fan-in: passing the raw fanIn
         // straight through would let 10 segments fit a single pass (no cascade); effectiveFanIn()=3
@@ -261,7 +317,8 @@ class SortTransformTest {
         Dirs dirs = dirs(root);
         // A previous merge attempt crashed mid-cascade, leaving an orphaned merge-*.parquet
         // intermediate behind (owned content this transform re-derives fresh every time).
-        Path staleIntermediate = writeSegment(dirs.staging, "merge-0.parquet", objects("z"));
+        Path staleIntermediate = Files.writeString(dirs.staging.resolve("merge-0.parquet"),
+                "legacy cascade debris");
         List<Path> staging = List.of(
                 writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c")),
                 writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d")));
@@ -388,12 +445,8 @@ class SortTransformTest {
     }
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        return path;
+        return SortTestSupport.writePageRun(
+                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
     }
 
     private List<ListEntry> objects(String... keys) {

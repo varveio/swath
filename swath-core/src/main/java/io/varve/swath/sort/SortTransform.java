@@ -23,8 +23,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The batch merge/publish step of {@code --sort}: cascaded {@link KWayMerge} over staged {@code
- * .pageseg} page-run segments (or, for {@link CaptureSorter}'s fixture path, staged columnar
- * Parquet) into final sorted Parquet, written to {@code *.tmp} and renamed in key order, with
+ * .pageseg} page-run segments into final sorted Parquet, written to {@code *.tmp} and renamed in key order, with
  * staging deleted only after the {@link PublishListener} fires. The full publish/resume state
  * machine (manifest-last commit, idempotent re-entry, stale-tmp/stale-final cleanup) is
  * {@code docs/internals/contracts.md} §6; this class's own re-entry sweep-scope safety proof lives at
@@ -38,9 +37,10 @@ import org.slf4j.LoggerFactory;
  * <p>The {@link KWayMerge} pass width is a runtime-clamped fan-in
  * ({@link MergeFanInPlanner#clampedMergeFanIn}), never the raw {@code fan-in} knob: the MIN of the
  * static budget ({@link SortConfig#effectiveFanIn()}), the process fd budget
- * ({@link MergeFdBudget}), and, for page-run input, the exact per-segment memory bound read from
- * each segment's trailer — so a single-pass open never exceeds the fd limit or the merge-memory
- * budget regardless of segment count (I11). A clamp that forces the fan-in below the segment count
+ * ({@link MergeFdBudget}), and, for page-run input, a record-size refinement read from each
+ * segment's trailer. The merge's active structures remain functions of configured segment/fan-in
+ * knobs rather than total object count (I11); {@code merge-budget-bytes} is a planning budget, not
+ * a byte-exact JVM heap meter. A clamp that forces the fan-in below the segment count
  * degrades to the {@link KWayMerge} cascade backstop instead of crashing ({@code
  * docs/internals/contracts.md} §7, {@code fan-in}/{@code merge-budget-bytes}).
  *
@@ -56,11 +56,9 @@ public final class SortTransform {
     private static final String TMP_SUFFIX = ".tmp";
     /**
      * The page-run staging/intermediate file extension — distinct from the FINAL output's
-     * {@code .parquet}. The listing lane ({@link SortLane}) and this transform's cascade
-     * {@code writeIntermediate} both stamp it, and {@code segmentIo}'s {@code open} dispatches on it:
-     * a {@code .pageseg} input is read by {@link PageRunSegmentReader}, anything else (a legacy
-     * {@code .parquet} staging segment from {@link CaptureSorter}'s fixture path, or the gated
-     * parallel path's own {@code merge-r*.parquet} intermediates) by the columnar {@link SegmentReader}.
+     * {@code .parquet}. Every producer and cascade intermediate stamps this suffix; transform input
+     * is preflighted before any stale-output sweep so an unsupported staging format cannot trigger
+     * destructive re-entry cleanup.
      */
     static final String SEGMENT_SUFFIX = ".pageseg";
 
@@ -73,11 +71,12 @@ public final class SortTransform {
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final boolean identityVerifiedWideSweep;
-    // Row-group skip: per-range merge-latency seam for the parallel path (NO_OP off that path).
+    private final boolean pageFrontierEnabled;
+    // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
     private final IntSupplier softFdLimitSupplier;
-    // The "how wide can this merge pass be" cluster (static budget bound + the fd/exact-
-    // memory runtime clamps + their observability) lives in MergeFanInPlanner, not here.
+    // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
+    // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
     private final MergeFanInPlanner fanInPlanner;
 
     /**
@@ -98,13 +97,13 @@ public final class SortTransform {
      * transform — see {@link #cleanStaleFinals} for the sweep-scope safety proof and which caller
      * qualifies.
      *
-     * <p>{@code rangeTimer} (row-group skip): the per-range merge-latency seam ({@code
+     * <p>{@code rangeTimer}: the per-range merge-latency seam ({@code
      * swath.sort.merge.range.latency}) for the parallel range-merge path. {@code
      * ListRunner} wires the live {@code RunMetrics}; every other caller (and the serial path) leaves
      * it {@link RangeMergeTimer#NO_OP}.
      */
     public SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer) {
-        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit);
+        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit, true);
     }
 
     /**
@@ -116,6 +115,11 @@ public final class SortTransform {
      */
     SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
                   IntSupplier softFdLimitSupplier) {
+        this(run, identityVerifiedWideSweep, rangeTimer, softFdLimitSupplier, true);
+    }
+
+    private SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
+                          IntSupplier softFdLimitSupplier, boolean pageFrontierEnabled) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -123,9 +127,21 @@ public final class SortTransform {
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.identityVerifiedWideSweep = identityVerifiedWideSweep;
+        this.pageFrontierEnabled = pageFrontierEnabled;
         this.rangeTimer = rangeTimer;
         this.softFdLimitSupplier = softFdLimitSupplier;
         this.fanInPlanner = new MergeFanInPlanner(config, metrics, softFdLimitSupplier);
+    }
+
+    /**
+     * Build the bounded entry-stream variant for arbitrary pre-existing captures. Their independently
+     * sorted chunks can overlap across many consecutive pages, unlike the mostly range-disjoint live
+     * listing runs the page-frontier fast path exploits. The storage format and cascade framework stay
+     * identical; only frontier/range routing is disabled.
+     */
+    static SortTransform forArbitraryRuns(SortRun run) {
+        return new SortTransform(run, false, RangeMergeTimer.NO_OP,
+                MergeFdBudget::softOpenFileLimit, false);
     }
 
     /**
@@ -184,12 +200,12 @@ public final class SortTransform {
     private SortTransformResult transformInterruptibly(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
+        requirePageRunSegments(stagingSegments);
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
-        // below for what each sweep removes and why; all four run before any new work below so a
-        // crashed prior attempt never blocks or contaminates this one.
+        // below for what each sweep removes and why. Disposable working files are cleared before
+        // work; prior published finals remain until their complete replacements are ready.
         cleanStaleTmp(stagingDir);
         cleanStaleTmp(outputDir);
-        cleanStaleFinals(outputDir);
         cleanStaleMergeIntermediates(stagingDir);
         cleanStalePrangeTmp(stagingDir);
 
@@ -199,27 +215,24 @@ public final class SortTransform {
         // keyspace (fewer than two distinct sample keys) returns null and falls through to the serial
         // path below — so both merge-parallelism=1 and any unsplittable keyspace take the
         // EXACT untouched serial code, byte-for-byte identical.
-        // The parallel range-merge path now reads BOTH staging formats: columnar Parquet (via
-        // SortedFileIndex + a row-group-scoped SegmentReader) and page-run (via a page-scoped
-        // RangeScopedPageFrontier feeding the ordinary PageRunSegmentReader). Page-run is the live
-        // listing lane's format, so before this the knob could not engage on a real listing run at
-        // all -- it silently fell back to the serial merge, which made every A/B of the knob on a
-        // live bucket a no-op. The default is core-derived and capped; effectiveRanges() may still
-        // route an ordinary run to the serial path, and the completeness stamp makes multi-file
-        // parallel output self-describing.
-        if (config.mergeParallelism() > 1) {
+        // Parallel ranges consume the same page-run frontier as the serial path. The default is
+        // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
+        // path, and the completeness stamp makes multi-file parallel output self-describing.
+        if (config.mergeParallelism() > 1 && pageFrontierEnabled) {
             SortTransformResult parallel = tryTransformParallel(stagingSegments, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting);
             if (parallel != null) {
                 return parallel;
             }
+        } else if (config.mergeParallelism() > 1) {
+            metrics.recordStealReason("SORT", "merge_range_frontier_disabled");
         }
 
         List<Path> intermediates = new ArrayList<>();
         SortedFileWriterFactory outputSequence = finalWriterFactory.forOutputSequence();
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         KWayMerge.SegmentIo<Path> io = segmentIo(segmentWriter, stagingDir, intermediates);
-        // Fan-in: see the class javadoc for the runtime-clamp proof (I11). plan() computes it and,
+        // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = fanInPlanner.plan(stagingSegments);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);
@@ -236,7 +249,7 @@ public final class SortTransform {
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
                     () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
                             outputSequence),
-                    true, progressCallback);
+                    true, progressCallback, metrics);
         }
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.
@@ -244,7 +257,11 @@ public final class SortTransform {
         long cascadedPasses = merge.cascadedPasses();
         long fastPathEmissions = merge.fastPathEmissions();
 
-        // Rename each final file into place in name (== key) order, then a directory barrier.
+        // The complete replacement is now durable under tmp names. Keep prior finals intact through
+        // every staging read and output close; only now remove stale/excess parts and rename the new
+        // set into place. This avoids destroying a recoverable published output when a segment has
+        // magic-preserving body corruption that the O(1) trailer preflight cannot prove absent.
+        cleanStaleFinals(outputDir);
         for (int i = 0; i < finalFiles.size(); i++) {
             atomicRename(tmpFiles.get(i), finalFiles.get(i));
         }
@@ -408,8 +425,10 @@ public final class SortTransform {
                     finalWriterFactory.forOutputSequence());
             writer.markFinal();
             writer.close();
+            cleanStaleFinals(outputDir);
             atomicRename(tf.get(0), finalFiles.get(0));
         } else {
+            cleanStaleFinals(outputDir);
             int filenameIndex = 0;
             for (Path tmp : tmpsInOrder) {
                 String name = finalPartName(filenameIndex++);
@@ -497,19 +516,9 @@ public final class SortTransform {
         return new KWayMerge.SegmentIo<>() {
             @Override
             public EntryStream open(Path segment) throws IOException {
-                // Page-run staging + cascade intermediates stream via PageRunSegmentReader; a
-                // legacy columnar Parquet staging segment (CaptureSorter's fixture path) still reads
-                // via SegmentReader. The format is keyed off the file extension the producer stamped.
-                // This is the StreamingMerger's page-run read path — the one
-                // taken whenever a merge group MIXES page-run and Parquet segments — so it carries the
-                // live metrics too; the intra-segment minKey-regression guard is the same one the
-                // frontier path runs (both go through PageRunSegmentIo#nextPage), and the counter it
-                // bumps (SORT.page_run_min_regression) must reach the run summary from either route.
-                // The reader is handed the SAME comparator this merge runs under — it needs it
-                // to key-merge a segment's overlapping pages into the sorted run StreamingMerger assumes.
-                return isPageRunSegment(segment)
-                        ? new PageRunSegmentReader(segment, comparator, metrics)
-                        : new SegmentReader(segment);
+                // Generic entry-stream fallback retained for KWayMerge's storage seam. Production
+                // page-run groups take the decode-free frontier below.
+                return new PageRunSegmentReader(segment, comparator, metrics);
             }
 
             @Override
@@ -527,9 +536,7 @@ public final class SortTransform {
 
             @Override
             public boolean supportsPageFrontier(Path segment) {
-                // A page-run staging/intermediate segment can be read as a decode-free page
-                // frontier; a legacy columnar Parquet staging segment cannot.
-                return isPageRunSegment(segment);
+                return pageFrontierEnabled;
             }
 
             @Override
@@ -542,11 +549,25 @@ public final class SortTransform {
         };
     }
 
-    /** Whether {@code segment} is a page-run staging/intermediate file (vs. a columnar Parquet one).
-     *  Package-private: {@link MergeFanInPlanner#exactMemoryFanIn} shares this instead of duplicating the
-     *  {@code .pageseg} suffix check. */
+    /** Whether {@code segment} has the required page-run staging/intermediate suffix.
+     *  Package-private: {@link MergeFanInPlanner} shares this instead of duplicating the
+     *  suffix check. */
     static boolean isPageRunSegment(Path segment) {
         return segment.getFileName().toString().endsWith(SEGMENT_SUFFIX);
+    }
+
+    /** Reject unsupported staging before cleanup can remove any prior working files. */
+    private static void requirePageRunSegments(List<Path> segments) throws IOException {
+        for (Path segment : segments) {
+            if (!isPageRunSegment(segment)) {
+                throw new IllegalArgumentException(
+                        "unsupported sort staging segment (expected " + SEGMENT_SUFFIX + "): " + segment);
+            }
+            // Extension alone is not a format proof. Validate the header/version/completeness tail
+            // and bounds before working-file cleanup. Full record CRC/order/count validation occurs
+            // during the merge while prior published finals are still intact.
+            PageRunSegmentReader.readTrailer(segment);
+        }
     }
 
     private static void atomicRename(Path from, Path to) throws IOException {
@@ -582,8 +603,9 @@ public final class SortTransform {
     }
 
     /**
-     * Remove stale FINAL files already in {@code outputDir} — an abandoned prior merge attempt's
-     * finals, orphaned outside any manifest. Without this, a retry that produces FEWER final files
+     * Remove stale FINAL files already in {@code outputDir}, after the complete replacement has been
+     * generated and closed under tmp names. These are an abandoned prior merge attempt's finals,
+     * orphaned outside any manifest. Without this, a retry that produces FEWER final files
      * than the abandoned attempt (a changed roll knob, or a different segment mix after a partial
      * resume) would leave the extras lying around outside the new manifest.
      *
@@ -605,7 +627,7 @@ public final class SortTransform {
      */
     private void cleanStaleFinals(Path outputDir) throws IOException {
         String glob = identityVerifiedWideSweep ? "*" + FINAL_SUFFIX : FINAL_PREFIX + "*" + FINAL_SUFFIX;
-        sweep(outputDir, stale -> log.info("sweeping stale sorted output before re-merge: {}", stale), glob);
+        sweep(outputDir, stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale), glob);
     }
 
     /**

@@ -196,14 +196,10 @@ class SortRollPublishStampCharacterizationTest {
         return new Dirs(output, staging);
     }
 
-    private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long segmentRowGroupBytes)
+    private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long ignoredPageRunBytes)
             throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, segmentRowGroupBytes);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        return path;
+        return SortTestSupport.writePageRun(
+                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
     }
 
     private static ListEntry object(String key) {

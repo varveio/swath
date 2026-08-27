@@ -21,11 +21,9 @@ import java.util.zip.CRC32C;
 /**
  * Persists a sealed buffer as ONE <b>page-run</b> staging segment: a stream of
  * length-delimited, CRC32C-framed {@link PageBlock} records plus a completeness trailer — the
- * page-oriented replacement for {@link SegmentWriter}'s columnar Parquet segment, and the writer
- * the live pipeline now uses instead of {@link SegmentWriter}.
+ * page-oriented staging format used by both live listing and offline fixture sorting.
  *
- * <p><b>Pack once, concatenate — no seal-time merge.</b> Unlike {@link SegmentWriter#flush}, which
- * k-way merges the buffer's per-node runs, this writer orders the buffer's pages by
+ * <p><b>Pack once, concatenate — no seal-time merge.</b> This writer orders the buffer's pages by
  * {@link PageBlock#firstKey()} and writes each page's {@link PageBlock#serialize()} bytes verbatim,
  * in minKey order. Correctness rests on the OBJECTS invariant that work-stealing nodes own disjoint
  * key ranges, so pages are range-disjoint by construction and concatenating them in minKey order is
@@ -52,8 +50,8 @@ import java.util.zip.CRC32C;
  * truncated-stats hazard. {@code trailerStart} is the absolute file offset where the trailer begins
  * (where {@code segMinKey}'s length prefix starts) — read from the fixed EOF-relative tail, it lets a
  * reader seek straight to the bounds in O(1) instead of walking every record's length prefix.
- * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in clamp uses it as
- * the exact per-stream memory bound, and the reader uses it to bound a record's claimed length before
+ * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in planner uses it
+ * to tighten its configured per-stream estimate, and the reader uses it to bound a claimed length before
  * allocating). A listing-phase segment's optional extension stores the exact capped systematic
  * page-minimum sample used by the parallel merge while preserving format version 1 and the fixed
  * 28-byte EOF tail; post-boundary cascade intermediates omit it. The trailer is written LAST: with
@@ -119,6 +117,7 @@ final class PageRunSegmentWriter {
         // adjacent tie as non-ordered) even though the read-back byte order is fine — so the ordered
         // bit is not a reliable post-seal "is this page sorted" proxy; the reader's min-monotonicity
         // guard must derive from actual key comparisons, not this bit.
+        boolean repacked = false;
         for (int i = 0; i < pages.size(); i++) {
             PageBlock page = pages.get(i);
             if (!page.orderedUnderFullComparator()) {
@@ -129,7 +128,11 @@ final class PageRunSegmentWriter {
                 }
                 entries.sort(comparator);
                 pages.set(i, PageBlock.pack(entries, comparator, codec));
+                repacked = true;
             }
+        }
+        if (repacked) {
+            metrics.recordStealReason("SORT", "buffer_page_repacked");
         }
 
         // Concatenation order: minKey (unsigned) across all node runs.
@@ -152,6 +155,10 @@ final class PageRunSegmentWriter {
      * selection has already completed, this path omits the unused sample extension. Returns total rows.
      */
     long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
+        return writeSorted(sorted, path);
+    }
+
+    private long writeSorted(SortedCursor sorted, Path path) throws IOException {
         long totalEntries = 0;
         int totalRecords = 0;
         int maxRecordLen = 0;
@@ -240,11 +247,13 @@ final class PageRunSegmentWriter {
     private static int writeFrame(FileChannel ch, byte[] body) throws IOException {
         CRC32C crc = new CRC32C();
         crc.update(body, 0, body.length);
-        ByteBuffer frame = ByteBuffer.allocate(8 + body.length);
-        frame.putInt(body.length);
-        frame.putInt((int) crc.getValue());
-        frame.put(body);
-        writeFully(ch, frame.flip());
+        ByteBuffer header = ByteBuffer.allocate(8);
+        header.putInt(body.length);
+        header.putInt((int) crc.getValue());
+        writeFully(ch, header.flip());
+        // PageBlock.serialize() already returned the exact body array. Write it directly instead of
+        // allocating and copying a second page-sized [header + body] buffer on every staged page.
+        writeFully(ch, ByteBuffer.wrap(body));
         return body.length;
     }
 

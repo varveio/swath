@@ -35,9 +35,6 @@ class SortConfigTest {
         assertThat(config.finalFileBytes()).isEqualTo(1L << 30);
         assertThat(config.segmentEntries()).isEqualTo(Long.MAX_VALUE);   // bytes gate governs by default
         assertThat(config.finalRowGroupBytes()).isEqualTo(8L * 1024 * 1024);
-        // segmentRowGroupBytes now only sizes columnar-Parquet staging (fixtures and the
-        // parallel-merge path); it no longer drives effectiveFanIn.
-        assertThat(config.segmentRowGroupBytes()).isEqualTo(1L * 1024 * 1024);
         // The page-run merge-memory denominator — ≈ one packed page (~64 KiB estimate).
         assertThat(config.mergePerStreamBytes()).isEqualTo(64L * 1024);
         // mergeBudgetBytes defaults to the SAME heap-adaptive shape as segmentBytes (floor 64 MB).
@@ -95,7 +92,6 @@ class SortConfigTest {
                 "fan-in", "8",
                 "final-file-bytes", "999",
                 "final-row-group-bytes", "111",
-                "segment-row-group-bytes", "222",
                 "merge-budget-bytes", "333",
                 "merge-per-stream-bytes", "444",
                 "min-parallel-staged-bytes", "555"));
@@ -105,7 +101,6 @@ class SortConfigTest {
         assertThat(config.fanIn()).isEqualTo(8);
         assertThat(config.finalFileBytes()).isEqualTo(999L);
         assertThat(config.finalRowGroupBytes()).isEqualTo(111L);
-        assertThat(config.segmentRowGroupBytes()).isEqualTo(222L);
         assertThat(config.mergeBudgetBytes()).isEqualTo(333L);
         assertThat(config.mergePerStreamBytes()).isEqualTo(444L);
         assertThat(config.minParallelStagedBytes()).isEqualTo(555L);
@@ -120,17 +115,15 @@ class SortConfigTest {
 
     @Test
     void rejectsInvalidKnobs() {
-        assertThatThrownBy(() -> new SortConfig(0, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
+        assertThatThrownBy(() -> new SortConfig(0, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 1, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // fan-in < 2
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // fan-in < 2
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.0, 2, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))  // heap-fraction 0
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.0, 2, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))  // heap-fraction 0
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 0, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // segment-row-group-bytes 0
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 0, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // merge-budget-bytes 0
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 0, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))   // merge-budget-bytes 0
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, 1,
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1,
                 DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, -1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("min-parallel-staged-bytes");
@@ -147,22 +140,22 @@ class SortConfigTest {
 
     @Test
     void rejectsBuffersBelowTwo() {
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 1, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 1, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
                 .as("buffers=1 must be rejected: 0 off-thread slots would deadlock every seal")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("buffers");
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 0, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 0, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("buffers");
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, -1, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, -1, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("buffers");
     }
 
     @Test
     void acceptsBuffersAtOrAboveTwo() {
-        assertThat(new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L).buffers()).isEqualTo(2);
-        assertThat(new SortConfig(1, 1, 0.08, 3, 512, 1, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L).buffers()).isEqualTo(3);
+        assertThat(new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L).buffers()).isEqualTo(2);
+        assertThat(new SortConfig(1, 1, 0.08, 3, 512, 1, 1, 1, 1, 1, DEFAULT_MERGE_PER_STREAM_BYTES, PageCodec.LZ4, 0L).buffers()).isEqualTo(3);
     }
 
     @Test
@@ -182,36 +175,31 @@ class SortConfigTest {
     @Test
     void effectiveFanInIsUnboundedByBudgetWhenBudgetIsGenerous() {
         SortConfig config = new SortConfig(64L << 20, Long.MAX_VALUE, 0.08, 2, 512,
-                Long.MAX_VALUE, 8L << 20, 1, 1L << 20, Long.MAX_VALUE, SortConfig.DEFAULT_MERGE_PARALLELISM,
+                Long.MAX_VALUE, 8L << 20, 1, Long.MAX_VALUE, SortConfig.DEFAULT_MERGE_PARALLELISM,
                 SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES, SortConfig.DEFAULT_SEGMENT_CODEC, 0L);
         assertThat(config.effectiveFanIn()).isEqualTo(512);   // budget never binds ⇒ raw fan-in
     }
 
     @Test
     void effectiveFanInIsCappedByTheMergeBudget() {
-        // The denominator is merge-per-stream-bytes (default 64 KiB), not segment-row-group-bytes.
+        // 640 KiB budget / 64 KiB per stream gives 10 streams per pass.
         // 640 KiB budget / 64 KiB per stream ⇒ 10 streams/pass, well under the raw fan-in of 512.
         SortConfig config = new SortConfig(64L << 20, Long.MAX_VALUE, 0.08, 2, 512,
-                Long.MAX_VALUE, 8L << 20, 1, 1L << 20, 10L * (64L << 10), SortConfig.DEFAULT_MERGE_PARALLELISM,
+                Long.MAX_VALUE, 8L << 20, 1, 10L * (64L << 10), SortConfig.DEFAULT_MERGE_PARALLELISM,
                 SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES, SortConfig.DEFAULT_SEGMENT_CODEC, 0L);
         assertThat(config.effectiveFanIn()).isEqualTo(10);
     }
 
     @Test
-    void effectiveFanInUsesMergePerStreamBytesNotSegmentRowGroupBytesAsTheDenominator() {
-        // The denominator is merge-per-stream-bytes; segment-row-group-bytes (a columnar-Parquet
-        // concept) must not affect the merge-memory bound. Same budget, two very different
-        // segment-row-group values ⇒ identical effectiveFanIn.
-        SortConfig smallRowGroup = fanInBudgetConfig(1L << 20, 128L << 10);   // 8 MB / 128 KiB = 64
-        SortConfig hugeRowGroup = fanInBudgetConfig(512L << 20, 128L << 10);
-        assertThat(smallRowGroup.effectiveFanIn()).isEqualTo(64);
-        assertThat(hugeRowGroup.effectiveFanIn()).isEqualTo(64);   // segment-row-group-bytes is irrelevant to the bound
+    void effectiveFanInUsesMergePerStreamBytesAsTheDenominator() {
+        SortConfig config = fanInBudgetConfig(128L << 10);   // 8 MB / 128 KiB = 64
+        assertThat(config.effectiveFanIn()).isEqualTo(64);
     }
 
     @Test
     void effectiveFanInIsFlooredAtTwoEvenUnderAnExtremelyTightBudget() {
         SortConfig config = new SortConfig(64L << 20, Long.MAX_VALUE, 0.08, 2, 512,
-                Long.MAX_VALUE, 8L << 20, 1, 1L << 20, 1L, SortConfig.DEFAULT_MERGE_PARALLELISM,
+                Long.MAX_VALUE, 8L << 20, 1, 1L, SortConfig.DEFAULT_MERGE_PARALLELISM,
                 SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES, SortConfig.DEFAULT_SEGMENT_CODEC, 0L);   // 1 byte budget
         assertThat(config.effectiveFanIn()).isEqualTo(2);
     }
@@ -223,7 +211,7 @@ class SortConfigTest {
         long twoGb = 2L * 1024 * 1024 * 1024;
         long budget = Math.max(SortConfig.SEGMENT_BYTES_FLOOR, (long) (0.08 * twoGb));
         SortConfig config = new SortConfig(budget, Long.MAX_VALUE, 0.08, 2, 10000,
-                Long.MAX_VALUE, 8L << 20, 1, 1L << 20, budget, SortConfig.DEFAULT_MERGE_PARALLELISM,
+                Long.MAX_VALUE, 8L << 20, 1, budget, SortConfig.DEFAULT_MERGE_PARALLELISM,
                 SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES, SortConfig.DEFAULT_SEGMENT_CODEC, 0L);
         assertThat(config.effectiveFanIn()).isEqualTo((int) (budget / SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES));
         assertThat(config.effectiveFanIn()).isLessThan(10000);   // strictly tighter than the raw knob
@@ -250,14 +238,14 @@ class SortConfigTest {
 
     @Test
     void rejectsNullSegmentCodec() {
-        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, 1, 1, null, 0L))
+        assertThatThrownBy(() -> new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, 1, null, 0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("segment-codec");
     }
 
     @Test
     void rejectsMergePerStreamBytesAtOrBelowZero() {
-        assertThatThrownBy(() -> fanInBudgetConfig(1L << 20, 0L))
+        assertThatThrownBy(() -> fanInBudgetConfig(0L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("merge-per-stream-bytes");
         assertThatThrownBy(() -> fromProperties(Map.of("merge-per-stream-bytes", "0")))
@@ -266,21 +254,20 @@ class SortConfigTest {
     }
 
     // ------------------------------------------------------------------
-    // These test-local factories build fixtures from a fixed base via the canonical 12-arg
+    // These test-local factories build fixtures from a fixed base via the canonical constructor,
     // constructor, each overriding just the one field the case needs.
     // ------------------------------------------------------------------
 
     /** All-1s minimal config, overriding only {@code mergeParallelism} (the field under test). */
     private static SortConfig minimalConfigWithMergeParallelism(int mergeParallelism) {
-        return new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, 1, mergeParallelism,
+        return new SortConfig(1, 1, 0.08, 2, 512, 1, 1, 1, 1, mergeParallelism,
                 SortConfig.DEFAULT_MERGE_PER_STREAM_BYTES, SortConfig.DEFAULT_SEGMENT_CODEC, 0L);
     }
 
-    /** The {@code effectiveFanIn} test fixture, overriding only {@code segmentRowGroupBytes} and
-     *  {@code mergePerStreamBytes} (the fields under test). */
-    private static SortConfig fanInBudgetConfig(long segmentRowGroupBytes, long mergePerStreamBytes) {
+    /** The {@code effectiveFanIn} test fixture, overriding {@code mergePerStreamBytes}. */
+    private static SortConfig fanInBudgetConfig(long mergePerStreamBytes) {
         return new SortConfig(64L << 20, Long.MAX_VALUE, 0.08, 2, 512, Long.MAX_VALUE, 8L << 20, 1,
-                segmentRowGroupBytes, 8L << 20, SortConfig.DEFAULT_MERGE_PARALLELISM, mergePerStreamBytes,
+                8L << 20, SortConfig.DEFAULT_MERGE_PARALLELISM, mergePerStreamBytes,
                 SortConfig.DEFAULT_SEGMENT_CODEC, 0L);
     }
 }

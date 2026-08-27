@@ -283,7 +283,6 @@ class ParallelMergeBenchmark {
         ar.rangeWouldCascadeCount = metrics.count("SORT.merge_range_would_cascade");
         ar.rangeUnsplittableCount = metrics.count("SORT.merge_range_unsplittable");
         ar.pageSkipEngagedCount = metrics.count("SORT.merge_range_page_skipped");
-        ar.rowgroupSkipEngagedCount = metrics.count("SORT.merge_range_rowgroup_skipped");
         ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
         ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
         ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
@@ -694,7 +693,6 @@ class ParallelMergeBenchmark {
         long rangeWouldCascadeCount;
         long rangeUnsplittableCount;
         long pageSkipEngagedCount;
-        long rowgroupSkipEngagedCount;
         long sampleCappedSegments;
         long pageWholeEmissions;
         long pageOverlapKeyMerges;
@@ -719,7 +717,7 @@ class ParallelMergeBenchmark {
                             + "range_below_staged_floor_count=%d range_fd_limited_count=%d "
                             + "range_fd_exhausted_count=%d "
                             + "range_would_cascade_count=%d range_unsplittable_count=%d "
-                            + "page_skip_engaged_ranges=%d rowgroup_skip_engaged_ranges=%d "
+                            + "page_skip_engaged_ranges=%d "
                             + "sample_capped_segments=%d page_whole_emissions=%d "
                             + "page_overlap_keymerges=%d page_reads=unavailable "
                             + "read_amplification=unavailable identity_check=full-row "
@@ -730,7 +728,7 @@ class ParallelMergeBenchmark {
                     mergePasses, cascadedPasses, fastPathEmissions, rangeParallelCount,
                     rangeBelowStagedFloorCount, rangeFdLimitedCount, rangeFdExhaustedCount,
                     rangeWouldCascadeCount, rangeUnsplittableCount, pageSkipEngagedCount,
-                    rowgroupSkipEngagedCount, sampleCappedSegments, pageWholeEmissions,
+                    sampleCappedSegments, pageWholeEmissions,
                     pageOverlapKeyMerges, fullRowExact, rangeLatenciesMs);
         }
     }

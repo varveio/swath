@@ -89,6 +89,12 @@ renames them, and prints row/file/byte/segment/merge counts. Output files are na
 `part-00000.parquet` onward. Versioned rows or duplicate keys are rejected in the current
 non-versioned format rather than silently collapsed.
 
+Unlike live `swath --sort` staging, independently sorted fixture chunks can overlap across their
+entire key ranges. `sort-fixture` therefore uses the library's bounded serial entry-stream merge and
+does not engage the page-frontier parallel range optimization, even when merge parallelism is
+configured. This keeps active state bounded for arbitrary captures; `SORT.merge_range_frontier_disabled`
+reports that expected policy choice.
+
 ## Start the server
 
 ```bash

@@ -16,8 +16,9 @@ import org.slf4j.LoggerFactory;
  * The merge fan-in planner — "how wide can this merge pass be" — extracted out of
  * {@link SortTransform} so its tmp/rename/publish state machine doesn't also carry this arithmetic
  * cluster. Composes the STATIC budget-bounded fan-in ({@link SortConfig#effectiveFanIn()}) with two
- * RUNTIME clamps — the process fd limit ({@link MergeFdBudget}) and the EXACT per-segment page-run
- * memory bound — and owns the cascade-predicted / fan-in-clamped observability (log warnings +
+ * RUNTIME clamps — the process fd limit ({@link MergeFdBudget}) and the largest encoded page-run
+ * record observed in segment trailers — and owns cascade-predicted / fan-in-clamped observability
+ * (log warnings +
  * {@code SORT.merge_fanin_clamped}/{@code _fd_clamped}/{@code _mem_clamped}/{@code
  * merge_cascade_predicted} counters), so a caller only ever needs {@link #plan(List)}.
  *
@@ -80,8 +81,8 @@ final class MergeFanInPlanner {
     /**
      * The runtime-clamped merge fan-in. Takes the MIN of (a) the static budget-bounded
      * {@link SortConfig#effectiveFanIn()}, (b) the fd clamp (this process's soft open-file limit minus
-     * {@link MergeFdBudget#FD_HEADROOM}), and (c) the EXACT per-segment memory bound from the page-run
-     * trailers ({@code mergeBudgetBytes / max(maxRecordLen)}) when the input is page-run — never below 2.
+     * {@link MergeFdBudget#FD_HEADROOM}), and (c) a per-stream price no smaller than either the
+     * configured estimate or the largest encoded record from the page-run trailers — never below 2.
      * Fires {@code SORT.merge_fanin_clamped} (with the fd/mem sub-reason) whenever the runtime clamp
      * reduces the fan-in below the static estimate; {@link #plan} then lets {@link
      * #warnIfCascadePredicted} note the cascade if the clamp forces the fan-in below the segment
@@ -90,47 +91,49 @@ final class MergeFanInPlanner {
     private int clampedMergeFanIn(List<Path> segments) {
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
-        int exactMemoryFanIn = exactMemoryFanIn(segments);
+        int recordSizedFanIn = recordSizedFanIn(segments);
         int clamped = MergeFdBudget.clampedFanIn(staticFanIn, softFdLimit, MergeFdBudget.FD_HEADROOM,
-                exactMemoryFanIn);
+                recordSizedFanIn);
         if (clamped < staticFanIn) {
             int fdBound = MergeFdBudget.fdBoundedFanIn(softFdLimit, MergeFdBudget.FD_HEADROOM);
             metrics.recordStealReason("SORT", "merge_fanin_clamped");
             if (fdBound < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_fd_clamped");
             }
-            if (exactMemoryFanIn < staticFanIn) {
+            if (recordSizedFanIn < staticFanIn) {
                 metrics.recordStealReason("SORT", "merge_fanin_mem_clamped");
             }
-            log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} exact_mem_fan_in={} "
+            log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} record_sized_fan_in={} "
                     + "clamped_fan_in={} soft_fd_limit={} segments={}",
-                    staticFanIn, fdBound, exactMemoryFanIn, clamped, softFdLimit, segments.size());
+                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit, segments.size());
         }
         return clamped;
     }
 
     /**
-     * Exact memory bound: {@code mergeBudgetBytes / max(maxRecordLen over the page-run segments)}
-     * — the actual per-open-stream heap a merge holds, read O(1) per segment from the page-run trailer
-     * ({@link PageRunSegmentReader#readTrailer}). Returns {@link Integer#MAX_VALUE} (so the static
-     * estimate governs) when the input is not page-run (columnar Parquet fixtures), is empty, or a
-     * trailer read fails — the static bound is an acceptable, correct fallback.
+     * Runtime refinement of the configured per-stream estimate. A page-run trailer exposes the
+     * largest encoded record, so a record larger than {@link SortConfig#mergePerStreamBytes()} must
+     * tighten the fan-in before any reader allocates it. Encoded size is not a complete resident-heap
+     * measurement (decoding and legal overlap add working state), so the trailer can tighten but never
+     * relax the configured estimate. Returns {@link Integer#MAX_VALUE} when no trailer size is
+     * available, leaving the static estimate in force.
      */
-    private int exactMemoryFanIn(List<Path> segments) {
+    private int recordSizedFanIn(List<Path> segments) {
         long maxRecordLen = maxPageRunRecordLen(segments);
         if (maxRecordLen <= 0) {
             return Integer.MAX_VALUE;
         }
-        long bound = config.mergeBudgetBytes() / maxRecordLen;
+        long perStreamPrice = Math.max(config.mergePerStreamBytes(), maxRecordLen);
+        long bound = config.mergeBudgetBytes() / perStreamPrice;
         return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
     }
 
     /**
      * The largest framed record across {@code segments}, read O(1) per segment from the page-run
-     * trailer — the EXACT heap one open page-run merge stream holds, and so the right divisor for any
-     * merge-memory bound over page-run input. Returns {@code -1} when the input is empty, is not
-     * all page-run (columnar Parquet, or a mixed set), or a trailer cannot be read; every caller
-     * then falls back to its own static estimate, which is correct and merely conservative.
+     * trailer — an O(1) encoded-record allocation guard used to tighten the configured stream price,
+     * not the complete decoded heap of one stream. Returns {@code -1} when the input is empty, has an
+     * unsupported suffix, or a trailer cannot be read; every caller then falls back to its own static
+     * estimate, which remains the configured planning guard.
      *
      * <p>Package-private and shared: {@link ParallelRangeMerge} needs the same quantity to size its
      * PER-RANGE fan-in, and computing it there independently would be the same scan written twice.
@@ -148,7 +151,7 @@ final class MergeFanInPlanner {
                 maxRecordLen = Math.max(maxRecordLen, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
             }
         } catch (IOException e) {
-            log.debug("could not read a page-run trailer for the exact merge-memory bound; "
+            log.debug("could not read a page-run trailer for the record-size fan-in refinement; "
                     + "falling back to the static estimate", e);
             return -1;
         }

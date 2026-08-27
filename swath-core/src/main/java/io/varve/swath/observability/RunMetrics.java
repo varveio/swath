@@ -236,7 +236,7 @@ public final class RunMetrics {
     private final Timer sortMergeLatency;
     // Per-RANGE merge wall time on the parallel range-merge path (off-by-default,
     // swath.sort.merge-parallelism>1). Distinct from sortMergeLatency (the whole-run merge wall): this
-    // records once per concurrent range so an A/B can see per-range cost with vs without row-group skip.
+    // records once per concurrent range so an A/B can see range balance and page-skip effectiveness.
     private final Timer sortMergeRangeLatency;
     // The parallel path's SERIAL prologue: boundary sampling, once per run, before any range starts.
     private final Timer sortMergeBoundariesLatency;
@@ -1103,8 +1103,8 @@ public final class RunMetrics {
     }
 
     /**
-     * Record one concurrent range's merge wall time ({@code swath.sort.merge.range.latency}) for
-     * row-group-skip. Called once per range from a range thread (Micrometer {@link Timer} is
+     * Record one concurrent range's merge wall time ({@code swath.sort.merge.range.latency}). Called
+     * once per range from a range thread (Micrometer {@link Timer} is
      * thread-safe); {@code nanos} is measured in {@code ParallelRangeMerge} so no {@link Timer.Sample}
      * crosses the sort-package seam.
      */

@@ -77,7 +77,7 @@ class SortTransformFanInClampTest {
     }
 
     @Test
-    void exactPageTrailerMemoryBoundClampsFanInAndFiresMemClamped(@TempDir Path root) throws IOException {
+    void pageTrailerRecordSizeRefinementClampsFanInAndFiresMemClamped(@TempDir Path root) throws IOException {
         // A tiny per-stream estimate (8 bytes) makes the STATIC budget bound huge ⇒ static effectiveFanIn
         // == raw fan-in 512; but the EXACT bound from the page trailers (mergeBudget / real packed-page
         // size) is far smaller, so the merge-entry memory clamp — not the fd clamp — reduces the fan-in.
