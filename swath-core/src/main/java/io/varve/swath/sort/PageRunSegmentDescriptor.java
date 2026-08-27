@@ -21,9 +21,14 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunBoundarySample.ReadResult sample) {
 
     static List<PageRunSegmentDescriptor> readAll(List<Path> paths) throws IOException {
+        return readAll(paths, PageRunSegmentIo::open);
+    }
+
+    /** Test seam for asserting the descriptor kickoff's open lifetime. */
+    static List<PageRunSegmentDescriptor> readAll(List<Path> paths, Opener opener) throws IOException {
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(paths.size());
         for (Path path : paths) {
-            try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+            try (PageRunSegmentIo io = opener.open(path)) {
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
                         PageRunSegmentReader.readTrailer(io), PageRunBoundarySample.read(io)));
             }
@@ -41,5 +46,10 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
             max = Math.max(max, descriptor.trailer().maxRecordLen());
         }
         return max;
+    }
+
+    @FunctionalInterface
+    interface Opener {
+        PageRunSegmentIo open(Path path) throws IOException;
     }
 }

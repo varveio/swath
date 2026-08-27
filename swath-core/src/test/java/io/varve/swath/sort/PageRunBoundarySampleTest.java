@@ -25,6 +25,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
@@ -56,10 +57,16 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
-    void boundarySelectionDoesNotReopenKickoffDescriptors(@TempDir Path dir) throws IOException {
+    void kickoffOpensSegmentExactlyOnceAndBoundarySelectionDoesNotReopen(@TempDir Path dir)
+            throws IOException {
         Path segment = writePages(dir.resolve("descriptor.pageseg"), 4);
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(List.of(segment));
+        AtomicInteger opens = new AtomicInteger();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(List.of(segment), path -> {
+            opens.incrementAndGet();
+            return PageRunSegmentIo.open(path);
+        });
         PageRunSegmentDescriptor descriptor = descriptors.getFirst();
+        assertThat(opens).hasValue(1);
         assertThat(descriptor.fileSize()).isEqualTo(Files.size(segment));
         assertThat(descriptor.trailerStart()).isPositive();
         assertThat(descriptor.sample().status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
