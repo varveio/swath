@@ -269,7 +269,8 @@ public final class SortLane implements AutoCloseable {
             try {
                 beforeEncodeHookForTesting.run();
                 int pageRuns = sealed.runCount();
-                Path path = stagingDir.resolve(segmentPrefix + "-" + seq.getAndIncrement() + ".pageseg");
+                Path path = stagingDir.resolve(
+                        StagingNames.listingSegment(segmentPrefix, seq.getAndIncrement()));
                 SegmentResult result = segmentWriter.flush(sealed, path);
                 sink.onSegmentFinalized(result);   // commit point: part_file row + durable_cursor advance
                 laneMeters.segmentFinalized(result.bytes(), pageRuns);

@@ -11,7 +11,6 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.parquet.ParquetParts;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -112,7 +111,7 @@ public final class CaptureSorter {
     public SortTransformResult sort(List<Path> inputParts, Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
         Path stagingDir = outputDir.resolve(STAGING_DIR_NAME);
-        wipe(stagingDir);
+        Sweeps.deleteTree(stagingDir);
         Files.createDirectories(stagingDir);
 
         Comparator<ListEntry> comparator = new ListEntryComparator();
@@ -166,7 +165,7 @@ public final class CaptureSorter {
     private Path flushChunk(List<ListEntry> chunk, Comparator<ListEntry> comparator,
                             PageRunSegmentWriter segmentWriter, Path stagingDir, int seq) throws IOException {
         chunk.sort(comparator);
-        Path path = stagingDir.resolve("fixture-" + seq + SortTransform.SEGMENT_SUFFIX);
+        Path path = stagingDir.resolve(StagingNames.fixtureSegment(seq));
         try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, DuplicateHook.NO_OP)) {
             // Arbitrary fixture chunks can overlap across their whole key ranges, so this pipeline
             // intentionally uses the serial entry-stream merger and never selects parallel range
@@ -187,22 +186,6 @@ public final class CaptureSorter {
             throw new VersionedCaptureException(
                     "sort-fixture is non-versioned-only (v1): key '" + e.key().asString()
                             + "' carries version_id '" + versionId + "'");
-        }
-    }
-
-    /** Recursively delete {@code dir} if present — this engine's own transient staging area only. */
-    private static void wipe(Path dir) throws IOException {
-        if (!Files.exists(dir)) {
-            return;
-        }
-        try (var stream = Files.walk(dir)) {
-            stream.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try {
-                    Files.delete(p);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
         }
     }
 

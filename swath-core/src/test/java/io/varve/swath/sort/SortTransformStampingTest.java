@@ -70,7 +70,7 @@ class SortTransformStampingTest {
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
         return SortTestSupport.writePageRun(
-                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
+                dir.resolve(name.replace(".parquet", StagingNames.PAGE_RUN_SUFFIX)), sorted, cmp);
     }
 
     private static ObjectEntry objectEntry(String key) {

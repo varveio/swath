@@ -75,17 +75,10 @@ public final class SortBenchCorpus {
 
     /** Best-effort removal of a measurement temporary tree. */
     public static void deleteTree(Path root) throws IOException {
-        if (!Files.exists(root)) {
-            return;
-        }
-        try (var walk = Files.walk(root)) {
-            walk.sorted(Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                    // Best-effort cleanup of a measurement temporary tree.
-                }
-            });
+        try {
+            Sweeps.deleteTree(root);
+        } catch (IOException ignored) {
+            // Best-effort cleanup of a measurement temporary tree.
         }
     }
 

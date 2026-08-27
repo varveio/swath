@@ -191,7 +191,8 @@ class SortTransformParallelMergeTest {
     private List<Path> stage(Path stagingDir, List<List<ListEntry>> segments) throws IOException {
         List<Path> out = new ArrayList<>();
         for (int i = 0; i < segments.size(); i++) {
-            out.add(writeSegment(stagingDir, "seg-" + i + SortTransform.SEGMENT_SUFFIX, segments.get(i)));
+            out.add(writeSegment(stagingDir, "seg-" + i + StagingNames.PAGE_RUN_SUFFIX,
+                    segments.get(i)));
         }
         return out;
     }

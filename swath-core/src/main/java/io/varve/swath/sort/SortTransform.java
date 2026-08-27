@@ -15,7 +15,6 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
@@ -50,17 +49,6 @@ import org.slf4j.LoggerFactory;
 public final class SortTransform {
 
     private static final Logger log = LoggerFactory.getLogger(SortTransform.class);
-
-    private static final String FINAL_PREFIX = "part-";
-    private static final String FINAL_SUFFIX = ".parquet";
-    private static final String TMP_SUFFIX = ".tmp";
-    /**
-     * The page-run staging/intermediate file extension — distinct from the FINAL output's
-     * {@code .parquet}. Every producer and cascade intermediate stamps this suffix; transform input
-     * is preflighted before any stale-output sweep so an unsupported staging format cannot trigger
-     * destructive re-entry cleanup.
-     */
-    static final String SEGMENT_SUFFIX = ".pageseg";
 
     // The sort-run inputs, held whole so the quintet threads straight through to ParallelRangeMerge
     // without re-listing loose positional params; the individual fields below are its hot-path aliases.
@@ -446,7 +434,7 @@ public final class SortTransform {
             cleanStaleFinals(outputDir);
             int filenameIndex = 0;
             for (Path tmp : tmpsInOrder) {
-                String name = finalPartName(filenameIndex++);
+                String name = StagingNames.finalPart(filenameIndex++);
                 Path finalPath = outputDir.resolve(name);
                 atomicRename(tmp, finalPath);
                 finalFiles.add(finalPath);
@@ -490,12 +478,12 @@ public final class SortTransform {
                                           List<Path> tmpFiles, List<SortedFileWriter> finalWriters,
                                           SortedFileWriterFactory outputSequence) throws IOException {
         int filenameIndex = finalFiles.size();
-        String name = finalPartName(filenameIndex);
+        String name = StagingNames.finalPart(filenameIndex);
         Path finalPath = outputDir.resolve(name);
         // Write the tmp OUTSIDE data/ — into the sibling staging dir on the same
         // filesystem — and atomically rename it INTO data/ (see transform()). data/ (outputDir) thus
         // only ever holds finalized *.parquet; a crash never strands a *.tmp inside the pure-parquet dir.
-        Path tmpPath = stagingDir.resolve(name + TMP_SUFFIX);
+        Path tmpPath = stagingDir.resolve(StagingNames.finalTmp(filenameIndex));
         // The public filename follows Spark/Hadoop's zero-based part ordinal. The footer's
         // file_index remains a 1-based position so existing sorted fixtures retain their stamp
         // semantics and replay's completeness check remains backward-compatible.
@@ -504,11 +492,6 @@ public final class SortTransform {
         tmpFiles.add(tmpPath);
         finalWriters.add(writer);
         return writer;
-    }
-
-    /** Spark/Hadoop-style public part name with a dense, zero-based ordinal. */
-    private static String finalPartName(int filenameIndex) {
-        return String.format("%s%05d%s", FINAL_PREFIX, filenameIndex, FINAL_SUFFIX);
     }
 
     private static List<FinalPart> finalParts(List<Path> paths, List<SortedFileWriter> writers) {
@@ -538,7 +521,8 @@ public final class SortTransform {
 
             @Override
             public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve("merge-" + (seq[0]++) + SEGMENT_SUFFIX);
+                Path dest = stagingDir.resolve(
+                        StagingNames.cascadeIntermediate("merge-", seq[0]++));
                 segmentWriter.writeIntermediate(sorted, dest);
                 intermediates.add(dest);
                 return dest;
@@ -568,7 +552,7 @@ public final class SortTransform {
      *  Package-private: {@link MergeFanInPlanner} shares this instead of duplicating the
      *  suffix check. */
     static boolean isPageRunSegment(Path segment) {
-        return segment.getFileName().toString().endsWith(SEGMENT_SUFFIX);
+        return segment.getFileName().toString().endsWith(StagingNames.PAGE_RUN_SUFFIX);
     }
 
     /** Reject unsupported staging before cleanup can remove any prior working files. */
@@ -576,7 +560,8 @@ public final class SortTransform {
         for (Path segment : segments) {
             if (!isPageRunSegment(segment)) {
                 throw new IllegalArgumentException(
-                        "unsupported sort staging segment (expected " + SEGMENT_SUFFIX + "): " + segment);
+                        "unsupported sort staging segment (expected " + StagingNames.PAGE_RUN_SUFFIX
+                                + "): " + segment);
             }
         }
     }
@@ -596,7 +581,7 @@ public final class SortTransform {
      * into published {@code data/}.
      */
     private static void cleanStaleTmp(Path dir) throws IOException {
-        sweep(dir, FINAL_PREFIX + "*" + FINAL_SUFFIX + TMP_SUFFIX);
+        Sweeps.sweep(dir, stale -> { }, StagingNames.FINAL_TMP_GLOB);
     }
 
     /**
@@ -610,7 +595,7 @@ public final class SortTransform {
      * violating {@code docs/internals/contracts.md} §6 ("staging dir cleaned on successful publish").
      */
     private static void cleanStalePrangeTmp(Path stagingDir) throws IOException {
-        sweep(stagingDir, "prange-*" + FINAL_SUFFIX + TMP_SUFFIX);
+        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB);
     }
 
     /**
@@ -637,8 +622,11 @@ public final class SortTransform {
      * </ul>
      */
     private void cleanStaleFinals(Path outputDir) throws IOException {
-        String glob = identityVerifiedWideSweep ? "*" + FINAL_SUFFIX : FINAL_PREFIX + "*" + FINAL_SUFFIX;
-        sweep(outputDir, stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale), glob);
+        String glob = identityVerifiedWideSweep
+                ? StagingNames.ALL_PARQUET_GLOB : StagingNames.OWN_FINAL_GLOB;
+        Sweeps.sweep(outputDir,
+                stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale),
+                glob);
     }
 
     /**
@@ -649,28 +637,7 @@ public final class SortTransform {
     private static void cleanStaleMergeIntermediates(Path stagingDir) throws IOException {
         // "merge-*" covers the serial path's own intermediates AND the parallel path's per-range
         // "merge-r<range>-<n>" ones, in both staging formats.
-        sweep(stagingDir, "merge-*" + SEGMENT_SUFFIX, "merge-*" + FINAL_SUFFIX);
-    }
-
-    /** Delete every file matching any of {@code globs} in {@code dir}; a no-op if {@code dir} doesn't
-     *  exist. Shared shape behind every {@code cleanStale*} sweep above. */
-    private static void sweep(Path dir, String... globs) throws IOException {
-        sweep(dir, stale -> { }, globs);
-    }
-
-    /** As {@link #sweep(Path, String...)}, plus a hook run just before each file is deleted (e.g.
-     *  {@link #cleanStaleFinals}'s per-file log line). */
-    private static void sweep(Path dir, Consumer<Path> beforeDelete, String... globs) throws IOException {
-        if (!Files.isDirectory(dir)) {
-            return;
-        }
-        for (String glob : globs) {
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, glob)) {
-                for (Path stale : stream) {
-                    beforeDelete.accept(stale);
-                    Files.deleteIfExists(stale);
-                }
-            }
-        }
+        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.CASCADE_PAGE_RUN_GLOB,
+                StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
     }
 }

@@ -213,7 +213,7 @@ class SortRollPublishStampCharacterizationTest {
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long ignoredPageRunBytes)
             throws IOException {
         return SortTestSupport.writePageRun(
-                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
+                dir.resolve(name.replace(".parquet", StagingNames.PAGE_RUN_SUFFIX)), sorted, cmp);
     }
 
     private static ListEntry object(String key) {

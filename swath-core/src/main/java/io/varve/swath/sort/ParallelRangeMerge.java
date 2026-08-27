@@ -9,7 +9,6 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -588,7 +587,7 @@ final class ParallelRangeMerge {
         // file_index is assigned by SortTransform once every range has drained and the global roll
         // sequence is known; the footer is not written until then (see setFileIndex).
         int localIndex = tmpParts.size() + 1;
-        Path tmp = stagingDir.resolve("prange-" + range + "-" + localIndex + ".parquet.tmp");
+        Path tmp = stagingDir.resolve(StagingNames.rangeTmp(range, localIndex));
         int open = openPartCount.incrementAndGet();
         if (open > openPartLimit) {
             openPartCount.decrementAndGet();
@@ -662,8 +661,8 @@ final class ParallelRangeMerge {
 
             @Override
             public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve("merge-r" + range + "-" + (seq[0]++)
-                        + SortTransform.SEGMENT_SUFFIX);
+                Path dest = stagingDir.resolve(StagingNames.cascadeIntermediate(
+                        "merge-r" + range + "-", seq[0]++));
                 pageRunWriter.writeIntermediate(sorted, dest);
                 intermediates.add(dest);
                 return dest;
@@ -897,19 +896,14 @@ final class ParallelRangeMerge {
 
     /** Best-effort sweep of THIS run's own tmp parts and cascade intermediates on the failure path. */
     private static void sweepOwnFiles(Path stagingDir) {
-        sweep(stagingDir, "prange-*.parquet.tmp");
-        sweep(stagingDir, "merge-r*-*.parquet");
-        sweep(stagingDir, "merge-r*-*" + SortTransform.SEGMENT_SUFFIX);   // page-run cascade intermediates
+        sweep(stagingDir, StagingNames.RANGE_TMP_GLOB);
+        sweep(stagingDir, StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB);
+        sweep(stagingDir, StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB);
     }
 
     private static void sweep(Path stagingDir, String glob) {
-        if (!Files.isDirectory(stagingDir)) {
-            return;
-        }
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(stagingDir, glob)) {
-            for (Path stale : stream) {
-                Files.deleteIfExists(stale);
-            }
+        try {
+            Sweeps.sweep(stagingDir, stale -> { }, glob);
         } catch (IOException e) {
             log.debug("failed to sweep {} in {} after a parallel merge failure", glob, stagingDir, e);
         }
