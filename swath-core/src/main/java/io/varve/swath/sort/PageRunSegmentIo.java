@@ -273,7 +273,7 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Structurally validate a body and return its frontier fields without decoding rows. */
     static FrontierFields parseFrontierFields(byte[] body) {
-        PageBlock.SerializedFields fields = PageBlock.parseSerializedFields(body);
+        PageBlockCodec.SerializedFields fields = PageBlockCodec.parseSerializedFields(body);
         if (Arrays.compareUnsigned(fields.minKey(), fields.maxKey()) > 0) {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");

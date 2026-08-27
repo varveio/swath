@@ -114,7 +114,7 @@ final class PageRunSegmentWriter {
             PageBlock page = pages.get(i);
             if (!page.orderedUnderFullComparator()) {
                 List<ListEntry> entries = new ArrayList<>(page.count());
-                PageBlock.Cursor c = page.cursor();
+                PageBlockCursor c = page.cursor();
                 byte[] previousRawKey = null;
                 while (c.hasNext()) {
                     ListEntry entry = c.next();

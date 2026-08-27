@@ -102,7 +102,7 @@ final class PageAwareMerger implements SortedCursor {
     private byte[] ceiling;
 
     /** A single decoded page being streamed whole (fast path); null otherwise. */
-    private PageBlock.Cursor wholeCursor;
+    private PageBlockCursor wholeCursor;
 
     private ListEntry previousEmitted;
     private ListEntry pending;
@@ -295,10 +295,10 @@ final class PageAwareMerger implements SortedCursor {
 
     /** A decoded page mid-emission in the key-merge fallback: its cursor plus the peeked head entry. */
     private static final class DecodedPage {
-        private final PageBlock.Cursor cursor;
+        private final PageBlockCursor cursor;
         private ListEntry head;
 
-        DecodedPage(PageBlock.Cursor cursor) {
+        DecodedPage(PageBlockCursor cursor) {
             this.cursor = cursor;
             this.head = cursor.hasNext() ? cursor.next() : null;   // a page always has >= 1 entry
         }

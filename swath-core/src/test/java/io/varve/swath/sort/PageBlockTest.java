@@ -35,7 +35,7 @@ class PageBlockTest {
     private static List<ListEntry> roundTrip(List<ListEntry> in) {
         PageBlock block = PageBlock.pack(in, CMP);
         List<ListEntry> out = new ArrayList<>();
-        PageBlock.Cursor c = block.cursor();
+        PageBlockCursor c = block.cursor();
         while (c.hasNext()) {
             out.add(c.next());
         }
