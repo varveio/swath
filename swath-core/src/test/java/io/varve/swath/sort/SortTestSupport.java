@@ -9,6 +9,8 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -59,6 +61,24 @@ final class SortTestSupport {
             }
         }
         return out;
+    }
+
+    /** Drain a checked-IO entry stream, closing it. */
+    static List<ListEntry> drain(EntryStream stream) throws IOException {
+        List<ListEntry> out = new ArrayList<>();
+        try (stream) {
+            while (stream.hasNext()) {
+                out.add(stream.next());
+            }
+        }
+        return out;
+    }
+
+    /** Write the complete buffer even when the channel performs a short write. */
+    static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
+        }
     }
 
     /** An in-memory {@link EntryStream} over a pre-sorted list — for merger/KWayMerge tests without Parquet. */

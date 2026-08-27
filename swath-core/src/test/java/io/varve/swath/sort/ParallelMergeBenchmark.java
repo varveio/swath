@@ -5,10 +5,7 @@
  */
 package io.varve.swath.sort;
 
-import com.sun.management.OperatingSystemMXBean;
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
@@ -16,15 +13,12 @@ import java.lang.management.MemoryType;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -119,9 +113,6 @@ class ParallelMergeBenchmark {
                 "invalid swath.bench.ranges='" + configured + "': " + reason);
     }
     private static final int TOTAL_DAYS = 1_500;
-    private static final String KEY_PREFIX = "corp-data-lake-logs";
-    private static final String[] STORAGE_CLASSES =
-            {"STANDARD", "STANDARD_IA", "INTELLIGENT_TIERING", "GLACIER"};
     // Generous: the corpus knobs above (and swath.bench.ranges) govern how long a sweep actually takes,
     // and this class never runs under the default suite — the timeout is a runaway backstop, not a budget.
     @Test
@@ -134,10 +125,10 @@ class ParallelMergeBenchmark {
         try {
             Path master = Files.createDirectory(root.resolve("master"));
             long t0 = System.nanoTime();
-            CorpusStats corpus = buildCorpus(master);
+            SortBenchCorpus.Stats corpus = buildCorpus(master);
             long buildMs = (System.nanoTime() - t0) / 1_000_000;
             System.out.printf("BENCH_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
-                    corpus.segments, corpus.rows, corpus.bytes, buildMs);
+                    corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
 
             measureOpenReaderHeap(master);
 
@@ -160,7 +151,7 @@ class ParallelMergeBenchmark {
                                 "full-row mismatch at requested R=" + r + " (actual ranges="
                                         + ar.actualRanges + ") vs the R=1 baseline — silent data loss");
                     }
-                    deleteRecursively(ar.armRoot);
+                    SortBenchCorpus.deleteTree(ar.armRoot);
                 }
                 System.out.println(ar.toLine());
             }
@@ -172,7 +163,7 @@ class ParallelMergeBenchmark {
                 throw new AssertionError("R=1 repeat mismatched the R=1 baseline");
             }
             System.out.println(repeat.toLine());
-            deleteRecursively(repeat.armRoot);
+            SortBenchCorpus.deleteTree(repeat.armRoot);
 
             ArmResult baseline = results.get(1);
             System.out.printf("BENCH_VARIANCE requested_r=1 actual_ranges=1 first_elapsed_ms=%d "
@@ -202,9 +193,9 @@ class ParallelMergeBenchmark {
                 }
             }
 
-            deleteRecursively(baseline.armRoot);
+            SortBenchCorpus.deleteTree(baseline.armRoot);
         } finally {
-            deleteRecursively(root);
+            SortBenchCorpus.deleteTree(root);
         }
     }
 
@@ -216,7 +207,7 @@ class ParallelMergeBenchmark {
         Path armRoot = Files.createDirectory(root.resolve("arm-" + label));
         Path output = Files.createDirectory(armRoot.resolve("data"));
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
-        List<Path> stagingSegments = copyCorpus(master, staging);
+        List<Path> stagingSegments = SortBenchCorpus.copyCorpus(master, staging);
 
         // merge-parallelism is the swept knob; every OTHER swath.sort.* property falls through to the
         // real system properties, so an arm can hold one knob fixed while another varies (e.g. pinning
@@ -243,7 +234,7 @@ class ParallelMergeBenchmark {
         // (ResourceMetrics#peakHeapBytes: used, summed across HEAP pools).
         System.gc();   // settle the prior arm's garbage so this arm's peak is its own
         resetHeapPeaks();
-        long cpuStartNanos = processCpuTimeNanos();
+        long cpuStartNanos = SortBenchCorpus.processCpuTimeNanos();
         long wallStartNanos = System.nanoTime();
         samplerThread.start();
         SortTransformResult result;
@@ -258,7 +249,7 @@ class ParallelMergeBenchmark {
             }
         }
         long wallEndNanos = System.nanoTime();
-        long cpuEndNanos = processCpuTimeNanos();
+        long cpuEndNanos = SortBenchCorpus.processCpuTimeNanos();
 
         ArmResult ar = new ArmResult();
         ar.requestedRanges = mergeParallelism;
@@ -360,15 +351,6 @@ class ParallelMergeBenchmark {
         return total;
     }
 
-    private static long processCpuTimeNanos() {
-        var os = ManagementFactory.getOperatingSystemMXBean();
-        if (os instanceof OperatingSystemMXBean sun) {
-            long cpu = sun.getProcessCpuTime();
-            return cpu >= 0 ? cpu : -1;
-        }
-        return -1;
-    }
-
     // =====================================================================
     // Corpus generation — deterministic, unique, monotonically-keyed rows
     // interleaved round-robin (at BLOCK_ROWS granularity) across NUM_SEGMENTS
@@ -377,10 +359,7 @@ class ParallelMergeBenchmark {
     // stays narrow (real page-skip opportunity).
     // =====================================================================
 
-    private record CorpusStats(int segments, long rows, long bytes) {
-    }
-
-    private CorpusStats buildCorpus(Path master) throws IOException {
+    private SortBenchCorpus.Stats buildCorpus(Path master) throws IOException {
         if (PAGE_ROWS <= 0) {
             throw new IllegalArgumentException("swath.bench.pageRows must be > 0, got " + PAGE_ROWS);
         }
@@ -395,7 +374,8 @@ class ParallelMergeBenchmark {
         for (int seg = 0; seg < NUM_SEGMENTS; seg++) {
             SortBuffer buffer = new SortBuffer(config, CMP);
             try (SortedCursor cursor =
-                         new GeneratedCursor(seg, NUM_SEGMENTS, BLOCK_ROWS, TOTAL_ROWS, rowsPerDay, base)) {
+                         SortBenchCorpus.generatedCursor(
+                                 seg, NUM_SEGMENTS, BLOCK_ROWS, TOTAL_ROWS, rowsPerDay, base)) {
                 List<ListEntry> page = new ArrayList<>(PAGE_ROWS);
                 long nodeId = 0;
                 while (cursor.hasNext()) {
@@ -418,136 +398,12 @@ class ParallelMergeBenchmark {
             totalRows += result.rows();
             totalBytes += result.bytes();
         }
-        return new CorpusStats(totalSegments, totalRows, totalBytes);
-    }
-
-    /**
-     * Lazily generates this segment's owned rows (streaming, O(1) memory): the global row index
-     * space [0, totalRows) is chopped into {@code blockRows}-sized blocks, round-robin assigned to
-     * segments ({@code block % numSegments == segment}); this segment visits its owned blocks in
-     * increasing block-index order and, within a block, increasing row-index order — so the emitted
-     * sequence is strictly increasing in the global row index, and (see {@link #key}) the derived
-     * key is a monotonic function of that index, making the cursor already internally sorted with
-     * NO in-memory sort. Segments therefore interleave across the WHOLE keyspace at block
-     * granularity (genuine k-way merge), while each page spans at most {@link #PAGE_ROWS}
-     * contiguous keys (narrow — real page-skip opportunity per range).
-     */
-    private static final class GeneratedCursor implements SortedCursor {
-        private final int segment;
-        private final int numSegments;
-        private final int blockRows;
-        private final long totalRows;
-        private final long rowsPerDay;
-        private final LocalDate base;
-
-        private long currentBlock;
-        private long currentI;
-        private long blockEnd;
-
-        GeneratedCursor(int segment, int numSegments, int blockRows, long totalRows, long rowsPerDay,
-                        LocalDate base) {
-            this.segment = segment;
-            this.numSegments = numSegments;
-            this.blockRows = blockRows;
-            this.totalRows = totalRows;
-            this.rowsPerDay = rowsPerDay;
-            this.base = base;
-            this.currentBlock = segment - (long) numSegments;
-            this.currentI = 0;
-            this.blockEnd = 0;
-        }
-
-        private boolean advanceIfNeeded() {
-            while (currentI >= blockEnd) {
-                currentBlock += numSegments;
-                long start = currentBlock * (long) blockRows;
-                if (start >= totalRows) {
-                    return false;
-                }
-                currentI = start;
-                blockEnd = Math.min(start + blockRows, totalRows);
-            }
-            return true;
-        }
-
-        @Override
-        public boolean hasNext() {
-            return advanceIfNeeded();
-        }
-
-        @Override
-        public ListEntry next() {
-            if (!advanceIfNeeded()) {
-                throw new NoSuchElementException();
-            }
-            ListEntry e = entry(currentI, rowsPerDay, base);
-            currentI++;
-            return e;
-        }
-
-        @Override
-        public void close() {
-            // in-memory generator — nothing to release
-        }
-    }
-
-    /** Deterministic realistic {@link ObjectEntry} for global row index {@code i} (see {@link #key}). */
-    private static ObjectEntry entry(long i, long rowsPerDay, LocalDate base) {
-        String k = key(i, rowsPerDay, base);
-        long size = 1 + Math.floorMod(mix(i * 31 + 7), 5_000_000L);
-        long day = i / rowsPerDay;
-        long within = i % rowsPerDay;
-        long lastModified = day * 86_400_000_000L + within * 137L;
-        String etag = String.format("%016x%016x", mix(i + 999), mix(i + 7_777));
-        String storageClass = STORAGE_CLASSES[(int) (i % STORAGE_CLASSES.length)];
-        return new ObjectEntry(KeyBytes.ofUtf8(k), size, lastModified, etag, storageClass,
-                null, false, null, null, null, null);
-    }
-
-    /**
-     * Realistic S3-style key, {@code <prefix>/YYYY/MM/DD/<within-day>-<hash>} (~70-80 bytes) —
-     * STRICTLY monotonic in {@code i} (see the {@link GeneratedCursor} javadoc): fixed prefix, then
-     * a fixed-width zero-padded calendar date (always non-decreasing with {@code i}), then a
-     * fixed-width zero-padded within-day counter (unique + increasing for a fixed day) — the
-     * trailing hash is cosmetic only, never needed to break a tie (day, within-day) already
-     * bijects with {@code i}.
-     */
-    private static String key(long i, long rowsPerDay, LocalDate base) {
-        long day = i / rowsPerDay;
-        long within = i % rowsPerDay;
-        LocalDate date = base.plusDays(day);
-        long h1 = mix(i);
-        long h2 = mix(i ^ 0x9E3779B97F4A7C15L);
-        return String.format("%s/%04d/%02d/%02d/%08d-%016x%016x",
-                KEY_PREFIX, date.getYear(), date.getMonthValue(), date.getDayOfMonth(), within, h1, h2);
-    }
-
-    /** splitmix64 finalizer — a fast, deterministic, well-mixed 64-bit hash of {@code x}. */
-    private static long mix(long x) {
-        x += 0x9E3779B97F4A7C15L;
-        x = (x ^ (x >>> 30)) * 0xBF58476D1CE4E5B9L;
-        x = (x ^ (x >>> 27)) * 0x94D049BB133111EBL;
-        return x ^ (x >>> 31);
+        return new SortBenchCorpus.Stats(totalSegments, totalRows, totalBytes);
     }
 
     // =====================================================================
     // Staging copy, full-row identity verification, RSS sampling, misc helpers
     // =====================================================================
-
-    private static List<Path> copyCorpus(Path master, Path target) throws IOException {
-        List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
-            ds.forEach(files::add);
-        }
-        files.sort(Comparator.comparing(p -> p.getFileName().toString()));
-        List<Path> out = new ArrayList<>();
-        for (Path f : files) {
-            Path dest = target.resolve(f.getFileName().toString());
-            Files.copy(f, dest, StandardCopyOption.COPY_ATTRIBUTES);
-            out.add(dest);
-        }
-        return out;
-    }
 
     /** Streams and compares decoded full rows position-for-position; this is not a file-byte check. */
     private static boolean fullRowsEqual(List<Path> expected, List<Path> actual) throws IOException {
@@ -654,21 +510,6 @@ class ParallelMergeBenchmark {
                 return -1;
             }
             return -1;
-        }
-    }
-
-    private static void deleteRecursively(Path root) throws IOException {
-        if (!Files.exists(root)) {
-            return;
-        }
-        try (var walk = Files.walk(root)) {
-            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try {
-                    Files.deleteIfExists(p);
-                } catch (IOException ignored) {
-                    // best-effort cleanup of a bench temp tree
-                }
-            });
         }
     }
 

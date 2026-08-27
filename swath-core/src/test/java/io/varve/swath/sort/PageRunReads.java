@@ -7,7 +7,6 @@ package io.varve.swath.sort;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -23,12 +22,8 @@ public final class PageRunReads {
 
     /** The keys of a page-run staging/intermediate segment, in stored (sorted) order. */
     public static List<String> keys(Path segment) throws IOException {
-        List<String> out = new ArrayList<>();
-        try (PageRunSegmentReader r = new PageRunSegmentReader(segment)) {
-            while (r.hasNext()) {
-                out.add(r.next().key().asString());
-            }
-        }
-        return out;
+        return SortTestSupport.drain(new PageRunSegmentReader(segment)).stream()
+                .map(entry -> entry.key().asString())
+                .toList();
     }
 }

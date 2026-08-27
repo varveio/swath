@@ -67,7 +67,7 @@ final class PageRunRawFixtures {
             ByteBuffer header = ByteBuffer.allocate(PageRunSegmentWriter.HEADER_BYTES);
             header.putInt(PageRunSegmentWriter.MAGIC);
             header.putShort(PageRunSegmentWriter.FORMAT_VERSION);
-            writeFully(ch, header.flip());
+            SortTestSupport.writeFully(ch, header.flip());
 
             for (PageBlock block : blocks) {
                 byte[] body = block.serialize();
@@ -77,7 +77,7 @@ final class PageRunRawFixtures {
                 frame.putInt(body.length);
                 frame.putInt((int) crc.getValue());
                 frame.put(body);
-                writeFully(ch, frame.flip());
+                SortTestSupport.writeFully(ch, frame.flip());
                 totalEntries += block.count();
                 maxRecordLen = Math.max(maxRecordLen, body.length);
             }
@@ -106,7 +106,7 @@ final class PageRunRawFixtures {
             trailer.putLong(totalEntries);
             trailer.putInt(maxRecordLen);
             trailer.putInt(PageRunSegmentWriter.MAGIC);
-            writeFully(ch, trailer.flip());
+            SortTestSupport.writeFully(ch, trailer.flip());
             ch.force(true);
         }
     }
@@ -208,9 +208,4 @@ final class PageRunRawFixtures {
         return pages;
     }
 
-    private static void writeFully(FileChannel ch, ByteBuffer buf) throws IOException {
-        while (buf.hasRemaining()) {
-            ch.write(buf);
-        }
-    }
 }
