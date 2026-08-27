@@ -67,6 +67,7 @@ class SortFixtureCommandTest {
         assertThat(registry.find("swath.replay.sort.steal_reason")
                 .tag("outcome", "SORT").tag("reason", "segment_flushed").counter().count())
                 .isGreaterThan(0.0);
+        assertThat(registry.find("swath.replay.sort.progress").counter().count()).isGreaterThan(0.0);
     }
 
     @Test

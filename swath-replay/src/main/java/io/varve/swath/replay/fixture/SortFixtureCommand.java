@@ -59,8 +59,7 @@ public final class SortFixtureCommand implements Callable<Integer> {
         Timer.Sample sample = metrics.startTimer();
         SortTransformResult result;
         try {
-            // Registry-backed adapter, not SortMetrics.NO_OP — see FixtureMetrics#recordStealReason.
-            CaptureSorter sorter = new CaptureSorter(SortConfig.fromSystemProperties(), metrics::recordStealReason);
+            CaptureSorter sorter = new CaptureSorter(SortConfig.fromSystemProperties(), metrics);
             result = sorter.sort(capture, output);
         } catch (DuplicateKeyException | VersionedCaptureException e) {
             System.err.println("sort-fixture: " + e.getMessage());

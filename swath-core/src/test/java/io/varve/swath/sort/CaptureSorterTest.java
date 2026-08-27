@@ -377,7 +377,8 @@ class CaptureSorterTest {
         Path outputDir = Files.createDirectories(root.resolve("out"));
 
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("no *.parquet files found in " + captureDir);
     }
 
     /**

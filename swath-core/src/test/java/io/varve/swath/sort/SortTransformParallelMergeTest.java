@@ -241,6 +241,14 @@ class SortTransformParallelMergeTest {
             counts.computeIfAbsent(outcome + "." + reason, k -> new LongAdder()).increment();
         }
 
+        @Override
+        public void markProgress() {
+        }
+
+        @Override
+        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();

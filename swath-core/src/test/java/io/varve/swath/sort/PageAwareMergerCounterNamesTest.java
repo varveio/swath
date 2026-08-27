@@ -58,9 +58,20 @@ class PageAwareMergerCounterNamesTest {
                 cmp);
 
         List<String> reasons = new ArrayList<>();
-        SortMetrics capturing = (outcome, reason) -> {
-            assertThat(outcome).isEqualTo("SORT");
-            reasons.add(reason);
+        SortMetrics capturing = new SortMetrics() {
+            @Override
+            public void recordStealReason(String outcome, String reason) {
+                assertThat(outcome).isEqualTo("SORT");
+                reasons.add(reason);
+            }
+
+            @Override
+            public void markProgress() {
+            }
+
+            @Override
+            public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+            }
         };
 
         List<String> merged = new ArrayList<>();

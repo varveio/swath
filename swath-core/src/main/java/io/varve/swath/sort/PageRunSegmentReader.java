@@ -191,18 +191,35 @@ final class PageRunSegmentReader implements EntryStream {
      * The constants remain for {@code equals} comparisons and for tests to reference by name.
      */
     private static SortMetrics relabelled(SortMetrics metrics) {
-        return (outcome, reason) -> {
-            // "SORT" is a literal, not the forwarded `outcome`, for the same drift-guard reason: both
-            // arguments must be literals for the guard to resolve the counter. PageAwareMerger only ever
-            // emits these two reasons under the SORT outcome, so pinning it here is faithful, not a guess.
-            if (PageAwareMerger.WHOLE_PAGE_EMITTED.equals(reason)) {
-                metrics.recordStealReason("SORT", "page_run_entry_whole_page");
-            } else if (PageAwareMerger.OVERLAP_KEYMERGE.equals(reason)) {
-                metrics.recordStealReason("SORT", "page_run_entry_overlap_keymerge");
-            } else {
-                metrics.recordStealReason(outcome, reason);
+        return new SortMetrics() {
+            @Override
+            public void recordStealReason(String outcome, String reason) {
+                recordRelabelledReason(metrics, outcome, reason);
+            }
+
+            @Override
+            public void markProgress() {
+                metrics.markProgress();
+            }
+
+            @Override
+            public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+                metrics.recordBoundaryIo(embeddedEntries, embeddedBytes, scanBytes);
             }
         };
+    }
+
+    private static void recordRelabelledReason(SortMetrics metrics, String outcome, String reason) {
+        // "SORT" is a literal, not the forwarded `outcome`, for the same drift-guard reason: both
+        // arguments must be literals for the guard to resolve the counter. PageAwareMerger only ever
+        // emits these two reasons under the SORT outcome, so pinning it here is faithful, not a guess.
+        if (PageAwareMerger.WHOLE_PAGE_EMITTED.equals(reason)) {
+            metrics.recordStealReason("SORT", "page_run_entry_whole_page");
+        } else if (PageAwareMerger.OVERLAP_KEYMERGE.equals(reason)) {
+            metrics.recordStealReason("SORT", "page_run_entry_overlap_keymerge");
+        } else {
+            metrics.recordStealReason(outcome, reason);
+        }
     }
 
     /**

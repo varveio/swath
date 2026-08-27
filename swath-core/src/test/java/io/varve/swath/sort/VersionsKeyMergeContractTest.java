@@ -474,6 +474,14 @@ class VersionsKeyMergeContractTest {
             counts.merge(outcome + "." + reason, 1, Integer::sum);
         }
 
+        @Override
+        public void markProgress() {
+        }
+
+        @Override
+        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+
         int count(String key) {
             return counts.getOrDefault(key, 0);
         }

@@ -17,11 +17,22 @@ package io.varve.swath.sort;
  * registry is the §5a drift table rather than an independently maintained list here. The pipeline
  * adds first-class Micrometer meters; this library only emits through the hook.
  */
-@FunctionalInterface
 public interface SortMetrics {
 
     /** Null object: records nothing. */
-    SortMetrics NO_OP = (outcome, reason) -> { };
+    SortMetrics NO_OP = new SortMetrics() {
+        @Override
+        public void recordStealReason(String outcome, String reason) {
+        }
+
+        @Override
+        public void markProgress() {
+        }
+
+        @Override
+        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+    };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
     void recordStealReason(String outcome, String reason);
@@ -36,21 +47,12 @@ public interface SortMetrics {
      * halted a perfectly healthy JVM before the merge wrote its first row. The row-emitting path was
      * never the problem; it ticks through a writer decorator.
      *
-     * <p><b>The default is a no-op, and that is a trap worth naming.</b> This interface is a
-     * {@code @FunctionalInterface} wired in most places as a lambda or a method reference, which
-     * cannot supply a second method — so a caller that wires {@code metrics::recordStealReason} gets
-     * a silently non-ticking implementation. The pipeline must wire something that overrides this;
-     * {@code ListRunner} uses a named bridge with a test asserting both methods forward.
      */
-    default void markProgress() {
-        // no-op: the null object and every test lambda record nothing.
-    }
+    void markProgress();
 
     /**
      * Record page-run boundary-selection IO: extension bytes actually read and framed record bytes
      * traversed by fallback scans. Parquet index metadata is deliberately outside these byte totals.
      */
-    default void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-        // no-op: overridden by the live runtime bridge.
-    }
+    void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes);
 }

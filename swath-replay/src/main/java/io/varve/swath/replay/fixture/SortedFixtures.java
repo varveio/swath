@@ -6,16 +6,14 @@
 package io.varve.swath.replay.fixture;
 
 import io.micrometer.core.instrument.Timer;
+import io.varve.swath.output.parquet.ParquetParts;
 import io.varve.swath.replay.protocol.ByteKey;
 import io.varve.swath.sort.SortStamp;
 import io.varve.swath.sort.SortedFileIndex;
 import io.varve.swath.sort.SortedFileIndex.RowGroupKey;
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -90,17 +88,7 @@ public final class SortedFixtures {
      * uses. Never recurses.
      */
     public static List<Path> resolveFiles(Path fixture) throws IOException {
-        if (Files.isRegularFile(fixture)) {
-            return List.of(fixture);
-        }
-        List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(fixture, "*.parquet")) {
-            for (Path p : stream) {
-                files.add(p);
-            }
-        }
-        files.sort(Comparator.comparing(p -> p.getFileName().toString()));
-        return files;
+        return ParquetParts.resolve(fixture);
     }
 
     /**

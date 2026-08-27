@@ -9,11 +9,10 @@ import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.ParquetParts;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -102,7 +101,11 @@ public final class CaptureSorter {
      * as a fixture.
      */
     public SortTransformResult sort(Path captureDir, Path outputDir) throws IOException {
-        return sort(resolveParts(captureDir), outputDir);
+        List<Path> parts = ParquetParts.resolve(captureDir);
+        if (parts.isEmpty()) {
+            throw new IllegalArgumentException("no *.parquet files found in " + captureDir);
+        }
+        return sort(parts, outputDir);
     }
 
     /** As {@link #sort(Path, Path)}, with the input parts already resolved by the caller. */
@@ -118,7 +121,8 @@ public final class CaptureSorter {
         SortTransform transform = SortTransform.forArbitraryRuns(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
                         metrics, finalWriterDelegate));
-        return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP);
+        return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP,
+                ignored -> metrics.markProgress());
     }
 
     /**
@@ -184,26 +188,6 @@ public final class CaptureSorter {
                     "sort-fixture is non-versioned-only (v1): key '" + e.key().asString()
                             + "' carries version_id '" + versionId + "'");
         }
-    }
-
-    private static List<Path> resolveParts(Path captureDir) throws IOException {
-        if (Files.isRegularFile(captureDir)) {
-            return List.of(captureDir);
-        }
-        if (!Files.isDirectory(captureDir)) {
-            throw new NoSuchFileException(captureDir.toString());
-        }
-        List<Path> parts = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(captureDir, "*.parquet")) {
-            for (Path p : stream) {
-                parts.add(p);
-            }
-        }
-        if (parts.isEmpty()) {
-            throw new IllegalArgumentException("no *.parquet files found in " + captureDir);
-        }
-        parts.sort(Comparator.comparing(p -> p.getFileName().toString()));
-        return parts;
     }
 
     /** Recursively delete {@code dir} if present — this engine's own transient staging area only. */
