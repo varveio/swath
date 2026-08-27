@@ -107,6 +107,7 @@ final class ParallelRangeMerge {
     /** At the supported 16-range maximum this retains 1,024 candidates per range. */
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
 
+    private final SortRun run;
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
@@ -134,6 +135,7 @@ final class ParallelRangeMerge {
     }
 
     ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer, IntSupplier softFdLimitSupplier) {
+        this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
@@ -396,10 +398,8 @@ final class ParallelRangeMerge {
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
-        Map<Path, PageRunTrailer.Trailer> validatedTrailers = segmentDescriptors.stream()
-                .collect(java.util.stream.Collectors.toUnmodifiableMap(
-                        PageRunSegmentDescriptor::path, PageRunSegmentDescriptor::trailer,
-                        (first, duplicate) -> first));
+        Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
+                PageRunSegmentDescriptor.byPath(segmentDescriptors);
         int ranges = boundaries.size() + 1;
         int perRangeFanIn = perRangeFanIn(ranges, segmentDescriptors);
         Object progressLock = new Object();
@@ -434,7 +434,7 @@ final class ParallelRangeMerge {
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
                 Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
                         perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit,
-                        validatedTrailers);
+                        descriptorsByPath);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
             List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
@@ -497,12 +497,11 @@ final class ParallelRangeMerge {
                                              Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
                                              DuplicateHook safeHook, AtomicInteger openPartCount,
                                              int openPartLimit,
-                                             Map<Path, PageRunTrailer.Trailer> validatedTrailers) {
+                                             Map<Path, PageRunSegmentDescriptor> descriptorsByPath) {
         return () -> {
             SortedFileWriterFactory rangeWriterFactory =
                     finalWriterFactory.forOutputSequence();
             long startNanos = System.nanoTime();
-            List<Path> intermediates = new ArrayList<>();
             // Page-skip counters live on the frontier wrappers this range opened (one per page-run
             // input); collected after the merge drains, for the same read-vs-skipped signal.
             List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
@@ -516,8 +515,10 @@ final class ParallelRangeMerge {
             };
             PageRunSegmentWriter pageRunWriter =
                     new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
-            KWayMerge.SegmentIo<Path> io = rangeSegmentIo(pageRunWriter, stagingDir, range,
-                    lo, hi, intermediates, pageFrontiers, validatedTrailers);
+            PageRunMergeIo io = new PageRunMergeIo(run,
+                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, pageRunWriter, stagingDir,
+                    "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
+                    pageFrontiers::add);
             KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
 
             List<Path> tmpParts = new ArrayList<>();
@@ -549,7 +550,7 @@ final class ParallelRangeMerge {
             // Reclaim this range's cascade intermediates (KWayMerge already deleted the ones it folded;
             // deleteIfExists is a no-op on those). Originals are shared across ranges and are NEVER
             // deleted here — SortTransform deletes them once, after the whole publish.
-            for (Path p : intermediates) {
+            for (Path p : io.intermediates()) {
                 Files.deleteIfExists(p);
             }
             // Instrumentation (metrics discipline, §5a): one increment per range engaged — the total
@@ -610,69 +611,6 @@ final class ParallelRangeMerge {
         openParts.add(writer);
         tmpParts.add(tmp);
         return writer;
-    }
-
-    private KWayMerge.SegmentIo<Path> rangeSegmentIo(PageRunSegmentWriter pageRunWriter,
-                                                     Path stagingDir, int range, byte[] lo, byte[] hi,
-                                                     List<Path> intermediates,
-                                                     List<RangeScopedPageFrontier> pageFrontiers,
-                                                     Map<Path, PageRunTrailer.Trailer> validatedTrailers) {
-        int[] seq = {0};
-        return new KWayMerge.SegmentIo<>() {
-            @Override
-            public EntryStream open(Path segment) throws IOException {
-                // Generic entry-stream fallback retained for KWayMerge's storage seam. Production
-                // groups take the page frontier below and are trimmed once above the merge.
-                return new PageRunSegmentReader(openScopedFrontier(segment), comparator, metrics);
-            }
-
-            @Override
-            public boolean supportsPageFrontier(Path segment) {
-                // Page-run inputs expose a decode-free frontier, so KWayMerge keeps PageAwareMerger's
-                // page-whole fast path INSIDE each range. Without this the parallel path would quietly
-                // fall back to the entry-typed StreamingMerger while the serial R=1 baseline kept the
-                // fast path — every range would pay a per-entry heap the control arm does not, and an
-                // A/B would be measuring a merger downgrade on top of the range parallelism.
-                return true;
-            }
-
-            @Override
-            public PageFrontierStream openFrontier(Path segment) throws IOException {
-                return openScopedFrontier(segment);
-            }
-
-            /** The range-scoped page frontier for {@code segment}, registered for its skip counters. */
-            private PageFrontierStream openScopedFrontier(Path segment) throws IOException {
-                PageRunTrailer.Trailer trailer = validatedTrailers.get(segment);
-                if (trailer != null) {
-                    metrics.recordStealReason("SORT", "merge_scoped_frontier_validated_trailer");
-                } else {
-                    metrics.recordStealReason("SORT", "merge_scoped_frontier_trailer_reread");
-                    try (PageRunSegmentIo segmentIo = PageRunSegmentIo.open(segment)) {
-                        trailer = PageRunTrailer.read(segmentIo);
-                    }
-                }
-                long totalPages = trailer.totalRecords();
-                RangeScopedPageFrontier scoped = new RangeScopedPageFrontier(
-                        new PageFrontierReader(segment, metrics), lo, hi, totalPages, metrics);
-                pageFrontiers.add(scoped);
-                return scoped;
-            }
-
-            @Override
-            public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve(StagingNames.cascadeIntermediate(
-                        "merge-r" + range + "-", seq[0]++));
-                pageRunWriter.writeIntermediate(sorted, dest);
-                intermediates.add(dest);
-                return dest;
-            }
-
-            @Override
-            public void delete(Path segment) throws IOException {
-                Files.deleteIfExists(segment);
-            }
-        };
     }
 
     /**

@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * One kickoff-opened page-run segment and its retained file, trailer, and boundary-sample metadata.
@@ -39,6 +41,13 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
 
     static List<Path> paths(List<PageRunSegmentDescriptor> descriptors) {
         return descriptors.stream().map(PageRunSegmentDescriptor::path).toList();
+    }
+
+    static Map<Path, PageRunSegmentDescriptor> byPath(
+            List<PageRunSegmentDescriptor> descriptors) {
+        return descriptors.stream().collect(Collectors.toUnmodifiableMap(
+                PageRunSegmentDescriptor::path, descriptor -> descriptor,
+                (first, duplicate) -> first));
     }
 
     static long maxRecordLen(List<PageRunSegmentDescriptor> descriptors) {

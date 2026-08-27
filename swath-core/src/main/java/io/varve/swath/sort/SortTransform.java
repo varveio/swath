@@ -15,6 +15,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
@@ -225,10 +226,12 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_frontier_disabled");
         }
 
-        List<Path> intermediates = new ArrayList<>();
         SortedFileWriterFactory outputSequence = finalWriterFactory.forOutputSequence();
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
-        KWayMerge.SegmentIo<Path> io = segmentIo(segmentWriter, stagingDir, intermediates);
+        Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
+                PageRunSegmentDescriptor.byPath(segmentDescriptors);
+        PageRunMergeIo io = new PageRunMergeIo(run, inputProfile, segmentWriter, stagingDir,
+                "merge-", null, descriptorsByPath, frontier -> { });
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = fanInPlanner.plan(segmentDescriptors);
@@ -274,7 +277,7 @@ public final class SortTransform {
         for (Path p : stagingSegments) {
             Files.deleteIfExists(p);
         }
-        for (Path p : intermediates) {
+        for (Path p : io.intermediates()) {
             Files.deleteIfExists(p);
         }
         // "Staging dir cleaned on successful publish": remove the now-empty staging dir
@@ -506,46 +509,6 @@ public final class SortTransform {
             parts.add(new FinalPart(paths.get(i), writers.get(i).finalMetadata()));
         }
         return List.copyOf(parts);
-    }
-
-    private KWayMerge.SegmentIo<Path> segmentIo(PageRunSegmentWriter segmentWriter, Path stagingDir,
-                                                List<Path> intermediates) {
-        int[] seq = {0};
-        return new KWayMerge.SegmentIo<>() {
-            @Override
-            public EntryStream open(Path segment) throws IOException {
-                // Generic entry-stream fallback retained for KWayMerge's storage seam. Production
-                // page-run groups take the decode-free frontier below.
-                return new PageRunSegmentReader(segment, comparator, metrics);
-            }
-
-            @Override
-            public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve(
-                        StagingNames.cascadeIntermediate("merge-", seq[0]++));
-                segmentWriter.writeIntermediate(sorted, dest);
-                intermediates.add(dest);
-                return dest;
-            }
-
-            @Override
-            public void delete(Path segment) throws IOException {
-                Files.deleteIfExists(segment);
-            }
-
-            @Override
-            public boolean supportsPageFrontier(Path segment) {
-                return inputProfile.pageFrontierAllowed();
-            }
-
-            @Override
-            public PageFrontierStream openFrontier(Path segment) throws IOException {
-                // The reader carries the live metrics so an intra-segment minKey REGRESSION
-                // (the merger's one unverified precondition) is counted — SORT.page_run_min_regression —
-                // before it fails the run as segment corruption, instead of misordering silently.
-                return new PageFrontierReader(segment, metrics);
-            }
-        };
     }
 
     /** Whether {@code segment} has the required page-run staging/intermediate suffix.
