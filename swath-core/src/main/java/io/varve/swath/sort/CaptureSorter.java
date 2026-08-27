@@ -117,11 +117,13 @@ public final class CaptureSorter {
         Comparator<ListEntry> comparator = new ListEntryComparator();
         List<Path> segments = stageSegments(inputParts, stagingDir, comparator);
 
-        SortTransform transform = SortTransform.forArbitraryRuns(
+        SortTransform transform = new SortTransform(
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
-                        metrics, finalWriterDelegate));
+                        metrics, finalWriterDelegate, MergeInputProfile.ARBITRARY_SORTED_RUNS,
+                        RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
+                        StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP,
-                ignored -> metrics.markProgress());
+                ignored -> metrics.markProgress(), FinalPassListener.NO_OP);
     }
 
     /**

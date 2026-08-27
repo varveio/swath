@@ -42,7 +42,7 @@ class PageRunSegmentTest {
 
     private static List<ListEntry> readBack(Path path) throws IOException {
         List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = new PageRunSegmentReader(path)) {
+        try (PageRunSegmentReader reader = reader(path, SortMetrics.NO_OP)) {
             while (reader.hasNext()) {
                 out.add(reader.next());
             }
@@ -99,7 +99,7 @@ class PageRunSegmentTest {
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = new PageRunSegmentReader(path, metrics)) {
+        try (PageRunSegmentReader reader = reader(path, metrics)) {
             while (reader.hasNext()) {
                 out.add(reader.next());
             }
@@ -139,7 +139,7 @@ class PageRunSegmentTest {
         byte[] raw = Files.readAllBytes(path);
         Files.write(path, Arrays.copyOf(raw, raw.length / 2));
 
-        assertThatThrownBy(() -> new PageRunSegmentReader(path)).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> reader(path, SortMetrics.NO_OP)).isInstanceOf(IOException.class);
     }
 
     @Test
@@ -374,7 +374,7 @@ class PageRunSegmentTest {
         assertThat(rows).isEqualTo(2500);
         assertThat(readBack(path)).containsExactlyElementsOf(sorted);
         assertThat(PageRunTrailer.read(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
             assertThat(PageRunBoundarySample.read(io, PageRunTrailer.read(io)).status())
                     .isEqualTo(PageRunBoundarySample.Status.ABSENT);
         }
@@ -553,11 +553,15 @@ class PageRunSegmentTest {
     }
 
     private static void driveFrontierToEnd(Path path) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(path)) {
+        try (PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             while (reader.hasPage()) {
                 reader.advance();
             }
         }
+    }
+
+    private static PageRunSegmentReader reader(Path path, SortMetrics metrics) throws IOException {
+        return new PageRunSegmentReader(new PageFrontierReader(path, metrics), CMP, metrics);
     }
 
     @Test

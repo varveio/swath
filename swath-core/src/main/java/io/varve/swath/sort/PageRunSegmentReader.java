@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 
@@ -83,38 +82,8 @@ final class PageRunSegmentReader implements EntryStream {
     private ListEntry head;
 
     /**
-     * Open {@code path} with no metrics recorder (tests / direct readers): as
-     * {@link #PageRunSegmentReader(Path, Comparator, SortMetrics)} with the
-     * {@link ListEntryComparator} and {@link SortMetrics#NO_OP}.
-     */
-    PageRunSegmentReader(Path path) throws IOException {
-        this(path, SortMetrics.NO_OP);
-    }
-
-    /**
-     * Open {@code path} under the {@link ListEntryComparator}. {@code metrics} carries the
-     * {@code SORT.page_run_min_regression} guard counter and this route's page counters.
-     */
-    PageRunSegmentReader(Path path, SortMetrics metrics) throws IOException {
-        this(path, new ListEntryComparator(), metrics);
-    }
-
-    /**
-     * Open {@code path}, validate the header magic/version and the trailing magic (completeness /
-     * truncation check), then position at the first entry of the segment's sorted run. {@code comparator}
-     * is the order the merge itself uses — the same one that resolves overlapping pages here, so the
-     * run this stream presents and the order the caller merges under can never disagree.
-     */
-    PageRunSegmentReader(Path path, Comparator<ListEntry> comparator, SortMetrics metrics)
-            throws IOException {
-        // The frontier reader carries the RAW metrics (its page advances fire the guard counter
-        // under its own name); only the merger's two page counters are re-labelled to this route's.
-        this(new PageFrontierReader(path, metrics), comparator, metrics);
-    }
-
-    /**
-     * As {@link #PageRunSegmentReader(Path, Comparator, SortMetrics)}, but over a frontier the
-     * caller supplies and this reader then OWNS (closing this closes it). The seam exists for
+     * Present a genuinely sorted entry stream over a frontier the caller supplies and this reader
+     * then owns (closing this closes it). The seam lets
      * {@link ParallelRangeMerge}'s page skip: a {@link RangeScopedPageFrontier} steps over the pages
      * that cannot reach the range without decoding them, and everything below this constructor —
      * the {@link PageAwareMerger}, the disjoint-page fast path, the overlap key-merge, the

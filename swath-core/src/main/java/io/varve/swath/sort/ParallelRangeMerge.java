@@ -130,11 +130,7 @@ final class ParallelRangeMerge {
      */
     private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
 
-    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer) {
-        this(run, rangeTimer, MergeFdBudget::softOpenFileLimit);
-    }
-
-    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer, IntSupplier softFdLimitSupplier) {
+    ParallelRangeMerge(SortRun run) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -142,8 +138,8 @@ final class ParallelRangeMerge {
         this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
-        this.rangeTimer = rangeTimer;
-        this.softFdLimitSupplier = softFdLimitSupplier;
+        this.rangeTimer = run.rangeMergeTimer();
+        this.softFdLimitSupplier = run.softFdLimitSupplier();
         this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
     }
 
@@ -500,8 +496,7 @@ final class ParallelRangeMerge {
             };
             PageRunSegmentWriter pageRunWriter =
                     new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
-            PageRunMergeIo io = new PageRunMergeIo(run,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, pageRunWriter, stagingDir,
+            PageRunMergeIo io = new PageRunMergeIo(run, pageRunWriter, stagingDir,
                     "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
                     pageFrontiers::add);
             KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);

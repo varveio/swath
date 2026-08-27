@@ -25,7 +25,7 @@ public final class PageRunTrailer {
 
     /** Open {@code path}, validate it, and read its trailer without walking framed records. */
     static Trailer read(Path path) throws IOException {
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
             return read(io);
         }
     }

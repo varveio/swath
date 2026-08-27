@@ -80,14 +80,6 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /**
-     * Open {@code path} with no metrics recorder (the trailer/inspection readers and tests): as
-     * {@link #open(Path, SortMetrics)} with {@link SortMetrics#NO_OP}.
-     */
-    static PageRunSegmentIo open(Path path) throws IOException {
-        return open(path, SortMetrics.NO_OP);
-    }
-
-    /**
      * Open {@code path}, validate the header magic/version and the fixed trailer tail (recovering the
      * record/entry counts, {@code maxRecordLen}, {@code trailerStart}, and the trailing magic /
      * truncation check), then position the channel at the first record ({@link PageRunSegmentWriter#HEADER_BYTES}).

@@ -99,7 +99,7 @@ class PageRunSegmentInspectorTest {
 
     private static List<PageFrontierView> frontierWalk(Path path) throws IOException {
         List<PageFrontierView> out = new ArrayList<>();
-        try (PageFrontierReader r = new PageFrontierReader(path)) {
+        try (PageFrontierReader r = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             while (r.hasPage()) {
                 out.add(new PageFrontierView(r.minKey().clone(), r.maxKey().clone(), r.count()));
                 r.advance();

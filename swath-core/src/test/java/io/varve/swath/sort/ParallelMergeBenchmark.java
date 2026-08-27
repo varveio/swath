@@ -221,7 +221,9 @@ class ParallelMergeBenchmark {
         SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortTransform transform =
                 new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
-                        EqualKeyPolicy.ALLOW, metrics, writerFactory), false, timer);
+                        EqualKeyPolicy.ALLOW, metrics, writerFactory,
+                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         RssSampler sampler = new RssSampler();
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + label);
@@ -239,7 +241,8 @@ class ParallelMergeBenchmark {
         samplerThread.start();
         SortTransformResult result;
         try {
-            result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP);
+            result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP,
+                    units -> { }, FinalPassListener.NO_OP);
         } finally {
             samplerThread.interrupt();
             try {
@@ -301,7 +304,7 @@ class ParallelMergeBenchmark {
         List<PageFrontierReader> open = new ArrayList<>(segments.size());
         try {
             for (Path segment : segments) {
-                PageFrontierReader reader = new PageFrontierReader(segment);
+                PageFrontierReader reader = new PageFrontierReader(segment, SortMetrics.NO_OP);
                 open.add(reader);
             }
             long after = settledHeapBytes();

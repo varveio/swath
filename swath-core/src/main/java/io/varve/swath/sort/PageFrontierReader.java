@@ -47,14 +47,6 @@ final class PageFrontierReader implements PageFrontierStream {
     private int currentCount;
 
     /**
-     * Open {@code path} with no metrics recorder (tests / direct readers): as
-     * {@link #PageFrontierReader(Path, SortMetrics)} with {@link SortMetrics#NO_OP}.
-     */
-    PageFrontierReader(Path path) throws IOException {
-        this(path, SortMetrics.NO_OP);
-    }
-
-    /**
      * Open {@code path}, validate the header magic/version and the trailing magic (truncation check),
      * read the fixed trailer tail for the record/entry counts and {@code maxRecordLen}, then load the
      * first page's frontier. {@code metrics} carries the {@code SORT.page_run_min_regression}

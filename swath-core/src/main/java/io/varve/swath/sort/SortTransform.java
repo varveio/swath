@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,8 +50,8 @@ public final class SortTransform {
 
     private static final Logger log = LoggerFactory.getLogger(SortTransform.class);
 
-    // The sort-run inputs, held whole so the quintet threads straight through to ParallelRangeMerge
-    // without re-listing loose positional params; the individual fields below are its hot-path aliases.
+    // The complete run policy threads whole through to ParallelRangeMerge; the individual fields
+    // below are its hot-path aliases.
     private final SortRun run;
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
@@ -60,58 +59,15 @@ public final class SortTransform {
     private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
-    private final boolean identityVerifiedWideSweep;
     private final MergeInputProfile inputProfile;
     // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
-    private final IntSupplier softFdLimitSupplier;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
     private final MergeFanInPlanner fanInPlanner;
 
-    /**
-     * The safe default for every caller without an identity-verified ownership guard over {@code
-     * outputDir} (e.g. {@link CaptureSorter}'s sort-fixture path, and every direct test caller):
-     * {@code identityVerifiedWideSweep=false} — see {@link #cleanStaleFinals} for the sweep-scope
-     * safety proof — and no range-merge timer ({@link RangeMergeTimer#NO_OP}).
-     */
+    /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
-        this(run, false, RangeMergeTimer.NO_OP);
-    }
-
-    /**
-     * The full public constructor.
-     *
-     * <p>{@code identityVerifiedWideSweep}: pass {@code true} only when the caller has already
-     * identity-verified {@code outputDir} as belonging to THIS run before ever reaching this
-     * transform — see {@link #cleanStaleFinals} for the sweep-scope safety proof and which caller
-     * qualifies.
-     *
-     * <p>{@code rangeTimer}: the per-range merge-latency seam ({@code
-     * swath.sort.merge.range.latency}) for the parallel range-merge path. {@code
-     * ListRunner} wires the live {@code RunMetrics}; every other caller (and the serial path) leaves
-     * it {@link RangeMergeTimer#NO_OP}.
-     */
-    public SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer) {
-        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES);
-    }
-
-    /**
-     * As {@link #SortTransform(SortRun, boolean, RangeMergeTimer)}, plus {@code softFdLimitSupplier}:
-     * the process SOFT open-file limit source for the runtime merge-entry fd clamp. Package-private
-     * test seam — production always uses {@link MergeFdBudget#softOpenFileLimit()} (the three-arg
-     * constructor); tests inject a fixed value so the fd clamp engages (or is proven not to)
-     * deterministically, independent of the real ulimit.
-     */
-    SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
-                  IntSupplier softFdLimitSupplier) {
-        this(run, identityVerifiedWideSweep, rangeTimer, softFdLimitSupplier,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES);
-    }
-
-    private SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
-                          IntSupplier softFdLimitSupplier, MergeInputProfile inputProfile) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -119,39 +75,16 @@ public final class SortTransform {
         this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
-        this.identityVerifiedWideSweep = identityVerifiedWideSweep;
-        this.inputProfile = inputProfile;
-        this.rangeTimer = rangeTimer;
-        this.softFdLimitSupplier = softFdLimitSupplier;
-        this.fanInPlanner = new MergeFanInPlanner(config, metrics, softFdLimitSupplier);
-    }
-
-    /**
-     * Build the bounded entry-stream variant for arbitrary pre-existing captures. Their independently
-     * sorted chunks can overlap across many consecutive pages, unlike the mostly range-disjoint live
-     * listing runs the page-frontier fast path exploits. The storage format and cascade framework stay
-     * identical; only frontier/range routing is disabled.
-     */
-    static SortTransform forArbitraryRuns(SortRun run) {
-        return new SortTransform(run, false, RangeMergeTimer.NO_OP,
-                MergeFdBudget::softOpenFileLimit, MergeInputProfile.ARBITRARY_SORTED_RUNS);
+        this.inputProfile = run.inputProfile();
+        this.rangeTimer = run.rangeMergeTimer();
+        this.fanInPlanner = new MergeFanInPlanner(config, metrics, run.softFdLimitSupplier());
     }
 
     /**
      * Merge {@code stagingSegments} into the final sorted output under {@code outputDir}, using
      * {@code stagingDir} for cascade intermediates. {@code publishListener} fires after the renames
-     * and before staging deletion (the manifest-last commit point). No merge-progress callback —
-     * see the overload below for the production (§3.2) path.
-     */
-    public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
-                                         PublishListener publishListener) throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, units -> { },
-                FinalPassListener.NO_OP);
-    }
-
-    /**
-     * Same as {@link #transform(List, Path, Path, PublishListener)}, plus {@code progressCallback}
-     * (§3.2): invoked with the row count of each completed batch — {@code swath.progress.units}'
+     * and before staging deletion (the manifest-last commit point). {@code progressCallback} is
+     * invoked with the row count of each completed batch — {@code swath.progress.units}'
      * merge-phase feed, wired by {@code ListRunner} to {@code RunMetrics.recordProgress}. Batched
      * ({@link KWayMerge#PROGRESS_BATCH_ROWS}), not per-row, and threaded through <em>every</em> merge
      * pass, not just the final one: {@link KWayMerge#merge(List, LongConsumer)} advances it as each
@@ -159,18 +92,7 @@ public final class SortTransform {
      * {@link RolledPartWriter#drain} advances it again as the final streaming pass writes rolled output. A
      * cascade's progress total is therefore rows-per-pass, not a single row-count total — intended:
      * progress is a monotonic units-of-work counter, not required to equal total rows for a
-     * multi-pass merge. No final-pass-starting hook — see the overload below.
-     */
-    public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
-                                         PublishListener publishListener, LongConsumer progressCallback)
-            throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, progressCallback,
-                FinalPassListener.NO_OP);
-    }
-
-    /**
-     * Same as {@link #transform(List, Path, Path, PublishListener, LongConsumer)}, plus {@code
-     * onFinalPassStarting} (see {@link FinalPassListener}): run once, right before the merge starts
+     * multi-pass merge. {@code onFinalPassStarting} runs once, right before the merge starts
      * writing the output it will publish. On the serial path every cascade pass is complete by then,
      * so the remaining work is one pass over the staged rows; on the parallel range-merge path it is
      * only when no range has to cascade, which is what the listener's flag carries.
@@ -230,7 +152,7 @@ public final class SortTransform {
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
                 PageRunSegmentDescriptor.byPath(segmentDescriptors);
-        PageRunMergeIo io = new PageRunMergeIo(run, inputProfile, segmentWriter, stagingDir,
+        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
                 "merge-", null, descriptorsByPath, frontier -> { });
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
@@ -304,7 +226,7 @@ public final class SortTransform {
             FinalPassListener onFinalPassStarting) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier);
+                new ParallelRangeMerge(run);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
@@ -568,15 +490,15 @@ public final class SortTransform {
      * than the abandoned attempt (a changed roll knob, or a different segment mix after a partial
      * resume) would leave the extras lying around outside the new manifest.
      *
-     * <p><b>Sweep scope</b>, set by {@link #identityVerifiedWideSweep} per caller:
+     * <p><b>Sweep scope</b>, set by {@link SortRun#staleFinalSweep()} per caller:
      * <ul>
-     *   <li>{@code true} — sweeps ALL {@code data/*.parquet}. Safe only because the caller
+     *   <li>{@link StaleFinalSweep#ALL_PARQUET} sweeps all {@code data/*.parquet}. Safe only because the caller
      *       ({@code ListCommand#isPublishedByThisRun}, via {@link Manifest#readIdentity}) has
      *       already refused to treat a foreign dataset's manifest as this run's own before reaching
      *       the merge-pending branch that calls {@link #transform} — so by the time this sweep
      *       runs, {@code outputDir} can only hold this run's own abandoned prior attempt or
      *       nothing.</li>
-     *   <li>{@code false} (default) — sweeps ONLY this transform's own {@code part-*.parquet}
+     *   <li>{@link StaleFinalSweep#OWN_PARTS_ONLY} sweeps only this transform's own {@code part-*.parquet}
      *       naming. {@link CaptureSorter}'s sort-fixture path has no such ownership guard (a
      *       user-supplied {@code --output} dir may hold unrelated {@code *.parquet} this engine
      *       never created), so a wide sweep there would unrecoverably delete foreign content;
@@ -585,8 +507,10 @@ public final class SortTransform {
      * </ul>
      */
     private void cleanStaleFinals(Path outputDir) throws IOException {
-        String glob = identityVerifiedWideSweep
-                ? StagingNames.ALL_PARQUET_GLOB : StagingNames.OWN_FINAL_GLOB;
+        String glob = switch (run.staleFinalSweep()) {
+            case ALL_PARQUET -> StagingNames.ALL_PARQUET_GLOB;
+            case OWN_PARTS_ONLY -> StagingNames.OWN_FINAL_GLOB;
+        };
         Sweeps.sweep(outputDir,
                 stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale),
                 glob);

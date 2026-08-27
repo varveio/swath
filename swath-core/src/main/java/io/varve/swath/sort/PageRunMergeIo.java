@@ -17,7 +17,6 @@ import java.util.function.Consumer;
 final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
 
     private final SortRun run;
-    private final MergeInputProfile inputProfile;
     private final PageRunSegmentWriter segmentWriter;
     private final Path stagingDir;
     private final String intermediatePrefix;
@@ -27,13 +26,11 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     private final List<Path> intermediates = new ArrayList<>();
     private int sequence;
 
-    PageRunMergeIo(SortRun run, MergeInputProfile inputProfile,
-                   PageRunSegmentWriter segmentWriter, Path stagingDir,
+    PageRunMergeIo(SortRun run, PageRunSegmentWriter segmentWriter, Path stagingDir,
                    String intermediatePrefix, KeyRange scope,
                    Map<Path, PageRunSegmentDescriptor> descriptors,
                    Consumer<RangeScopedPageFrontier> frontierRegistration) {
         this.run = run;
-        this.inputProfile = inputProfile;
         this.segmentWriter = segmentWriter;
         this.stagingDir = stagingDir;
         this.intermediatePrefix = intermediatePrefix;
@@ -63,7 +60,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
 
     @Override
     public boolean supportsPageFrontier(Path segment) {
-        return inputProfile.pageFrontierAllowed();
+        return run.inputProfile().pageFrontierAllowed();
     }
 
     @Override
@@ -76,22 +73,23 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     }
 
     private PageFrontierStream openPageFrontier(Path segment) throws IOException {
-        PageFrontierReader frontier = new PageFrontierReader(segment, run.metrics());
         if (scope == null) {
-            return frontier;
+            return new PageFrontierReader(segment, run.metrics());
         }
-        try {
-            PageRunSegmentDescriptor descriptor = descriptors.get(segment);
-            long totalPages;
-            if (descriptor != null) {
-                run.metrics().recordStealReason("SORT", "merge_scoped_frontier_validated_trailer");
-                totalPages = descriptor.trailer().totalRecords();
-            } else {
-                run.metrics().recordStealReason("SORT", "merge_scoped_frontier_trailer_reread");
-                try (PageRunSegmentIo segmentIo = PageRunSegmentIo.open(segment)) {
-                    totalPages = PageRunTrailer.read(segmentIo).totalRecords();
-                }
+        PageRunSegmentDescriptor descriptor = descriptors.get(segment);
+        long totalPages;
+        if (descriptor != null) {
+            run.metrics().recordStealReason("SORT", "merge_scoped_frontier_validated_trailer");
+            totalPages = descriptor.trailer().totalRecords();
+        } else {
+            run.metrics().recordStealReason("SORT", "merge_scoped_frontier_trailer_reread");
+            try (PageRunSegmentIo segmentIo =
+                         PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+                totalPages = PageRunTrailer.read(segmentIo).totalRecords();
             }
+        }
+        PageFrontierReader frontier = new PageFrontierReader(segment, run.metrics());
+        try {
             RangeScopedPageFrontier scoped = new RangeScopedPageFrontier(
                     frontier, scope.lo(), scope.hi(), totalPages, run.metrics());
             frontierRegistration.accept(scoped);

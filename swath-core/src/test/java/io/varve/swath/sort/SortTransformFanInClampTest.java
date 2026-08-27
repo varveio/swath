@@ -134,7 +134,8 @@ class SortTransformFanInClampTest {
         // interferes with the roll behaviour under test.
         SortConfig rolling = SortConfigs.base().withFinalFileBytes(2048L);
         SortTransformResult result = newTransform(rolling, SortMetrics.NO_OP, () -> HEALTHY_FD)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP);
+                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         List<Path> parts = result.finalFiles();
         assertThat(parts.size()).as("small final-file-bytes must roll into multiple parts").isGreaterThan(1);
@@ -181,14 +182,16 @@ class SortTransformFanInClampTest {
         Path staging = Files.createDirectories(root.resolve("prun/_staging"));
         Path output = Files.createDirectories(root.resolve("prun"));
         SortTransformResult result = newTransform(config, metrics, softFdLimit)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP);
+                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
         return new Result(result, keys(result.finalFiles()), expected);
     }
 
     private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT), false,
-                RangeMergeTimer.NO_OP, softFdLimit);
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private List<Path> stagePageRun(Path dir, List<List<ListEntry>> segs) throws IOException {

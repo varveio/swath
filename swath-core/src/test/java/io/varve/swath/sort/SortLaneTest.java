@@ -129,7 +129,7 @@ final class SortLaneTest {
     private List<String> keys(Path segment) throws IOException {
         // The lane stages page-run (.pageseg) segments; read them back with the page-run reader.
         List<String> out = new ArrayList<>();
-        try (PageRunSegmentReader r = new PageRunSegmentReader(segment)) {
+        try (PageRunSegmentReader r = PageRunReads.open(segment)) {
             while (r.hasNext()) {
                 out.add(r.next().key().asString());
             }

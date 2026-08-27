@@ -83,7 +83,9 @@ class MergeCpuProfileHarness {
             SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
             SortTransform transform =
                     new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
-                            EqualKeyPolicy.ALLOW, metrics, writerFactory), false, timer);
+                            EqualKeyPolicy.ALLOW, metrics, writerFactory,
+                            MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
+                            SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
             Configuration jfrConfig = Configuration.getConfiguration("profile");
             Recording recording = new Recording(jfrConfig);
@@ -93,7 +95,8 @@ class MergeCpuProfileHarness {
             recording.start();
             SortTransformResult result;
             try {
-                result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP);
+                result = transform.transform(stagingSegments, output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
             } finally {
                 recording.stop();
             }

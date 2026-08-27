@@ -155,8 +155,9 @@ class SortMergeLiveProgressTest {
         SortTransform transform = new SortTransform(
                 new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         SortMetrics.NO_OP,
-                        SortedFileWriterFactory.DEFAULT),
-                false, RangeMergeTimer.NO_OP);
+                        SortedFileWriterFactory.DEFAULT,
+                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {
                     metrics.recordProgress(units);
@@ -177,8 +178,9 @@ class SortMergeLiveProgressTest {
         SortTransform transform = new SortTransform(
                 new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP,
                         EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
-                        SortedFileWriterFactory.DEFAULT),
-                false, RangeMergeTimer.NO_OP);
+                        SortedFileWriterFactory.DEFAULT,
+                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
                 units -> {
                     metrics.recordProgress(units);

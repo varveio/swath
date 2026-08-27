@@ -23,7 +23,7 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunBoundarySample.ReadResult sample) {
 
     static List<PageRunSegmentDescriptor> readAll(List<Path> paths) throws IOException {
-        return readAll(paths, PageRunSegmentIo::open);
+        return readAll(paths, path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
     }
 
     /** Test seam for asserting the descriptor kickoff's open lifetime. */

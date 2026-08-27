@@ -7,16 +7,14 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import java.util.Comparator;
+import java.util.function.IntSupplier;
 
 /**
  * The immutable inputs defining one sort/merge run — the inputs threaded whole through
  * {@link SortTransform} and, from there, {@link ParallelRangeMerge}: the {@link SortConfig knobs},
  * the §0.3 key {@code comparator}, the {@link DuplicateHook dedup hook}, the final-output
- * {@link EqualKeyPolicy}, the {@link SortMetrics} sink, and the {@link SortedFileWriterFactory} for
- * the final output. Grouping them replaces the
- * former positional constructor list; behavioural knobs that a caller varies independently
- * ({@code identityVerifiedWideSweep}, the range-merge timer) stay explicit {@link SortTransform}
- * constructor arguments.
+ * {@link EqualKeyPolicy}, the {@link SortMetrics} sink, the {@link SortedFileWriterFactory} for the
+ * final output, merge input provenance, timing/fd seams, and the stale-final ownership scope.
  *
  * @param config the sort knobs (segment/merge budgets, fan-in, roll size, codec)
  * @param comparator the §0.3 total order every merge pass runs under
@@ -24,6 +22,10 @@ import java.util.Comparator;
  * @param equalKeyPolicy whether the final drain permits or rejects adjacent equal raw keys
  * @param metrics the sort metrics sink; {@link SortMetrics#NO_OP} off the instrumented path
  * @param finalWriterFactory builds the final sorted-Parquet writers the roll opens
+ * @param inputProfile optimizations permitted by the provenance of the staged runs
+ * @param rangeMergeTimer records parallel range and boundary-sampling wall time
+ * @param softFdLimitSupplier process soft open-file limit source, or a deterministic test value
+ * @param staleFinalSweep ownership scope for replacement-publish cleanup
  */
 public record SortRun(
         SortConfig config,
@@ -31,5 +33,12 @@ public record SortRun(
         DuplicateHook hook,
         EqualKeyPolicy equalKeyPolicy,
         SortMetrics metrics,
-        SortedFileWriterFactory finalWriterFactory) {
+        SortedFileWriterFactory finalWriterFactory,
+        MergeInputProfile inputProfile,
+        RangeMergeTimer rangeMergeTimer,
+        IntSupplier softFdLimitSupplier,
+        StaleFinalSweep staleFinalSweep) {
+
+    /** Production soft-fd-limit source; tests pass a fixed supplier when they exercise clamps. */
+    public static final IntSupplier PROCESS_SOFT_FD_LIMIT = MergeFdBudget::softOpenFileLimit;
 }

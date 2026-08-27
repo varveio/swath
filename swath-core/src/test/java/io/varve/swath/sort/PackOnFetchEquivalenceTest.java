@@ -169,7 +169,7 @@ final class PackOnFetchEquivalenceTest {
 
     private List<String> keys(Path segment) throws IOException {
         List<String> out = new ArrayList<>();
-        try (PageRunSegmentReader r = new PageRunSegmentReader(segment)) {
+        try (PageRunSegmentReader r = PageRunReads.open(segment)) {
             while (r.hasNext()) {
                 out.add(r.next().key().asString());
             }

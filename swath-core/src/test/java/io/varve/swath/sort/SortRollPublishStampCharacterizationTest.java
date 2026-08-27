@@ -65,7 +65,8 @@ class SortRollPublishStampCharacterizationTest {
         List<FinalPart> published = new ArrayList<>();
         SortTransformResult result = stampedTransform(config)
                 .transform(staging, dirs.output, dirs.staging,
-                        (parts, ignoredRows) -> published.addAll(parts), progress::add);
+                        (parts, ignoredRows) -> published.addAll(parts), progress::add,
+                        FinalPassListener.NO_OP);
 
         // Roll cadence: one row per file, four files, named in key order.
         assertThat(result.finalFiles()).hasSize(4);
@@ -123,7 +124,8 @@ class SortRollPublishStampCharacterizationTest {
                 .withFinalFileBytes(1L).withMergeParallelism(3).withMergeBudgetBytes(64L << 20);
         List<Long> progress = new ArrayList<>();
         SortTransformResult result = stampedTransform(config)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add,
+                        FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(9);
         assertThat(names(result.finalFiles())).containsExactly(
@@ -179,7 +181,8 @@ class SortRollPublishStampCharacterizationTest {
         // and a single output file ⇒ the whole 2500-row stream drains through one RolledPartWriter.drain loop.
         List<Long> batches = new ArrayList<>();
         SortTransformResult result = transform(SortConfigs.base())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add,
+                        FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
         assertThat(result.totalRows()).isEqualTo(2500);
@@ -192,13 +195,17 @@ class SortRollPublishStampCharacterizationTest {
     private SortTransform transform(SortConfig config) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                 SortMetrics.NO_OP,
-                SortedFileWriterFactory.DEFAULT));
+                SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform stampedTransform(SortConfig config) {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped));
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private record Dirs(Path output, Path staging) {

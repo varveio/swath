@@ -64,7 +64,7 @@ class PageRunBoundarySampleTest {
         AtomicInteger opens = new AtomicInteger();
         List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(List.of(segment), path -> {
             opens.incrementAndGet();
-            return PageRunSegmentIo.open(path);
+            return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
         });
         PageRunSegmentDescriptor descriptor = descriptors.getFirst();
         assertThat(opens).hasValue(1);
@@ -338,10 +338,12 @@ class PageRunBoundarySampleTest {
             CountingMetrics metrics = new CountingMetrics();
             SortConfig config = SortConfigs.base().withMergeParallelism(4);
             SortTransform transform = new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT));
+                    EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
+                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                    SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
             assertThatThrownBy(() -> transform.transform(List.of(segment), data, staging,
-                    PublishListener.NO_OP))
+                    PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
                     .as("page %s", page)
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("CRC32C mismatch");
@@ -393,7 +395,7 @@ class PageRunBoundarySampleTest {
     }
 
     private static PageRunBoundarySample.ReadResult readSample(Path path) throws IOException {
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
             return PageRunBoundarySample.read(io, PageRunTrailer.read(io));
         }
     }

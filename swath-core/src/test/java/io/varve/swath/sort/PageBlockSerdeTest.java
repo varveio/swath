@@ -245,7 +245,7 @@ class PageBlockSerdeTest {
         Path path = dir.resolve("lz4.pgr");
         new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE).flush(sealed, path);
 
-        try (PageFrontierReader reader = new PageFrontierReader(path)) {
+        try (PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             // Header fields (min/max/count) are readable immediately after open()/advance() — before
             // decodeCurrentPage() is ever called, i.e. before any row is decompressed.
             assertThat(reader.hasPage()).isTrue();

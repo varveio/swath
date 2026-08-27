@@ -48,14 +48,16 @@ class SortTransformParallelMergeTest {
         Dirs serialDirs = dirs(root, "serial");
         List<Path> serialStaging = stage(serialDirs.staging, segs);
         SortTransformResult serial = transform(config(1))
-                .transform(serialStaging, serialDirs.output, serialDirs.staging, PublishListener.NO_OP);
+                .transform(serialStaging, serialDirs.output, serialDirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
         assertThat(keys(serial.finalFiles())).containsExactlyElementsOf(expected);
 
         // Parallel path with R=3.
         Dirs parDirs = dirs(root, "parallel");
         List<Path> parStaging = stage(parDirs.staging, segs);
         SortTransformResult parallel = transform(config(3))
-                .transform(parStaging, parDirs.output, parDirs.staging, PublishListener.NO_OP);
+                .transform(parStaging, parDirs.output, parDirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(parallel.totalRows()).isEqualTo(12);
         // Filename order == key order == the global sort, no gap, no duplicate.
@@ -78,7 +80,8 @@ class SortTransformParallelMergeTest {
                 objects("a", "c", "e"),
                 objects("b", "d", "f")));
         SortTransformResult r = transform(config(3))
-                .transform(staging, d.output, d.staging, PublishListener.NO_OP);
+                .transform(staging, d.output, d.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(r.totalRows()).isEqualTo(6);
         assertThat(keys(r.finalFiles())).containsExactly("a", "b", "c", "d", "e", "f");
@@ -91,7 +94,8 @@ class SortTransformParallelMergeTest {
         Dirs d = dirs(root, "degenerate");
         List<Path> staging = stage(d.staging, List.of(objects("a", "b", "c", "d")));
         SortTransformResult r = transform(config(4))
-                .transform(staging, d.output, d.staging, PublishListener.NO_OP);
+                .transform(staging, d.output, d.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(r.finalFiles()).hasSize(1);
         assertThat(keys(r.finalFiles())).containsExactly("a", "b", "c", "d");
@@ -106,8 +110,11 @@ class SortTransformParallelMergeTest {
                 objects("c", "f", "i")));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT))
-                .transform(staging, d.output, d.staging, PublishListener.NO_OP);
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY))
+                .transform(staging, d.output, d.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         // 3 distinct first-keys ⇒ 3 ranges ⇒ the counter total is the range count.
         assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(3);
@@ -131,9 +138,12 @@ class SortTransformParallelMergeTest {
             return SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
         };
         SortTransform transform = new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, boom));
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, boom,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
-        assertThatThrownBy(() -> transform.transform(staging, d.output, d.staging, PublishListener.NO_OP))
+        assertThatThrownBy(() -> transform.transform(staging, d.output, d.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class);
         // Nothing was published into the output data dir.
         try (var s = Files.newDirectoryStream(d.output, "part-*.parquet")) {
@@ -159,7 +169,8 @@ class SortTransformParallelMergeTest {
         assertThat(Files.exists(staleTmp)).isTrue();
 
         SortTransformResult r = transform(config(3))
-                .transform(staging, d.output, d.staging, PublishListener.NO_OP);
+                .transform(staging, d.output, d.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(r.totalRows()).isEqualTo(9);
         assertThat(keys(r.finalFiles()))
@@ -176,7 +187,9 @@ class SortTransformParallelMergeTest {
 
     private SortTransform transform(SortConfig config) {
         return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private record Dirs(Path output, Path staging) {

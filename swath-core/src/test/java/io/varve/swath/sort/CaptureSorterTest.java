@@ -128,7 +128,7 @@ class CaptureSorterTest {
         Path staging = outputDir.resolve(CaptureSorter.STAGING_DIR_NAME);
         Path segment = staging.resolve(StagingNames.fixtureSegment(0));
         assertThat(Files.exists(segment)).isTrue();
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment)) {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
             PageRunBoundarySample.ReadResult sample =
                     PageRunBoundarySample.read(io, PageRunTrailer.read(io));
             assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.ABSENT);

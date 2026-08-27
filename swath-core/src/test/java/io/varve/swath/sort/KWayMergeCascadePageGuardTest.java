@@ -155,7 +155,7 @@ class KWayMergeCascadePageGuardTest {
 
             @Override
             public EntryStream open(Path segment) throws IOException {
-                return new PageRunSegmentReader(segment);
+                return PageRunReads.open(segment);
             }
 
             @Override
@@ -224,7 +224,7 @@ class KWayMergeCascadePageGuardTest {
     private List<ListEntry> sortedOracle(List<Path> files) throws IOException {
         List<ListEntry> all = new ArrayList<>();
         for (Path f : files) {
-            try (PageRunSegmentReader reader = new PageRunSegmentReader(f)) {
+            try (PageRunSegmentReader reader = PageRunReads.open(f)) {
                 while (reader.hasNext()) {
                     all.add(reader.next());
                 }
@@ -244,7 +244,7 @@ class KWayMergeCascadePageGuardTest {
 
     /** True iff the physical segment holds two adjacent pages whose ranges overlap. */
     private boolean hasOverlappingAdjacentPages(Path file) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(file)) {
+        try (PageFrontierReader reader = new PageFrontierReader(file, SortMetrics.NO_OP)) {
             byte[] prevMax = null;
             while (reader.hasPage()) {
                 if (prevMax != null && Arrays.compareUnsigned(reader.minKey(), prevMax) <= 0) {

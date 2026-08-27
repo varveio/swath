@@ -51,10 +51,13 @@ class SortTransformStampingTest {
                 key -> Map.of("final-row-group-bytes", "4096").get(key.substring("swath.sort.".length())));
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory));
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         SortTransformResult result = transform.transform(
-                List.of(seg0, seg1), output, staging, PublishListener.NO_OP);
+                List.of(seg0, seg1), output, staging, PublishListener.NO_OP,
+                units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
         Path finalFile = result.finalFiles().get(0);

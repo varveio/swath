@@ -51,7 +51,7 @@ public final class PageRunSegmentInspector {
      */
     public static Dump inspect(Path path) throws IOException {
         List<RecordInfo> records = new ArrayList<>();
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
             PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
 
             // open() positioned the channel at the first record; walk exactly totalRecords records.

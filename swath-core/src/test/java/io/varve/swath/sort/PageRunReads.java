@@ -22,8 +22,14 @@ public final class PageRunReads {
 
     /** The keys of a page-run staging/intermediate segment, in stored (sorted) order. */
     public static List<String> keys(Path segment) throws IOException {
-        return SortTestSupport.drain(new PageRunSegmentReader(segment)).stream()
+        return SortTestSupport.drain(open(segment)).stream()
                 .map(entry -> entry.key().asString())
                 .toList();
+    }
+
+    static PageRunSegmentReader open(Path segment) throws IOException {
+        return new PageRunSegmentReader(
+                new PageFrontierReader(segment, SortMetrics.NO_OP),
+                new ListEntryComparator(), SortMetrics.NO_OP);
     }
 }

@@ -145,7 +145,7 @@ class PageAwareMergerTest {
     private List<PageFrontierStream> frontiers(List<Path> files) throws IOException {
         List<PageFrontierStream> out = new ArrayList<>();
         for (Path f : files) {
-            out.add(new PageFrontierReader(f));
+            out.add(new PageFrontierReader(f, SortMetrics.NO_OP));
         }
         return out;
     }
@@ -153,7 +153,7 @@ class PageAwareMergerTest {
     private List<EntryStream> entryStreams(List<Path> files) throws IOException {
         List<EntryStream> out = new ArrayList<>();
         for (Path f : files) {
-            out.add(new PageRunSegmentReader(f));
+            out.add(PageRunReads.open(f));
         }
         return out;
     }
