@@ -146,6 +146,7 @@ public final class CaptureSorter {
                                      Comparator<ListEntry> comparator, DuplicateHook hook) throws IOException {
         PageRunSegmentWriter segmentWriter =
                 new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
+        SegmentGate gate = new SegmentGate(config);
         List<Path> segments = new ArrayList<>();
         List<ListEntry> chunk = new ArrayList<>();
         long chunkBytes = 0;
@@ -156,8 +157,8 @@ public final class CaptureSorter {
                     ListEntry e = reader.next();
                     checkNotVersioned(e);
                     chunk.add(e);
-                    chunkBytes += e.key().length() + PageBlock.ENTRY_OVERHEAD_BYTES;
-                    if (chunkBytes >= config.segmentBytes() || chunk.size() >= config.segmentEntries()) {
+                    chunkBytes += PageBlock.estimatedBytes(e);
+                    if (gate.full(chunkBytes, chunk.size())) {
                         segments.add(flushChunk(chunk, comparator, hook, segmentWriter, stagingDir, seq++));
                         chunk = new ArrayList<>();
                         chunkBytes = 0;

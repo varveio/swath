@@ -33,6 +33,7 @@ import java.util.Set;
 final class SortBuffer {
 
     private final SortConfig config;
+    private final SegmentGate gate;
     private final Comparator<ListEntry> comparator;
     private List<PageBlock> pages = new ArrayList<>();
     private Set<Long> nodeIds = new HashSet<>();
@@ -42,6 +43,7 @@ final class SortBuffer {
 
     SortBuffer(SortConfig config, Comparator<ListEntry> comparator) {
         this.config = config;
+        this.gate = new SegmentGate(config);
         this.comparator = comparator;
     }
 
@@ -89,13 +91,7 @@ final class SortBuffer {
 
     /** Which gate (if any) says this buffer is full and should be sealed. */
     SealTrigger triggerOrNone() {
-        if (estimatedBytes >= config.segmentBytes()) {
-            return SealTrigger.BYTE_GATE;
-        }
-        if (entryCount >= config.segmentEntries()) {
-            return SealTrigger.ENTRY_CAP;
-        }
-        return SealTrigger.DRAIN;   // caller decides whether a partial drain-seal is warranted
+        return gate.trigger(estimatedBytes, entryCount);
     }
 
     /**

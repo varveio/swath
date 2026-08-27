@@ -197,7 +197,7 @@ final class PageBlock {
         Writer w = new Writer(entries.size(), useDict);
         long estimate = 0;
         for (ListEntry e : entries) {
-            estimate += e.key().length() + ENTRY_OVERHEAD_BYTES;
+            estimate += estimatedBytes(e);
             switch (e) {
                 case ObjectEntry o -> {
                     w.tag(TAG_OBJECT);
@@ -316,6 +316,11 @@ final class PageBlock {
      */
     long estimatedBytes() {
         return estimatedBytes;
+    }
+
+    /** The shared logical-byte estimate used by every staging-segment gate. */
+    static long estimatedBytes(ListEntry entry) {
+        return entry.key().length() + ENTRY_OVERHEAD_BYTES;
     }
 
     /**
