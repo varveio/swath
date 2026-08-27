@@ -35,7 +35,10 @@ import java.util.zip.CRC32C;
  * §0.3 comparator. A page that arrived out of order ({@code !orderedUnderFullComparator()}) is
  * re-packed: its entries are drained, sorted with {@code comparator}, and {@link PageBlock#pack}-ed
  * again (pack sets the ordered-bit for a pre-sorted list but never reorders, so the sort must happen
- * first). This is strictly per-page — it never merges node runs into one global stream.
+ * first). Repair is allowed only while raw keys remain non-decreasing: {@link SortBuffer}'s
+ * checkpoint maximum comes from the admitted page's last raw key, so a raw-key regression is
+ * rejected before persistence rather than sorted into a segment whose durable cursor would be too
+ * low. This is strictly per-page — it never merges node runs into one global stream.
  *
  * <p><b>On-disk format, big-endian:</b>
  * <pre>
@@ -45,8 +48,8 @@ import java.util.zip.CRC32C;
  *           [optional boundary-sample extension]
  *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
  * </pre>
- * {@code segMinKey}/{@code segMaxKey} are the ACTUAL first/last keys (first page's {@code firstKey()},
- * last page's {@code lastKey()}) — the drop-in for {@code SortedFileIndex.bounds} with no
+ * {@code segMinKey}/{@code segMaxKey} are the ACTUAL unsigned minimum of all page minima and
+ * unsigned maximum of all page maxima — the drop-in for {@code SortedFileIndex.bounds} with no
  * truncated-stats hazard. {@code trailerStart} is the absolute file offset where the trailer begins
  * (where {@code segMinKey}'s length prefix starts) — read from the fixed EOF-relative tail, it lets a
  * reader seek straight to the bounds in O(1) instead of walking every record's length prefix.
@@ -123,8 +126,21 @@ final class PageRunSegmentWriter {
             if (!page.orderedUnderFullComparator()) {
                 List<ListEntry> entries = new ArrayList<>(page.count());
                 PageBlock.Cursor c = page.cursor();
+                byte[] previousRawKey = null;
                 while (c.hasNext()) {
-                    entries.add(c.next());
+                    ListEntry entry = c.next();
+                    byte[] rawKey = entry.key().rawUnsafe();
+                    if (previousRawKey != null
+                            && Arrays.compareUnsigned(rawKey, previousRawKey) < 0) {
+                        metrics.recordStealReason("SORT", "buffer_page_raw_key_regression");
+                        throw new SegmentCorruptionException(path,
+                                SegmentCorruptionException.PAGE_RUN_RAW_KEY_REGRESSION,
+                                "raw key regressed inside an admitted page; checkpoint durable "
+                                        + "cursors require non-decreasing raw keys even when the "
+                                        + "full comparator order needs repair");
+                    }
+                    previousRawKey = rawKey;
+                    entries.add(entry);
                 }
                 entries.sort(comparator);
                 pages.set(i, PageBlock.pack(entries, comparator, codec));
@@ -213,11 +229,23 @@ final class PageRunSegmentWriter {
         long totalEntries = 0;
         int maxRecordLen = 0;
         PageBlock prev = null;
+        byte[] segMin = EMPTY_KEY;
+        byte[] segMax = EMPTY_KEY;
+        boolean haveBounds = false;
 
         try (FileChannel ch = FileChannel.open(path,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
             writeHeader(ch);
             for (PageBlock page : pages) {
+                byte[] pageMin = page.firstKey();
+                byte[] pageMax = page.lastKey();
+                if (!haveBounds || Arrays.compareUnsigned(pageMin, segMin) < 0) {
+                    segMin = pageMin;
+                }
+                if (!haveBounds || Arrays.compareUnsigned(pageMax, segMax) > 0) {
+                    segMax = pageMax;
+                }
+                haveBounds = true;
                 if (prev != null && comparator.compare(prev.lastEntry(), page.firstEntry()) == 0) {
                     hook.onDuplicate(prev.lastEntry(), page.firstEntry());
                 }
@@ -225,8 +253,6 @@ final class PageRunSegmentWriter {
                 totalEntries += page.count();
                 prev = page;
             }
-            byte[] segMin = pages.isEmpty() ? EMPTY_KEY : pages.get(0).firstKey();
-            byte[] segMax = pages.isEmpty() ? EMPTY_KEY : pages.get(pages.size() - 1).lastKey();
             long trailerStart = ch.position();
             writeTrailer(ch, segMin, segMax, PageRunBoundarySample.select(pages), trailerStart,
                     pages.size(), totalEntries, maxRecordLen);

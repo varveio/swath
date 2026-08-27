@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.zip.CRC32C;
@@ -81,8 +82,20 @@ final class PageRunRawFixtures {
                 maxRecordLen = Math.max(maxRecordLen, body.length);
             }
 
-            byte[] segMin = blocks.isEmpty() ? new byte[0] : blocks.get(0).firstKey();
-            byte[] segMax = blocks.isEmpty() ? new byte[0] : blocks.get(blocks.size() - 1).lastKey();
+            byte[] segMin = new byte[0];
+            byte[] segMax = new byte[0];
+            boolean haveBounds = false;
+            for (PageBlock block : blocks) {
+                byte[] pageMin = block.firstKey();
+                byte[] pageMax = block.lastKey();
+                if (!haveBounds || Arrays.compareUnsigned(pageMin, segMin) < 0) {
+                    segMin = pageMin;
+                }
+                if (!haveBounds || Arrays.compareUnsigned(pageMax, segMax) > 0) {
+                    segMax = pageMax;
+                }
+                haveBounds = true;
+            }
             long trailerStart = ch.position();
             ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length
                     + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);

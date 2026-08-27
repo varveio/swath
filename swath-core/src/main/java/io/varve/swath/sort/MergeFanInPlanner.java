@@ -50,7 +50,7 @@ final class MergeFanInPlanner {
      * by staging format — reusing {@link #maxPageRunRecordLen} for the page-run case. It calls
      * {@link #warnIfCascadePredicted} directly for the warning alone.
      */
-    int plan(List<Path> segments) {
+    int plan(List<PageRunSegmentDescriptor> segments) {
         int clamped = clampedMergeFanIn(segments);
         warnIfCascadePredicted(segments.size(), clamped);
         return clamped;
@@ -88,7 +88,7 @@ final class MergeFanInPlanner {
      * #warnIfCascadePredicted} note the cascade if the clamp forces the fan-in below the segment
      * count.
      */
-    private int clampedMergeFanIn(List<Path> segments) {
+    private int clampedMergeFanIn(List<PageRunSegmentDescriptor> segments) {
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(segments);
@@ -118,8 +118,8 @@ final class MergeFanInPlanner {
      * relax the configured estimate. Returns {@link Integer#MAX_VALUE} when no trailer size is
      * available, leaving the static estimate in force.
      */
-    private int recordSizedFanIn(List<Path> segments) {
-        long maxRecordLen = maxPageRunRecordLen(segments);
+    private int recordSizedFanIn(List<PageRunSegmentDescriptor> segments) {
+        long maxRecordLen = PageRunSegmentDescriptor.maxRecordLen(segments);
         if (maxRecordLen <= 0) {
             return Integer.MAX_VALUE;
         }
@@ -131,31 +131,22 @@ final class MergeFanInPlanner {
     /**
      * The largest framed record across {@code segments}, read O(1) per segment from the page-run
      * trailer — an O(1) encoded-record allocation guard used to tighten the configured stream price,
-     * not the complete decoded heap of one stream. Returns {@code -1} when the input is empty, has an
-     * unsupported suffix, or a trailer cannot be read; every caller then falls back to its own static
-     * estimate, which remains the configured planning guard.
+     * not the complete decoded heap of one stream. Empty input returns {@code -1}; an unreadable
+     * trailer is an input failure and is never silently reinterpreted as an unknown estimate.
      *
      * <p>Package-private and shared: {@link ParallelRangeMerge} needs the same quantity to size its
      * PER-RANGE fan-in, and computing it there independently would be the same scan written twice.
      */
-    static long maxPageRunRecordLen(List<Path> segments) {
+    static long maxPageRunRecordLen(List<Path> segments) throws IOException {
         if (segments.isEmpty()) {
             return -1;
         }
-        long maxRecordLen = 0;
-        try {
-            for (Path seg : segments) {
-                if (!SortTransform.isPageRunSegment(seg)) {
-                    return -1;
-                }
-                maxRecordLen = Math.max(maxRecordLen, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
+        for (Path seg : segments) {
+            if (!SortTransform.isPageRunSegment(seg)) {
+                throw new IOException("unsupported sort staging segment: " + seg);
             }
-        } catch (IOException e) {
-            log.debug("could not read a page-run trailer for the record-size fan-in refinement; "
-                    + "falling back to the static estimate", e);
-            return -1;
         }
-        return maxRecordLen > 0 ? maxRecordLen : -1;
+        return PageRunSegmentDescriptor.maxRecordLen(PageRunSegmentDescriptor.readAll(segments));
     }
 
     /** Number of {@link KWayMerge#merge} passes (cascade passes + the final streaming pass). */

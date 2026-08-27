@@ -10,9 +10,12 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -75,6 +78,9 @@ final class PageBlock {
      */
     static final int DICT_CAP = 64;
 
+    /** Hard allocation ceiling for one decoded S3 page payload read from an internal segment. */
+    static final int MAX_RAW_PAYLOAD_BYTES = 256 * 1024 * 1024;
+
     private static final byte[] EMPTY_KEY = new byte[0];
 
     private static final byte TAG_OBJECT = 0;
@@ -112,11 +118,13 @@ final class PageBlock {
     private ListEntry lastEntry;
     private final long estimatedBytes;
     private final boolean orderedUnderFullComparator;
+    /** Non-null only for a persisted page, so cursor-time decode faults retain typed path context. */
+    private final Path sourcePath;
 
     private PageBlock(byte[] storedPayload, int rawPayloadLength, PageCodec codec, String[][] dicts,
                       boolean[] useDict, int count, byte[] firstKeyBytes, byte[] lastKeyBytes,
                       ListEntry firstEntry, ListEntry lastEntry, long estimatedBytes,
-                      boolean orderedUnderFullComparator) {
+                      boolean orderedUnderFullComparator, Path sourcePath) {
         this.storedPayload = storedPayload;
         this.rawPayloadLength = rawPayloadLength;
         this.codec = codec;
@@ -129,6 +137,7 @@ final class PageBlock {
         this.lastEntry = lastEntry;
         this.estimatedBytes = estimatedBytes;
         this.orderedUnderFullComparator = orderedUnderFullComparator;
+        this.sourcePath = sourcePath;
     }
 
     /**
@@ -223,7 +232,7 @@ final class PageBlock {
         byte[] raw = w.toBytes();
         byte[] stored = codec.compress(raw);
         return new PageBlock(stored, raw.length, codec, w.dictArrays(), useDict, entries.size(),
-                first.key().rawUnsafe(), last.key().rawUnsafe(), first, last, estimate, ordered);
+                first.key().rawUnsafe(), last.key().rawUnsafe(), first, last, estimate, ordered, null);
     }
 
     /** The first entry's key (defensive copy). */
@@ -311,7 +320,11 @@ final class PageBlock {
 
     /** A fresh sequential decoder over this block. Decompresses the payload once, lazily, on demand. */
     Cursor cursor() {
-        return new Cursor(decodedPayload());
+        try {
+            return new Cursor(decodedPayload());
+        } catch (RuntimeException e) {
+            throw decodedCorruption(e);
+        }
     }
 
     /**
@@ -409,36 +422,89 @@ final class PageBlock {
      * matches the record's declared {@code rawPayloadLen} (fails fast on a corrupt/truncated payload).
      */
     static PageBlock deserialize(byte[] record) {
+        return deserialize(record, null);
+    }
+
+    static PageBlock deserialize(byte[] record, Path sourcePath) {
+        SerializedFields fields = parseSerializedFields(record);
+        return new PageBlock(fields.storedPayload(), fields.rawPayloadLength(), fields.codec(),
+                fields.dicts(), fields.useDict(), fields.count(), fields.minKey(), fields.maxKey(),
+                null, null, fields.storedPayload().length, fields.ordered(), sourcePath);
+    }
+
+    /** Structurally validated fields needed by the decode-free frontier and full deserializer. */
+    record SerializedFields(byte[] minKey, byte[] maxKey, int count, boolean ordered,
+                            String[][] dicts, boolean[] useDict, PageCodec codec,
+                            int rawPayloadLength, byte[] storedPayload) {
+    }
+
+    /**
+     * Validate every length/count/mode field in a serialized page before allocating from it. This
+     * deliberately does not decompress or materialize rows; the source-aware {@link Cursor}
+     * performs the row/header cross-check when a frontier actually selects the page for decoding.
+     */
+    static SerializedFields parseSerializedFields(byte[] record) {
         ByteBuffer buf = ByteBuffer.wrap(record);
-        byte[] minKey = getLenBytes(buf);
-        byte[] maxKey = getLenBytes(buf);
+        byte[] minKey = getBoundedLenBytes(buf, "minKey");
+        byte[] maxKey = getBoundedLenBytes(buf, "maxKey");
+        requireRemaining(buf, 5, "count and ordered flag");
         int count = buf.getInt();
-        boolean ordered = buf.get() != 0;
+        if (count <= 0) {
+            throw malformed("count must be positive, got " + count);
+        }
+        byte orderedByte = buf.get();
+        if (orderedByte != 0 && orderedByte != 1) {
+            throw malformed("ordered flag must be 0 or 1, got " + (orderedByte & 0xFF));
+        }
 
         String[][] dicts = new String[DICT_COLUMN_COUNT][];
         for (int i = 0; i < DICT_COLUMN_COUNT; i++) {
+            requireRemaining(buf, 2, "dictionary count");
             int n = buf.getShort() & 0xFFFF;
+            if (n > DICT_CAP) {
+                throw malformed("dictionary " + i + " count " + n + " exceeds " + DICT_CAP);
+            }
             String[] values = new String[n];
             for (int j = 0; j < n; j++) {
-                values[j] = new String(getLenBytes(buf), StandardCharsets.UTF_8);
+                values[j] = new String(getBoundedLenBytes(buf, "dictionary value"),
+                        StandardCharsets.UTF_8);
             }
             dicts[i] = values;
         }
 
+        requireRemaining(buf, 10, "page modes and payload lengths");
         int packedUseDict = buf.get() & 0xFF;
+        int validUseDictBits = (1 << DICT_COLUMN_COUNT) - 1;
+        if ((packedUseDict & ~validUseDictBits) != 0) {
+            throw malformed("useDict contains unknown bits: 0x"
+                    + Integer.toHexString(packedUseDict));
+        }
         boolean[] useDict = new boolean[DICT_COLUMN_COUNT];
         for (int i = 0; i < DICT_COLUMN_COUNT; i++) {
             useDict[i] = (packedUseDict & (1 << i)) != 0;
         }
 
-        PageCodec codec = PageCodec.fromCode(buf.get());
+        PageCodec codec;
+        byte codecCode = buf.get();
+        try {
+            codec = PageCodec.fromCode(codecCode);
+        } catch (IllegalStateException e) {
+            throw malformed("unsupported codec " + (codecCode & 0xFF), e);
+        }
         int rawPayloadLength = buf.getInt();
         int storedPayloadLength = buf.getInt();
+        if (rawPayloadLength <= 0 || rawPayloadLength > MAX_RAW_PAYLOAD_BYTES) {
+            throw malformed("raw payload length " + rawPayloadLength + " is outside 1.."
+                    + MAX_RAW_PAYLOAD_BYTES);
+        }
+        if (storedPayloadLength <= 0 || storedPayloadLength != buf.remaining()) {
+            throw malformed("stored payload length " + storedPayloadLength
+                    + " does not equal remaining body bytes " + buf.remaining());
+        }
         byte[] storedPayload = new byte[storedPayloadLength];
         buf.get(storedPayload);
-
-        return new PageBlock(storedPayload, rawPayloadLength, codec, dicts, useDict, count, minKey, maxKey,
-                null, null, storedPayload.length, ordered);
+        return new SerializedFields(minKey, maxKey, count, orderedByte == 1, dicts, useDict,
+                codec, rawPayloadLength, storedPayload);
     }
 
     private static void putLenBytes(ByteBuffer buf, byte[] bytes) {
@@ -446,11 +512,28 @@ final class PageBlock {
         buf.put(bytes);
     }
 
-    private static byte[] getLenBytes(ByteBuffer buf) {
+    private static byte[] getBoundedLenBytes(ByteBuffer buf, String field) {
+        requireRemaining(buf, 2, field + " length");
         int len = buf.getShort() & 0xFFFF;
+        requireRemaining(buf, len, field);
         byte[] bytes = new byte[len];
         buf.get(bytes);
         return bytes;
+    }
+
+    private static void requireRemaining(ByteBuffer buf, int needed, String field) {
+        if (needed < 0 || buf.remaining() < needed) {
+            throw malformed(field + " exceeds record body (needed " + needed
+                    + ", remaining " + buf.remaining() + ")");
+        }
+    }
+
+    private static IllegalArgumentException malformed(String message) {
+        return new IllegalArgumentException("malformed PageBlock: " + message);
+    }
+
+    private static IllegalArgumentException malformed(String message, Throwable cause) {
+        return new IllegalArgumentException("malformed PageBlock: " + message, cause);
     }
 
     /**
@@ -464,6 +547,7 @@ final class PageBlock {
         private int pos;
         private int emitted;
         private byte[] prevKey = EMPTY_KEY;
+        private byte[] decodedFirstKey;
 
         private Cursor(byte[] payload) {
             this.payload = payload;
@@ -474,12 +558,13 @@ final class PageBlock {
         }
 
         ListEntry next() {
-            if (emitted >= count) {
-                throw new NoSuchElementException();
-            }
-            emitted++;
-            byte tag = payload[pos++];
-            return switch (tag) {
+            try {
+                if (emitted >= count) {
+                    throw new NoSuchElementException();
+                }
+                emitted++;
+                byte tag = payload[pos++];
+                ListEntry entry = switch (tag) {
                 case TAG_OBJECT -> {
                     KeyBytes key = key();
                     long size = fixedLong();
@@ -505,7 +590,25 @@ final class PageBlock {
                     yield new DeleteMarkerEntry(key, versionId, isLatest, lastModified, ownerId);
                 }
                 default -> throw new IllegalStateException("bad PageBlock tag: " + tag);
-            };
+                };
+                if (emitted == 1) {
+                    decodedFirstKey = entry.key().rawUnsafe();
+                }
+                if (emitted == count) {
+                    if (pos != payload.length) {
+                        throw malformed("decoded " + count + " rows with "
+                                + (payload.length - pos) + " trailing payload bytes");
+                    }
+                    if (!Arrays.equals(decodedFirstKey, firstKeyBytes)
+                            || !Arrays.equals(entry.key().rawUnsafe(), lastKeyBytes)) {
+                        throw malformed(
+                                "decoded first/last raw keys do not match persisted page bounds");
+                    }
+                }
+                return entry;
+            } catch (RuntimeException e) {
+                throw decodedCorruption(e);
+            }
         }
 
         /**
@@ -601,6 +704,15 @@ final class PageBlock {
                 shift += 7;
             }
         }
+    }
+
+    private RuntimeException decodedCorruption(RuntimeException cause) {
+        if (sourcePath == null || cause instanceof UncheckedIOException) {
+            return cause;
+        }
+        return new UncheckedIOException(new SegmentCorruptionException(sourcePath,
+                SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                "decoded page does not match its structural metadata", cause));
     }
 
     /**

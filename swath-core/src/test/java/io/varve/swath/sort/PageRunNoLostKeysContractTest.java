@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,7 +31,9 @@ import org.junit.jupiter.api.io.TempDir;
  * <em>re-reads the staged {@code .pageseg} files</em>. Both sides of that comparison are derived from the
  * same staged bytes, so a row the STAGING WRITER ({@link PageRunSegmentWriter#flush}: page re-pack, page
  * sort, framing, trailer counts) dropped or duplicated is invisible to both: the oracle loses it too and
- * the assertion stays green.
+ * the assertion stays green. Pages obey the live protocol's raw-key monotonicity while retaining
+ * randomized full-comparator order inside equal-key groups, so the safe repair path is exercised
+ * without relying on the raw-regression behavior that the writer now rejects before checkpointing.
  *
  * <p><b>The oracle here is the GENERATED input</b> — the {@code List<ListEntry>} handed to the buffer,
  * retained in memory and never re-read from disk. Asserting {@code containsExactlyInAnyOrderElementsOf}
@@ -82,7 +83,10 @@ class PageRunNoLostKeysContractTest {
             List<Path> files = new ArrayList<>();
             for (int s = 0; s < nSegs; s++) {
                 List<ListEntry> entries = new ArrayList<>(bySeg.get(s));
-                Collections.shuffle(entries, rnd);   // arrival order ⇒ per-page re-pack + overlapping pages
+                // Stable raw-key sort preserves randomized version/row-type order within each key:
+                // raw cursor safety holds, while comparator ties/disorder still force page repair.
+                entries.sort((a, b) -> KeyBytes.compareUnsigned(
+                        a.key().rawUnsafe(), b.key().rawUnsafe()));
                 files.add(stage(caseDir, "seg-" + s + ".pageseg", entries, rnd));
             }
 

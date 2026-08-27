@@ -11,10 +11,10 @@ import java.nio.file.Path;
 /**
  * Decode-free {@link PageFrontierStream} over one {@link PageRunSegmentWriter} page-run segment.
  * Reads one framed {@link PageBlock} record at a time and exposes the current page's
- * {@code [minKey, maxKey]} and {@code count} by parsing ONLY the record body's leading fields — the
- * front-coded row payload is never decoded here. {@link #decodeCurrentPage()} runs the deferred
- * {@link PageBlock#deserialize} on the retained body bytes when (and only when) the merger emits the
- * page.
+ * {@code [minKey, maxKey]} and {@code count} by structurally validating the body without decoding
+ * rows. {@link #decodeCurrentPage()} runs the deferred {@link PageBlock#deserialize} on the retained
+ * body bytes when (and only when) the merger emits the page; its cursor verifies payload exhaustion
+ * and decoded first/last keys as it emits rows, without a second decode pass.
  *
  * <p>Shares {@link PageRunSegmentReader}'s physical-integrity guarantees, single-sourced in
  * {@link PageRunSegmentIo}: header/trailer magic validated on open, every framed record's length
@@ -96,7 +96,12 @@ final class PageFrontierReader implements PageFrontierStream {
         if (currentBody == null) {
             throw io.fail("decodeCurrentPage() with no current page");
         }
-        return PageBlock.deserialize(currentBody);
+        try {
+            return PageBlock.deserialize(currentBody, io.path());
+        } catch (RuntimeException e) {
+            throw io.corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "malformed page body", e);
+        }
     }
 
     @Override

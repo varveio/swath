@@ -201,6 +201,11 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         requirePageRunSegments(stagingSegments);
+        // Validate and retain every trailer before deleting any disposable working file. Fan-in and
+        // range planning consume these descriptors; an unreadable segment is not an optional memory
+        // refinement and must fail at kickoff while the prior output and working evidence are intact.
+        List<PageRunSegmentDescriptor> segmentDescriptors =
+                PageRunSegmentDescriptor.readAll(stagingSegments);
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
         // below for what each sweep removes and why. Disposable working files are cleared before
         // work; prior published finals remain until their complete replacements are ready.
@@ -219,7 +224,7 @@ public final class SortTransform {
         // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
         // path, and the completeness stamp makes multi-file parallel output self-describing.
         if (config.mergeParallelism() > 1 && pageFrontierEnabled) {
-            SortTransformResult parallel = tryTransformParallel(stagingSegments, outputDir, stagingDir,
+            SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting);
             if (parallel != null) {
                 return parallel;
@@ -234,7 +239,7 @@ public final class SortTransform {
         KWayMerge.SegmentIo<Path> io = segmentIo(segmentWriter, stagingDir, intermediates);
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
-        int runtimeFanIn = fanInPlanner.plan(stagingSegments);
+        int runtimeFanIn = fanInPlanner.plan(segmentDescriptors);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);
 
         List<Path> finalFiles = new ArrayList<>();
@@ -298,11 +303,13 @@ public final class SortTransform {
      * rename it writes the multi-file completeness stamp ({@code file_index} 1..N, one
      * {@code file_final} on N), which is the point at which the global part order is first known.
      */
-    private SortTransformResult tryTransformParallel(List<Path> stagingSegments, Path outputDir,
+    private SortTransformResult tryTransformParallel(List<PageRunSegmentDescriptor> segmentDescriptors,
+            Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
+        List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier);
+                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier, segmentDescriptors);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
@@ -310,7 +317,7 @@ public final class SortTransform {
         // ParallelRangeMerge#effectiveRanges.
         int requestedRanges = config.mergeParallelism();
         ParallelRangeMerge.EffectiveRanges rangePlan =
-                rangeMerge.effectiveRanges(requestedRanges, stagingSegments);
+                rangeMerge.effectiveRangesForDescriptors(requestedRanges, segmentDescriptors);
         int desiredRanges = rangePlan.ranges();
         if (rangePlan.reason() != ParallelRangeMerge.ClampReason.NONE) {
             // WARN, not debug: the operator asked for something the run could not give them. Keep
@@ -342,8 +349,8 @@ public final class SortTransform {
         // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
-        List<byte[]> boundaries =
-                ParallelRangeMerge.boundaries(stagingSegments, desiredRanges, metrics);
+        List<byte[]> boundaries = ParallelRangeMerge.boundariesForDescriptors(
+                segmentDescriptors, desiredRanges, metrics);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
@@ -566,10 +573,6 @@ public final class SortTransform {
                 throw new IllegalArgumentException(
                         "unsupported sort staging segment (expected " + SEGMENT_SUFFIX + "): " + segment);
             }
-            // Extension alone is not a format proof. Validate the header/version/completeness tail
-            // and bounds before working-file cleanup. Full record CRC/order/count validation occurs
-            // during the merge while prior published finals are still intact.
-            PageRunSegmentReader.readTrailer(segment);
         }
     }
 

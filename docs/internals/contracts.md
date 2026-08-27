@@ -718,7 +718,8 @@ which owns the at-most-once-text durability questions it would reopen):
   buffers admitted pages up to a heap-adaptive segment gate (§7), then flushes the
   sealed buffer as an internally-sorted page-run segment (a `.pageseg` file: header
   magic/version, one CRC32C-framed page record per page carrying `[minKey, maxKey,
-  count, codec, len]`, then a completeness trailer with the exact `segMin`/`segMax`
+  count, codec, len]`, then a completeness trailer whose exact `segMin` is the unsigned minimum
+  of every page minimum and whose exact `segMax` is the unsigned maximum of every page maximum
   and record/entry counts) into a staging directory, the **visible** `_staging/`
   inside the output directory (a mid-sort run must be observable with a plain
   `ls`) (same
@@ -732,6 +733,11 @@ which owns the at-most-once-text durability questions it would reopen):
   finalize exactly as it does for parts (§4.1) — out-of-order finalize would
   let `durable_cursor` over-advance past keys still sitting in an earlier
   unfinalized buffer and silently lose them on resume.
+  A page may need repair under the full comparator while its raw keys remain
+  non-decreasing (the dormant version-shaped case); that repair keeps the original last raw key as
+  the safe per-node durable maximum. A raw-key regression is rejected before segment fsync and
+  `partFinalized`, because sorting such a page could persist a key above the admission-time durable
+  cursor and make resume relist already-durable rows.
 - **Comparator** equals the in-memory comparator exactly. The dormant `VERSIONS` plumbing currently
   uses `(key, version_id)` with null first and then unsigned UTF-8 `version_id`, and stamps that exact
   order. This is an implementation order for synthetic tests, not the planned `--all-versions`
@@ -847,6 +853,16 @@ payload: entryCount * [keyLength u16][key]
 [crc32c u32]
 [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
 ```
+
+For non-empty segments, `segMinKey` is the unsigned minimum of all persisted page minima and
+`segMaxKey` is the unsigned maximum of all persisted page maxima. Nested legal page ranges such as
+`[a,z]` followed by `[b,c]` therefore retain `z`, not merely the last stored page's maximum.
+
+Every CRC-valid record body is structurally checked before its frontier is trusted: fixed fields,
+dictionary counts and lengths, positive row count, codec, raw/stored payload lengths, no trailing
+bytes, and `minKey <= maxKey` are bounded and validated before allocation. When a page is decoded,
+the decoded row count/payload exhaustion and first/last raw keys are checked against that header.
+Malformed bodies raise typed `page_run_body_corruption`; no replacement output is published.
 
 For `P` pages the sample stride is `max(1, ceil(P / 4096))`; minima at physical page ordinals
 `0, stride, 2*stride, ...` are retained, including repeats. The block CRC covers its complete header

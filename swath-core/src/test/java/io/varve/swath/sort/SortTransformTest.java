@@ -13,10 +13,12 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -253,6 +255,41 @@ class SortTransformTest {
         assertThat(Files.readAllBytes(priorFinal))
                 .as("replacement is generated completely before prior finals are swept")
                 .containsExactly(priorContents);
+    }
+
+    @Test
+    void crcValidMalformedBodyPublishesNoReplacementAndLeavesPriorFinalIntact(
+            @TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path corrupt = writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b"));
+        byte[] segmentBytes = Files.readAllBytes(corrupt);
+        int frameOffset = PageRunSegmentWriter.HEADER_BYTES;
+        int bodyLength = ByteBuffer.wrap(segmentBytes, frameOffset, 4).getInt();
+        int bodyOffset = frameOffset + 8;
+        ByteBuffer body = ByteBuffer.wrap(segmentBytes, bodyOffset, bodyLength).slice();
+        int minLength = body.getShort() & 0xFFFF;
+        body.position(body.position() + minLength);
+        int maxLength = body.getShort() & 0xFFFF;
+        body.position(body.position() + maxLength);
+        body.putInt(0);   // framed pages must contain at least one row
+        CRC32C crc = new CRC32C();
+        crc.update(segmentBytes, bodyOffset, bodyLength);
+        ByteBuffer.wrap(segmentBytes, frameOffset + 4, 4).putInt((int) crc.getValue());
+        Files.write(corrupt, segmentBytes);
+
+        Path priorFinal = dirs.output.resolve("part-00000.parquet");
+        byte[] priorContents = "prior published output".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(priorFinal, priorContents);
+        List<List<FinalPart>> published = new ArrayList<>();
+
+        assertThatThrownBy(() -> transform(SortConfigs.base())
+                .transform(List.of(corrupt), dirs.output, dirs.staging,
+                        (parts, rows) -> published.add(parts)))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_body_corruption");
+
+        assertThat(published).isEmpty();
+        assertThat(Files.readAllBytes(priorFinal)).containsExactly(priorContents);
     }
 
     @Test
