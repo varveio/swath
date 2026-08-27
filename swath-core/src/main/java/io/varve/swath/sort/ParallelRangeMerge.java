@@ -449,20 +449,11 @@ final class ParallelRangeMerge {
                     ranges, threads, perRangeFanIn);
             return results;
         } catch (InterruptedException e) {
-            futures.forEach(f -> f.cancel(true));
-            shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir);
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
-            futures.forEach(f -> f.cancel(true));
-            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
-            if (interruptedWhileJoining) {
-                Thread.currentThread().interrupt();
-            }
+            abortAndCleanUp(pool, futures, stagingDir);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -480,13 +471,7 @@ final class ParallelRangeMerge {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
-            futures.forEach(f -> f.cancel(true));
-            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
-            if (interruptedWhileJoining) {
-                Thread.currentThread().interrupt();
-            }
+            abortAndCleanUp(pool, futures, stagingDir);
             throw e;
         } finally {
             pool.shutdownNow();
@@ -810,6 +795,17 @@ final class ParallelRangeMerge {
             }
         }
         return interrupted;
+    }
+
+    /** Cancel, prove worker quiescence, release writers, then sweep owned files. */
+    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir) {
+        futures.forEach(future -> future.cancel(true));
+        boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
+        releaseOpenParts();
+        sweepOwnFiles(stagingDir);
+        if (interruptedWhileJoining) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
