@@ -6,6 +6,7 @@
 package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
@@ -37,7 +38,7 @@ class RolledPartWriterTest {
                 RecordingWriter writer = new RecordingWriter();
                 files.add(writer);
                 return writer;
-            }, true, progress::add, metrics);
+            }, true, progress::add, metrics, EqualKeyPolicy.ALLOW);
         }
 
         assertThat(rows).isEqualTo(entries.size());
@@ -53,6 +54,31 @@ class RolledPartWriterTest {
         assertThat(files).allMatch(RecordingWriter::closed);
         assertThat(files.subList(0, files.size() - 1)).noneMatch(RecordingWriter::finalFile);
         assertThat(files.getLast().finalFile()).isTrue();
+    }
+
+    @Test
+    void rejectPolicyFailsAtTheFinalDrainAndSignalsExactlyOnce() throws IOException {
+        List<ListEntry> entries = List.of(
+                SortTestSupport.object("a"), SortTestSupport.object("a"), SortTestSupport.object("a"));
+        List<RecordingWriter> files = new ArrayList<>();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        try (SortedCursor cursor = new InMemoryCursor(entries, comparator, DuplicateHook.NO_OP)) {
+            assertThatThrownBy(() -> RolledPartWriter.drain(cursor, Long.MAX_VALUE, () -> {
+                RecordingWriter writer = new RecordingWriter();
+                files.add(writer);
+                return writer;
+            }, true, ignored -> { }, metrics, EqualKeyPolicy.REJECT))
+                    .isInstanceOf(DuplicateKeyException.class)
+                    .hasMessage("sort-fixture found a duplicate key: 'a'");
+        }
+
+        assertThat(metrics.count("SORT.equal_key_rejected")).isEqualTo(1);
+        assertThat(files).singleElement().satisfies(writer -> {
+            assertThat(writer.entries).hasSize(1);
+            assertThat(writer.closed()).isTrue();
+            assertThat(writer.finalFile()).isFalse();
+        });
     }
 
     private static void addVersions(List<ListEntry> entries, String key, int count) {

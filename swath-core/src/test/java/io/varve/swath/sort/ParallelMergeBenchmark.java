@@ -229,7 +229,8 @@ class ParallelMergeBenchmark {
         BenchRangeTimer timer = new BenchRangeTimer();
         SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
         SortTransform transform =
-                new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP, metrics, writerFactory), false, timer);
+                new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
+                        EqualKeyPolicy.ALLOW, metrics, writerFactory), false, timer);
 
         RssSampler sampler = new RssSampler();
         Thread samplerThread = new Thread(sampler, "bench-rss-sampler-" + label);

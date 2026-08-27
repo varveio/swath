@@ -50,7 +50,8 @@ class SortTransformStampingTest {
         SortConfig config = SortConfig.fromProperties(
                 key -> Map.of("final-row-group-bytes", "4096").get(key.substring("swath.sort.".length())));
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, stampedFactory));
+        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory));
 
         SortTransformResult result = transform.transform(
                 List.of(seg0, seg1), output, staging, PublishListener.NO_OP);

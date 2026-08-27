@@ -186,7 +186,9 @@ class SortTransformFanInClampTest {
     }
 
     private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, softFdLimit);
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT), false,
+                RangeMergeTimer.NO_OP, softFdLimit);
     }
 
     private List<Path> stagePageRun(Path dir, List<List<ListEntry>> segs) throws IOException {

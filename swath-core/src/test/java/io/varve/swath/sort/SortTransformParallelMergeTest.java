@@ -105,7 +105,8 @@ class SortTransformParallelMergeTest {
                 objects("b", "e", "h"),
                 objects("c", "f", "i")));
         ThreadSafeMetrics metrics = new ThreadSafeMetrics();
-        new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT))
+        new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT))
                 .transform(staging, d.output, d.staging, PublishListener.NO_OP);
 
         // 3 distinct first-keys ⇒ 3 ranges ⇒ the counter total is the range count.
@@ -129,7 +130,8 @@ class SortTransformParallelMergeTest {
             }
             return SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
         };
-        SortTransform transform = new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, boom));
+        SortTransform transform = new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, boom));
 
         assertThatThrownBy(() -> transform.transform(staging, d.output, d.staging, PublishListener.NO_OP))
                 .isInstanceOf(IOException.class);
@@ -173,7 +175,8 @@ class SortTransformParallelMergeTest {
     }
 
     private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
     }
 
     private record Dirs(Path output, Path staging) {

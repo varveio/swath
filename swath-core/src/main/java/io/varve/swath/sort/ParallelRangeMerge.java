@@ -111,6 +111,7 @@ final class ParallelRangeMerge {
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
+    private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final RangeMergeTimer rangeTimer;
@@ -143,6 +144,7 @@ final class ParallelRangeMerge {
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
+        this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.rangeTimer = rangeTimer;
@@ -478,7 +480,7 @@ final class ParallelRangeMerge {
                 throw uio.getCause() == null ? new IOException(uio.getMessage(), uio) : uio.getCause();
             }
             if (cause instanceof RuntimeException runtime) {
-                // Preserve policy exceptions such as CaptureSorter's DuplicateKeyException. The
+                // Preserve policy exceptions such as DuplicateKeyException. The
                 // parallel coordinator must not change the public failure type relative to serial.
                 throw runtime;
             }
@@ -539,7 +541,8 @@ final class ParallelRangeMerge {
                 // closes, once every range has drained.
                 rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
                         () -> openRangePart(stagingDir, range, tmpParts, rangeWriterFactory,
-                                openPartCount, openPartLimit), safeProgress, metrics, parts, false);
+                                openPartCount, openPartLimit), safeProgress, metrics, equalKeyPolicy,
+                        parts, false);
             } catch (IOException | RuntimeException e) {
                 // This range failed, so nothing it wrote will be published: release the open parts
                 // rather than strand their descriptors until the sweep. Never stamped -- an aborted

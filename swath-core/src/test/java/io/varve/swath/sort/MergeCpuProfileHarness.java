@@ -94,7 +94,8 @@ class MergeCpuProfileHarness {
             RangeMergeTimer timer = rangeLatenciesNanos::add;
             SortedFileWriterFactory writerFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
             SortTransform transform =
-                    new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP, metrics, writerFactory), false, timer);
+                    new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
+                            EqualKeyPolicy.ALLOW, metrics, writerFactory), false, timer);
 
             Configuration jfrConfig = Configuration.getConfiguration("profile");
             Recording recording = new Recording(jfrConfig);

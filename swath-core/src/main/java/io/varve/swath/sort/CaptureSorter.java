@@ -7,7 +7,6 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
-import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
@@ -19,7 +18,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * The <b>sort-fixture engine</b> (§0.7): turns a legacy/unsorted
@@ -41,21 +39,12 @@ import java.util.Optional;
  *       streamed off the input parts (the transform's own pass — free, never a separate scan).
  *       There is no flag to opt back into versioned handling in v1 — that is deferred serving-side
  *       semantics, not a sort-fixture toggle.</li>
- *   <li><b>Adjacent-equal-key fail-fast (§0.5).</b> Once entries are in the total {@link
- *       ListEntryComparator} order, two adjacent entries comparing equal (same key, since v1 is
- *       non-versioned) throw {@link DuplicateKeyException} naming the offending key — a
- *       non-versioned fixture with duplicate keys is broken, and dedup-keep-first is a follow-up
- *       flag, not built now. The check fires both while a single staging chunk is locally sorted
- *       AND across the final cross-segment merge, so a duplicate split across two staging chunks is
- *       still caught.</li>
- *   <li><b>Cross-row-type key uniqueness (§0.5).</b> The {@link ListEntryComparator}-driven merge's
- *       own duplicate hook cannot see a same-raw-key clash across row types (see {@link
- *       DuplicateKeyCheckingWriterFactory}, which closes the gap inline in the one write pass
- *       {@link SortTransform} performs by wrapping the final {@link SortedFileWriter} this class
- *       hands {@link SortTransform}). This key-unique requirement is a sort-fixture-only policy,
- *       applied only via that wrapper — {@link SortTransform} itself, and so swath {@code --sort}
- *       (which drives it directly with an unwrapped {@link SortedFileWriterFactory}), never applies
- *       it (that path never drops or rejects user entries, §0.5).</li>
+ *   <li><b>Raw-key uniqueness (§0.5).</b> Once entries reach the shared final drain, two adjacent
+ *       rows with the same raw key throw {@link DuplicateKeyException} naming the offending key.
+ *       This catches both comparator-equal rows and same-key rows of different types, including a
+ *       pair split across staging chunks or lying at a final-file roll threshold. The fixture sets
+ *       {@link EqualKeyPolicy#REJECT}; live swath {@code --sort} sets {@link EqualKeyPolicy#ALLOW}
+ *       and preserves every row.</li>
  * </ul>
  *
  * <p><b>Crash-safe and idempotent by re-run (like {@code --sort}'s own publish).</b> Each final file
@@ -124,13 +113,11 @@ public final class CaptureSorter {
         Files.createDirectories(stagingDir);
 
         Comparator<ListEntry> comparator = new ListEntryComparator();
-        DuplicateHook hook = CaptureSorter::failOnDuplicate;
-        List<Path> segments = stageSegments(inputParts, stagingDir, comparator, hook);
+        List<Path> segments = stageSegments(inputParts, stagingDir, comparator);
 
-        SortedFileWriterFactory finalWriterFactory = new DuplicateKeyCheckingWriterFactory(
-                finalWriterDelegate, metrics);
         SortTransform transform = SortTransform.forArbitraryRuns(
-                new SortRun(config, comparator, hook, metrics, finalWriterFactory));
+                new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.REJECT,
+                        metrics, finalWriterDelegate));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP);
     }
 
@@ -143,9 +130,9 @@ public final class CaptureSorter {
      * sort lane uses.
      */
     private List<Path> stageSegments(List<Path> inputParts, Path stagingDir,
-                                     Comparator<ListEntry> comparator, DuplicateHook hook) throws IOException {
+                                     Comparator<ListEntry> comparator) throws IOException {
         PageRunSegmentWriter segmentWriter =
-                new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
+                new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, metrics, config.segmentCodec());
         SegmentGate gate = new SegmentGate(config);
         List<Path> segments = new ArrayList<>();
         List<ListEntry> chunk = new ArrayList<>();
@@ -159,7 +146,7 @@ public final class CaptureSorter {
                     chunk.add(e);
                     chunkBytes += PageBlock.estimatedBytes(e);
                     if (gate.full(chunkBytes, chunk.size())) {
-                        segments.add(flushChunk(chunk, comparator, hook, segmentWriter, stagingDir, seq++));
+                        segments.add(flushChunk(chunk, comparator, segmentWriter, stagingDir, seq++));
                         chunk = new ArrayList<>();
                         chunkBytes = 0;
                     }
@@ -167,16 +154,16 @@ public final class CaptureSorter {
             }
         }
         if (!chunk.isEmpty()) {
-            segments.add(flushChunk(chunk, comparator, hook, segmentWriter, stagingDir, seq++));
+            segments.add(flushChunk(chunk, comparator, segmentWriter, stagingDir, seq++));
         }
         return segments;
     }
 
-    private Path flushChunk(List<ListEntry> chunk, Comparator<ListEntry> comparator, DuplicateHook hook,
+    private Path flushChunk(List<ListEntry> chunk, Comparator<ListEntry> comparator,
                             PageRunSegmentWriter segmentWriter, Path stagingDir, int seq) throws IOException {
         chunk.sort(comparator);
         Path path = stagingDir.resolve("fixture-" + seq + SortTransform.SEGMENT_SUFFIX);
-        try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, hook)) {
+        try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, DuplicateHook.NO_OP)) {
             // Arbitrary fixture chunks can overlap across their whole key ranges, so this pipeline
             // intentionally uses the serial entry-stream merger and never selects parallel range
             // boundaries. Do not retain an unused boundary sample in every staged chunk.
@@ -197,13 +184,6 @@ public final class CaptureSorter {
                     "sort-fixture is non-versioned-only (v1): key '" + e.key().asString()
                             + "' carries version_id '" + versionId + "'");
         }
-    }
-
-    /** §0.5: adjacent-equal keys are a broken fixture, not a policy choice — fail fast, name the key. */
-    private static void failOnDuplicate(ListEntry previous, ListEntry current) {
-        throw new DuplicateKeyException(
-                "sort-fixture found a duplicate key (adjacent-equal under the sort order): '"
-                        + current.key().asString() + "'");
     }
 
     private static List<Path> resolveParts(Path captureDir) throws IOException {
@@ -242,116 +222,4 @@ public final class CaptureSorter {
         }
     }
 
-    /** Thrown when a capture carries a non-null {@code version_id} (§0.6 — v1 is non-versioned-only). */
-    public static final class VersionedCaptureException extends RuntimeException {
-        public VersionedCaptureException(String message) {
-            super(message);
-        }
-    }
-
-    /** Thrown when the sorted capture has adjacent-equal keys (§0.5 — a broken, non-versioned fixture). */
-    public static final class DuplicateKeyException extends RuntimeException {
-        public DuplicateKeyException(String message) {
-            super(message);
-        }
-    }
-
-    /**
-     * Folded into the single write pass: {@link
-     * ListEntryComparator} equality folds in {@code row_type} rank, so the SAME raw key emitted once
-     * as {@code OBJECT} and once as {@code COMMON_PREFIX} (or {@code DELETE_MARKER}) sorts adjacent in
-     * the final output but never compares EQUAL under that comparator — the merge's own {@link
-     * DuplicateHook} (see {@link #failOnDuplicate}) is invoked only on comparator-equal pairs and
-     * structurally cannot see this case. This class already asserts non-versioned (§0.6) by
-     * construction, so the only way two rows can share a raw key by the time this runs is a genuine
-     * key clash.
-     *
-     * <p>Wraps the delegate {@link SortedFileWriterFactory} (the stamped {@link
-     * SortedParquetWriterFactory}) and intercepts every {@link SortedFileWriter#write}: since {@link
-     * SortTransform} writes the already-merged, totally-ordered stream, comparing each row's raw key
-     * bytes against the immediately preceding row's (tracked in this factory instance, so the
-     * comparison carries across a multi-file roll — the {@link RolledPartWriter#drain} loop opens a new
-     * delegate writer per file but one {@link SortedFileWriterFactory#forOutputSequence() output
-     * sequence} is shared across all rolls) is exactly equivalent to the old post-hoc read-back of the published
-     * output, without a second full decode pass. The duplicate check fires BEFORE the row reaches the
-     * delegate writer, so it throws while the offending file is still {@code part-NNNNN.parquet.tmp}
-     * — before {@link SortTransform}'s rename loop runs — preserving the same tmp-then-rename publish
-     * discipline the merge-phase {@link DuplicateHook} already relies on (a thrown exception here
-     * never leaves a corrupt PUBLISHED file; only stale {@code .tmp}s, cleaned on the next run).
-     */
-    static final class DuplicateKeyCheckingWriterFactory implements SortedFileWriterFactory {
-        private final SortedFileWriterFactory delegate;
-        private final SortMetrics metrics;
-        private byte[] previousKey;
-
-        DuplicateKeyCheckingWriterFactory(SortedFileWriterFactory delegate, SortMetrics metrics) {
-            this.delegate = delegate;
-            this.metrics = metrics;
-        }
-
-        @Override
-        public SortedFileWriterFactory forOutputSequence() {
-            // ParallelRangeMerge shares the configured factory across range threads, but each range
-            // is its own ordered sequence. Give it independent previous-key state while retaining
-            // that state across every rolled file within the range. The serial path calls this once
-            // for the whole publish, so its cross-roll duplicate detection is unchanged.
-            return new DuplicateKeyCheckingWriterFactory(delegate.forOutputSequence(), metrics);
-        }
-
-        @Override
-        public SortedFileWriter create(Path path, int fileIndex) throws IOException {
-            // Engagement counter: fires once per
-            // final file opened via this factory, so post-analysis can see the inline check engaged
-            // on a sort-fixture run — and, by its ABSENCE, that the live --sort path (which drives
-            // SortedParquetWriterFactory directly, never through this wrapper) never does.
-            metrics.recordStealReason("SORT", "fixture_dup_check_inline");
-            SortedFileWriter target = delegate.create(path, fileIndex);
-            return new SortedFileWriter() {
-                @Override
-                public void write(ListEntry e) throws IOException {
-                    byte[] key = e.key().rawUnsafe();
-                    if (previousKey != null && KeyBytes.compareUnsigned(previousKey, key) == 0) {
-                        throw new DuplicateKeyException(
-                                "sort-fixture found a duplicate key across row types (adjacent-equal key "
-                                        + "bytes regardless of row_type): '" + e.key().asString() + "'");
-                    }
-                    previousKey = key;
-                    target.write(e);
-                }
-
-                @Override
-                public long rows() {
-                    return target.rows();
-                }
-
-                @Override
-                public long dataSize() {
-                    return target.dataSize();
-                }
-
-                @Override
-                public void markFinal() {
-                    target.markFinal();
-                }
-
-                @Override
-                public void setFileIndex(int fileIndex) {
-                    // Pure forward: this decorator only adds the duplicate-key check, never stamp
-                    // semantics. Swallowing it would silently downgrade fixture output's
-                    // completeness proof to the range-local one.
-                    target.setFileIndex(fileIndex);
-                }
-
-                @Override
-                public void close() throws IOException {
-                    target.close();
-                }
-
-                @Override
-                public Optional<FinalPartMetadata> finalMetadata() {
-                    return target.finalMetadata();
-                }
-            };
-        }
-    }
 }

@@ -154,7 +154,8 @@ class SortTransformPageRunParallelMergePropTest {
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(ranges);
-        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT);
         ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
@@ -412,7 +413,8 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig belowConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes + 1);
-            new SortTransform(new SortRun(belowConfig, cmp, DuplicateHook.NO_OP, belowMetrics,
+            new SortTransform(new SortRun(belowConfig, cmp, DuplicateHook.NO_OP,
+                    EqualKeyPolicy.ALLOW, belowMetrics,
                     SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, () -> -1)
                     .transform(belowSegments, belowOut, belowStaging, PublishListener.NO_OP);
 
@@ -426,7 +428,8 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig exactConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes(exactSegments));
-            new SortTransform(new SortRun(exactConfig, cmp, DuplicateHook.NO_OP, exactMetrics,
+            new SortTransform(new SortRun(exactConfig, cmp, DuplicateHook.NO_OP,
+                    EqualKeyPolicy.ALLOW, exactMetrics,
                     SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, () -> -1)
                     .transform(exactSegments, exactOut, exactStaging, PublishListener.NO_OP);
 
@@ -441,7 +444,8 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics fdMetrics = new CountingMetrics();
             SortConfig fdConfig = SortConfigs.base().withMergeParallelism(2);
             int exhaustedLimit = MergeFdBudget.FD_HEADROOM + 2;
-            new SortTransform(new SortRun(fdConfig, cmp, DuplicateHook.NO_OP, fdMetrics,
+            new SortTransform(new SortRun(fdConfig, cmp, DuplicateHook.NO_OP,
+                    EqualKeyPolicy.ALLOW, fdMetrics,
                     SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
                     () -> exhaustedLimit)
                     .transform(fdSegments, fdOut, fdStaging, PublishListener.NO_OP);
@@ -455,7 +459,8 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics limitedMetrics = new CountingMetrics();
             SortConfig limitedConfig = SortConfigs.base().withMergeParallelism(4);
             int limitedFdLimit = MergeFdBudget.FD_HEADROOM + 8;
-            new SortTransform(new SortRun(limitedConfig, cmp, DuplicateHook.NO_OP, limitedMetrics,
+            new SortTransform(new SortRun(limitedConfig, cmp, DuplicateHook.NO_OP,
+                    EqualKeyPolicy.ALLOW, limitedMetrics,
                     SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
                     () -> limitedFdLimit)
                     .transform(limitedSegments, limitedOut, limitedStaging, PublishListener.NO_OP);
@@ -494,7 +499,8 @@ class SortTransformPageRunParallelMergePropTest {
             // however, and is therefore the constraint that ultimately declines parallel merge.
             int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM + 8;
 
-            new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics,
+            new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                    EqualKeyPolicy.ALLOW, metrics,
                     SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
                     () -> partiallyLimitedFd)
                     .transform(segments, output, staging, PublishListener.NO_OP);
@@ -528,7 +534,8 @@ class SortTransformPageRunParallelMergePropTest {
             // a third writer/descriptor is opened.
             int softLimit = MergeFdBudget.FD_HEADROOM + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
+                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                            SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> softLimit);
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
 
@@ -556,7 +563,7 @@ class SortTransformPageRunParallelMergePropTest {
             List<Path> segments = stage(staging, scenario.segments());
             SortConfig config = SortConfigs.base().withMergeParallelism(1);
             SortTransform transform = new SortTransform(new SortRun(config, cmp,
-                    DuplicateHook.NO_OP, SortMetrics.NO_OP, writers));
+                    DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, writers));
 
             assertThatThrownBy(() -> transform.transform(
                     segments, output, staging, PublishListener.NO_OP))
@@ -583,7 +590,8 @@ class SortTransformPageRunParallelMergePropTest {
                     new TrackingWriterFactory(earlierRangeWriting, new CountDownLatch(1));
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
+                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                            SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> -1);
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
 
@@ -614,7 +622,8 @@ class SortTransformPageRunParallelMergePropTest {
             TrackingWriterFactory writers = new TrackingWriterFactory(bothWriting);
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
+                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                            SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> -1);
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -665,7 +674,8 @@ class SortTransformPageRunParallelMergePropTest {
             Path staging = Files.createDirectories(output.resolve("_staging"));
             List<Path> segs = stage(staging, s.segments());
             SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS)));
+                    EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                    new SortedParquetWriterFactory(config, SortMode.OBJECTS)));
             SortTransformResult result =
                     transform.transform(segs, output, staging, PublishListener.NO_OP);
 
@@ -800,7 +810,7 @@ class SortTransformPageRunParallelMergePropTest {
 
             SortConfig config = SortConfigs.base().withMergeParallelism(4);
             SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+                    EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
             assertThatThrownBy(() -> transform.transform(segs, Files.createDirectories(
                     root.resolve("parallel").resolve("data")), staging, PublishListener.NO_OP))
                     .isInstanceOf(IOException.class);
@@ -922,7 +932,8 @@ class SortTransformPageRunParallelMergePropTest {
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(parallelism);
         SortTransform transform = new SortTransform(
-                new SortRun(config, cmp, hook, metrics, SortedFileWriterFactory.DEFAULT));
+                new SortRun(config, cmp, hook, EqualKeyPolicy.ALLOW, metrics,
+                        SortedFileWriterFactory.DEFAULT));
         return transform.transform(segs, output, staging, PublishListener.NO_OP);
     }
 

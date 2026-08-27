@@ -68,6 +68,7 @@ public final class SortTransform {
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
+    private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final boolean identityVerifiedWideSweep;
@@ -126,6 +127,7 @@ public final class SortTransform {
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
+        this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.identityVerifiedWideSweep = identityVerifiedWideSweep;
@@ -259,7 +261,7 @@ public final class SortTransform {
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
                     () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
                             outputSequence),
-                    true, progressCallback, metrics);
+                    true, progressCallback, metrics, equalKeyPolicy);
         }
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.

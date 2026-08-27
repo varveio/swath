@@ -87,7 +87,9 @@ swath-replay sort-fixture \
 The transform uses the same bounded sort library as swath, writes temporary files then
 renames them, and prints row/file/byte/segment/merge counts. Output files are named
 `part-00000.parquet` onward. Versioned rows or duplicate keys are rejected in the current
-non-versioned format rather than silently collapsed.
+non-versioned format rather than silently collapsed. Duplicate raw keys are rejected in the shared
+final drain, after sorting and before publication; `SORT.equal_key_rejected` records the failed
+fixture once. Live `swath --sort` permits equal raw-key rows for version-compatible output.
 
 Unlike live `swath --sort` staging, independently sorted fixture chunks can overlap across their
 entire key ranges. `sort-fixture` therefore uses the library's bounded serial entry-stream merge and

@@ -54,6 +54,7 @@ import io.varve.swath.output.text.TextWriterPool;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
@@ -972,7 +973,8 @@ public final class ListRunner {
             }
         };
         SortTransform transform = new SortTransform(
-                new SortRun(config, comparator, DuplicateHook.NO_OP, sortMetrics, writerFactory),
+                new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                        sortMetrics, writerFactory),
                 identityVerifiedWideSweep, rangeTimer);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall

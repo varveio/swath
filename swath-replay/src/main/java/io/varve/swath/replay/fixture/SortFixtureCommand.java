@@ -7,8 +7,10 @@ package io.varve.swath.replay.fixture;
 
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.sort.CaptureSorter;
+import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortTransformResult;
+import io.varve.swath.sort.VersionedCaptureException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +27,7 @@ import picocli.CommandLine.Option;
  * module's compile classpath.
  *
  * <p>Duplicate-key and versioned-capture fail-fasts (§0.6) surface as {@link
- * CaptureSorter.DuplicateKeyException}/{@link CaptureSorter.VersionedCaptureException}; this
+ * DuplicateKeyException}/{@link VersionedCaptureException}; this
  * command catches both and prints a one-line error instead of a stack trace, exiting {@code 1}.
  */
 @Command(name = "sort-fixture",
@@ -60,7 +62,7 @@ public final class SortFixtureCommand implements Callable<Integer> {
             // Registry-backed adapter, not SortMetrics.NO_OP — see FixtureMetrics#recordStealReason.
             CaptureSorter sorter = new CaptureSorter(SortConfig.fromSystemProperties(), metrics::recordStealReason);
             result = sorter.sort(capture, output);
-        } catch (CaptureSorter.DuplicateKeyException | CaptureSorter.VersionedCaptureException e) {
+        } catch (DuplicateKeyException | VersionedCaptureException e) {
             System.err.println("sort-fixture: " + e.getMessage());
             return 1;
         } catch (IOException e) {

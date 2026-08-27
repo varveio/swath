@@ -190,13 +190,15 @@ class SortRollPublishStampCharacterizationTest {
     // --- helpers ---
 
     private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT));
     }
 
     private SortTransform stampedTransform(SortConfig config) {
         SortedFileWriterFactory stamped = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, stamped));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stamped));
     }
 
     private record Dirs(Path output, Path staging) {

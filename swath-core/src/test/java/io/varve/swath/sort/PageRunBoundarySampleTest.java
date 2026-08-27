@@ -335,7 +335,7 @@ class PageRunBoundarySampleTest {
             CountingMetrics metrics = new CountingMetrics();
             SortConfig config = SortConfigs.base().withMergeParallelism(4);
             SortTransform transform = new SortTransform(new SortRun(config, CMP, DuplicateHook.NO_OP,
-                    metrics, SortedFileWriterFactory.DEFAULT));
+                    EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT));
 
             assertThatThrownBy(() -> transform.transform(List.of(segment), data, staging,
                     PublishListener.NO_OP))

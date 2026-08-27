@@ -28,6 +28,7 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.SegmentResult;
 import io.varve.swath.sort.SegmentSink;
@@ -132,11 +133,15 @@ final class SortMergeReentryContractTest {
         List<Path> segments = buildStagingSegments(keyspace, stagingDir);
         assertThat(segments).as("multiple durable staging segments").hasSizeGreaterThan(1);
 
-        SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS)));
+        SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS)));
 
         // First attempt crashes partway through writing the final file (a real mid-merge kill).
         AtomicBoolean crashArmed = new AtomicBoolean(true);
-        SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100)));
+        SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100)));
         assertThatThrownBy(() -> crashingTransform.transform(segments, outputDir, stagingDir,
                 (files, rows) -> { }))
                 .isInstanceOf(IOException.class);
@@ -287,13 +292,17 @@ final class SortMergeReentryContractTest {
         assertThat(segments).as("more than fan-in segments ⇒ a multi-pass cascade").hasSizeGreaterThan(2);
 
         AtomicBoolean armed = new AtomicBoolean(true);
-        SortTransform crashing = new SortTransform(new SortRun(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100)));
+        SortTransform crashing = new SortTransform(new SortRun(cascade, cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100)));
         assertThatThrownBy(() -> crashing.transform(segments, outputDir, stagingDir, (f, r) -> { }))
                 .isInstanceOf(IOException.class);
 
         // Contract: re-running the merge from the checkpoint's (original) segment list must republish
         // the exact sorted whole — the originals are still on disk (KWayMerge's deletion-policy fix).
-        SortTransform redo = new SortTransform(new SortRun(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS)));
+        SortTransform redo = new SortTransform(new SortRun(cascade, cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS)));
         SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
                         files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));

@@ -372,23 +372,25 @@ class SortTransformTest {
     }
 
     @Test
-    void liveSortNeverAppliesTheSortFixtureCrossRowTypeDuplicateCheck(@TempDir Path root) throws IOException {
-        // sort-fixture's key-unique-across-row-types policy (CaptureSorter.DuplicateKeyCheckingWriterFactory)
-        // wraps SortedFileWriterFactory OUTSIDE this class; swath --sort (ListRunner) drives this class
-        // with an unwrapped SortedFileWriterFactory (SortedParquetWriterFactory/DEFAULT directly), so a
-        // same-key OBJECT/COMMON_PREFIX pair — adjacent under ListEntryComparator but never
-        // comparator-EQUAL — must publish successfully here, never throwing
-        // CaptureSorter.DuplicateKeyException (§0.5: --sort never drops or rejects user entries).
+    void liveAllowPolicyPreservesEqualRawKeysAcrossARollThreshold(@TempDir Path root)
+            throws IOException {
+        // Live --sort selects ALLOW, so a same-key OBJECT/COMMON_PREFIX pair must publish without
+        // rejection. A one-byte target also proves the shared raw-key comparison still defers the
+        // roll and keeps the group in one file.
         Dirs dirs = dirs(root);
         List<ListEntry> rows = new ArrayList<>(objects("a"));
         rows.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a")));
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", rows));
 
-        SortTransformResult result = transform(SortConfig.fromSystemProperties())
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortTransformResult result = transformWithMetrics(SortConfigs.rolledPerEntry(), metrics)
                 .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
 
         assertThat(result.totalRows()).isEqualTo(2);
+        assertThat(result.finalFiles()).hasSize(1);
         assertThat(keys(result.finalFiles())).containsExactly("a", "a");
+        assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
+        assertThat(metrics.count("SORT.final_roll_equal_key_deferred")).isEqualTo(1);
     }
 
     @Test
@@ -445,7 +447,8 @@ class SortTransformTest {
             tmpPathsSeen.add(path);
             return SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
         };
-        SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, spy));
+        SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, spy));
         SortTransformResult result = transform.transform(staged, output, staging, PublishListener.NO_OP);
 
         // Every tmp the writer was ever handed lived under staging, never under the data/ output dir.
@@ -465,11 +468,13 @@ class SortTransformTest {
     // --- helpers ---
 
     private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
     }
 
     private SortTransform transformWithMetrics(SortConfig config, SortMetrics metrics) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT));
     }
 
     private record Dirs(Path output, Path staging) {

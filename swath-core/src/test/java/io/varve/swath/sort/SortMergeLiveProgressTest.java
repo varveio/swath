@@ -153,7 +153,8 @@ class SortMergeLiveProgressTest {
         metrics.recordSortStaged(segments.size(), STAGED_ROWS);
         metrics.setPhase(Phase.MERGING);
         SortTransform transform = new SortTransform(
-                new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                        SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT),
                 false, RangeMergeTimer.NO_OP);
         return transform.transform(segments, output, staging, PublishListener.NO_OP,
@@ -174,7 +175,8 @@ class SortMergeLiveProgressTest {
         metrics.recordSortStaged(segments.size(), STAGED_ROWS);
         metrics.setPhase(Phase.MERGING);
         SortTransform transform = new SortTransform(
-                new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                new SortRun(SortConfigs.base().withFanIn(2), cmp, DuplicateHook.NO_OP,
+                        EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
                         SortedFileWriterFactory.DEFAULT),
                 false, RangeMergeTimer.NO_OP);
         return transform.transform(segments, output, staging, PublishListener.NO_OP,

@@ -26,8 +26,8 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link CaptureSorter} — the sort-fixture engine: legacy/unsorted capture parts in, one stamped
  * globally-sorted Parquet file out, via the same staging-segment/{@link KWayMerge}/
- * {@link SortTransform} pipeline {@code --sort} uses. Covers §0.5 (adjacent-equal-key fail-fast,
- * including across a chunk boundary), §0.6 (versioned fail-fast), the atomic tmp-then-rename
+ * {@link SortTransform} pipeline {@code --sort} uses. Covers §0.5 (raw-key fail-fast in the final
+ * drain, including across a chunk boundary), §0.6 (versioned fail-fast), the atomic tmp-then-rename
  * publish, and the fixed staging dir getting wiped on the next call after a simulated crash.
  */
 class CaptureSorterTest {
@@ -160,15 +160,20 @@ class CaptureSorterTest {
         Path outputDir = Files.createDirectories(root.resolve("out"));
         writePart(captureDir, "part-0.parquet", objects("a", "b", "b", "c"));
 
-        assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
-                .hasMessageContaining("'b'");
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        assertThatThrownBy(() -> new CaptureSorter(config(Map.of()), metrics)
+                .sort(captureDir, outputDir))
+                .isInstanceOf(DuplicateKeyException.class)
+                .hasMessage("sort-fixture found a duplicate key: 'b'");
+        assertThat(metrics.count("SORT.equal_key_rejected"))
+                .as("one rejection signal for the failing final drain")
+                .isEqualTo(1);
     }
 
     @Test
     void duplicateKeySplitAcrossTwoStagingChunksIsStillCaught(@TempDir Path root) throws IOException {
         // A tiny segment-entries gate forces "b" to land in one chunk and its duplicate in the next,
-        // so only the FINAL cross-segment merge (not the per-chunk local sort) can see them adjacent.
+        // so the shared FINAL drain must carry the comparison across the cross-segment merge.
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
         writePart(captureDir, "part-0.parquet", objects("a", "b"));
@@ -176,7 +181,7 @@ class CaptureSorterTest {
 
         SortConfig tinyChunks = SortConfigs.base().withSegmentEntries(2).withMergeBudgetBytes(64L << 20);
         assertThatThrownBy(() -> new CaptureSorter(tinyChunks).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
+                .isInstanceOf(DuplicateKeyException.class)
                 .hasMessageContaining("'b'");
     }
 
@@ -184,8 +189,8 @@ class CaptureSorterTest {
      * {@link ListEntryComparator} equality folds in {@code row_type} rank, so the SAME raw key
      * emitted once as {@code OBJECT} and once as {@code COMMON_PREFIX} sorts
      * adjacent in the final output but never compares EQUAL under that comparator — the merge's own
-     * comparator-driven {@link DuplicateHook} (exercised by the two tests above) structurally cannot
-     * catch it. {@code sort-fixture}'s independent, key-bytes-only read-back check must.
+     * comparator-driven {@link DuplicateHook} structurally cannot catch it. The final drain's
+     * raw-key policy must.
      */
     @Test
     void sameKeyAsObjectAndCommonPrefixFailsFastAcrossRowTypes(@TempDir Path root) throws IOException {
@@ -197,19 +202,18 @@ class CaptureSorterTest {
         writePart(captureDir, "part-0.parquet", rows);
 
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
+                .isInstanceOf(DuplicateKeyException.class)
                 .hasMessageContaining("'a'");
     }
 
     /**
-     * The cross-row-type check runs inside the {@link CaptureSorter}-only {@code SortedFileWriter}
-     * decorator that wraps the final writer (see {@code CaptureSorter.DuplicateKeyCheckingWriterFactory})
-     * — its {@code previousKey} state must see adjacent cross-type rows before publication. Force the
+     * The cross-row-type check runs in the shared final drain, whose {@code previousKey} state must
+     * see adjacent cross-type rows before publication. Force the
      * roll threshold after every row ({@code finalFileBytes = 1}); key-atomic rolling deliberately
      * defers the roll across the OBJECT/COMMON_PREFIX key group, and the fixture policy rejects the
      * second row before a new part opens. This also proves the duplicate-detected path leaves only a
      * {@code .tmp} file behind (no
-     * renamed/published final), same as the merge-phase {@link DuplicateHook} discipline.
+     * renamed/published final).
      */
     @Test
     void duplicateKeyAcrossRowTypesIsCaughtBeforeAKeyAtomicFinalRoll(@TempDir Path root) throws IOException {
@@ -220,9 +224,14 @@ class CaptureSorterTest {
         writePart(captureDir, "part-0.parquet", rows);
 
         SortConfig rollEveryRow = SortConfigs.rolledPerEntry();
-        assertThatThrownBy(() -> new CaptureSorter(rollEveryRow).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        assertThatThrownBy(() -> new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir))
+                .isInstanceOf(DuplicateKeyException.class)
                 .hasMessageContaining("'a'");
+        assertThat(metrics.count("SORT.equal_key_rejected")).isEqualTo(1);
+        assertThat(metrics.count("SORT.final_roll_equal_key_deferred"))
+                .as("REJECT wins at the common policy point before roll deferral is classified")
+                .isZero();
 
         // No final (non-tmp) file was ever renamed into place — detected before the rename loop runs.
         try (var stream = Files.newDirectoryStream(outputDir, "part-*.parquet")) {
@@ -239,15 +248,20 @@ class CaptureSorterTest {
             assertThat(tmpFiles).as("an equal-key group must not be split across final files")
                     .hasSize(1);
         }
+
+        // A clean re-run owns and removes the failed attempt's tmp/staging state before publishing.
+        Path cleanCapture = Files.createDirectories(root.resolve("clean-capture"));
+        writePart(cleanCapture, "part-0.parquet", objects("a", "b"));
+        SortTransformResult clean = new CaptureSorter(rollEveryRow).sort(cleanCapture, outputDir);
+        assertThat(clean.finalFiles()).hasSize(2);
+        assertThat(Files.exists(stagingDir)).isFalse();
     }
 
     /**
-     * The inline check fires through the same {@link SortMetrics} hook every other sort-fixture
-     * algorithm path uses — once per final file created, so post-analysis can see
-     * whether a run engaged it.
+     * Successful key-unique fixtures never emit the rejection-only counter.
      */
     @Test
-    void inlineDuplicateCheckEmitsAnEngagementCounterPerFinalFile(@TempDir Path root) throws IOException {
+    void distinctKeysDoNotEmitEqualKeyRejected(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
         writePart(captureDir, "part-0.parquet", objects("a", "b", "c"));
@@ -255,17 +269,15 @@ class CaptureSorterTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         new CaptureSorter(config(Map.of()), metrics).sort(captureDir, outputDir);
 
-        assertThat(metrics.count("SORT.fixture_dup_check_inline")).isEqualTo(1);
+        assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
     }
 
     /**
-     * Sibling to the test above, proving the "per final file" part of the semantics (not just "fires
-     * at all"): forcing a roll after every row ({@code finalFileBytes = 1}) over N distinct keys opens
-     * N final files via the factory, so the engagement counter must fire exactly N times — one call to
-     * {@code create()} per file, matching {@code SORT.segment_flushed}'s own per-file granularity.
+     * A multi-file roll also stays silent: the counter describes an actual rejection, not policy
+     * arming or file creation.
      */
     @Test
-    void inlineDuplicateCheckEngagementCounterFiresOncePerFileAcrossAMultiFileRoll(@TempDir Path root)
+    void distinctKeysAcrossAMultiFileRollDoNotEmitEqualKeyRejected(@TempDir Path root)
             throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
@@ -276,7 +288,7 @@ class CaptureSorterTest {
         SortTransformResult result = new CaptureSorter(rollEveryRow, metrics).sort(captureDir, outputDir);
 
         assertThat(result.finalFiles()).hasSize(4);
-        assertThat(metrics.count("SORT.fixture_dup_check_inline")).isEqualTo(4);
+        assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
     }
 
     /**
@@ -309,7 +321,7 @@ class CaptureSorterTest {
         writePart(captureDir, "part-0.parquet", rows);
 
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.VersionedCaptureException.class)
+                .isInstanceOf(VersionedCaptureException.class)
                 .hasMessageContaining("'m'");
     }
 
@@ -322,7 +334,7 @@ class CaptureSorterTest {
         writePart(captureDir, "part-0.parquet", rows);
 
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.VersionedCaptureException.class)
+                .isInstanceOf(VersionedCaptureException.class)
                 .hasMessageContaining("'z'");
     }
 
