@@ -180,14 +180,8 @@ public final class CaptureSorter {
             // Arbitrary fixture chunks can overlap across their whole key ranges, so this pipeline
             // intentionally uses the serial entry-stream merger and never selects parallel range
             // boundaries. Do not retain an unused boundary sample in every staged chunk.
-            segmentWriter.writeIntermediate(cursor, path);
+            segmentWriter.writeFixtureChunk(cursor, path);
         }
-        // writeIntermediate() itself emits no counters (it's also the merge-phase cascade-
-        // intermediate path, which has its own accounting), but this call site is sort-fixture's own
-        // staging-segment build, the direct analog of the listing lane's page-run flush, which DOES
-        // emit SORT.segment_flushed. Emit it here too so a real sort-fixture run's
-        // segment count is observable via metrics, not just log lines.
-        metrics.recordStealReason("SORT", "segment_flushed");
         return path;
     }
 

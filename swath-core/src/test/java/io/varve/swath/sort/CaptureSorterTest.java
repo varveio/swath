@@ -137,6 +137,24 @@ class CaptureSorterTest {
     }
 
     @Test
+    void fixtureChunkEncoderEmitsExactlyOneSegmentCounterAtEachInclusiveGate(@TempDir Path root)
+            throws IOException {
+        Path captureDir = Files.createDirectories(root.resolve("capture"));
+        Path outputDir = Files.createDirectories(root.resolve("out"));
+        writePart(captureDir, "part-0.parquet", objects("e", "d", "c", "b", "a"));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortTransformResult result = new CaptureSorter(
+                SortConfigs.base().withSegmentEntries(2), metrics)
+                .sort(captureDir, outputDir);
+
+        assertThat(result.totalRows()).isEqualTo(5);
+        assertThat(metrics.count("SORT.segment_flushed"))
+                .as("two exact entry-cap chunks plus one drained tail, with no call-site double count")
+                .isEqualTo(3);
+    }
+
+    @Test
     void duplicateAdjacentKeyFailsFastNamingTheKey(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));

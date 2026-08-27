@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
@@ -217,6 +218,47 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void segmentKindsOwnTheirCompletionCounterSemantics(@TempDir Path dir) throws IOException {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PageRunSegmentWriter writer =
+                new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE);
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a")));
+
+        writer.flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("listing.pageseg"));
+        assertThat(metrics.count("SORT.segment_flushed")).isEqualTo(1);
+
+        try (SortedCursor cascade = new InMemoryCursor(
+                List.of(object("b")), CMP, DuplicateHook.NO_OP)) {
+            writer.writeIntermediate(cascade, dir.resolve("cascade.pageseg"));
+        }
+        assertThat(metrics.count("SORT.segment_flushed"))
+                .as("cascade intermediates retain their existing separate accounting")
+                .isEqualTo(1);
+
+        try (SortedCursor fixture = new InMemoryCursor(
+                List.of(object("c")), CMP, DuplicateHook.NO_OP)) {
+            writer.writeFixtureChunk(fixture, dir.resolve("fixture.pageseg"));
+        }
+        assertThat(metrics.count("SORT.segment_flushed")).isEqualTo(2);
+    }
+
+    @Test
+    void listingFlushStillReportsComparatorEqualPageBoundaryOnce(@TempDir Path dir)
+            throws IOException {
+        AtomicInteger duplicates = new AtomicInteger();
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a"), object("b")));
+        buffer.admit(2L, List.of(object("b"), object("c")));
+
+        new PageRunSegmentWriter(CMP, (previous, current) -> duplicates.incrementAndGet(),
+                SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("boundary-duplicate.pageseg"));
+
+        assertThat(duplicates).hasValue(1);
+    }
+
+    @Test
     void outOfOrderPageReSortIsPackedWithTheWriterConfiguredCodec(@TempDir Path dir) throws IOException {
         // The re-pack path (an out-of-order page, drained/sorted/repacked at flush time) must honor
         // the writer's configured codec. Do not hardcode NONE here via the 2-arg
@@ -336,6 +378,25 @@ class PageRunSegmentTest {
             assertThat(PageRunBoundarySample.read(io).status())
                     .isEqualTo(PageRunBoundarySample.Status.ABSENT);
         }
+    }
+
+    @Test
+    void cascadeEncodingIsByteExactToTheIndependentRawFormatFixture(@TempDir Path dir)
+            throws IOException {
+        List<ListEntry> sorted = new ArrayList<>();
+        for (int i = 0; i < 1_001; i++) {
+            sorted.add(object(String.format("k%06d", i)));
+        }
+        Path expected = dir.resolve("expected.pageseg");
+        PageRunRawFixtures.writeRawPageRun(expected,
+                List.of(sorted.subList(0, 1_000), sorted.subList(1_000, 1_001)), CMP);
+
+        Path actual = dir.resolve("actual.pageseg");
+        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+            writer().writeIntermediate(cursor, actual);
+        }
+
+        assertThat(Files.readAllBytes(actual)).containsExactly(Files.readAllBytes(expected));
     }
 
     @Test
