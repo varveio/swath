@@ -208,21 +208,17 @@ final class ParallelRangeMerge {
      */
     static List<byte[]> boundaries(List<Path> segments, int desiredRanges, SortMetrics metrics)
             throws IOException {
-        return boundariesForPaths(segments, desiredRanges, metrics);
+        return boundariesForDescriptors(PageRunSegmentDescriptor.readAll(segments), desiredRanges,
+                metrics);
     }
 
     static List<byte[]> boundariesForDescriptors(List<PageRunSegmentDescriptor> segments,
                                                  int desiredRanges, SortMetrics metrics)
             throws IOException {
-        return boundariesForPaths(PageRunSegmentDescriptor.paths(segments), desiredRanges, metrics);
-    }
-
-    private static List<byte[]> boundariesForPaths(List<Path> segments, int desiredRanges,
-                                                   SortMetrics metrics) throws IOException {
         BoundaryCandidates distinct = new BoundaryCandidates();
         boolean embedded = false;
         boolean scanned = false;
-        for (Path segment : segments) {
+        for (PageRunSegmentDescriptor segment : segments) {
             SampleSource source = sampleKeys(segment, distinct, metrics);
             embedded |= source == SampleSource.EMBEDDED;
             scanned |= source == SampleSource.SCAN;
@@ -262,19 +258,11 @@ final class ParallelRangeMerge {
      * preferred; absent, unknown, or invalid extensions fall back transactionally to a frontier scan
      * without exposing provisional keys to the global set.
      */
-    private static SampleSource sampleKeys(Path segment, BoundaryCandidates distinct,
+    private static SampleSource sampleKeys(PageRunSegmentDescriptor descriptor,
+                                           BoundaryCandidates distinct,
                                            SortMetrics metrics)
             throws IOException {
-        PageRunBoundarySample.ReadResult embedded;
-        long framedRecordBytes;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment)) {
-            embedded = PageRunBoundarySample.read(io);
-            long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            framedRecordBytes = io.trailerStart >= PageRunSegmentWriter.HEADER_BYTES
-                            && io.trailerStart <= fixedTailStart
-                    ? io.trailerStart - PageRunSegmentWriter.HEADER_BYTES
-                    : 0;
-        }
+        PageRunBoundarySample.ReadResult embedded = descriptor.sample();
         if (embedded.valid()) {
             for (byte[] key : embedded.keys()) {
                 distinct.add(key);
@@ -293,7 +281,7 @@ final class ParallelRangeMerge {
         if (stride > 1) {
             metrics.recordStealReason("SORT", "merge_range_sample_capped");
         }
-        try (PageFrontierReader frontier = new PageFrontierReader(segment, metrics)) {
+        try (PageFrontierReader frontier = new PageFrontierReader(descriptor.path(), metrics)) {
             for (long page = 0; frontier.hasPage(); page++) {
                 if (page % stride == 0) {
                     distinct.add(frontier.minKey().clone());
@@ -302,6 +290,12 @@ final class ParallelRangeMerge {
                 frontier.advance();
             }
         }
+        long fixedTailStart = descriptor.fileSize()
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        long framedRecordBytes = descriptor.trailerStart() >= PageRunSegmentWriter.HEADER_BYTES
+                        && descriptor.trailerStart() <= fixedTailStart
+                ? descriptor.trailerStart() - PageRunSegmentWriter.HEADER_BYTES
+                : 0;
         metrics.recordBoundaryIo(0, embedded.bytesRead(), framedRecordBytes);
         return SampleSource.SCAN;
     }

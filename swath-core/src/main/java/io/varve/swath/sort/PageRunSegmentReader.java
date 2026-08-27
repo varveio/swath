@@ -223,15 +223,20 @@ final class PageRunSegmentReader implements EntryStream {
      */
     static Trailer readTrailer(Path path) throws IOException {
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            byte[] segMin = readLenPrefixedKey(io, io.trailerStart, fixedTailStart);
-            byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length,
-                    fixedTailStart);
-            if (io.totalRecords == 0 && (segMin.length != 0 || segMax.length != 0)) {
-                throw io.fail("empty segment has non-empty trailer bounds");
-            }
-            return new Trailer(segMin, segMax, io.totalRecords, io.totalEntries, io.maxRecordLen);
+            return readTrailer(io);
         }
+    }
+
+    /** Read the trailer bounds from an already-open, validated segment. */
+    static Trailer readTrailer(PageRunSegmentIo io) throws IOException {
+        long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        byte[] segMin = readLenPrefixedKey(io, io.trailerStart, fixedTailStart);
+        byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length,
+                fixedTailStart);
+        if (io.totalRecords == 0 && (segMin.length != 0 || segMax.length != 0)) {
+            throw io.fail("empty segment has non-empty trailer bounds");
+        }
+        return new Trailer(segMin, segMax, io.totalRecords, io.totalEntries, io.maxRecordLen);
     }
 
     private static byte[] readLenPrefixedKey(PageRunSegmentIo io, long pos, long limit)

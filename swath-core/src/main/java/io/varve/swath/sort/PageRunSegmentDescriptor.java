@@ -11,17 +11,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * One kickoff-validated page-run segment and its immutable trailer metadata. Reading all descriptors
- * before cleanup makes an unreadable internal input a preflight failure rather than an optional
- * fan-in refinement that silently falls back and fails later after working files were removed.
+ * One kickoff-opened page-run segment and its retained file, trailer, and boundary-sample metadata.
+ * Reading all descriptors before cleanup makes an unreadable internal input a preflight failure
+ * rather than an optional fan-in refinement that silently falls back and fails later after working
+ * files were removed.
  */
-record PageRunSegmentDescriptor(Path path, PageRunSegmentReader.Trailer trailer) {
+record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
+                                PageRunSegmentReader.Trailer trailer,
+                                PageRunBoundarySample.ReadResult sample) {
 
     static List<PageRunSegmentDescriptor> readAll(List<Path> paths) throws IOException {
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(paths.size());
         for (Path path : paths) {
-            descriptors.add(new PageRunSegmentDescriptor(path,
-                    PageRunSegmentReader.readTrailer(path)));
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
+                descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
+                        PageRunSegmentReader.readTrailer(io), PageRunBoundarySample.read(io)));
+            }
         }
         return List.copyOf(descriptors);
     }

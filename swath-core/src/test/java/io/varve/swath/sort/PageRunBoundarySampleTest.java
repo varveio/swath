@@ -56,6 +56,25 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
+    void boundarySelectionDoesNotReopenKickoffDescriptors(@TempDir Path dir) throws IOException {
+        Path segment = writePages(dir.resolve("descriptor.pageseg"), 4);
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(List.of(segment));
+        PageRunSegmentDescriptor descriptor = descriptors.getFirst();
+        assertThat(descriptor.fileSize()).isEqualTo(Files.size(segment));
+        assertThat(descriptor.trailerStart()).isPositive();
+        assertThat(descriptor.sample().status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
+
+        Files.delete(segment);
+        CountingMetrics metrics = new CountingMetrics();
+
+        assertThat(hex(ParallelRangeMerge.boundariesForDescriptors(descriptors, 3, metrics)))
+                .hasSize(2);
+        assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isEqualTo(1);
+        assertThat(metrics.embeddedEntries.sum()).isEqualTo(4);
+        assertThat(metrics.scanBytes.sum()).isZero();
+    }
+
+    @Test
     void exact4096And4097SystematicSemantics(@TempDir Path dir) throws IOException {
         Path atCap = writePages(dir.resolve("4096.pageseg"), 4_096);
         Path aboveCap = writePages(dir.resolve("4097.pageseg"), 4_097);
@@ -131,13 +150,23 @@ class PageRunBoundarySampleTest {
             assertThat(metrics.scanBytes.sum()).isEqualTo(expectedScanBytes);
             long expectedAttemptBytes = switch (mutation) {
                 case UNKNOWN, LENGTH, COUNT -> 16;
-                case EXTENSION_START -> 0;
                 case CRC, ORDER, KEY_LENGTH, TRAILING_PAYLOAD, BOUNDS ->
                         originalLayout.extensionBytes();
             };
             assertThat(metrics.embeddedBytes.sum()).as(mutation.name())
                     .isEqualTo(expectedAttemptBytes);
         }
+    }
+
+    @Test
+    void malformedTrailerBoundsFailDescriptorKickoff(@TempDir Path dir) throws IOException {
+        Path path = writePages(dir.resolve("bad-trailer-bounds.pageseg"), 5);
+        mutateExtensionStart(path);
+
+        assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
+                List.of(path), 3, SortMetrics.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("trailer key exceeds trailer bounds");
     }
 
     @Test
@@ -392,7 +421,6 @@ class PageRunBoundarySampleTest {
     }
 
     private enum Mutation {
-        EXTENSION_START("merge_boundary_fallback_invalid_length"),
         UNKNOWN("merge_boundary_fallback_unknown"),
         LENGTH("merge_boundary_fallback_invalid_length"),
         COUNT("merge_boundary_fallback_invalid_count"),
@@ -414,12 +442,6 @@ class PageRunBoundarySampleTest {
         Layout layout = layout(bytes);
         int extension = Math.toIntExact(layout.extensionStart);
         switch (mutation) {
-            case EXTENSION_START -> {
-                int minLength = ByteBuffer.wrap(bytes).getShort(Math.toIntExact(layout.trailerStart))
-                        & 0xffff;
-                ByteBuffer.wrap(bytes).putShort(Math.toIntExact(layout.trailerStart) + 2 + minLength,
-                        (short) 0xffff);
-            }
             case UNKNOWN -> bytes[extension] ^= 1;
             case LENGTH -> ByteBuffer.wrap(bytes).putInt(extension + 8,
                     ByteBuffer.wrap(bytes).getInt(extension + 8) + 1);
@@ -452,6 +474,16 @@ class PageRunBoundarySampleTest {
             }
             case BOUNDS -> bytes[Math.toIntExact(layout.trailerStart) + 2] = 'a';
         }
+        Files.write(path, bytes);
+    }
+
+    private static void mutateExtensionStart(Path path) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        Layout layout = layout(bytes);
+        int minLength = ByteBuffer.wrap(bytes).getShort(Math.toIntExact(layout.trailerStart))
+                & 0xffff;
+        ByteBuffer.wrap(bytes).putShort(Math.toIntExact(layout.trailerStart) + 2 + minLength,
+                (short) 0xffff);
         Files.write(path, bytes);
     }
 
