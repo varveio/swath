@@ -313,7 +313,7 @@ public final class SortTransform {
             FinalPassListener onFinalPassStarting) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier, segmentDescriptors);
+                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
@@ -321,7 +321,7 @@ public final class SortTransform {
         // ParallelRangeMerge#effectiveRanges.
         int requestedRanges = config.mergeParallelism();
         ParallelRangeMerge.EffectiveRanges rangePlan =
-                rangeMerge.effectiveRangesForDescriptors(requestedRanges, segmentDescriptors);
+                rangeMerge.effectiveRanges(requestedRanges, segmentDescriptors);
         int desiredRanges = rangePlan.ranges();
         if (rangePlan.reason() != ParallelRangeMerge.ClampReason.NONE) {
             // WARN, not debug: the operator asked for something the run could not give them. Keep
@@ -353,7 +353,7 @@ public final class SortTransform {
         // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
-        List<byte[]> boundaries = ParallelRangeMerge.boundariesForDescriptors(
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
                 segmentDescriptors, desiredRanges, metrics);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
@@ -376,9 +376,10 @@ public final class SortTransform {
         // cascade; otherwise the parallel merge reports work and no percentage, exactly as the serial
         // cascade does.
         onFinalPassStarting.onFinalPassStarting(
-                stagingSegments.size() <= rangeMerge.perRangeFanIn(boundaries.size() + 1, stagingSegments));
+                segmentDescriptors.size()
+                        <= rangeMerge.perRangeFanIn(boundaries.size() + 1, segmentDescriptors));
         List<ParallelRangeMerge.RangeResult> results =
-                rangeMerge.run(stagingSegments, stagingDir, boundaries, progressCallback);
+                rangeMerge.run(segmentDescriptors, stagingDir, boundaries, progressCallback);
 
         List<Path> tmpsInOrder = new ArrayList<>();
         List<SortedFileWriter> partsInOrder = new ArrayList<>();

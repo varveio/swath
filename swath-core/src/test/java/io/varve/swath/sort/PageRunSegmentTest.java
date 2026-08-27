@@ -75,7 +75,7 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writer().flush(sealed, path);
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         // Exact unsigned extrema, not truncated stats (§9.1).
         assertThat(trailer.segMinKey()).containsExactly(bytes("alpha"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("zulu"));
@@ -93,7 +93,7 @@ class PageRunSegmentTest {
         Path path = dir.resolve("nested.pageseg");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.segMinKey()).containsExactly(bytes("a"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("z"));
 
@@ -107,7 +107,7 @@ class PageRunSegmentTest {
         assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("z"));
         assertThat(metrics.count("SORT.page_run_entry_overlap_keymerge")).isGreaterThan(0);
 
-        PageRunSegmentInspector.TrailerInfo inspected =
+        PageRunTrailer.Trailer inspected =
                 PageRunSegmentInspector.inspect(path).trailer();
         assertThat(inspected.segMinKey()).containsExactly(bytes("a"));
         assertThat(inspected.segMaxKey()).containsExactly(bytes("z"));
@@ -373,9 +373,9 @@ class PageRunSegmentTest {
 
         assertThat(rows).isEqualTo(2500);
         assertThat(readBack(path)).containsExactlyElementsOf(sorted);
-        assertThat(PageRunSegmentReader.readTrailer(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
+        assertThat(PageRunTrailer.read(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            assertThat(PageRunBoundarySample.read(io).status())
+            assertThat(PageRunBoundarySample.read(io, PageRunTrailer.read(io)).status())
                     .isEqualTo(PageRunBoundarySample.Status.ABSENT);
         }
     }
@@ -410,7 +410,7 @@ class PageRunSegmentTest {
 
         assertThat(result.rows()).isEqualTo(0);
         assertThat(readBack(path)).isEmpty();
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.totalRecords()).isEqualTo(0);
         assertThat(trailer.totalEntries()).isEqualTo(0);
     }
@@ -528,7 +528,7 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 
-        PageRunSegmentReader.Trailer before = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer before = PageRunTrailer.read(path);
         assertThat(before.totalRecords()).isEqualTo(1);   // precondition: exactly one page / one record
         assertThat(before.totalEntries()).isEqualTo(2);
 
@@ -571,7 +571,7 @@ class PageRunSegmentTest {
             writer().writeIntermediate(cursor, path);
         }
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.segMinKey()).containsExactly(bytes("k000000"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("k002499"));
         assertThat(trailer.totalRecords()).isEqualTo(3);   // 1000 + 1000 + 500

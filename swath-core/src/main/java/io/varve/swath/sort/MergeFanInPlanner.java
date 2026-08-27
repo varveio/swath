@@ -5,8 +5,6 @@
  */
 package io.varve.swath.sort;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.function.IntSupplier;
 import org.slf4j.Logger;
@@ -47,7 +45,7 @@ final class MergeFanInPlanner {
      * entry point the serial merge path needs. The parallel range-merge path does not
      * call this: it computes its own PER-RANGE width ({@link ParallelRangeMerge#perRangeFanIn}), which
      * divides both the memory budget and the process fd budget by the range count and prices a stream
-     * by staging format — reusing {@link #maxPageRunRecordLen} for the page-run case. It calls
+     * by staging format — reusing retained descriptor trailers for the page-run case. It calls
      * {@link #warnIfCascadePredicted} directly for the warning alone.
      */
     int plan(List<PageRunSegmentDescriptor> segments) {
@@ -126,27 +124,6 @@ final class MergeFanInPlanner {
         long perStreamPrice = Math.max(config.mergePerStreamBytes(), maxRecordLen);
         long bound = config.mergeBudgetBytes() / perStreamPrice;
         return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
-    }
-
-    /**
-     * The largest framed record across {@code segments}, read O(1) per segment from the page-run
-     * trailer — an O(1) encoded-record allocation guard used to tighten the configured stream price,
-     * not the complete decoded heap of one stream. Empty input returns {@code -1}; an unreadable
-     * trailer is an input failure and is never silently reinterpreted as an unknown estimate.
-     *
-     * <p>Package-private and shared: {@link ParallelRangeMerge} needs the same quantity to size its
-     * PER-RANGE fan-in, and computing it there independently would be the same scan written twice.
-     */
-    static long maxPageRunRecordLen(List<Path> segments) throws IOException {
-        if (segments.isEmpty()) {
-            return -1;
-        }
-        for (Path seg : segments) {
-            if (!SortTransform.isPageRunSegment(seg)) {
-                throw new IOException("unsupported sort staging segment: " + seg);
-            }
-        }
-        return PageRunSegmentDescriptor.maxRecordLen(PageRunSegmentDescriptor.readAll(segments));
     }
 
     /** Number of {@link KWayMerge#merge} passes (cascade passes + the final streaming pass). */

@@ -158,12 +158,14 @@ class SortTransformPageRunParallelMergePropTest {
                 SortMetrics.NO_OP,
                 SortedFileWriterFactory.DEFAULT);
         ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segs);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                descriptors, ranges, SortMetrics.NO_OP);
         if (boundaries == null) {
             return null;
         }
         List<ParallelRangeMerge.RangeResult> results =
-                merge.run(segs, staging, boundaries, units -> { });
+                merge.run(descriptors, staging, boundaries, units -> { });
 
         List<Path> parts = new ArrayList<>();
         List<SortedFileWriter> writers = new ArrayList<>();
@@ -333,10 +335,8 @@ class SortTransformPageRunParallelMergePropTest {
             // Price an open page-run stream as the planner does: the larger of the configured
             // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
-            long perStream = 0;
-            for (Path seg : stage(probeDir, s.segments())) {
-                perStream = Math.max(perStream, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
-            }
+            long perStream = PageRunSegmentDescriptor.maxRecordLen(
+                    PageRunSegmentDescriptor.readAll(stage(probeDir, s.segments())));
             perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
             long budget = perStream * segmentCount * allowed;
 
@@ -537,9 +537,11 @@ class SortTransformPageRunParallelMergePropTest {
                     new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                             SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> softLimit);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, 2, SortMetrics.NO_OP);
 
-            assertThatThrownBy(() -> merge.run(segments, staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("output-part fd budget exhausted");
             assertThat(writers.opened.get()).isEqualTo(2);
@@ -593,10 +595,12 @@ class SortTransformPageRunParallelMergePropTest {
                     new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                             SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> -1);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
-                    assertThatThrownBy(() -> merge.run(segments, staging, boundaries, units -> { }))
+                    assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
                             .isInstanceOf(IOException.class)
                             .hasMessageContaining("injected later range failure"));
             assertThat(writers.cooperativelyCancelled.get())
@@ -625,12 +629,14 @@ class SortTransformPageRunParallelMergePropTest {
                     new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                             SortMetrics.NO_OP, writers),
                     RangeMergeTimer.NO_OP, () -> -1);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             AtomicBoolean interruptRestored = new AtomicBoolean();
             Thread caller = new Thread(() -> {
                 try {
-                    merge.run(segments, staging, boundaries, units -> { });
+                    merge.run(descriptors, staging, boundaries, units -> { });
                 } catch (Throwable t) {
                     failure.set(t);
                     interruptRestored.set(Thread.currentThread().isInterrupted());

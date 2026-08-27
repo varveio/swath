@@ -107,20 +107,16 @@ final class PageRunBoundarySample {
         out.flush();
     }
 
-    static ReadResult read(PageRunSegmentIo io) throws IOException {
+    static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer) throws IOException {
         long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-        Bounds bounds = readBounds(io, fixedTailStart);
-        if (bounds == null) {
-            return invalid(Status.INVALID_LENGTH, io.totalRecords, 0);
-        }
-        long extensionStart = bounds.extensionStart;
+        long extensionStart = trailer.extensionStart();
         long extensionBytes = fixedTailStart - extensionStart;
         long bytesRead = 0;
         if (extensionBytes == 0) {
-            return new ReadResult(Status.ABSENT, List.of(), io.totalRecords, bytesRead);
+            return new ReadResult(Status.ABSENT, List.of(), trailer.totalRecords(), bytesRead);
         }
         if (extensionBytes < HEADER_BYTES + CRC_BYTES) {
-            return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead);
+            return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead);
         }
 
         byte[] header = io.readAt(extensionStart, HEADER_BYTES).array();
@@ -132,18 +128,18 @@ final class PageRunBoundarySample {
         long payloadLength = fields.getInt() & 0xFFFFFFFFL;
         long entryCount = fields.getInt() & 0xFFFFFFFFL;
         if (magic != MAGIC || type != TYPE || version != VERSION) {
-            return new ReadResult(Status.UNKNOWN, List.of(), io.totalRecords, bytesRead);
+            return new ReadResult(Status.UNKNOWN, List.of(), trailer.totalRecords(), bytesRead);
         }
-        int expectedCount = expectedCount(io.totalRecords);
+        int expectedCount = expectedCount(trailer.totalRecords());
         long maxExtensionBytes = HEADER_BYTES + CRC_BYTES + (long) expectedCount * (2 + 0xFFFF);
         if (extensionBytes > maxExtensionBytes) {
-            return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead);
+            return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead);
         }
         if (payloadLength != extensionBytes - HEADER_BYTES - CRC_BYTES) {
-            return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead);
+            return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead);
         }
-        if (entryCount > Math.min(io.totalRecords, MAX_ENTRIES) || entryCount != expectedCount) {
-            return invalid(Status.INVALID_COUNT, io.totalRecords, bytesRead);
+        if (entryCount > Math.min(trailer.totalRecords(), MAX_ENTRIES) || entryCount != expectedCount) {
+            return invalid(Status.INVALID_COUNT, trailer.totalRecords(), bytesRead);
         }
 
         ChunkedReader in = new ChunkedReader(io, extensionStart + HEADER_BYTES,
@@ -155,71 +151,43 @@ final class PageRunBoundarySample {
         long payloadRemaining = payloadLength;
         for (int i = 0; i < entryCount; i++) {
             if (payloadRemaining < 2) {
-                return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead + in.bytesRead());
             }
             int keyLength = in.readUnsignedShort(crc);
             payloadRemaining -= 2;
             if (keyLength > payloadRemaining) {
-                return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead + in.bytesRead());
             }
             byte[] key = new byte[keyLength];
             in.read(key, crc);
             payloadRemaining -= keyLength;
             if (previous != null && Arrays.compareUnsigned(key, previous) < 0) {
-                return invalid(Status.INVALID_ORDER, io.totalRecords, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_ORDER, trailer.totalRecords(), bytesRead + in.bytesRead());
             }
             keys.add(key);
             previous = key;
         }
         if (payloadRemaining != 0) {
-            return invalid(Status.INVALID_LENGTH, io.totalRecords, bytesRead + in.bytesRead());
+            return invalid(Status.INVALID_LENGTH, trailer.totalRecords(), bytesRead + in.bytesRead());
         }
         int expectedCrc = in.readInt();
         bytesRead += in.bytesRead();
         if ((int) crc.getValue() != expectedCrc) {
-            return invalid(Status.INVALID_CRC, io.totalRecords, bytesRead);
+            return invalid(Status.INVALID_CRC, trailer.totalRecords(), bytesRead);
         }
         if (keys.isEmpty()) {
-            if (bounds.min.length != 0 || bounds.max.length != 0) {
-                return invalid(Status.INVALID_BOUNDS, io.totalRecords, bytesRead);
+            if (trailer.segMinKey().length != 0 || trailer.segMaxKey().length != 0) {
+                return invalid(Status.INVALID_BOUNDS, trailer.totalRecords(), bytesRead);
             }
-        } else if (!Arrays.equals(keys.getFirst(), bounds.min)
-                || Arrays.compareUnsigned(keys.getLast(), bounds.max) > 0) {
-            return invalid(Status.INVALID_BOUNDS, io.totalRecords, bytesRead);
+        } else if (!Arrays.equals(keys.getFirst(), trailer.segMinKey())
+                || Arrays.compareUnsigned(keys.getLast(), trailer.segMaxKey()) > 0) {
+            return invalid(Status.INVALID_BOUNDS, trailer.totalRecords(), bytesRead);
         }
-        return new ReadResult(Status.EMBEDDED, List.copyOf(keys), io.totalRecords, bytesRead);
-    }
-
-    private static Bounds readBounds(PageRunSegmentIo io, long fixedTailStart) throws IOException {
-        long pos = io.trailerStart;
-        if (pos < PageRunSegmentWriter.HEADER_BYTES || fixedTailStart - pos < 4) {
-            return null;
-        }
-        int minLength = io.readAt(pos, 2).getShort() & 0xFFFF;
-        pos += 2;
-        if (minLength > fixedTailStart - pos) {
-            return null;
-        }
-        byte[] min = io.readAt(pos, minLength).array();
-        pos += minLength;
-        if (pos > fixedTailStart - 2) {
-            return null;
-        }
-        int maxLength = io.readAt(pos, 2).getShort() & 0xFFFF;
-        pos += 2;
-        if (maxLength > fixedTailStart - pos) {
-            return null;
-        }
-        byte[] max = io.readAt(pos, maxLength).array();
-        pos += maxLength;
-        return new Bounds(min, max, pos);
+        return new ReadResult(Status.EMBEDDED, List.copyOf(keys), trailer.totalRecords(), bytesRead);
     }
 
     private static ReadResult invalid(Status status, long totalRecords, long bytesRead) {
         return new ReadResult(status, List.of(), totalRecords, bytesRead);
-    }
-
-    private record Bounds(byte[] min, byte[] max, long extensionStart) {
     }
 
     private static final class ChunkedWriter {

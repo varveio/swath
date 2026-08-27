@@ -222,49 +222,4 @@ final class PageRunSegmentReader implements EntryStream {
         }
     }
 
-    /**
-     * The completeness trailer of a page-run segment: the actual segment key bounds plus the record /
-     * entry counts and the max framed record length. This is the seam {@code SortedFileIndex}
-     * consumes for {@code bounds} ({@code segMinKey}/{@code segMaxKey} are exact keys, no truncated-stats
-     * hazard) and the runtime merge fan-in planner consumes {@code maxRecordLen} as an encoded-record
-     * refinement of its configured per-stream estimate.
-     */
-    record Trailer(byte[] segMinKey, byte[] segMaxKey, long totalRecords, long totalEntries, long maxRecordLen) {
-    }
-
-    /**
-     * Read just the trailer of {@code path} without decoding any record: validate the header and the
-     * trailing magic (fail-fast on a truncated/corrupt segment) via {@link PageRunSegmentIo#open},
-     * then seek straight to {@code trailerStart} to read the key bounds — O(1) regardless of how many
-     * records the segment holds (no per-record length-prefix walk).
-     */
-    static Trailer readTrailer(Path path) throws IOException {
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            return readTrailer(io);
-        }
-    }
-
-    /** Read the trailer bounds from an already-open, validated segment. */
-    static Trailer readTrailer(PageRunSegmentIo io) throws IOException {
-        long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-        byte[] segMin = readLenPrefixedKey(io, io.trailerStart, fixedTailStart);
-        byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length,
-                fixedTailStart);
-        if (io.totalRecords == 0 && (segMin.length != 0 || segMax.length != 0)) {
-            throw io.fail("empty segment has non-empty trailer bounds");
-        }
-        return new Trailer(segMin, segMax, io.totalRecords, io.totalEntries, io.maxRecordLen);
-    }
-
-    private static byte[] readLenPrefixedKey(PageRunSegmentIo io, long pos, long limit)
-            throws IOException {
-        if (pos < io.trailerStart || pos > limit - 2) {
-            throw io.fail("trailer key prefix exceeds trailer bounds");
-        }
-        int len = io.readAt(pos, 2).getShort() & 0xFFFF;
-        if (len > limit - pos - 2) {
-            throw io.fail("trailer key exceeds trailer bounds");
-        }
-        return io.readAt(pos + 2, len).array();
-    }
 }

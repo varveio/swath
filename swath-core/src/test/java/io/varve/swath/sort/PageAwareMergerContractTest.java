@@ -436,7 +436,7 @@ class PageAwareMergerContractTest {
     private long totalRecords(List<Path> files) throws IOException {
         long total = 0;
         for (Path f : files) {
-            total += PageRunSegmentReader.readTrailer(f).totalRecords();
+            total += PageRunTrailer.read(f).totalRecords();
         }
         return total;
     }

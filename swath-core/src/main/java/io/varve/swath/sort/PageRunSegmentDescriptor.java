@@ -17,7 +17,7 @@ import java.util.List;
  * files were removed.
  */
 record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
-                                PageRunSegmentReader.Trailer trailer,
+                                PageRunTrailer.Trailer trailer,
                                 PageRunBoundarySample.ReadResult sample) {
 
     static List<PageRunSegmentDescriptor> readAll(List<Path> paths) throws IOException {
@@ -29,8 +29,9 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(paths.size());
         for (Path path : paths) {
             try (PageRunSegmentIo io = opener.open(path)) {
+                PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        PageRunSegmentReader.readTrailer(io), PageRunBoundarySample.read(io)));
+                        trailer, PageRunBoundarySample.read(io, trailer)));
             }
         }
         return List.copyOf(descriptors);

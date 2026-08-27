@@ -105,7 +105,7 @@ class SortTransformFanInClampTest {
         bytes[bytes.length - 1] ^= 0x01;
         Files.write(segment, bytes);
 
-        assertThatThrownBy(() -> MergeFanInPlanner.maxPageRunRecordLen(List.of(segment)))
+        assertThatThrownBy(() -> PageRunSegmentDescriptor.readAll(List.of(segment)))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");
     }

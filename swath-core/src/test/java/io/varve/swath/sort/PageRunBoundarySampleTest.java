@@ -44,14 +44,15 @@ class PageRunBoundarySampleTest {
         corruptFirstPageBody(legacy);
 
         CountingMetrics metrics = new CountingMetrics();
-        assertThat(hex(ParallelRangeMerge.boundaries(List.of(extended), 3, metrics))).hasSize(2);
+        assertThat(hex(ParallelRangeMerge.boundaries(descriptors(extended), 3, metrics))).hasSize(2);
         assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_boundary_global_capped")).isZero();
         assertThat(metrics.scanBytes.sum()).isZero();
         assertThat(metrics.embeddedEntries.sum()).isEqualTo(4);
         assertThat(metrics.progress.sum()).isEqualTo(1);
 
-        assertThatThrownBy(() -> ParallelRangeMerge.boundaries(List.of(legacy), 3, SortMetrics.NO_OP))
+        assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
+                descriptors(legacy), 3, SortMetrics.NO_OP))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("CRC32C mismatch");
     }
@@ -74,7 +75,7 @@ class PageRunBoundarySampleTest {
         Files.delete(segment);
         CountingMetrics metrics = new CountingMetrics();
 
-        assertThat(hex(ParallelRangeMerge.boundariesForDescriptors(descriptors, 3, metrics)))
+        assertThat(hex(ParallelRangeMerge.boundaries(descriptors, 3, metrics)))
                 .hasSize(2);
         assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isEqualTo(1);
         assertThat(metrics.embeddedEntries.sum()).isEqualTo(4);
@@ -122,12 +123,14 @@ class PageRunBoundarySampleTest {
         Path firstLegacy = stripExtension(first, dir.resolve("first-legacy.pageseg"));
         Path secondLegacy = stripExtension(second, dir.resolve("second-legacy.pageseg"));
 
-        List<String> embedded = hex(ParallelRangeMerge.boundaries(List.of(first, second), 8,
+        List<String> embedded = hex(ParallelRangeMerge.boundaries(descriptors(first, second), 8,
                 SortMetrics.NO_OP));
-        List<String> legacy = hex(ParallelRangeMerge.boundaries(List.of(firstLegacy, secondLegacy), 8,
+        List<String> legacy = hex(ParallelRangeMerge.boundaries(
+                descriptors(firstLegacy, secondLegacy), 8,
                 SortMetrics.NO_OP));
         CountingMetrics mixedMetrics = new CountingMetrics();
-        List<String> mixed = hex(ParallelRangeMerge.boundaries(List.of(first, secondLegacy), 8,
+        List<String> mixed = hex(ParallelRangeMerge.boundaries(
+                descriptors(first, secondLegacy), 8,
                 mixedMetrics));
 
         assertThat(embedded).containsExactlyElementsOf(legacy);
@@ -143,12 +146,12 @@ class PageRunBoundarySampleTest {
             Path path = writePages(dir.resolve(mutation.name() + ".pageseg"), 5);
             Layout originalLayout = layout(Files.readAllBytes(path));
             Path legacy = stripExtension(path, dir.resolve(mutation.name() + "-legacy.pageseg"));
-            List<byte[]> expected = ParallelRangeMerge.boundaries(List.of(legacy), 3,
+            List<byte[]> expected = ParallelRangeMerge.boundaries(descriptors(legacy), 3,
                     SortMetrics.NO_OP);
             mutateExtension(path, mutation);
             CountingMetrics metrics = new CountingMetrics();
 
-            assertByteExact(ParallelRangeMerge.boundaries(List.of(path), 3, metrics), expected);
+            assertByteExact(ParallelRangeMerge.boundaries(descriptors(path), 3, metrics), expected);
             assertThat(metrics.count("SORT." + mutation.reason)).as(mutation.name()).isEqualTo(1);
             assertThat(metrics.count("SORT.merge_boundary_source_scan")).isEqualTo(1);
             assertThat(metrics.embeddedEntries.sum()).isZero();
@@ -171,7 +174,7 @@ class PageRunBoundarySampleTest {
         mutateExtensionStart(path);
 
         assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
-                List.of(path), 3, SortMetrics.NO_OP))
+                descriptors(path), 3, SortMetrics.NO_OP))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("trailer key exceeds trailer bounds");
     }
@@ -187,7 +190,7 @@ class PageRunBoundarySampleTest {
             Files.write(path, bytes);
 
             assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
-                    List.of(path), 3, SortMetrics.NO_OP))
+                    descriptors(path), 3, SortMetrics.NO_OP))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("invalid page-run trailer offset");
         }
@@ -211,7 +214,7 @@ class PageRunBoundarySampleTest {
         Layout layout = layout(Files.readAllBytes(legacy));
         CountingMetrics metrics = new CountingMetrics();
 
-        ParallelRangeMerge.boundaries(List.of(legacy), 3, metrics);
+        ParallelRangeMerge.boundaries(descriptors(legacy), 3, metrics);
 
         assertThat(metrics.embeddedBytes.sum()).isZero();
         assertThat(metrics.scanBytes.sum())
@@ -234,8 +237,8 @@ class PageRunBoundarySampleTest {
         assertThat(sample.keys().get(1)).containsExactly(0x00, (byte) 0x80, (byte) 0xff);
         assertThat(sample.keys().get(4)).hasSize(1_024);
         assertThat(sample.keys().getLast()).hasSize(0xffff);
-        assertByteExact(ParallelRangeMerge.boundaries(List.of(embedded), 32, SortMetrics.NO_OP),
-                ParallelRangeMerge.boundaries(List.of(legacy), 32, SortMetrics.NO_OP));
+        assertByteExact(ParallelRangeMerge.boundaries(descriptors(embedded), 32, SortMetrics.NO_OP),
+                ParallelRangeMerge.boundaries(descriptors(legacy), 32, SortMetrics.NO_OP));
     }
 
     @Test
@@ -306,7 +309,7 @@ class PageRunBoundarySampleTest {
         }
         CountingMetrics metrics = new CountingMetrics();
 
-        assertThat(ParallelRangeMerge.boundaries(segments, 8, metrics)).hasSize(7);
+        assertThat(ParallelRangeMerge.boundaries(descriptors(segments), 8, metrics)).hasSize(7);
         assertThat(metrics.count("SORT.merge_boundary_global_capped")).isEqualTo(1);
     }
 
@@ -391,8 +394,16 @@ class PageRunBoundarySampleTest {
 
     private static PageRunBoundarySample.ReadResult readSample(Path path) throws IOException {
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            return PageRunBoundarySample.read(io);
+            return PageRunBoundarySample.read(io, PageRunTrailer.read(io));
         }
+    }
+
+    private static List<PageRunSegmentDescriptor> descriptors(Path... paths) throws IOException {
+        return PageRunSegmentDescriptor.readAll(List.of(paths));
+    }
+
+    private static List<PageRunSegmentDescriptor> descriptors(List<Path> paths) throws IOException {
+        return PageRunSegmentDescriptor.readAll(paths);
     }
 
     private static Path stripExtension(Path source, Path destination) throws IOException {
