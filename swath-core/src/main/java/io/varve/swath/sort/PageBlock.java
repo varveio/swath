@@ -46,7 +46,7 @@ import java.util.Set;
  * including null fields, unicode keys, and 1&nbsp;KB keys.
  *
  * <p><b>Ordering metadata.</b> {@link #pack} also records, in the same single pass over
- * {@code entries}, whether the page is <b>internally strictly ascending under the full {@code
+ * {@code entries}, whether the page is <b>internally non-decreasing under the full {@code
  * ListEntryComparator}</b> (key, then version_id, then row_type — not key bytes alone), plus the
  * page's first and last {@link ListEntry} (not just their key bytes). {@link SealedBuffer}'s
  * defensive pre-sortedness check needs the full comparator because versioned listings
@@ -171,8 +171,8 @@ final class PageBlock {
             probes[i] = new DictProbe();
         }
         for (ListEntry e : entries) {
-            if (prev != null && comparator.compare(prev, e) >= 0) {
-                ordered = false;   // includes exact adjacent ties — never assumed pre-sorted
+            if (prev != null && comparator.compare(prev, e) > 0) {
+                ordered = false;
             }
             prev = e;
             switch (e) {
@@ -279,10 +279,10 @@ final class PageBlock {
     }
 
     /**
-     * True iff this page's entries are strictly ascending under the full §0.3 {@code
+     * True iff this page's entries are non-decreasing under the full §0.3 {@code
      * ListEntryComparator} (key, then version_id, then row_type) — computed once, at admission, in
-     * {@link #pack}. False for any adjacent tie (including two versions of the same key that are
-     * present but not ascending) as well as any out-of-order pair.
+     * {@link #pack}. Comparator-equal adjacent entries remain ordered; only a comparator regression
+     * clears the flag.
      */
     boolean orderedUnderFullComparator() {
         return orderedUnderFullComparator;

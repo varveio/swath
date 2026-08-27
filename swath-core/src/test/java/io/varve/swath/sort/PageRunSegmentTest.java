@@ -182,13 +182,16 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void adjacentComparatorTieWithMonotonicRawKeysCanStillBeRepacked(@TempDir Path dir)
+    void adjacentComparatorTieIsNotRepackedAndRetainsInputOrder(@TempDir Path dir)
             throws IOException {
-        // Exact comparator ties make the ordered bit false, but raw cursor safety still holds.
+        ObjectEntry first = objectWithSize("a", 2L);
+        ObjectEntry second = objectWithSize("a", 1L);
+        assertThat(CMP.compare(first, second)).as("precondition: payload is not an ordering field").isZero();
+
         SortBuffer buffer = new SortBuffer(config, CMP);
-        buffer.admit(1L, List.of(object("a"), object("a"), object("c")));
+        buffer.admit(1L, List.of(first, second, object("c")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
-        assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition
+        assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isTrue();
 
         Path path = dir.resolve("seg.pgr");
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -196,10 +199,8 @@ class PageRunSegmentTest {
                 .flush(sealed, path);
 
         List<ListEntry> out = readBack(path);
-        assertThat(out).containsExactly(object("a"), object("a"), object("c"));
-        assertThat(metrics.count("SORT.buffer_page_repacked"))
-                .as("the real seal-time reorder path is observable once per affected buffer")
-                .isEqualTo(1);
+        assertThat(out).containsExactly(first, second, object("c"));
+        assertThat(metrics.count("SORT.buffer_page_repacked")).isZero();
     }
 
     @Test
@@ -588,6 +589,11 @@ class PageRunSegmentTest {
 
     private static ObjectEntry version(String key, String versionId) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, versionId,
+                false, null, null, null, null);
+    }
+
+    private static ObjectEntry objectWithSize(String key, long size) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), size, 0L, null, null, null,
                 false, null, null, null, null);
     }
 }

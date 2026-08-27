@@ -113,13 +113,8 @@ final class PageRunSegmentWriter {
     SegmentResult flush(SealedBuffer buffer, Path path) throws IOException {
         List<PageBlock> pages = buffer.pages();   // already a fresh, mutable, sortable list
 
-        // Re-pack any page that isn't internally ordered under the full comparator. pack() does
-        // NOT reorder — it packs in the given order and sets the ordered-bit — so we must sort first.
-        // Note: a page whose entries are correctly ordered but contain an adjacent TIE (equal under
-        // the comparator) re-packs with orderedUnderFullComparator() still FALSE (pack() treats any
-        // adjacent tie as non-ordered) even though the read-back byte order is fine — so the ordered
-        // bit is not a reliable post-seal "is this page sorted" proxy; the reader's min-monotonicity
-        // guard must derive from actual key comparisons, not this bit.
+        // Re-pack any page with a full-comparator regression. pack() preserves input order and sets
+        // the ordered bit; comparator-equal adjacent entries are already ordered and remain stable.
         boolean repacked = false;
         for (int i = 0; i < pages.size(); i++) {
             PageBlock page = pages.get(i);
