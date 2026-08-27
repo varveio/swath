@@ -253,7 +253,7 @@ class MergeCpuProfileHarness {
 
     private static List<Path> copyCorpus(Path master, Path target) throws IOException {
         List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.parquet")) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
             ds.forEach(files::add);
         }
         files.sort(Comparator.comparing(p -> p.getFileName().toString()));

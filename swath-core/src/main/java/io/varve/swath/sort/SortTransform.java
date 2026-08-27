@@ -239,6 +239,9 @@ public final class SortTransform {
 
         List<Path> finalFiles = new ArrayList<>();
         List<Path> tmpFiles = new ArrayList<>();
+        // Every writer ever opened, including rolled writers already closed by drain's private
+        // bounded open-writer list. Retain these objects because close() publishes immutable
+        // FinalPartMetadata that finalParts() hands to the manifest listener after all renames.
         List<SortedFileWriter> finalWriters = new ArrayList<>();
         long totalRows;
         try (SortedCursor merged = merge.merge(stagingSegments, progressCallback)) {
