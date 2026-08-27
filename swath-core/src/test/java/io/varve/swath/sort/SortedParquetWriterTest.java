@@ -17,7 +17,6 @@ import io.varve.swath.output.dataset.PeriodicDataSync;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
@@ -141,20 +140,6 @@ class SortedParquetWriterTest {
         }
 
         assertThat(SortStamp.read(path)).isEmpty();
-    }
-
-    @Test
-    void aStagingSegmentHasNoStamp(@TempDir Path dir) throws IOException {
-        // Segments (SegmentParquetSink, via SegmentWriter) are internal working state, not served —
-        // deliberately unstamped: only final files are stamped.
-        ListEntryComparator cmp = new ListEntryComparator();
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-        Path segment = dir.resolve("seg-0.parquet");
-        try (SortedCursor cursor = new InMemoryCursor(List.of(object("a"), object("b")), cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, segment);
-        }
-
-        assertThat(SortStamp.read(segment)).isEmpty();
     }
 
     @Test

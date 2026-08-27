@@ -20,7 +20,7 @@ import java.util.List;
  *
  * <p><b>Reuses the shared read contract.</b> The trailer is read via
  * {@link PageRunSegmentReader#readTrailer} (O(1), no record walk); the framing/len-bound/CRC read and
- * the decode-free min/max/count parse are the single-sourced {@link PageRunSegmentIo} primitives the
+ * the decode-free structural/min/max/count parse are the single-sourced {@link PageRunSegmentIo} primitives the
  * streaming readers use (no row materialization); the codec is read from a {@link PageBlock#deserialize}
  * of the (verified) body. Unlike the streaming readers this inspector does <b>not</b> throw on a
  * per-record CRC mismatch — it records {@code crcOk=false} and keeps walking (via
@@ -83,10 +83,11 @@ public final class PageRunSegmentInspector {
                         codec = PageBlock.deserialize(body).codec().name();
                     }
                 } catch (RuntimeException parseFailed) {
-                    // Only reachable on a corrupt (crcOk==false) body; leave the decode-free
-                    // display fields at their defaults rather than aborting the whole dump.
+                    // A CRC-bad body stays diagnosable with placeholder fields; a CRC-valid malformed
+                    // body is typed corruption and must not be normalized by the inspector.
                     if (crcOk) {
-                        throw parseFailed;
+                        throw io.corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                                "malformed page body", parseFailed);
                     }
                 }
                 records.add(new RecordInfo(i, min, max, count, codec, rec.framedLen(), crcOk));

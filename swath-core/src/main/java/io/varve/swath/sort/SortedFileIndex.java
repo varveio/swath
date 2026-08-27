@@ -144,10 +144,10 @@ public final class SortedFileIndex {
     }
 
     /**
-     * One non-empty row group's actual first key, its <b>physical</b> block index, and row count —
-     * for the row-group skip on the parallel range-merge path. Unlike {@link RowGroupKey}, the
-     * {@link #blockIndex} field is carried so a caller can prune non-overlapping groups and read only
-     * the covered ones via {@link org.apache.parquet.hadoop.ParquetFileReader#readRowGroup(int)}.
+     * One non-empty row group's actual first key, its <b>physical</b> block index, and row count.
+     * Unlike {@link RowGroupKey}, {@link #blockIndex} is carried so an indexed Parquet reader can
+     * address the physical group directly via {@link
+     * org.apache.parquet.hadoop.ParquetFileReader#readRowGroup(int)}.
      */
     public record RowGroupSpan(byte[] firstKey, int blockIndex, long rowCount) {
 
@@ -185,8 +185,8 @@ public final class SortedFileIndex {
      * ParquetFileReader#readRowGroup(int)}. Empty row groups are omitted (they carry no first key and
      * no rows), so a {@link RowGroupSpan}'s position in the returned list is <b>not</b> its physical
      * block index — that is exactly why {@link RowGroupSpan#blockIndex} is carried explicitly
-     * (row-group skip: skipping past a non-overlapping group must {@code readRowGroup(physicalIndex)},
-     * never {@code readRowGroup(listPosition)}). Returns an empty list for a file with no rows.
+     * (an indexed reader must call {@code readRowGroup(physicalIndex)}, never {@code
+     * readRowGroup(listPosition)}). Returns an empty list for a file with no rows.
      */
     public static List<RowGroupSpan> rowGroupSpans(Path file) throws IOException {
         try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {

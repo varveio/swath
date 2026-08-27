@@ -106,13 +106,14 @@ on field order. Dedicated `*_ms` fields use milliseconds. Generic percentile gau
 For page-run staging, the `sort` block reports `merge_boundary_embedded_entries`,
 `merge_boundary_embedded_bytes`, and `merge_boundary_scan_bytes` to distinguish validated
 trailer samples from compatibility fallback scans. `merge_boundary_bytes` is the sum of
-the two byte fields. Parquet boundary selection contributes zero to these page-run totals.
+the two byte fields.
 
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
 time from the first final close through publication, while `finalize_close_ms` sums per-part
-close service and can exceed wall time when closes overlap. Fresh final parts derive their
-digest, byte count, row count, and exact bounds while writing; nonzero manifest bounds-read
+close service. Final writers close sequentially in publish order; `finalize_parallelism` reports
+the ranges that encoded final output concurrently, not close concurrency. Fresh final parts derive
+their digest, byte count, row count, and exact bounds while writing; nonzero manifest bounds-read
 metrics identify the compatibility path that reopened a carried part.
 
 The report can contain the target URI, arguments, filter values, slow-range bounds, and

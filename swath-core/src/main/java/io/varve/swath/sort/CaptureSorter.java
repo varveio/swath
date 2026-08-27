@@ -60,11 +60,12 @@ import java.util.Optional;
  *
  * <p><b>Crash-safe and idempotent by re-run (like {@code --sort}'s own publish).</b> Each final file
  * is written to {@code part-NNNNN.parquet.tmp} in the staging dir, then atomically renamed into
- * {@code outputDir} in key order by {@link SortTransform}, which also sweeps stale {@code .tmp}s and
- * abandoned {@code part-*} finals from a prior crashed attempt at the START of the next invocation. A
+ * {@code outputDir} in key order by {@link SortTransform}, which sweeps stale {@code .tmp}s at the
+ * start and abandoned {@code part-*} finals only after the complete replacement is closed. A
  * crash mid-publish can leave tmp files, or — for a multi-file roll — a prefix of renamed finals
- * alongside the still-unrenamed tmps; that entry sweep clears both before re-merging, so a re-run is
- * clean. This engine passes {@link PublishListener#NO_OP}, so there is no manifest commit point over
+ * alongside the still-unrenamed tmps; a re-run clears disposable tmp work first, regenerates the
+ * replacement, then clears stale finals immediately before publication. This engine passes
+ * {@link PublishListener#NO_OP}, so there is no manifest commit point over
  * the roll — each per-file rename is atomic, the multi-file dataset as a whole is not. This engine's own
  * staging directory ({@link #STAGING_DIR_NAME}, a fixed name under {@code outputDir}) is wiped at
  * the START of every call for the same reason: unlike the checkpoint-tracked {@code --sort}
@@ -128,21 +129,23 @@ public final class CaptureSorter {
 
         SortedFileWriterFactory finalWriterFactory = new DuplicateKeyCheckingWriterFactory(
                 finalWriterDelegate, metrics);
-        SortTransform transform = new SortTransform(new SortRun(config, comparator, hook, metrics, finalWriterFactory));
+        SortTransform transform = SortTransform.forArbitraryRuns(
+                new SortRun(config, comparator, hook, metrics, finalWriterFactory));
         return transform.transform(segments, outputDir, stagingDir, PublishListener.NO_OP);
     }
 
     /**
-     * Stream every input part's entries (via {@link SegmentReader} — the same low-level,
-     * one-row-group-at-a-time reader {@code --sort} uses for its own staging segments, since a
-     * plain unsorted swath part shares the canonical schema), scanning for a version_id as they go
+     * Stream every input part's entries via the low-level, one-row-group-at-a-time {@link
+     * SegmentReader}, since a plain unsorted swath part shares the canonical schema, scanning for a
+     * version_id as they go
      * (§0.6), and chunk them into locally-sorted staging segments gated by the same
      * {@link SortConfig#segmentBytes()}/{@link SortConfig#segmentEntries()} knobs the listing-time
      * sort lane uses.
      */
     private List<Path> stageSegments(List<Path> inputParts, Path stagingDir,
                                      Comparator<ListEntry> comparator, DuplicateHook hook) throws IOException {
-        SegmentWriter segmentWriter = new SegmentWriter(comparator, hook, metrics, config.segmentRowGroupBytes());
+        PageRunSegmentWriter segmentWriter =
+                new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         List<Path> segments = new ArrayList<>();
         List<ListEntry> chunk = new ArrayList<>();
         long chunkBytes = 0;
@@ -169,16 +172,19 @@ public final class CaptureSorter {
     }
 
     private Path flushChunk(List<ListEntry> chunk, Comparator<ListEntry> comparator, DuplicateHook hook,
-                            SegmentWriter segmentWriter, Path stagingDir, int seq) throws IOException {
+                            PageRunSegmentWriter segmentWriter, Path stagingDir, int seq) throws IOException {
         chunk.sort(comparator);
-        Path path = stagingDir.resolve("fixture-" + seq + ".parquet");
+        Path path = stagingDir.resolve("fixture-" + seq + SortTransform.SEGMENT_SUFFIX);
         try (SortedCursor cursor = new InMemoryCursor(chunk, comparator, hook)) {
+            // Arbitrary fixture chunks can overlap across their whole key ranges, so this pipeline
+            // intentionally uses the serial entry-stream merger and never selects parallel range
+            // boundaries. Do not retain an unused boundary sample in every staged chunk.
             segmentWriter.writeIntermediate(cursor, path);
         }
         // writeIntermediate() itself emits no counters (it's also the merge-phase cascade-
         // intermediate path, which has its own accounting), but this call site is sort-fixture's own
-        // staging-segment build, the direct analog of the listing lane's SegmentWriter#flush(),
-        // which DOES emit SORT.segment_flushed. Emit it here too so a real sort-fixture run's
+        // staging-segment build, the direct analog of the listing lane's page-run flush, which DOES
+        // emit SORT.segment_flushed. Emit it here too so a real sort-fixture run's
         // segment count is observable via metrics, not just log lines.
         metrics.recordStealReason("SORT", "segment_flushed");
         return path;

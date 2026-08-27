@@ -12,9 +12,9 @@ import java.util.List;
 import java.util.NoSuchElementException;
 
 /**
- * {@link SortedCursor} over an already-sorted in-memory list — the TimSort fallback taken when a
- * sealed buffer fails its defensive per-page order check ({@link SealedBuffer}). Applies the
- * {@link DuplicateHook} on adjacent equal entries so behavior matches the streaming merge path.
+ * {@link SortedCursor} over an already-sorted in-memory list. The fixture sorter uses it to stream a
+ * bounded, locally sorted chunk into page-run staging. Applies the {@link DuplicateHook} on adjacent
+ * equal entries so behavior matches the streaming merge path.
  */
 final class InMemoryCursor implements SortedCursor {
 

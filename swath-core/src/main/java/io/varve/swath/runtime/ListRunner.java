@@ -116,8 +116,8 @@ public final class ListRunner {
 
     /**
      * The process exit code a CLASSIFIED fatal crash reports in the JSON summary. Every
-     * classification that reaches {@code RunMetrics#recordFatalErrorClass} is a merge/publish
-     * failure rethrown as an {@code OutputException}, whose {@code exitCode()} is 1 — the same value
+     * classification that reaches {@code RunMetrics#recordFatalErrorClass} is a sort segment or
+     * merge/publish failure rethrown as an {@code OutputException}, whose {@code exitCode()} is 1 — the same value
      * {@code ExitCodes.forThrowable} hands the process. Kept as a literal because {@code ExitCodes}
      * lives in the CLI module (core must not depend on it); a new classification whose exit code is NOT
      * 1 must thread its own code here rather than reuse this constant.
@@ -808,7 +808,7 @@ public final class ListRunner {
                 .terminalSummary(el -> ctx.metrics().summary(el, "WORK_STEALING",
                         merged[0].finalFiles().size(), sortedOutputBytes(merged[0].finalFiles())))
                 .statistics(stage::statistics)
-                .drain(laneDrain(lane))
+                .drain(laneDrain(lane, ctx.metrics()))
                 .complete(() -> {
                     // Listing complete + all segments durable. Latch nodes, then merge + publish.
                     store.markOutputComplete(runId);
@@ -1306,12 +1306,14 @@ public final class ListRunner {
     }
 
     /** Drain the sort lane's encoder, mapping its checked failure onto the pipeline's exception types. */
-    private static void closeLane(SortLane lane) throws SwathException, InterruptedException {
+    private static void closeLane(SortLane lane, RunMetrics metrics)
+            throws SwathException, InterruptedException {
         try {
             lane.close();
         } catch (SwathException | InterruptedException e) {
             throw e;
         } catch (Exception e) {
+            metrics.recordFatalErrorClass(segmentErrorClass(e));
             throw new OutputException("sort segment encode failed", e);
         }
     }
@@ -1407,8 +1409,9 @@ public final class ListRunner {
         // minKeys regress). An unclassified crash keeps its error_class:null (and exit_code:null)
         // shape — its terminal throwable is not in hand here, and the exit-code mapping assigns different
         // codes to different fatal types (OutputException/CheckpointException 1, Invalid* 2), so a code
-        // must never be guessed. A CLASSIFIED fatal is different: the one class today (page_run_min_regression)
-        // is raised as segment corruption and rethrown by sortMergeAndPublish as an OutputException, whose
+        // must never be guessed. A CLASSIFIED fatal is different: typed page-run corruption (for
+        // example page_run_min_regression or page_run_body_corruption) is rethrown by
+        // sortMergeAndPublish as an OutputException, whose
         // exit code is 1 — so the sidecar can report the true process exit code instead of null, exactly as
         // the classified seed-failure path does (docs/metrics-and-observability.md §3).
         String fatalErrorClass = ctx.metrics().fatalErrorClass();
@@ -1786,11 +1789,11 @@ public final class ListRunner {
     }
 
     /** Drain for a sort sink: drain the lane's encoder (every segment durable) on success, abort on failure. */
-    private static DrainStep laneDrain(SortLane lane) {
+    private static DrainStep laneDrain(SortLane lane, RunMetrics metrics) {
         return new DrainStep() {
             @Override
             public void onDrained() throws SwathException, InterruptedException {
-                closeLane(lane);   // drain encoder → every segment durable (throws on failure)
+                closeLane(lane, metrics);   // drain encoder → every segment durable (throws on failure)
             }
 
             @Override

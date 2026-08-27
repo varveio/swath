@@ -96,7 +96,7 @@ class SortMergeLiveProgressTest {
         // let every range cascade — a cascading range merge is slower than the serial one it would
         // replace. What runs is therefore the SERIAL cascade, and the guard is that it still reports
         // work without claiming a percentage it cannot honestly compute.
-        SortTransformResult result = mergeParquetWithProgress(root, metrics, samples,
+        SortTransformResult result = mergeParallelWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(2));
 
         assertThat(result.cascadedPasses()).as("the case under test is a genuine multi-pass merge")
@@ -124,7 +124,7 @@ class SortMergeLiveProgressTest {
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
         // Fan-in wider than the staged segment count: no range can cascade.
-        SortTransformResult result = mergeParquetWithProgress(root, metrics, samples,
+        SortTransformResult result = mergeParallelWithProgress(root, metrics, samples,
                 parallelConfig().withFanIn(SEGMENTS + 1));
 
         assertThat(result.cascadedPasses()).isZero();
@@ -142,13 +142,13 @@ class SortMergeLiveProgressTest {
         return SortConfigs.base().withMergeParallelism(3).withMergeBudgetBytes(1L << 30);
     }
 
-    /** The production wiring again, over COLUMNAR staging — the only format the parallel branch reads. */
-    private SortTransformResult mergeParquetWithProgress(Path root, RunMetrics metrics,
+    /** The production wiring again, over page-run staging. */
+    private SortTransformResult mergeParallelWithProgress(Path root, RunMetrics metrics,
                                                           List<ProgressEvent> samples, SortConfig config)
             throws IOException {
         Path staging = Files.createDirectories(root.resolve("run/_staging"));
         Path output = Files.createDirectories(root.resolve("run"));
-        List<Path> segments = stageParquet(staging);
+        List<Path> segments = stage(staging);
 
         metrics.recordSortStaged(segments.size(), STAGED_ROWS);
         metrics.setPhase(Phase.MERGING);
@@ -162,23 +162,6 @@ class SortMergeLiveProgressTest {
                     samples.add(metrics.progressEvent(Duration.ofSeconds(1)));
                 },
                 metrics::startFinalMergePass);
-    }
-
-    private List<Path> stageParquet(Path dir) throws IOException {
-        List<Path> out = new ArrayList<>();
-        for (int s = 0; s < SEGMENTS; s++) {
-            List<ListEntry> rows = new ArrayList<>();
-            for (int i = 0; i < ROWS_PER_SEGMENT; i++) {
-                rows.add(object(String.format("k%05d", i * SEGMENTS + s)));
-            }
-            Path path = dir.resolve("seg-" + s + ".parquet");
-            SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-            try (SortedCursor cursor = new InMemoryCursor(rows, cmp, DuplicateHook.NO_OP)) {
-                writer.writeIntermediate(cursor, path);
-            }
-            out.add(path);
-        }
-        return out;
     }
 
     /** The production wiring: fan-in pinned to 2 so five staged segments genuinely cascade. */

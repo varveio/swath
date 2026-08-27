@@ -82,15 +82,15 @@ final class SortLaneTest {
     @Test
     void wiresTheConfiguredSegmentCodecIntoAnOutOfOrderReSortedPage(@TempDir Path tmp) throws Exception {
         // SortLane must thread SortConfig#segmentCodec() into its PageRunSegmentWriter so an
-        // out-of-order page's re-pack (at flush time) honors it too, not just the page's original
-        // admission-time pack.
+        // full-comparator-disordered but raw-key-monotonic page's re-pack (at flush time) honors it
+        // too, not just the page's original admission-time pack.
         Path staging = Files.createDirectories(tmp.resolve("_staging"));
         List<SegmentResult> finalized = new ArrayList<>();
         SortConfig zstdConfig = SortConfigs.base().withSegmentCodec(PageCodec.ZSTD1);
 
         SortLane lane = new SortLane(zstdConfig, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, NO_OP_METERS,
                 staging, "seg-test", finalized::add);
-        lane.admit(1L, page("d", "b", "a", "c"));   // out of order: forces the re-pack at flush
+        lane.admit(1L, page("a", "a", "c"));   // comparator tie forces safe re-pack at flush
         lane.close();
 
         assertThat(finalized).hasSize(1);

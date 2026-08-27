@@ -69,51 +69,6 @@ class SortTransformParallelMergeTest {
     }
 
     @Test
-    void multiRowGroupSegmentsAreRowGroupSkippedYetProduceOutputEqualToSerial(@TempDir Path root)
-            throws IOException {
-        // Row-group skip: three segments each split into MANY row groups (tiny row-group bytes +
-        // ~200 B padded keys), interleaved across the whole keyspace. Each R=3 range therefore prunes
-        // the non-overlapping row groups of every segment — and the pruned output must still equal both
-        // the no-skip serial baseline and the exact expected global sort (skip drops no row).
-        List<ListEntry> seg0 = new ArrayList<>();
-        List<ListEntry> seg1 = new ArrayList<>();
-        List<ListEntry> seg2 = new ArrayList<>();
-        List<String> expected = new ArrayList<>();
-        for (int i = 0; i < 300; i++) {
-            String k = String.format("%05d", i) + "x".repeat(200);
-            expected.add(k);
-            (i % 3 == 0 ? seg0 : i % 3 == 1 ? seg1 : seg2).add(obj(k));
-        }
-
-        // Serial baseline (parallelism=1, untouched path — no row-group skip).
-        Dirs serialDirs = dirs(root, "mrg-serial");
-        List<Path> serialStaging = List.of(
-                writeSegment(serialDirs.staging, "seg-0.parquet", seg0, 4096L),
-                writeSegment(serialDirs.staging, "seg-1.parquet", seg1, 4096L),
-                writeSegment(serialDirs.staging, "seg-2.parquet", seg2, 4096L));
-        SortTransformResult serial = transform(config(1))
-                .transform(serialStaging, serialDirs.output, serialDirs.staging, PublishListener.NO_OP);
-        assertThat(keys(serial.finalFiles())).containsExactlyElementsOf(expected);
-
-        // Parallel path with R=3 + a metrics recorder to prove row-group skip actually ENGAGED.
-        Dirs parDirs = dirs(root, "mrg-parallel");
-        List<Path> parStaging = List.of(
-                writeSegment(parDirs.staging, "seg-0.parquet", seg0, 4096L),
-                writeSegment(parDirs.staging, "seg-1.parquet", seg1, 4096L),
-                writeSegment(parDirs.staging, "seg-2.parquet", seg2, 4096L));
-        ThreadSafeMetrics metrics = new ThreadSafeMetrics();
-        SortTransformResult parallel =
-                new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT))
-                        .transform(parStaging, parDirs.output, parDirs.staging, PublishListener.NO_OP);
-
-        assertThat(parallel.totalRows()).isEqualTo(300);
-        assertThat(keys(parallel.finalFiles())).containsExactlyElementsOf(expected);
-        // The skip engaged on at least one range (>=1 group pruned) — otherwise this test isn't
-        // exercising the mechanism at all.
-        assertThat(metrics.count("SORT.merge_range_rowgroup_skipped")).isGreaterThanOrEqualTo(1);
-    }
-
-    @Test
     void parallelMergeWithFewerDistinctSampleKeysThanRangesStillTotalAndSorted(@TempDir Path root)
             throws IOException {
         // Only two distinct segment first-keys ("a","b") but R=3 requested ⇒ 2 ranges, still a total,
@@ -155,6 +110,8 @@ class SortTransformParallelMergeTest {
 
         // 3 distinct first-keys ⇒ 3 ranges ⇒ the counter total is the range count.
         assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(3);
+        assertThat(metrics.count("SORT.merge_scoped_frontier_validated_trailer")).isPositive();
+        assertThat(metrics.count("SORT.merge_scoped_frontier_trailer_reread")).isZero();
     }
 
     @Test
@@ -231,24 +188,13 @@ class SortTransformParallelMergeTest {
     private List<Path> stage(Path stagingDir, List<List<ListEntry>> segments) throws IOException {
         List<Path> out = new ArrayList<>();
         for (int i = 0; i < segments.size(); i++) {
-            out.add(writeSegment(stagingDir, "seg-" + i + ".parquet", segments.get(i)));
+            out.add(writeSegment(stagingDir, "seg-" + i + SortTransform.SEGMENT_SUFFIX, segments.get(i)));
         }
         return out;
     }
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
-        return writeSegment(dir, name, sorted, 1L << 20);
-    }
-
-    /** Force multiple row groups per segment by shrinking {@code segmentRowGroupBytes} (engages the row-group skip). */
-    private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long segmentRowGroupBytes)
-            throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, segmentRowGroupBytes);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        return path;
+        return SortTestSupport.writePageRun(dir.resolve(name), sorted, cmp);
     }
 
     private ListEntry obj(String key) {

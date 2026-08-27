@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.zip.CRC32C;
@@ -81,8 +82,20 @@ final class PageRunRawFixtures {
                 maxRecordLen = Math.max(maxRecordLen, body.length);
             }
 
-            byte[] segMin = blocks.isEmpty() ? new byte[0] : blocks.get(0).firstKey();
-            byte[] segMax = blocks.isEmpty() ? new byte[0] : blocks.get(blocks.size() - 1).lastKey();
+            byte[] segMin = new byte[0];
+            byte[] segMax = new byte[0];
+            boolean haveBounds = false;
+            for (PageBlock block : blocks) {
+                byte[] pageMin = block.firstKey();
+                byte[] pageMax = block.lastKey();
+                if (!haveBounds || Arrays.compareUnsigned(pageMin, segMin) < 0) {
+                    segMin = pageMin;
+                }
+                if (!haveBounds || Arrays.compareUnsigned(pageMax, segMax) > 0) {
+                    segMax = pageMax;
+                }
+                haveBounds = true;
+            }
             long trailerStart = ch.position();
             ByteBuffer trailer = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length
                     + PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
@@ -164,7 +177,7 @@ final class PageRunRawFixtures {
      * <b>trusting</b> that the pages ascend — exactly what {@link PageRunSegmentReader#readNext()} did
      * with no monotonicity check. This is the {@link StreamingMerger}-route sibling of
      * {@link TrustingPageFrontier}: driving the real {@link StreamingMerger} through it (as
-     * {@code KWayMerge} does whenever a merge group also holds a columnar Parquet segment, so
+     * the generic {@code KWayMerge} entry-stream seam does for a non-frontier store, so
      * {@code allSupportPageFrontier} is false) shows what the merge does when a page-run input is not
      * actually a sorted run — it silently misorders, which is why the guard lives in the shared IO layer
      * rather than in the frontier reader alone.

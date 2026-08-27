@@ -45,7 +45,7 @@ public final class PartWriter implements AutoCloseable, DatasetPartWriter {
         ListEntryParquetWriters.DataForcer selectedForcer =
                 dataForcer == null ? null : dataForcer::force;
         ListEntryParquetWriters.TrackedSpec spec = new ListEntryParquetWriters.TrackedSpec(
-                ROW_GROUP_BYTES, ListEntryParquetWriters.PageLayout.staging(),
+                ROW_GROUP_BYTES, ListEntryParquetWriters.PageLayout.direct(),
                 writebackBytes, selectedForcer);
         tracked = ListEntryParquetWriters.buildTracked(
                 path, new ListEntryWriteSupport(schema), spec);

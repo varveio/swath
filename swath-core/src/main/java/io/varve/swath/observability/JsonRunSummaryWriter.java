@@ -496,8 +496,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
 
         // The --sort block, read straight off the registry meters so a
         // sorted run is self-describing (did sort engage, which regime, what did it cost?). Only
-        // emitted for a --sort run; the classification signals (page_runs_per_buffer,
-        // buffer_sort_fallbacks) are the cheap "was pre-sortedness exploited" tells.
+        // emitted for a --sort run; page_runs_per_buffer is the cheap staging-shape signal.
         if (rc.sortEnabled()) {
             writeSort(root.putObject("sort"), rc, summary);
         }
@@ -804,7 +803,9 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("phase_rows_per_sec", mergeMs <= 0 ? 0.0
                 : summary.objects() / (mergeMs / 1_000.0));
         sortNode.put("page_runs_per_buffer", distributionMean("swath.sort.page_runs_per_buffer"));
-        sortNode.put("buffer_sort_fallbacks", (long) stealReasonCount("SORT", "buffer_sort_fallback"));
+        // Compatibility field retained for existing summary consumers after the fallback path was
+        // removed in 2026-08; it is intentionally always zero for newly produced runs.
+        sortNode.put("buffer_sort_fallbacks", 0L);
         // A merge-only `--sort --resume` (the listing was already complete in the
         // checkpoint; this process re-ran ONLY the k-way merge over already-durable staging
         // segments, ListRunner#runSortMergeOnly) recovers `segments`/the top-level `objects`

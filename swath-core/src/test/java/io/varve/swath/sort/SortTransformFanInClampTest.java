@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
@@ -77,7 +78,7 @@ class SortTransformFanInClampTest {
     }
 
     @Test
-    void exactPageTrailerMemoryBoundClampsFanInAndFiresMemClamped(@TempDir Path root) throws IOException {
+    void pageTrailerRecordSizeRefinementClampsFanInAndFiresMemClamped(@TempDir Path root) throws IOException {
         // A tiny per-stream estimate (8 bytes) makes the STATIC budget bound huge ⇒ static effectiveFanIn
         // == raw fan-in 512; but the EXACT bound from the page trailers (mergeBudget / real packed-page
         // size) is far smaller, so the merge-entry memory clamp — not the fd clamp — reduces the fan-in.
@@ -93,6 +94,20 @@ class SortTransformFanInClampTest {
         assertThat(metrics.count("SORT.merge_fanin_fd_clamped")).isZero();   // fd healthy ⇒ fd never binds
         assertThat(r.keys).isSorted();
         assertThat(r.keys).containsExactlyElementsOf(r.expected);
+    }
+
+    @Test
+    void unreadableTrailerFailsRecordSizePlanningInsteadOfFallingBack(@TempDir Path root)
+            throws IOException {
+        Path staging = Files.createDirectories(root.resolve("broken/_staging"));
+        Path segment = stagePageRun(staging, List.of(List.of(object("a")))).get(0);
+        byte[] bytes = Files.readAllBytes(segment);
+        bytes[bytes.length - 1] ^= 0x01;
+        Files.write(segment, bytes);
+
+        assertThatThrownBy(() -> MergeFanInPlanner.maxPageRunRecordLen(List.of(segment)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("bad or missing page-run trailer");
     }
 
     @Test

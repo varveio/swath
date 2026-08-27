@@ -51,14 +51,15 @@ final class MergeFdBudget {
     }
 
     /**
-     * Compose the runtime-clamped fan-in: {@code max(2, min(staticFanIn, fdBound, exactMemoryFanIn))}.
-     * {@code exactMemoryFanIn} is {@link Integer#MAX_VALUE} when no exact page-run memory bound was
-     * computed (Parquet/mixed input, or a trailer read failed) — so it drops out of the {@code min}
-     * and the static estimate governs. Pure/injectable.
+     * Compose the runtime-clamped fan-in:
+     * {@code max(2, min(staticFanIn, fdBound, recordSizedFanIn))}.
+     * {@code recordSizedFanIn} is {@link Integer#MAX_VALUE} when no page-run record-size refinement
+     * was computed, so it drops out of the {@code min} and the configured estimate governs.
+     * Pure/injectable.
      */
-    static int clampedFanIn(int staticFanIn, int softFdLimit, int headroom, int exactMemoryFanIn) {
+    static int clampedFanIn(int staticFanIn, int softFdLimit, int headroom, int recordSizedFanIn) {
         int fdBound = fdBoundedFanIn(softFdLimit, headroom);
-        return Math.max(2, Math.min(staticFanIn, Math.min(fdBound, exactMemoryFanIn)));
+        return Math.max(2, Math.min(staticFanIn, Math.min(fdBound, recordSizedFanIn)));
     }
 
     /**

@@ -28,7 +28,8 @@ import java.util.zip.CRC32C;
  * trailing-magic truncation check), the framed-record read ({@code [len u32][crc32c u32][body]} with
  * the {@code len<=0 || len>maxRecordLen} bound applied BEFORE allocation and a CRC32C body verify), the
  * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the decode-free
- * frontier-field parse, the <b>intra-segment min-monotonicity guard</b> ({@link #nextPage()}), and
+ * bounded structural page-body validation/frontier parse, the <b>intra-segment min-monotonicity
+ * guard</b> ({@link #nextPage()}), and
  * the positional/sequential read primitives.
  *
  * <p>Three record-read variants share the same len/crc read: the two streaming readers call
@@ -121,6 +122,23 @@ final class PageRunSegmentIo implements AutoCloseable {
             if (trailerMagic != PageRunSegmentWriter.MAGIC) {
                 throw failFor(path, "bad or missing page-run trailer (truncated segment?)");
             }
+            long fixedTailStart = size - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            if (trailerStart < PageRunSegmentWriter.HEADER_BYTES
+                    || trailerStart > fixedTailStart - 4) {
+                throw failFor(path, "invalid page-run trailer offset " + trailerStart);
+            }
+            long recordBytes = trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            if (totalRecords == 0) {
+                if (recordBytes != 0 || totalEntries != 0 || maxRecordLen != 0) {
+                    throw failFor(path, "inconsistent empty page-run trailer counts");
+                }
+            } else if (totalEntries < totalRecords
+                    || maxRecordLen == 0
+                    || recordBytes < 9
+                    || totalRecords > recordBytes / 9
+                    || maxRecordLen > recordBytes - 8) {
+                throw failFor(path, "inconsistent page-run trailer record metadata");
+            }
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
             return new PageRunSegmentIo(channel, path, metrics, maxRecordLen, totalRecords, totalEntries,
@@ -150,14 +168,19 @@ final class PageRunSegmentIo implements AutoCloseable {
      * min-monotonicity invariant. Returning the parsed fields alongside the body costs the entry-typed
      * reader nothing (the leading min/max/count parse is a few bytes of the body it already holds) and buys
      * the guarantee that a third reader added later CANNOT skip the LOGICAL guard the way a bare
-     * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} — the fallback
-     * whenever any segment in a merge group is a columnar Parquet fixture — assumes each input run is
-     * sorted, so an unguarded page-run reader on that path silently misorders the merged output exactly as
-     * the frontier path would.
+     * {@code nextBody()} let {@link PageRunSegmentReader} skip it: {@code StreamingMerger} assumes each
+     * input run is sorted, so an unguarded page-run reader on that generic seam silently misorders output
+     * exactly as the frontier path would.
      */
     Page nextPage() throws IOException {
         byte[] body = nextBody();
-        FrontierFields fields = parseFrontierFields(body);
+        FrontierFields fields;
+        try {
+            fields = parseFrontierFields(body);
+        } catch (IllegalArgumentException e) {
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "malformed page body: " + e.getMessage(), e);
+        }
         pagesRead++;
         checkMinMonotonic(fields.minKey());
         previousMin = fields.minKey();
@@ -237,20 +260,25 @@ final class PageRunSegmentIo implements AutoCloseable {
      */
     void checkComplete(long seenEntries) throws IOException {
         if (seenEntries != totalEntries) {
-            throw fail("entry count mismatch: saw " + seenEntries
-                    + " but trailer declared totalEntries=" + totalEntries);
+            throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
+                    "entry count mismatch: saw " + seenEntries
+                            + " but trailer declared totalEntries=" + totalEntries, null);
         }
     }
 
-    /** Parse ONLY the leading frontier fields of a record body — no row decode (see {@link PageBlock#serialize}). */
+    /** Structurally validate a body and return its frontier fields without decoding rows. */
     static FrontierFields parseFrontierFields(byte[] body) {
-        ByteBuffer b = ByteBuffer.wrap(body);
-        byte[] min = new byte[b.getShort() & 0xFFFF];
-        b.get(min);
-        byte[] max = new byte[b.getShort() & 0xFFFF];
-        b.get(max);
-        int count = b.getInt();
-        return new FrontierFields(min, max, count);
+        PageBlock.SerializedFields fields = PageBlock.parseSerializedFields(body);
+        if (Arrays.compareUnsigned(fields.minKey(), fields.maxKey()) > 0) {
+            throw new IllegalArgumentException(
+                    "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
+        }
+        if (fields.codec() == PageCodec.NONE
+                && fields.storedPayload().length != fields.rawPayloadLength()) {
+            throw new IllegalArgumentException("malformed PageBlock: NONE payload lengths differ: raw="
+                    + fields.rawPayloadLength() + " stored=" + fields.storedPayload().length);
+        }
+        return new FrontierFields(fields.minKey(), fields.maxKey(), fields.count());
     }
 
     /** Positional read of exactly {@code n} bytes (does not move the channel position). */
@@ -297,6 +325,14 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     IOException fail(String message) {
         return failFor(path, message);
+    }
+
+    SegmentCorruptionException corruption(String errorClass, String message, Throwable cause) {
+        return new SegmentCorruptionException(path, errorClass, message, cause);
+    }
+
+    Path path() {
+        return path;
     }
 
     private static IOException failFor(Path path, String message) {

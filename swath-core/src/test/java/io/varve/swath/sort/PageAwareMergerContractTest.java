@@ -306,7 +306,11 @@ class PageAwareMergerContractTest {
             List<Path> files = new ArrayList<>();
             for (int s = 0; s < nSegs; s++) {
                 List<ListEntry> entries = bySeg.get(s);
-                Collections.shuffle(entries, rnd);                 // random order -> re-sort + overlaps
+                Collections.shuffle(entries, rnd);
+                // Live pages require non-decreasing raw keys. Stable raw sorting preserves randomized
+                // version/row-type order within equal keys, so safe full-comparator repair still engages.
+                entries.sort((a, b) -> KeyBytes.compareUnsigned(
+                        a.key().rawUnsafe(), b.key().rawUnsafe()));
                 List<List<ListEntry>> pages = new ArrayList<>();
                 int idx = 0;
                 while (idx < entries.size()) {

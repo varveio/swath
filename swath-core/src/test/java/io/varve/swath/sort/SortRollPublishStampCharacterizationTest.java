@@ -62,8 +62,10 @@ class SortRollPublishStampCharacterizationTest {
 
         SortConfig config = SortConfigs.base().withFinalFileBytes(1L);
         List<Long> progress = new ArrayList<>();
+        List<FinalPart> published = new ArrayList<>();
         SortTransformResult result = stampedTransform(config)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, progress::add);
+                .transform(staging, dirs.output, dirs.staging,
+                        (parts, ignoredRows) -> published.addAll(parts), progress::add);
 
         // Roll cadence: one row per file, four files, named in key order.
         assertThat(result.finalFiles()).hasSize(4);
@@ -72,6 +74,16 @@ class SortRollPublishStampCharacterizationTest {
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d");
         for (Path f : result.finalFiles()) {
             assertThat(keys(List.of(f))).hasSize(1);
+        }
+        assertThat(published.stream().map(FinalPart::path).toList())
+                .as("closed rolled writers retain metadata through the publish handoff")
+                .containsExactlyElementsOf(result.finalFiles());
+        for (int i = 0; i < published.size(); i++) {
+            String expectedKey = String.valueOf((char) ('a' + i));
+            FinalPartMetadata metadata = published.get(i).metadata().orElseThrow();
+            assertThat(metadata.rows()).isEqualTo(1);
+            assertThat(metadata.minKey()).isEqualTo(expectedKey);
+            assertThat(metadata.maxKey()).isEqualTo(expectedKey);
         }
 
         // Footer stamp: file_index is the global 1..N in filename order; file_final on the last file only.
@@ -196,14 +208,10 @@ class SortRollPublishStampCharacterizationTest {
         return new Dirs(output, staging);
     }
 
-    private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long segmentRowGroupBytes)
+    private Path writeSegment(Path dir, String name, List<ListEntry> sorted, long ignoredPageRunBytes)
             throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, segmentRowGroupBytes);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        return path;
+        return SortTestSupport.writePageRun(
+                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
     }
 
     private static ListEntry object(String key) {

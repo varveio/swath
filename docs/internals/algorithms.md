@@ -1568,7 +1568,12 @@ prefix→count map) so a future run can seed from it.
 > **Planned — not yet wired.** `S3PageFetcher` throws for a `VERSIONS` request and
 > `StoreCapabilities.supportsVersions` is `false`; v1.0 lists `OBJECTS` only. This
 > section is the design of record for when `ListObjectVersions` lands (see
-> [`contracts.md`](contracts.md) §1.2).
+> [`contracts.md`](contracts.md) §1.2). One enablement gate remains explicit: the intended
+> product order is newest-first within a key, but the dormant synthetic sort machinery currently
+> compares and stamps null-first, lexicographic `version_id`. Those orders are not equivalent because
+> version IDs are opaque. Do not expose `VERSIONS` until chronology and deterministic ties are defined
+> and the comparator, footer/manifest order value, compatibility version, and independent oracle tests
+> are changed together; the provisional lexicographic order is not the product contract.
 
 Versioned mode changes the ordering and the split granularity:
 
@@ -1579,7 +1584,9 @@ Versioned mode changes the ordering and the split granularity:
   null`); never split inside a key's version list.
 - The stop check compares **key only** (`k.key > hi`).
 - A single key with millions of versions is an **unsplittable atom** — the
-  estimator/probe treats one key as the floor granularity.
+  estimator/probe treats one key as the floor granularity. Final output rolling likewise never splits
+  an equal-key group: `final-file-bytes` is a soft target and this atom may make one file exceed it,
+  while the writer stays streaming and retains only the previous key.
 - **All pivot / stop / span / `byteMidpoint` computations operate on
   `cursor.key` only** (never the `version_id` component); a split pivot `m`
   must satisfy `compare(m, cursor.key) > 0` (strictly past the current key),
@@ -1659,14 +1666,17 @@ only to general-purpose buckets.
 
 ## 12. Parallel sort boundary selection
 
-When the range-merge gates admit `R > 1`, boundary selection builds one global unsigned `TreeSet`
-of page-minimum candidates and chooses ranks `j * candidates / R` for `j = 1..R-1`. Each page-run
-original listing-phase segment contributes the systematic sample in contracts §6.1. Cascade
+When the range-merge gates admit `R > 1`, each page-run original listing-phase segment contributes
+the systematic page-minimum sample in contracts §6.1. Boundary selection deduplicates those keys and
+retains the deterministic bottom-hash 16,384 candidates across the whole run (1,024 per range at
+the supported 16-range maximum); this bounds retained
+candidate state independently of segment count and is invariant to segment/input order. It sorts the
+retained keys unsigned and chooses ranks `j * candidates / R` for `j = 1..R-1`. Cascade
 intermediates are produced after this phase and therefore carry no sample. A valid embedded sample
 is committed only after its complete block passes structural, CRC, count, and ordering validation;
 otherwise that segment alone is scanned through `PageFrontierReader`, preserving legacy behavior. Repeated
-minima remain in the per-segment sample and are deduplicated only by the same global set, so
-embedded, legacy, and mixed inputs choose byte-identical boundaries.
+minima remain in the per-segment sample and are deduplicated by the whole-run sampler. Embedded,
+legacy, and mixed inputs therefore feed the same deterministic selection rule.
 
 Boundary choice affects balance only: every range still filters every retained page row against its
 exact `[lo, hi)` bounds. The final unbounded range drains every original segment to EOF, retaining

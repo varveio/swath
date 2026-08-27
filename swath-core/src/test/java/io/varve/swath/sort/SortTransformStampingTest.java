@@ -25,8 +25,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * {@link SortTransform} wired with {@link SortedParquetWriterFactory} (instead of
  * {@link SortedFileWriterFactory#DEFAULT}): the published final file(s) carry the sortedness
- * stamp and small row groups; staging segments (written by
- * {@link SegmentWriter}/{@link SegmentParquetSink}) do not.
+ * stamp and small row groups; staging uses page-run files.
  */
 class SortTransformStampingTest {
 
@@ -69,12 +68,8 @@ class SortTransformStampingTest {
     }
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-        try (SortedCursor cursor = new InMemoryCursor(sorted, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        return path;
+        return SortTestSupport.writePageRun(
+                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
     }
 
     private static ObjectEntry objectEntry(String key) {

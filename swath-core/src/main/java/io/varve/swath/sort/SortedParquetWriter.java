@@ -31,7 +31,7 @@ import org.apache.parquet.schema.MessageType;
  * sortedness stamp in the footer key-value
  * metadata, written via {@link WriteSupport#finalizeWrite()}, the one footer-KV hook the high-level
  * writer supports. {@link #close()} finalizes + fsyncs, matching
- * {@link io.varve.swath.output.parquet.PartWriter}/{@link SegmentParquetSink}'s durability discipline —
+ * {@link io.varve.swath.output.parquet.PartWriter}'s durability discipline —
  * the writer construction and close/fsync sequence itself live in {@link ListEntryParquetWriters},
  * shared between the two.
  *
@@ -44,9 +44,8 @@ import org.apache.parquet.schema.MessageType;
  * schema and the reader-side completeness check: {@code docs/internals/contracts.md} §6 and
  * {@code docs/swath-replay.md} ("Footer sortedness stamp").
  *
- * <p>Only <b>final</b> output files are stamped by this writer; staging segments
- * ({@link SegmentParquetSink}) are written by a separate, unstamped path — a segment is
- * internal working state, never served.
+ * <p>Only <b>final</b> output files use this writer. Staging uses the distinct page-run format, so
+ * internal working state cannot be mistaken for served Parquet output.
  */
 public final class SortedParquetWriter implements SortedFileWriter {
 

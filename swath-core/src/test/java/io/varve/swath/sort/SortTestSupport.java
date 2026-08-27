@@ -9,7 +9,9 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +26,28 @@ final class SortTestSupport {
     static ObjectEntry object(String key) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, null,
                 false, null, null, null, null);
+    }
+
+    /** Write pre-sorted entries in the production page-run staging format. */
+    static Path writePageRun(Path path, List<ListEntry> sorted, Comparator<ListEntry> comparator)
+            throws IOException {
+        PageRunSegmentWriter writer =
+                new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
+        try (SortedCursor cursor = new InMemoryCursor(sorted, comparator, DuplicateHook.NO_OP)) {
+            writer.writeIntermediate(cursor, path);
+        }
+        return path;
+    }
+
+    /** Write canonical Parquet input for tests of CaptureSorter/SegmentReader, not internal staging. */
+    static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
+        try (SortedFileWriter writer =
+                     new SortedParquetWriter(path, SortConfigs.base(), SortMode.VERSIONS, 1)) {
+            for (ListEntry entry : entries) {
+                writer.write(entry);
+            }
+        }
+        return path;
     }
 
     /** Drain a cursor, closing it. */

@@ -24,7 +24,10 @@ import java.util.Map;
  * <p>The sorter admits {@code (nodeId, page)} pairs because a sealed buffer mixes many nodes and
  * {@link ListEntry} carries no node id. {@code comparator} is threaded
  * through to {@link PageBlock#pack} so each page records, at admission, whether it is internally
- * ordered under the full §0.3 preorder — not just key bytes.
+ * ordered under the full §0.3 preorder — not just key bytes. The page-run writer repairs
+ * full-comparator disorder only while raw keys remain non-decreasing, which makes the admitted
+ * {@link PageBlock#lastKey()} a safe durable maximum; raw-key regression is rejected before the
+ * {@link SegmentSink} checkpoint seam.
  */
 final class SortBuffer {
 

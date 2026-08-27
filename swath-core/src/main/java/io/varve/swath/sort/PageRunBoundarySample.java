@@ -18,7 +18,7 @@ final class PageRunBoundarySample {
 
     /**
      * The sample only resolves {@code R-1} split points, so thousands of candidates per segment is
-     * ample while keeping sampler heap independent of the listing's row count (I11).
+     * ample. {@link ParallelRangeMerge} applies a second whole-run cap across segment samples.
      */
     static final int MAX_ENTRIES = 4_096;
     static final int IO_BUFFER_BYTES = 64 * 1_024;

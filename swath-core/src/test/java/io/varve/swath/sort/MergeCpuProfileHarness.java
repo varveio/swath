@@ -64,10 +64,6 @@ class MergeCpuProfileHarness {
     private static final String KEY_PREFIX = "corp-data-lake-logs";
     private static final String[] STORAGE_CLASSES =
             {"STANDARD", "STANDARD_IA", "INTELLIGENT_TIERING", "GLACIER"};
-    // Production default segment-row-group-bytes (SortConfig#fromProperties) — narrow staging row
-    // groups, matching production shape.
-    private static final long SEGMENT_ROW_GROUP_BYTES = 1L << 20;
-
     @Test
     @Timeout(value = 9, unit = TimeUnit.MINUTES)
     void profileSerialMerge() throws Exception {
@@ -152,9 +148,9 @@ class MergeCpuProfileHarness {
         long totalRows = 0;
         long totalBytes = 0;
         for (int seg = 0; seg < NUM_SEGMENTS; seg++) {
-            Path path = master.resolve(String.format("seg-%05d.parquet", seg));
-            SegmentWriter writer =
-                    new SegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, SEGMENT_ROW_GROUP_BYTES);
+            Path path = master.resolve(String.format("seg-%05d.pageseg", seg));
+            PageRunSegmentWriter writer =
+                    new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE);
             long rows;
             try (SortedCursor cursor =
                          new GeneratedCursor(seg, NUM_SEGMENTS, BLOCK_ROWS, TOTAL_ROWS, rowsPerDay, base)) {
@@ -257,7 +253,7 @@ class MergeCpuProfileHarness {
 
     private static List<Path> copyCorpus(Path master, Path target) throws IOException {
         List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.parquet")) {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
             ds.forEach(files::add);
         }
         files.sort(Comparator.comparing(p -> p.getFileName().toString()));

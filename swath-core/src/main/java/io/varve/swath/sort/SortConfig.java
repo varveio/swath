@@ -37,36 +37,20 @@ import java.util.function.UnaryOperator;
  *       is Parquet's smallest addressable unit, so this is the floor on what a bounded key-range read
  *       must decode; see the constant for why the default is a listing page rather than parquet's
  *       20,000.</li>
- *   <li>{@code segmentRowGroupBytes} — the row-group size for INTERNAL <b>columnar Parquet</b> staging
- *       segments ({@link SegmentWriter}/{@link SegmentParquetSink}, still used by {@link CaptureSorter}'s
- *       sort-fixture path and the gated {@link ParallelRangeMerge} path): small on purpose
- *       (default 1&nbsp;MB, not {@code finalRowGroupBytes}'s 8&nbsp;MB) because {@link SegmentReader}
- *       preloads a whole row group per open Parquet stream. The live listing path stages
- *       <b>page-run</b> segments (not columnar Parquet), so this knob no longer governs the serial
- *       {@link #effectiveFanIn()} merge-memory bound — {@code mergePerStreamBytes} does. It survives only
- *       as the Parquet-staging row-group size for the two columnar callers above; {@link ParallelRangeMerge}
- *       keeps its own row-group-derived per-range bound.</li>
- *   <li>{@code mergePerStreamBytes} — the estimated heap a single OPEN merge stream holds,
- *       the denominator of the serial page-run merge's {@link #effectiveFanIn()} memory bound. A
- *       {@link PageFrontierReader} currently retains the FULL packed page body per open stream (for CRC),
- *       so per-stream heap ≈ one packed page (~tens of KiB); the default is a conservative 64&nbsp;KiB
- *       <b>estimate, to be validated at the perf gate</b>. Replaces {@code segmentRowGroupBytes} as the
- *       merge-memory denominator (the row-group concept has no page-run meaning). The runtime
- *       merge-entry clamp ({@link SortTransform}) refines this with the exact per-segment
- *       {@code maxRecordLen} from the page-run trailer when available.</li>
- *   <li>{@code mergeBudgetBytes} — the merge-phase memory budget: caps how many
+ *   <li>{@code mergePerStreamBytes} — the configured planning price for one OPEN merge stream,
+ *       and the denominator of the serial page-run merge's {@link #effectiveFanIn()}. A
+ *       {@link PageFrontierReader} retains packed page bodies per open stream, so the default uses
+ *       64&nbsp;KiB as a capacity estimate. The runtime merge-entry clamp ({@link SortTransform})
+ *       raises that price to the largest encoded {@code maxRecordLen} from the page-run trailers
+ *       when necessary. Neither value is a measurement or hard bound of decoded JVM heap.</li>
+ *   <li>{@code mergeBudgetBytes} — the merge-phase planning budget: caps how many
  *       segment streams a single {@link KWayMerge} pass may hold open at once, via
  *       {@link #effectiveFanIn()} = {@code min(fanIn, max(2, mergeBudgetBytes / mergePerStreamBytes))}
- *       — bounding memory is a function of the budget, never of segment count (I11), even when
- *       {@code fanIn} alone would have allowed more streams than the budget affords. Same heap-adaptive
- *       shape as {@code segmentBytes} by default (floor 64&nbsp;MB). <b>The {@code max(2, …)} floor
- *       is a documented floor, not a rejection:</b> {@link #effectiveFanIn()} never opens
- *       fewer than 2 streams (a merge needs at least 2 to merge anything), so for a budget below
- *       {@code 2 × mergePerStreamBytes} the realized peak is the 2-stream floor itself, not the
- *       budget — i.e. {@code streams/pass × mergePerStreamBytes ≤ mergeBudgetBytes} holds for any
- *       budget {@code ≥ 2 × mergePerStreamBytes}, and below that the true bound is
- *       {@code 2 × mergePerStreamBytes} (the minimum realizable merge memory), which the caller
- *       should read as the effective floor rather than expect a smaller number from a tiny budget.</li>
+ *       — keeping planned open-stream capacity a function of the budget, never of segment count
+ *       (I11), even when {@code fanIn} alone would allow more streams. Same heap-adaptive shape as
+ *       {@code segmentBytes} by default (floor 64&nbsp;MB). The {@code max(2, …)} floor is a
+ *       documented merge-width floor, not a claim that two streams consume exactly twice the
+ *       configured price.</li>
  *   <li>{@code segmentCodec} — the codec {@link PageBlock#pack} compresses a page's
  *       front-coded PAYLOAD at pack time ({@code NONE}, {@code LZ4}, or {@code ZSTD1}; default
  *       {@code LZ4}) — the record HEADER (min/max, dict
@@ -78,7 +62,7 @@ import java.util.function.UnaryOperator;
 public record SortConfig(long segmentBytes, long segmentEntries, double heapFraction,
                          int buffers, int fanIn, long finalFileBytes, long finalRowGroupBytes,
                          int finalPageRows,
-                         long segmentRowGroupBytes, long mergeBudgetBytes, int mergeParallelism,
+                         long mergeBudgetBytes, int mergeParallelism,
                          long mergePerStreamBytes, PageCodec segmentCodec,
                          long minParallelStagedBytes) {
 
@@ -178,7 +162,6 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
             1L << 30,                                     // final-file-bytes: rolls sorted output into ~1 GiB parts
             8L * 1024 * 1024,                             // final-row-group-bytes: served-file seek granularity
             DEFAULT_FINAL_PAGE_ROWS,                      // final-page-rows: seek granularity WITHIN a row group
-            1L * 1024 * 1024,                             // segment-row-group-bytes: columnar-Parquet staging only
             adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // merge-budget: same heap-adaptive shape as segmentBytes
             DEFAULT_MERGE_PARALLELISM,
             DEFAULT_MERGE_PER_STREAM_BYTES,
@@ -215,9 +198,6 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         if (finalPageRows <= 0) {
             throw new IllegalArgumentException("final-page-rows must be > 0, got " + finalPageRows);
         }
-        if (segmentRowGroupBytes <= 0) {
-            throw new IllegalArgumentException("segment-row-group-bytes must be > 0, got " + segmentRowGroupBytes);
-        }
         if (mergeBudgetBytes <= 0) {
             throw new IllegalArgumentException("merge-budget-bytes must be > 0, got " + mergeBudgetBytes);
         }
@@ -240,67 +220,62 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
 
     public SortConfig withSegmentBytes(long segmentBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withSegmentEntries(long segmentEntries) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withHeapFraction(double heapFraction) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withBuffers(int buffers) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFanIn(int fanIn) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFinalRowGroupBytes(long finalRowGroupBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withFinalPageRows(int finalPageRows) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
-    }
-
-    public SortConfig withSegmentRowGroupBytes(long segmentRowGroupBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     /** Read the knobs from system properties once, applying the documented defaults. */
@@ -325,7 +300,6 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         long finalFileBytes = longProp(lookup, "final-file-bytes", DEFAULT.finalFileBytes());
         long finalRowGroupBytes = longProp(lookup, "final-row-group-bytes", DEFAULT.finalRowGroupBytes());
         int finalPageRows = intProp(lookup, "final-page-rows", DEFAULT.finalPageRows());
-        long segmentRowGroupBytes = longProp(lookup, "segment-row-group-bytes", DEFAULT.segmentRowGroupBytes());
         long mergeBudgetBytes = longProp(lookup, "merge-budget-bytes", adaptiveSegmentBytes(heapFraction));
         int mergeParallelism = intProp(lookup, "merge-parallelism", DEFAULT.mergeParallelism());
         long mergePerStreamBytes = longProp(lookup, "merge-per-stream-bytes", DEFAULT.mergePerStreamBytes());
@@ -336,13 +310,13 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
                 ? DEFAULT.segmentCodec()
                 : parseSegmentCodec(segmentCodecProp);
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn,
-                finalFileBytes, finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism,
+                finalFileBytes, finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism,
                 mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
     }
 
     public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, segmentRowGroupBytes, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
                 segmentCodec, minParallelStagedBytes);
     }
 
@@ -357,23 +331,20 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
     /**
      * The <b>static</b> budget-bounded merge fan-in: {@code min(fanIn,
      * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link KWayMerge} opens at most this many streams
-     * per pass, and each open page-run stream holds ≈ {@code mergePerStreamBytes} of heap (one packed
-     * page), so this keeps merge-phase peak memory a function of the budget knob, never of how many
-     * segments a run happens to produce (I11) — {@code fanIn} alone is only a correctness/fd bound
-     * (I2), not a memory bound.
+     * per pass, so planned open-stream capacity remains a function of the budget knob, never of how
+     * many segments a run happens to produce (I11). The price is advisory capacity planning, not a
+     * measurement or hard bound of decoded JVM heap; {@code fanIn} alone is only a correctness/fd
+     * bound (I2).
      *
      * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate),
-     * NOT {@code segmentRowGroupBytes} (a columnar-Parquet row-group concept with no page-run meaning).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
      * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
-     * exact per-segment {@code maxRecordLen}.
+     * largest per-segment encoded {@code maxRecordLen}.
      *
-     * <p><b>The {@code max(2, …)} floor is documented, not rejected:</b> a merge pass
-     * needs at least 2 streams to merge anything, so this never returns fewer than 2 regardless of
-     * how tiny {@code mergeBudgetBytes} is — for a budget below {@code 2 × mergePerStreamBytes} the
-     * realized peak is exactly the 2-stream floor (the minimum realizable merge memory), not the
-     * budget itself; {@code streams/pass × mergePerStreamBytes ≤ mergeBudgetBytes} only holds once
-     * the budget reaches that floor.
+     * <p><b>The {@code max(2, …)} floor is documented, not rejected:</b> a merge pass needs at least
+     * 2 streams to merge anything, so this never returns fewer than 2 regardless of how tiny
+     * {@code mergeBudgetBytes} is. Below two configured stream prices, the planning arithmetic
+     * intentionally exceeds the requested budget; it does not imply an exact resident-memory peak.
      */
     public int effectiveFanIn() {
         long budgetBound = mergeBudgetBytes / mergePerStreamBytes;

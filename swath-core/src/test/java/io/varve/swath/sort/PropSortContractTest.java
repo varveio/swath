@@ -56,7 +56,7 @@ import org.apache.parquet.schema.MessageType;
  *       transitivity, equivalence-transitivity, totality) across mixed subtypes incl. null
  *       {@code version_id} and equal-comparing cross-type entries; (iii) equal-comparing entries all
  *       survive the merge — none dropped — and keep stable input order within one segment.</li>
- *   <li><b>PROP-SORT-2</b> — {@link SegmentWriter}→{@link SegmentReader} round-trips every {@link
+ *   <li><b>PROP-SORT-2</b> — canonical Parquet → {@link SegmentReader} round-trips every {@link
  *       ListEntry} subtype for arbitrary generated entries incl. {@code 0x00}/{@code 0xFF} bytes in
  *       keys, 1&nbsp;KB keys, unicode, null optional fields, the empty segment, and a single
  *       record.</li>
@@ -66,7 +66,7 @@ import org.apache.parquet.schema.MessageType;
  *       true first row, which derive must still return correctly.</li>
  * </ul>
  *
- * <p>In-package so the package-private merge/segment seams ({@link KWayMerge}, {@link SegmentWriter},
+ * <p>In-package so the package-private merge/segment seams ({@link KWayMerge},
  * {@link SegmentReader}, {@link InMemorySegments}) are reachable. Try budgets are kept modest on the
  * Parquet-writing properties so the default suite stays fast.
  */
@@ -355,10 +355,7 @@ class PropSortContractTest {
     private static void assertRoundTrips(List<ListEntry> entries) throws IOException {
         Path seg = Files.createTempFile("propsort2-", ".parquet");
         try {
-            SegmentWriter writer = new SegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-            try (SortedCursor cursor = new InMemoryCursor(entries, CMP, DuplicateHook.NO_OP)) {
-                writer.writeIntermediate(cursor, seg);
-            }
+            SortTestSupport.writeCanonicalParquet(seg, entries);
             List<ListEntry> back = new ArrayList<>();
             try (SegmentReader reader = new SegmentReader(seg)) {
                 while (reader.hasNext()) {

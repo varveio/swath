@@ -9,7 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
 
 /**
- * The page-run analogue of {@link ParallelRangeMerge}'s Parquet row-group skip: a
+ * A range-scoped view of one page-run frontier: a
  * {@link PageFrontierStream} view of one page-run segment restricted to the pages that can hold a
  * key in {@code [lo, hi)}. Pages outside the range are stepped over <b>without decoding their
  * rows</b> — {@link #decodeCurrentPage()} is never called on them — which is what makes a range cost

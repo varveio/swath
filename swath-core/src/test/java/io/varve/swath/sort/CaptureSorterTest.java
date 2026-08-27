@@ -20,8 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -75,6 +73,67 @@ class CaptureSorterTest {
     }
 
     @Test
+    void arbitraryOverlappingChunksUseTheBoundedEntryMerge(@TempDir Path root) throws IOException {
+        Path captureDir = Files.createDirectories(root.resolve("capture"));
+        Path outputDir = Files.createDirectories(root.resolve("out"));
+        List<ListEntry> evensDescending = new ArrayList<>();
+        List<ListEntry> oddsDescending = new ArrayList<>();
+        for (int i = 5_999; i >= 0; i--) {
+            (i % 2 == 0 ? evensDescending : oddsDescending)
+                    .add(obj(String.format("k%05d", i)));
+        }
+        writePart(captureDir, "part-0.parquet", evensDescending);
+        writePart(captureDir, "part-1.parquet", oddsDescending);
+
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortConfig config = SortConfigs.base()
+                .withSegmentEntries(1_500)
+                .withMergeParallelism(4)
+                .withMinParallelStagedBytes(0);
+        SortTransformResult result = new CaptureSorter(config, metrics).sort(captureDir, outputDir);
+
+        assertThat(result.totalRows()).isEqualTo(6_000);
+        assertThat(keysOf(result.finalFiles().getFirst())).containsExactly(
+                java.util.stream.IntStream.range(0, 6_000)
+                        .mapToObj(i -> String.format("k%05d", i))
+                        .toArray(String[]::new));
+        assertThat(metrics.count("SORT.merge_range_frontier_disabled")).isEqualTo(1);
+        assertThat(metrics.count("SORT.page_whole_emitted"))
+                .as("arbitrary chunks must not enter the overlap-retaining frontier merge")
+                .isZero();
+    }
+
+    @Test
+    void arbitraryFixtureChunksArePageRunsWithoutUnusedBoundarySamples(@TempDir Path root) throws IOException {
+        Path captureDir = Files.createDirectories(root.resolve("capture"));
+        Path outputDir = Files.createDirectories(root.resolve("out"));
+        List<ListEntry> rows = new ArrayList<>();
+        for (int i = 2_499; i >= 0; i--) {
+            rows.add(obj(String.format("k%05d", i)));
+        }
+        writePart(captureDir, "part-0.parquet", rows);
+
+        SortedFileWriterFactory failAfterStaging = (path, fileIndex) -> {
+            throw new IOException("stop after staging");
+        };
+        CaptureSorter sorter = new CaptureSorter(
+                SortConfigs.base().withSegmentEntries(3_000), SortMetrics.NO_OP, failAfterStaging);
+        assertThatThrownBy(() -> sorter.sort(captureDir, outputDir))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("stop after staging");
+
+        Path staging = outputDir.resolve(CaptureSorter.STAGING_DIR_NAME);
+        Path segment = staging.resolve("fixture-0" + SortTransform.SEGMENT_SUFFIX);
+        assertThat(Files.exists(segment)).isTrue();
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment)) {
+            PageRunBoundarySample.ReadResult sample = PageRunBoundarySample.read(io);
+            assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.ABSENT);
+            assertThat(sample.totalRecords()).isEqualTo(3);
+            assertThat(sample.keys()).isEmpty();
+        }
+    }
+
+    @Test
     void duplicateAdjacentKeyFailsFastNamingTheKey(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
@@ -124,15 +183,15 @@ class CaptureSorterTest {
     /**
      * The cross-row-type check runs inside the {@link CaptureSorter}-only {@code SortedFileWriter}
      * decorator that wraps the final writer (see {@code CaptureSorter.DuplicateKeyCheckingWriterFactory})
-     * — its {@code previousKey} state must survive a FINAL-FILE ROLL, not just a single writer's
-     * lifetime. Force a roll after every row ({@code finalFileBytes = 1}) so the OBJECT "a" is
-     * written to {@code part-00000} and its COMMON_PREFIX duplicate lands in {@code part-00001}
-     * — only cross-file state can catch
-     * this. Also proves the duplicate-detected path still leaves ONLY {@code .tmp} files behind (no
+     * — its {@code previousKey} state must see adjacent cross-type rows before publication. Force the
+     * roll threshold after every row ({@code finalFileBytes = 1}); key-atomic rolling deliberately
+     * defers the roll across the OBJECT/COMMON_PREFIX key group, and the fixture policy rejects the
+     * second row before a new part opens. This also proves the duplicate-detected path leaves only a
+     * {@code .tmp} file behind (no
      * renamed/published final), same as the merge-phase {@link DuplicateHook} discipline.
      */
     @Test
-    void duplicateKeyAcrossRowTypesStraddlingAFinalFileRollIsStillCaught(@TempDir Path root) throws IOException {
+    void duplicateKeyAcrossRowTypesIsCaughtBeforeAKeyAtomicFinalRoll(@TempDir Path root) throws IOException {
         Path captureDir = Files.createDirectories(root.resolve("capture"));
         Path outputDir = Files.createDirectories(root.resolve("out"));
         List<ListEntry> rows = new ArrayList<>(objects("a"));
@@ -150,41 +209,15 @@ class CaptureSorterTest {
                     .as("a duplicate detected mid-write must leave only .tmp files, no published final")
                     .isFalse();
         }
-        // Exactly two .tmp files: this makes the ROLL itself a hard precondition of the test, not just
-        // an assumption — if writer.dataSize() ever reported 0 after one row (so shouldRoll() never
-        // fired), this would silently degrade into same-writer detection and the assertion above would
-        // still pass without ever exercising the cross-file previousKey state. The .tmp
-        // files live in the SIBLING staging dir (never in outputDir alongside the finals), so a
-        // crash never strands a .tmp among the published output.
+        // Key-atomic rolling keeps equal raw keys together, so the duplicate fails before a second
+        // writer opens. The one tmp file lives in the sibling staging dir, never alongside finals.
         Path stagingDir = outputDir.resolve(CaptureSorter.STAGING_DIR_NAME);
         try (var stream = Files.newDirectoryStream(stagingDir, "part-*.parquet.tmp")) {
             List<Path> tmpFiles = new ArrayList<>();
             stream.forEach(tmpFiles::add);
-            assertThat(tmpFiles).as("the straddle requires the roll to have actually opened a second file")
-                    .hasSize(2);
+            assertThat(tmpFiles).as("an equal-key group must not be split across final files")
+                    .hasSize(1);
         }
-    }
-
-    @Test
-    void duplicateStateIsRangeScopedThroughTheFullParallelCapturePipeline(@TempDir Path root)
-            throws Exception {
-        Path captureDir = Files.createDirectories(root.resolve("capture"));
-        Path outputDir = Files.createDirectories(root.resolve("out"));
-        List<ListEntry> duplicateRange = new ArrayList<>(objects("a"));
-        duplicateRange.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a")));
-        writePart(captureDir, "part-0.parquet", duplicateRange);
-        writePart(captureDir, "part-1.parquet", objects("z"));
-
-        InterleavingWriterFactory delegate = new InterleavingWriterFactory();
-        SortConfig parallel = SortConfigs.base()
-                .withSegmentEntries(2)
-                .withMergeParallelism(2);
-        assertThatThrownBy(() -> new CaptureSorter(parallel, SortMetrics.NO_OP, delegate)
-                .sort(captureDir, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class)
-                .hasMessageContaining("'a'");
-        assertThat(delegate.rangeZeroWrote.await(1, TimeUnit.SECONDS)).isTrue();
-        assertThat(delegate.rangeOneWrote.await(1, TimeUnit.SECONDS)).isTrue();
     }
 
     /**
@@ -347,11 +380,7 @@ class CaptureSorterTest {
     // --- helpers ---
 
     private void writePart(Path dir, String name, List<ListEntry> entries) throws IOException {
-        Path path = dir.resolve(name);
-        SegmentWriter writer = new SegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, 1L << 20);
-        try (SortedCursor cursor = new InMemoryCursor(entries, cmp, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
+        SortTestSupport.writeCanonicalParquet(dir.resolve(name), entries);
     }
 
     private List<ListEntry> objects(String... keys) {
@@ -404,35 +433,4 @@ class CaptureSorterTest {
         }
     }
 
-    private static final class InterleavingWriterFactory implements SortedFileWriterFactory {
-        private final CountDownLatch rangeZeroWrote = new CountDownLatch(1);
-        private final CountDownLatch rangeOneWrote = new CountDownLatch(1);
-
-        @Override
-        public SortedFileWriter create(Path path, int fileIndex) {
-            boolean rangeZero = path.getFileName().toString().startsWith("prange-0-");
-            return new NoOpWriter() {
-                @Override
-                public void write(ListEntry e) {
-                    try {
-                        if (rangeZero && rows() == 0) {
-                            rangeZeroWrote.countDown();
-                            if (!rangeOneWrote.await(2, TimeUnit.SECONDS)) {
-                                throw new AssertionError("range 1 did not interleave");
-                            }
-                        } else if (!rangeZero) {
-                            if (!rangeZeroWrote.await(2, TimeUnit.SECONDS)) {
-                                throw new AssertionError("range 0 did not interleave");
-                            }
-                            rangeOneWrote.countDown();
-                        }
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        throw new AssertionError("forced interleaving interrupted", interrupted);
-                    }
-                    super.write(e);
-                }
-            };
-        }
-    }
 }

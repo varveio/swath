@@ -9,7 +9,9 @@ import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +20,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -71,12 +75,41 @@ class PageRunSegmentTest {
         writer().flush(sealed, path);
 
         PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
-        // Exact keys, not truncated stats (§9.1): first page's firstKey / last page's lastKey.
+        // Exact unsigned extrema, not truncated stats (§9.1).
         assertThat(trailer.segMinKey()).containsExactly(bytes("alpha"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("zulu"));
         assertThat(trailer.totalRecords()).isEqualTo(2);
         assertThat(trailer.totalEntries()).isEqualTo(4);
         assertThat(trailer.maxRecordLen()).isGreaterThan(0);
+    }
+
+    @Test
+    void nestedOverlappingPagesPersistExactBoundsAndEngageTheOverlapMerge(@TempDir Path dir)
+            throws IOException {
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a"), object("z")));
+        buffer.admit(2L, List.of(object("b"), object("c")));
+        Path path = dir.resolve("nested.pageseg");
+        writer().flush(buffer.seal(SealTrigger.DRAIN), path);
+
+        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        assertThat(trailer.segMinKey()).containsExactly(bytes("a"));
+        assertThat(trailer.segMaxKey()).containsExactly(bytes("z"));
+
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        List<ListEntry> out = new ArrayList<>();
+        try (PageRunSegmentReader reader = new PageRunSegmentReader(path, metrics)) {
+            while (reader.hasNext()) {
+                out.add(reader.next());
+            }
+        }
+        assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("z"));
+        assertThat(metrics.count("SORT.page_run_entry_overlap_keymerge")).isGreaterThan(0);
+
+        PageRunSegmentInspector.TrailerInfo inspected =
+                PageRunSegmentInspector.inspect(path).trailer();
+        assertThat(inspected.segMinKey()).containsExactly(bytes("a"));
+        assertThat(inspected.segMaxKey()).containsExactly(bytes("z"));
     }
 
     @Test
@@ -109,20 +142,77 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void outOfOrderPageIsReSortedAndRepackedSoItReadsBackAscending(@TempDir Path dir) throws IOException {
-        // A single page admitted out of order — pack() records it as !orderedUnderFullComparator, so
-        // the writer must drain-sort-repack it before persisting.
+    void rawKeyRegressionIsRejectedBeforeTheSegmentSinkCanAdvanceACheckpoint(@TempDir Path dir)
+            throws Exception {
+        Path staging = Files.createDirectories(dir.resolve("_staging"));
+        List<SegmentResult> finalized = new ArrayList<>();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortLane lane = new SortLane(config, CMP, DuplicateHook.NO_OP, metrics,
+                SortLaneMeters.NO_OP, staging, "regressing", finalized::add);
+        lane.admit(1L, List.of(object("d"), object("b"), object("a"), object("c")));
+
+        assertThatThrownBy(lane::close)
+                .hasRootCauseInstanceOf(SegmentCorruptionException.class)
+                .hasStackTraceContaining("raw key regressed inside an admitted page");
+        assertThat(finalized)
+                .as("SegmentSink must not publish a durable cursor for a rejected page")
+                .isEmpty();
+        assertThat(metrics.count("SORT.buffer_page_raw_key_regression")).isEqualTo(1);
+        assertThat(staging).isEmptyDirectory();
+    }
+
+    @Test
+    void fullComparatorDisorderWithMonotonicRawKeysRepacksAndKeepsTheDurableMaximum(
+            @TempDir Path dir) throws Exception {
+        ObjectEntry kV2 = version("k", "v2");
+        ObjectEntry kV1 = version("k", "v1");
+        Path staging = Files.createDirectories(dir.resolve("_staging"));
+        List<SegmentResult> finalized = new ArrayList<>();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortLane lane = new SortLane(config, CMP, DuplicateHook.NO_OP, metrics,
+                SortLaneMeters.NO_OP, staging, "versions", finalized::add);
+        lane.admit(7L, List.of(kV2, kV1, object("z")));
+        lane.close();
+
+        assertThat(finalized).hasSize(1);
+        assertThat(finalized.get(0).perNodeMaxKeys().get(7L)).containsExactly(bytes("z"));
+        assertThat(readBack(finalized.get(0).path()))
+                .containsExactly(kV1, kV2, object("z"));
+        assertThat(metrics.count("SORT.buffer_page_repacked")).isEqualTo(1);
+    }
+
+    @Test
+    void adjacentComparatorTieWithMonotonicRawKeysCanStillBeRepacked(@TempDir Path dir)
+            throws IOException {
+        // Exact comparator ties make the ordered bit false, but raw cursor safety still holds.
         SortBuffer buffer = new SortBuffer(config, CMP);
-        buffer.admit(1L, List.of(object("d"), object("b"), object("a"), object("c")));
+        buffer.admit(1L, List.of(object("a"), object("a"), object("c")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition
 
         Path path = dir.resolve("seg.pgr");
-        writer().flush(sealed, path);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE)
+                .flush(sealed, path);
 
         List<ListEntry> out = readBack(path);
-        assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("d"));
-        assertThat(isAscending(out)).isTrue();
+        assertThat(out).containsExactly(object("a"), object("a"), object("c"));
+        assertThat(metrics.count("SORT.buffer_page_repacked"))
+                .as("the real seal-time reorder path is observable once per affected buffer")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void byteGateFlushRemainsObservable(@TempDir Path dir) throws IOException {
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a"), object("b")));
+        SealedBuffer sealed = buffer.seal(SealTrigger.BYTE_GATE);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE)
+                .flush(sealed, dir.resolve("seg.pgr"));
+
+        assertThat(metrics.count("SORT.buffer_byte_gated")).isEqualTo(1);
     }
 
     @Test
@@ -133,7 +223,7 @@ class PageRunSegmentTest {
         // was originally admitted with.
         SortConfig zstdConfig = configWithCodec(PageCodec.ZSTD1);
         SortBuffer buffer = new SortBuffer(zstdConfig, CMP);
-        buffer.admit(1L, List.of(object("d"), object("b"), object("a"), object("c")));
+        buffer.admit(1L, List.of(version("k", "v2"), version("k", "v1"), object("z")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition: forces the re-pack path
 
@@ -143,14 +233,15 @@ class PageRunSegmentTest {
         PageRunSegmentInspector.Dump dump = PageRunSegmentInspector.inspect(path);
         assertThat(dump.records()).hasSize(1);
         assertThat(dump.records().get(0).codec()).isEqualTo("ZSTD1");
-        assertThat(readBack(path)).containsExactly(object("a"), object("b"), object("c"), object("d"));
+        assertThat(readBack(path))
+                .containsExactly(version("k", "v1"), version("k", "v2"), object("z"));
     }
 
     @Test
     void outOfOrderPageReSortWithNoneConfiguredCodecStillWritesNone(@TempDir Path dir) throws IOException {
         SortConfig noneConfig = configWithCodec(PageCodec.NONE);
         SortBuffer buffer = new SortBuffer(noneConfig, CMP);
-        buffer.admit(1L, List.of(object("d"), object("b"), object("a"), object("c")));
+        buffer.admit(1L, List.of(version("k", "v2"), version("k", "v1"), object("z")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
         assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition: forces the re-pack path
 
@@ -290,6 +381,60 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void crcValidMalformedPageHeadersFailAsTypedCorruption(@TempDir Path dir) throws IOException {
+        List<BodyMutation> mutations = List.of(
+                new BodyMutation("zero-count", body -> body.putInt(countOffset(body), 0)),
+                new BodyMutation("oversized-dictionary",
+                        body -> body.putShort(countOffset(body) + 5, (short) (PageBlock.DICT_CAP + 1))),
+                new BodyMutation("unknown-codec",
+                        body -> body.put(payloadLayout(body).codecOffset(), (byte) 127)),
+                new BodyMutation("negative-stored-length",
+                        body -> body.putInt(payloadLayout(body).storedLengthOffset(), -1)),
+                new BodyMutation("inverted-bounds", body -> {
+                    int firstKeyByte = 2;
+                    body.put(firstKeyByte, (byte) 'z');
+                }));
+
+        for (BodyMutation mutation : mutations) {
+            Path path = dir.resolve(mutation.name() + ".pageseg");
+            writeSimpleSegment(path, 2);
+            mutateFirstBodyAndRepairCrc(path, mutation.mutator());
+
+            assertThatThrownBy(() -> readBack(path))
+                    .as(mutation.name())
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_body_corruption");
+        }
+    }
+
+    @Test
+    void crcValidDecodedRowsMustMatchHeaderCountBoundsAndPayloadLength(@TempDir Path dir)
+            throws IOException {
+        List<BodyMutation> mutations = List.of(
+                new BodyMutation("declared-count-too-large",
+                        body -> body.putInt(countOffset(body), 3)),
+                new BodyMutation("decoded-first-key-mismatch", body -> {
+                    PayloadLayout layout = payloadLayout(body);
+                    // NONE payload begins [object-tag][shared=0][suffixLen=7][first key bytes].
+                    body.put(layout.payloadOffset() + 3, (byte) 'x');
+                }),
+                new BodyMutation("unexpected-trailing-payload",
+                        body -> body.putInt(payloadLayout(body).storedLengthOffset(),
+                                body.getInt(payloadLayout(body).storedLengthOffset()) - 1)));
+
+        for (BodyMutation mutation : mutations) {
+            Path path = dir.resolve(mutation.name() + ".pageseg");
+            writeSimpleSegment(path, 2);
+            mutateFirstBodyAndRepairCrc(path, mutation.mutator());
+
+            assertThatThrownBy(() -> readBack(path))
+                    .as(mutation.name())
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_body_corruption");
+        }
+    }
+
+    @Test
     void corruptedTotalEntriesDownwardFailsTheEndOfStreamCrossCheck(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
@@ -336,13 +481,13 @@ class PageRunSegmentTest {
         // drop 2 rows).
         assertThatThrownBy(() -> driveFrontierToEnd(path))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("entry count mismatch");
+                .hasMessageContaining("inconsistent empty page-run trailer counts");
 
         // The entry-typed reader rejects the same corruption too, since it drives the same frontier
         // reader underneath.
         assertThatThrownBy(() -> readBack(path))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("entry count mismatch");
+                .hasMessageContaining("inconsistent empty page-run trailer counts");
     }
 
     private static void driveFrontierToEnd(Path path) throws IOException {
@@ -392,5 +537,57 @@ class PageRunSegmentTest {
 
     private static byte[] bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void mutateFirstBodyAndRepairCrc(Path path, Consumer<ByteBuffer> mutator)
+            throws IOException {
+        byte[] file = Files.readAllBytes(path);
+        int frameOffset = PageRunSegmentWriter.HEADER_BYTES;
+        int bodyLength = ByteBuffer.wrap(file, frameOffset, 4).getInt();
+        int bodyOffset = frameOffset + 8;
+        ByteBuffer body = ByteBuffer.wrap(file, bodyOffset, bodyLength).slice();
+        mutator.accept(body);
+        CRC32C crc = new CRC32C();
+        crc.update(file, bodyOffset, bodyLength);
+        ByteBuffer.wrap(file, frameOffset + 4, 4).putInt((int) crc.getValue());
+        Files.write(path, file);
+    }
+
+    private static int countOffset(ByteBuffer body) {
+        ByteBuffer cursor = body.duplicate();
+        cursor.position(2 + (cursor.getShort(0) & 0xFFFF));
+        int maxLength = cursor.getShort() & 0xFFFF;
+        cursor.position(cursor.position() + maxLength);
+        return cursor.position();
+    }
+
+    private static PayloadLayout payloadLayout(ByteBuffer body) {
+        ByteBuffer cursor = body.duplicate();
+        cursor.position(countOffset(cursor) + 5);
+        for (int i = 0; i < 5; i++) {
+            int values = cursor.getShort() & 0xFFFF;
+            for (int j = 0; j < values; j++) {
+                int length = cursor.getShort() & 0xFFFF;
+                cursor.position(cursor.position() + length);
+            }
+        }
+        cursor.get();   // useDict
+        int codecOffset = cursor.position();
+        cursor.get();
+        cursor.getInt();   // raw payload length
+        int storedLengthOffset = cursor.position();
+        cursor.getInt();
+        return new PayloadLayout(codecOffset, storedLengthOffset, cursor.position());
+    }
+
+    private record BodyMutation(String name, Consumer<ByteBuffer> mutator) {
+    }
+
+    private record PayloadLayout(int codecOffset, int storedLengthOffset, int payloadOffset) {
+    }
+
+    private static ObjectEntry version(String key, String versionId) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, versionId,
+                false, null, null, null, null);
     }
 }

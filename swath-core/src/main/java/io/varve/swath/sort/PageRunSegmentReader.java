@@ -14,9 +14,10 @@ import java.util.List;
 
 /**
  * Streaming {@link EntryStream} over one {@link PageRunSegmentWriter} page-run segment — a
- * <b>genuinely sorted run</b>, which is exactly what the entry-typed {@link StreamingMerger} (the
- * merger used whenever a merge group also holds a columnar Parquet segment) ASSUMES of every input
- * it is handed. Never materializes a whole segment: only the current page group is in heap.
+ * <b>genuinely sorted run</b>, which is exactly what the generic entry-typed {@link StreamingMerger}
+ * assumes of every input it is handed. Path-backed production merges use the page-frontier route;
+ * this seam remains useful to embedded and direct callers. It never materializes a whole segment:
+ * only the current page group is in heap.
  *
  * <p><b>Why a page-run segment isn't sorted by plain concatenation.</b> Pages are stored in
  * non-decreasing {@code minKey} order ({@link PageRunSegmentWriter#flush()} sorts each buffer's
@@ -208,8 +209,8 @@ final class PageRunSegmentReader implements EntryStream {
      * The completeness trailer of a page-run segment: the actual segment key bounds plus the record /
      * entry counts and the max framed record length. This is the seam {@code SortedFileIndex}
      * consumes for {@code bounds} ({@code segMinKey}/{@code segMaxKey} are exact keys, no truncated-stats
-     * hazard) and the runtime merge fan-in clamp consumes {@code maxRecordLen} for its per-stream memory
-     * bound.
+     * hazard) and the runtime merge fan-in planner consumes {@code maxRecordLen} as an encoded-record
+     * refinement of its configured per-stream estimate.
      */
     record Trailer(byte[] segMinKey, byte[] segMaxKey, long totalRecords, long totalEntries, long maxRecordLen) {
     }
@@ -222,14 +223,26 @@ final class PageRunSegmentReader implements EntryStream {
      */
     static Trailer readTrailer(Path path) throws IOException {
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            byte[] segMin = readLenPrefixedKey(io, io.trailerStart);
-            byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length);
+            long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+            byte[] segMin = readLenPrefixedKey(io, io.trailerStart, fixedTailStart);
+            byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length,
+                    fixedTailStart);
+            if (io.totalRecords == 0 && (segMin.length != 0 || segMax.length != 0)) {
+                throw io.fail("empty segment has non-empty trailer bounds");
+            }
             return new Trailer(segMin, segMax, io.totalRecords, io.totalEntries, io.maxRecordLen);
         }
     }
 
-    private static byte[] readLenPrefixedKey(PageRunSegmentIo io, long pos) throws IOException {
+    private static byte[] readLenPrefixedKey(PageRunSegmentIo io, long pos, long limit)
+            throws IOException {
+        if (pos < io.trailerStart || pos > limit - 2) {
+            throw io.fail("trailer key prefix exceeds trailer bounds");
+        }
         int len = io.readAt(pos, 2).getShort() & 0xFFFF;
+        if (len > limit - pos - 2) {
+            throw io.fail("trailer key exceeds trailer bounds");
+        }
         return io.readAt(pos + 2, len).array();
     }
 }

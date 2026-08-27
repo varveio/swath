@@ -10,8 +10,8 @@ import java.util.Iterator;
 
 /**
  * A forward-only stream of {@link ListEntry} in {@link ListEntryComparator} order — returned by a
- * seal-path buffer merge or the {@link SortTransform} merge phase. Backed either by an in-memory
- * sorted list (the TimSort fallback) or by a streaming k-way merge over open {@link EntryStream}s,
+ * fixture-staging chunk or the {@link SortTransform} merge phase. Backed either by an in-memory
+ * sorted list or by a streaming k-way merge over open {@link EntryStream}s,
  * so it is {@link AutoCloseable}: use it in a try-with-resources to release any open readers.
  *
  * <p>Underlying read failures surface as {@link java.io.UncheckedIOException} from {@link #next()}

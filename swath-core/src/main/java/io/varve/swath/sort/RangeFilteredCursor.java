@@ -10,12 +10,9 @@ import io.varve.swath.model.ListEntry;
 import java.util.NoSuchElementException;
 
 /**
- * {@link RangeFilteredStream}'s twin one level up: the same {@code [lo, hi)} key-only trim applied to
- * a merged {@link SortedCursor} instead of to each input {@link EntryStream}.
+ * A {@code [lo, hi)} key-only trim applied to a merged {@link SortedCursor}.
  *
- * <p><b>Why the trim moves up on the page-run path.</b> {@link ParallelRangeMerge} restricts a range's
- * Parquet inputs by wrapping each opened stream, because the columnar path merges entry-typed streams
- * anyway. The page-run path must not do that: {@link KWayMerge} takes {@link PageAwareMerger}'s
+ * <p><b>Why the trim is above the page-run merge.</b> {@link KWayMerge} takes {@link PageAwareMerger}'s
  * decode-free page-whole fast path only when every input reports {@link
  * KWayMerge.SegmentIo#supportsPageFrontier}, and a frontier is a stream of PAGES, not of entries — so
  * an entry-level wrapper around each input would silently force the whole merge back onto the
@@ -25,7 +22,7 @@ import java.util.NoSuchElementException;
  * <p><b>What still needs trimming after the page skip.</b> {@link RangeScopedPageFrontier} drops
  * pages that cannot overlap the range, but a page that STRADDLES a boundary is kept whole and carries
  * rows on the far side of it. Those are the only out-of-range rows that reach here, and this cursor
- * removes them by the same exact per-row key compare {@link RangeFilteredStream} uses — {@code lo}
+ * removes them by an exact per-row key compare — {@code lo}
  * inclusive, {@code hi} exclusive, either bound {@code null} meaning unbounded — so all rows sharing a
  * key (versions, cross row_types) still land in exactly one range.
  *

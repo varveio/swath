@@ -86,10 +86,9 @@ public final class FixtureMetrics {
     /**
      * Registry-backed {@link io.varve.swath.sort.SortMetrics} adapter: {@code sort-fixture} wires
      * this in via a method reference ({@code metrics::recordStealReason})
-     * instead of {@code SortMetrics.NO_OP}, so the root sort library's engagement counters —
-     * {@code SORT.segment_flushed}, {@code SORT.merge_pass_cascaded}, {@code SORT.merge_fastpath},
-     * {@code SORT.buffer_sort_fallback}, {@code SORT.buffer_byte_gated} — are observable for
-     * a real {@code sort-fixture} run; under {@code SortMetrics.NO_OP} a run's cascade engagement
+     * instead of {@code SortMetrics.NO_OP}, so the root sort library's fixture-reachable engagement
+     * counters are observable for a real {@code sort-fixture} run; under {@code SortMetrics.NO_OP}
+     * a run's cascade engagement
      * is invisible to metrics. Mirrors
      * {@code io.varve.swath.observability.RunMetrics#recordStealReason}'s tagging scheme
      * ({@code swath.replay.sort.steal_reason\{outcome,reason\}}) without depending on that class.

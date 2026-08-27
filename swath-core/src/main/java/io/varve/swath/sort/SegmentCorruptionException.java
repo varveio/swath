@@ -31,10 +31,21 @@ public final class SegmentCorruptionException extends IOException {
     /** A page-run segment's page {@code minKey}s went backwards within one file. */
     static final String PAGE_RUN_MIN_REGRESSION = "page_run_min_regression";
 
+    /** An admitted page's raw keys regressed, making its checkpoint durable cursor unsafe. */
+    static final String PAGE_RUN_RAW_KEY_REGRESSION = "page_run_raw_key_regression";
+
+    /** A CRC-valid page body failed structural or decoded-row validation. */
+    static final String PAGE_RUN_BODY_CORRUPTION = "page_run_body_corruption";
+
     private final String errorClass;
 
     SegmentCorruptionException(Path path, String errorClass, String message) {
         super("page-run segment " + path + ": error_class=" + errorClass + ": " + message);
+        this.errorClass = errorClass;
+    }
+
+    SegmentCorruptionException(Path path, String errorClass, String message, Throwable cause) {
+        super("page-run segment " + path + ": error_class=" + errorClass + ": " + message, cause);
         this.errorClass = errorClass;
     }
 

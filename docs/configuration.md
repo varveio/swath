@@ -191,15 +191,14 @@ with `java -D... -jar`, `JAVA_TOOL_OPTIONS`, or the launcher-specific `JAVA_OPTS
 | `swath.sort.segment-entries` | effectively unbounded | Secondary segment entry cap. |
 | `swath.sort.buffers` | `2`, minimum `2` | Fill buffer plus bounded off-thread encode buffers. |
 | `swath.sort.segment-codec` | `LZ4` | Staging payload codec: `NONE`, `LZ4`, or `ZSTD1`. |
-| `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by memory and open files. |
-| `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Heap budget for open merge streams. |
-| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Conservative per-stream divisor used by the merge planner. |
+| `swath.sort.fan-in` | `10000` | Per-range merge-stream ceiling, further limited by the planning budget and open files. |
+| `swath.sort.merge-budget-bytes` | same adaptive shape as `segment-bytes` | Capacity-planning budget for open merge streams; not a JVM heap meter. |
+| `swath.sort.merge-per-stream-bytes` | `64 KiB` | Configured per-stream planning price. Trailers can raise it for large encoded records; neither value is a hard decoded-heap bound. |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | Maximum contiguous key ranges in the final merge; `1` forces serial. Prefer `--tune sort.merge-parallelism=N` for an operator-selected value; the typed CLI value wins over this property. |
 | `swath.sort.min-parallel-staged-bytes` | `256 MiB` | Keep smaller merges serial. |
-| `swath.sort.final-file-bytes` | `1 GiB` | Roll threshold for final sorted parts. |
+| `swath.sort.final-file-bytes` | `1 GiB` | Soft roll target for final sorted parts; an equal-key group is never split across files. |
 | `swath.sort.final-row-group-bytes` | `8 MiB` | Final Parquet seek granularity. |
 | `swath.sort.final-page-rows` | `1024` | Maximum rows per final-file data page; the within-row-group seek granularity. |
-| `swath.sort.segment-row-group-bytes` | `1 MiB` | Legacy columnar-staging path only. |
 | `swath.git.sha` | unset | Optional commit value included in the run fingerprint. |
 
 The realized merge width is constrained by the staged segment count, heap budget, and
