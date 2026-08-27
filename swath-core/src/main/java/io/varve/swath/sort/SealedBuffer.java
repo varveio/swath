@@ -5,27 +5,28 @@
  */
 package io.varve.swath.sort;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * An immutable snapshot of a sealed {@link SortBuffer}: per-node {@link PageBlock} runs plus the
- * per-node max keys and the {@link SealTrigger}. {@link PageRunSegmentWriter} consumes the packed
- * pages directly; merge ordering is resolved by the page-aware external merge.
+ * The state moved out of a sealed {@link SortBuffer}: packed pages, distinct-node count, per-node
+ * max keys, and the {@link SealTrigger}. {@link PageRunSegmentWriter} owns and sorts the page list
+ * in place; merge ordering is resolved by the page-aware external merge.
  */
 final class SealedBuffer {
 
-    private final Map<Long, List<PageBlock>> runs;
+    private final List<PageBlock> pages;
+    private final int runCount;
     private final Map<Long, byte[]> maxKeys;
     private final long entryCount;
     private final SealTrigger trigger;
     private final long estimatedBytes;
 
-    SealedBuffer(Map<Long, List<PageBlock>> runs, Map<Long, byte[]> maxKeys, long entryCount,
+    SealedBuffer(List<PageBlock> pages, int runCount, Map<Long, byte[]> maxKeys, long entryCount,
                  SealTrigger trigger, long estimatedBytes) {
-        this.runs = runs;
+        this.pages = pages;
+        this.runCount = runCount;
         this.maxKeys = maxKeys;
         this.entryCount = entryCount;
         this.trigger = trigger;
@@ -49,21 +50,16 @@ final class SealedBuffer {
 
     /** How many per-node page runs this buffer holds — the {@code page_runs_per_buffer} signal. */
     int runCount() {
-        return runs.size();
+        return runCount;
     }
 
     /**
-     * All pages across every node run, flattened (in node-run iteration order, <b>not</b> globally
-     * sorted). The minimal seal-path source the page-run writer consumes: it orders these by
-     * {@link PageBlock#firstKey()} and concatenates them — it does <b>not</b> k-way merge the buffer
-     * since range-disjoint pages let us pack once and write in minKey order.
+     * The moved page list in admission order, <b>not</b> globally sorted. The page-run writer owns
+     * this list and orders it by {@link PageBlock#firstKey()} in place; no live {@link SortBuffer}
+     * retains an alias after sealing.
      */
     List<PageBlock> pages() {
-        List<PageBlock> out = new ArrayList<>();
-        for (List<PageBlock> run : runs.values()) {
-            out.addAll(run);
-        }
-        return out;
+        return pages;
     }
 
     SealTrigger trigger() {
