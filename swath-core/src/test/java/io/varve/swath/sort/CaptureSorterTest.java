@@ -98,6 +98,9 @@ class CaptureSorterTest {
                         .mapToObj(i -> String.format("k%05d", i))
                         .toArray(String[]::new));
         assertThat(metrics.count("SORT.merge_range_frontier_disabled")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_range_parallel"))
+                .as("arbitrary sorted runs must never enter the parallel range merge")
+                .isZero();
         assertThat(metrics.count("SORT.page_whole_emitted"))
                 .as("arbitrary chunks must not enter the overlap-retaining frontier merge")
                 .isZero();

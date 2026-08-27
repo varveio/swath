@@ -71,7 +71,7 @@ public final class SortTransform {
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final boolean identityVerifiedWideSweep;
-    private final boolean pageFrontierEnabled;
+    private final MergeInputProfile inputProfile;
     // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
     private final IntSupplier softFdLimitSupplier;
@@ -103,7 +103,8 @@ public final class SortTransform {
      * it {@link RangeMergeTimer#NO_OP}.
      */
     public SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer) {
-        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit, true);
+        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES);
     }
 
     /**
@@ -115,11 +116,12 @@ public final class SortTransform {
      */
     SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
                   IntSupplier softFdLimitSupplier) {
-        this(run, identityVerifiedWideSweep, rangeTimer, softFdLimitSupplier, true);
+        this(run, identityVerifiedWideSweep, rangeTimer, softFdLimitSupplier,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES);
     }
 
     private SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
-                          IntSupplier softFdLimitSupplier, boolean pageFrontierEnabled) {
+                          IntSupplier softFdLimitSupplier, MergeInputProfile inputProfile) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -127,7 +129,7 @@ public final class SortTransform {
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.identityVerifiedWideSweep = identityVerifiedWideSweep;
-        this.pageFrontierEnabled = pageFrontierEnabled;
+        this.inputProfile = inputProfile;
         this.rangeTimer = rangeTimer;
         this.softFdLimitSupplier = softFdLimitSupplier;
         this.fanInPlanner = new MergeFanInPlanner(config, metrics, softFdLimitSupplier);
@@ -141,7 +143,7 @@ public final class SortTransform {
      */
     static SortTransform forArbitraryRuns(SortRun run) {
         return new SortTransform(run, false, RangeMergeTimer.NO_OP,
-                MergeFdBudget::softOpenFileLimit, false);
+                MergeFdBudget::softOpenFileLimit, MergeInputProfile.ARBITRARY_SORTED_RUNS);
     }
 
     /**
@@ -223,7 +225,7 @@ public final class SortTransform {
         // Parallel ranges consume the same page-run frontier as the serial path. The default is
         // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
         // path, and the completeness stamp makes multi-file parallel output self-describing.
-        if (config.mergeParallelism() > 1 && pageFrontierEnabled) {
+        if (config.mergeParallelism() > 1 && inputProfile.parallelRangesAllowed()) {
             SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting);
             if (parallel != null) {
@@ -546,7 +548,7 @@ public final class SortTransform {
 
             @Override
             public boolean supportsPageFrontier(Path segment) {
-                return pageFrontierEnabled;
+                return inputProfile.pageFrontierAllowed();
             }
 
             @Override
