@@ -788,9 +788,6 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelHits.get())
                     .as("parallel duplicate-hook count == serial (no double-count across boundaries)")
                     .isEqualTo(serialHits.get());
-            // Non-vacuity, conditioned on the input: equal counts are only meaningful when there was
-            // something to count. A tiny generated case can legitimately contain no equal-comparing
-            // pair at all, so require a positive baseline exactly when the input has one.
             List<ListEntry> sorted = new ArrayList<>(s.allEntries());
             sorted.sort(cmp);
             long expectedPairs = 0;
@@ -799,12 +796,9 @@ class SortTransformPageRunParallelMergePropTest {
                     expectedPairs++;
                 }
             }
-            if (expectedPairs > 0) {
-                assertThat(serialHits.get())
-                        .as("input holds %d equal-comparing pair(s), so the hook must have fired",
-                                expectedPairs)
-                        .isPositive();
-            }
+            assertThat(serialHits.get())
+                    .as("serial hook count equals every adjacent comparator-equal pair")
+                    .isEqualTo(expectedPairs);
         } finally {
             Sweeps.deleteTree(root);
         }

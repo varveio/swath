@@ -159,7 +159,8 @@ class PageRunNoLostKeysContractTest {
             frontiers.add(new PageFrontierReader(f, metrics));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, hook, metrics)) {
+        try (SortedCursor merger = new DuplicateReporting(
+                new PageAwareMerger(frontiers, cmp, MergeScope.CROSS_SEGMENT, metrics), cmp, hook)) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }

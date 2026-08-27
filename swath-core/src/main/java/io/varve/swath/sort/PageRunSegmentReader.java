@@ -39,12 +39,9 @@ import java.util.List;
  *       fallback), so the emitted stream is sorted by construction ({@code
  *       SORT.page_run_entry_overlap_keymerge}; 0 on a segment whose pages are range-disjoint).</li>
  * </ul>
- * The inner merger's own {@code page_whole_emitted}/{@code page_overlap_keymerge} counters are
- * re-labelled to the two above so those two keep meaning "the MERGE saw (interleaved) pages across
- * its inputs", undiluted by this route's intra-segment reads — see {@link #relabelled} for the
- * re-labelling itself. The inner merger is given {@link DuplicateHook#NO_OP} because the outer
- * merger fires the hook on the merged output — reporting an adjacent duplicate here too would
- * double-count it.
+ * The inner merger is scoped as {@link MergeScope#INTRA_SEGMENT}, so it emits the two route-specific
+ * counters directly. The outer merge owns duplicate reporting; doing it inside this reader as well
+ * would double-count adjacent equals.
  *
  * <p><b>Intra-segment min-monotonicity guard.</b> Every page advance goes through
  * {@link PageRunSegmentIo#nextPage()}, the single page-advance primitive shared with
@@ -74,10 +71,6 @@ import java.util.List;
  */
 final class PageRunSegmentReader implements EntryStream {
 
-    /** This route's engagement counters (SORT category) — see the class javadoc. */
-    static final String ENTRY_WHOLE_PAGE = "page_run_entry_whole_page";
-    static final String ENTRY_OVERLAP_KEYMERGE = "page_run_entry_overlap_keymerge";
-
     private final PageAwareMerger merger;
     private ListEntry head;
 
@@ -93,8 +86,8 @@ final class PageRunSegmentReader implements EntryStream {
     PageRunSegmentReader(PageFrontierStream frontier, Comparator<ListEntry> comparator,
                          SortMetrics metrics) throws IOException {
         try {
-            this.merger = new PageAwareMerger(List.of(frontier), comparator, DuplicateHook.NO_OP,
-                    relabelled(metrics));
+            this.merger = new PageAwareMerger(
+                    List.of(frontier), comparator, MergeScope.INTRA_SEGMENT, metrics);
         } catch (UncheckedIOException e) {
             throw e.getCause();   // PageAwareMerger's constructor already closed the frontier stream
         }
@@ -143,51 +136,6 @@ final class PageRunSegmentReader implements EntryStream {
             merger.close();   // closes the single frontier stream it owns
         } catch (UncheckedIOException e) {
             throw e.getCause();
-        }
-    }
-
-    /**
-     * The inner single-segment {@link PageAwareMerger}'s two page counters, re-labelled to this route's
-     * (see the class javadoc): the merge-level {@code page_whole_emitted}/{@code page_overlap_keymerge}
-     * must keep meaning "the MERGE saw (interleaved) pages across its inputs", so an intra-segment page
-     * resolution done inside one input stream is counted under its own reason instead. Anything else the
-     * merger might emit passes through unchanged.
-     *
-     * <p>The re-labelled reasons are passed as STRING LITERALS, not via the {@link #ENTRY_WHOLE_PAGE}
-     * /{@link #ENTRY_OVERLAP_KEYMERGE} constants: {@code scripts/ci/check-instrumentation-drift.sh}
-     * statically reconciles {@code recordStealReason} call sites against the §5 registry table and can
-     * only resolve literals — passing a constant makes the counter a "ghost row" and fails the build.
-     * The constants remain for {@code equals} comparisons and for tests to reference by name.
-     */
-    private static SortMetrics relabelled(SortMetrics metrics) {
-        return new SortMetrics() {
-            @Override
-            public void recordStealReason(String outcome, String reason) {
-                recordRelabelledReason(metrics, outcome, reason);
-            }
-
-            @Override
-            public void markProgress() {
-                metrics.markProgress();
-            }
-
-            @Override
-            public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
-                metrics.recordBoundaryIo(embeddedEntries, embeddedBytes, scanBytes);
-            }
-        };
-    }
-
-    private static void recordRelabelledReason(SortMetrics metrics, String outcome, String reason) {
-        // "SORT" is a literal, not the forwarded `outcome`, for the same drift-guard reason: both
-        // arguments must be literals for the guard to resolve the counter. PageAwareMerger only ever
-        // emits these two reasons under the SORT outcome, so pinning it here is faithful, not a guess.
-        if (PageAwareMerger.WHOLE_PAGE_EMITTED.equals(reason)) {
-            metrics.recordStealReason("SORT", "page_run_entry_whole_page");
-        } else if (PageAwareMerger.OVERLAP_KEYMERGE.equals(reason)) {
-            metrics.recordStealReason("SORT", "page_run_entry_overlap_keymerge");
-        } else {
-            metrics.recordStealReason(outcome, reason);
         }
     }
 

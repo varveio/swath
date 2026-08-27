@@ -383,7 +383,8 @@ class VersionsKeyMergeContractTest {
             frontiers.add(new PageFrontierReader(f, SortMetrics.NO_OP));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, DuplicateHook.NO_OP, metrics)) {
+        try (PageAwareMerger merger = new PageAwareMerger(
+                frontiers, cmp, MergeScope.CROSS_SEGMENT, metrics)) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }
@@ -397,7 +398,7 @@ class VersionsKeyMergeContractTest {
             streams.add(PageRunReads.open(f));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (StreamingMerger merger = new StreamingMerger(streams, cmp, DuplicateHook.NO_OP, n -> { })) {
+        try (StreamingMerger merger = new StreamingMerger(streams, cmp, n -> { })) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }

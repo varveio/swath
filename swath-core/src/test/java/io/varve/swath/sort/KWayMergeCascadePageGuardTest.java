@@ -139,7 +139,8 @@ class KWayMergeCascadePageGuardTest {
         assertThat(countKey(out, "m")).as("all three \"m\" rows survive the cascade").isEqualTo(3);
         assertThat(countKey(out, "z")).isEqualTo(1);
         assertThat(duplicatesReported.get())
-                .as("adjacent equals are REPORTED to the hook (never dropped)").isGreaterThan(0);
+                .as("three callbacks in the cascade pass plus five in the final pass")
+                .isEqualTo(8);
         assertGloballySorted(out);
         assertThat(metrics.count("SORT.page_run_min_regression"))
                 .as("neither flush() nor writeIntermediate() may emit a page-min regression").isZero();

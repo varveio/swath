@@ -91,9 +91,9 @@ class PageAwareMergerTest {
         List<Path> files = stage(dir, segs);
 
         List<ListEntry> viaPageAware = drainEntries(new PageAwareMerger(frontiers(files), cmp,
-                DuplicateHook.NO_OP, new CountingMetrics()));
+                MergeScope.CROSS_SEGMENT, new CountingMetrics()));
         List<ListEntry> viaEntryMerge = drainEntries(new StreamingMerger(entryStreams(files), cmp,
-                DuplicateHook.NO_OP, n -> { }));
+                n -> { }));
 
         assertThat(viaPageAware).isEqualTo(viaEntryMerge);
         assertThat(viaPageAware.stream().map(e -> e.key().asString()).toList()).isSorted();
@@ -126,7 +126,8 @@ class PageAwareMergerTest {
 
     private List<String> drainKeys(List<Path> files, SortMetrics metrics) throws IOException {
         List<String> out = new ArrayList<>();
-        for (ListEntry e : drainEntries(new PageAwareMerger(frontiers(files), cmp, DuplicateHook.NO_OP, metrics))) {
+        for (ListEntry e : drainEntries(new PageAwareMerger(
+                frontiers(files), cmp, MergeScope.CROSS_SEGMENT, metrics))) {
             out.add(e.key().asString());
         }
         return out;

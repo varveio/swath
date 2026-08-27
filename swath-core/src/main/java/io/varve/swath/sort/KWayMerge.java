@@ -27,9 +27,10 @@ import org.slf4j.LoggerFactory;
  * <p>Every pass — each cascade pass ({@link #onePass}) and the final pass — selects its merger through
  * the one {@link #openMerger} factory: a {@link PageAwareMerger} when every segment in the group exposes
  * a {@link PageFrontierStream} (decode-free frontier + page-whole fast path + both overlap guards), else
- * the entry-typed {@link StreamingMerger} (heap merge + same-reader fast path + duplicate hook). This
- * keeps the intra-segment/cross-segment overlap guards in force on EVERY pass, so a cascade intermediate
- * is never written from a mis-ordered cursor.
+ * the entry-typed {@link StreamingMerger} (heap merge + same-reader fast path), then wraps either
+ * output in {@link DuplicateReporting}. This keeps the intra-segment/cross-segment overlap guards in
+ * force and reports adjacent equals exactly once on EVERY pass, so a cascade intermediate is never
+ * written from a mis-ordered cursor.
  *
  * <p><b>Merge-phase memory + fd bound (I11).</b> {@code fanIn} here is expected to already be the
  * RUNTIME-clamped fan-in {@link SortTransform} computes — the MIN of the static
@@ -189,12 +190,15 @@ final class KWayMerge<S> {
      */
     private SortedCursor openMerger(List<S> group, StreamingMerger.DisjointSink disjointSink)
             throws IOException {
+        SortedCursor merger;
         if (allSupportPageFrontier(group)) {
             List<PageFrontierStream> frontiers = openFrontiers(group);
-            return new PageAwareMerger(frontiers, comparator, hook, metrics);
+            merger = new PageAwareMerger(frontiers, comparator, MergeScope.CROSS_SEGMENT, metrics);
+        } else {
+            List<EntryStream> streams = open(group);
+            merger = new StreamingMerger(streams, comparator, this::recordFastPath, disjointSink);
         }
-        List<EntryStream> streams = open(group);
-        return new StreamingMerger(streams, comparator, hook, this::recordFastPath, disjointSink);
+        return new DuplicateReporting(merger, comparator, hook);
     }
 
     private boolean allSupportPageFrontier(List<S> segments) {

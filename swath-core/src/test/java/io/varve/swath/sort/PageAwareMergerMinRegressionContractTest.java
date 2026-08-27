@@ -197,7 +197,8 @@ class PageAwareMergerMinRegressionContractTest {
 
     private List<ListEntry> drain(List<PageFrontierStream> frontiers, SortMetrics metrics) {
         List<ListEntry> out = new ArrayList<>();
-        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, DuplicateHook.NO_OP, metrics)) {
+        try (PageAwareMerger merger = new PageAwareMerger(
+                frontiers, cmp, MergeScope.CROSS_SEGMENT, metrics)) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }
