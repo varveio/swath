@@ -240,6 +240,15 @@ final class PageBlock {
         return firstKeyBytes.clone();
     }
 
+    /**
+     * The first entry's key without a defensive copy. Package-internal hot paths may read this
+     * array but must never mutate it; callers that retain a key independently of this block must
+     * copy it.
+     */
+    byte[] firstKeyUnsafe() {
+        return firstKeyBytes;
+    }
+
     /** The last entry's key (defensive copy). */
     byte[] lastKey() {
         return lastKeyBytes.clone();

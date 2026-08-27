@@ -65,7 +65,7 @@ final class PageRunBoundarySample {
         long stride = stride(pages.size());
         List<byte[]> sample = new ArrayList<>(expectedCount(pages.size()));
         for (long i = 0; i < pages.size(); i += stride) {
-            sample.add(pages.get(Math.toIntExact(i)).firstKey());
+            sample.add(pages.get(Math.toIntExact(i)).firstKeyUnsafe().clone());
         }
         return sample;
     }

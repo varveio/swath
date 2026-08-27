@@ -147,7 +147,7 @@ final class PageRunSegmentWriter {
         }
 
         // Concatenation order: minKey (unsigned) across all node runs.
-        pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKey(), b.firstKey()));
+        pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKeyUnsafe(), b.firstKeyUnsafe()));
 
         long totalEntries = writePageRun(path, pages);
 
