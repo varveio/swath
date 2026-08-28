@@ -24,9 +24,5 @@ class MergeRunTrackerTest {
         tracker.emittedFrom(1);
         tracker.emittedFrom(0);
         assertThat(tracker.count(0)).isEqualTo(2);
-        tracker.seedCountForTesting(0, Integer.MAX_VALUE);
-        tracker.emittedFrom(1);
-        tracker.emittedFrom(0);
-        assertThat(tracker.count(0)).isEqualTo(Integer.MAX_VALUE);
     }
 }

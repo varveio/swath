@@ -47,6 +47,11 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
+    public void recordRangeFramedBytes(long bytes) {
+        metrics.recordSortMergeRangeFramedBytes(bytes);
+    }
+
+    @Override
     public void recordProofSpool(long logicalExtentBytes,
                                  long preallocationOperations,
                                  long preallocationAttemptedBytes,

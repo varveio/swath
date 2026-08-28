@@ -243,6 +243,7 @@ final class SortTestSupport {
     /** Counts recordStealReason calls per {@code outcome.reason}. */
     static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
+        final LongAdder rangeFramedBytes = new LongAdder();
         final LongAdder rangeIndexBytes = new LongAdder();
         final LongAdder progress = new LongAdder();
         final LongAdder proofSpoolLogicalExtentBytes = new LongAdder();
@@ -278,6 +279,11 @@ final class SortTestSupport {
         @Override
         public void recordRangeIndexBytes(long bytes) {
             rangeIndexBytes.add(bytes);
+        }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+            rangeFramedBytes.add(bytes);
         }
 
         @Override

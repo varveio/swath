@@ -78,6 +78,7 @@ class SortedFixturesTest {
 
         metrics.markProgress();
         metrics.recordBoundaryIo(7, 123, 456);
+        metrics.recordRangeFramedBytes(654);
         metrics.recordRangeIndexBytes(789);
         metrics.recordProofSpool(6_212, 2, 6_212, 5, 321, 3_000_000);
 
@@ -88,6 +89,8 @@ class SortedFixturesTest {
                 .isEqualTo(123.0);
         assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count())
                 .isEqualTo(456.0);
+        assertThat(registry.find("swath.replay.sort.merge.range.framed.bytes").counter().count())
+                .isEqualTo(654.0);
         assertThat(registry.find("swath.replay.sort.merge.range.index.bytes").counter().count())
                 .isEqualTo(789.0);
         assertThat(registry.find("swath.replay.sort.merge.proof_spool.logical_extent.bytes")

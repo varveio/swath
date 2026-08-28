@@ -106,6 +106,7 @@ final class ParallelRangeWorker {
                 if (pagesSeekedOver + pagesSkipped + pagesUnread > 0) {
                     metrics.recordStealReason("SORT", "merge_range_page_skipped");
                 }
+                metrics.recordRangeFramedBytes(bytesRead);
                 long rangeNanos = System.nanoTime() - startNanos;
                 rangeTimer.recordRangeMerge(rangeNanos);
                 log.info("sort_merge_range range={} rows={} pages_kept={} pages_skipped={} "

@@ -153,6 +153,38 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
+    @Example
+    void forcedParallelCascadeAccountsForOriginalAndIntermediatePageFrames() throws IOException {
+        Scenario scenario = build(4, 200, KeyStyle.DENSE_SEQUENTIAL, 17L);
+        Path root = Files.createTempDirectory("prange-pagerun-cascade-bytes-");
+        CountingMetrics metrics = new CountingMetrics();
+        Logger logger = (Logger) LoggerFactory.getLogger(ParallelRangeMerge.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            CascadeRun parallel = runParallelUnclamped(scenario, 3, root, "parallel", 1L, metrics);
+            assertThat(parallel).isNotNull();
+            assertThat(parallel.cascadedPasses()).isPositive();
+
+            long loggedBytes = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.startsWith("sort_merge_range range="))
+                    .mapToLong(message -> longField(message, "bytes_read"))
+                    .sum();
+            assertThat(metrics.rangeFramedBytes.sum())
+                    .as("range framed-byte metric equals the exact per-range log total")
+                    .isEqualTo(loggedBytes);
+            assertThat(loggedBytes)
+                    .as("forced cascade reads every original plus its page-run intermediates")
+                    .isGreaterThan(parallel.originalFramedBytes());
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            deleteTreeBestEffort(root);
+        }
+    }
+
     /**
      * Drive {@link ParallelRangeMerge} directly, past {@link SortTransform}'s clamp, so the cascade
      * branches are genuinely reached. Cascade intermediates keep the page-run format, which is what
@@ -160,14 +192,20 @@ class SortTransformPageRunParallelMergePropTest {
      */
     private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
                                             long mergeBudgetBytes) throws IOException {
+        return runParallelUnclamped(s, ranges, root, name, mergeBudgetBytes, SortMetrics.NO_OP);
+    }
+
+    private CascadeRun runParallelUnclamped(Scenario s, int ranges, Path root, String name,
+                                            long mergeBudgetBytes, SortMetrics metrics) throws IOException {
         Path output = Files.createDirectories(root.resolve(name));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         List<Path> segs = stage(staging, s.segments());
+        long originalFramedBytes = framedPageBytes(segs);
         SortConfig config = SortConfigs.base()
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(ranges);
-        SortRun run = sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+        SortRun run = sortRun(config, DuplicateHook.NO_OP, metrics,
                 SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT);
         ParallelRangeMerge merge = new ParallelRangeMerge(run);
         ParallelKickoff kickoff = parallelKickoff(segs);
@@ -197,7 +235,7 @@ class SortTransformPageRunParallelMergePropTest {
             writers.get(writers.size() - 1).markFinal();
         }
         RolledPartWriter.closeInOrder(writers);
-        return new CascadeRun(parts, rows, cascaded);
+        return new CascadeRun(parts, rows, cascaded, originalFramedBytes);
     }
 
     private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
@@ -224,7 +262,8 @@ class SortTransformPageRunParallelMergePropTest {
                                      WeakReference<Scenario> fixture) {
     }
 
-    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
+    private record CascadeRun(List<Path> parts, long rows, long cascadedPasses,
+                              long originalFramedBytes) {
     }
 
     /**
@@ -1327,6 +1366,7 @@ class SortTransformPageRunParallelMergePropTest {
     /** {@link SortMetrics} that counts engagement reasons; ranges record from several threads. */
     private static final class CountingMetrics implements SortMetrics {
         private final Map<String, LongAdder> counts = new ConcurrentHashMap<>();
+        private final LongAdder rangeFramedBytes = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -1353,6 +1393,11 @@ class SortTransformPageRunParallelMergePropTest {
         public void recordRangeIndexBytes(long bytes) {
         }
 
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+            rangeFramedBytes.add(bytes);
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();
@@ -1365,6 +1410,22 @@ class SortTransformPageRunParallelMergePropTest {
             total += Files.size(segment);
         }
         return total;
+    }
+
+    private static long framedPageBytes(List<Path> segments) throws IOException {
+        long total = 0;
+        for (Path segment : segments) {
+            try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+                total += io.trailerStart - PageRunSegmentWriter.HEADER_BYTES;
+            }
+        }
+        return total;
+    }
+
+    private static long longField(String message, String field) {
+        int start = message.indexOf(field + "=") + field.length() + 1;
+        int end = message.indexOf(' ', start);
+        return Long.parseLong(end < 0 ? message.substring(start) : message.substring(start, end));
     }
 
     private static ListAppender<ILoggingEvent> attachTransformLog() {

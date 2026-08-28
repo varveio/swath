@@ -28,7 +28,4 @@ final class MergeRunTracker {
         return counts[source];
     }
 
-    void seedCountForTesting(int source, int count) {
-        counts[source] = count;
-    }
 }

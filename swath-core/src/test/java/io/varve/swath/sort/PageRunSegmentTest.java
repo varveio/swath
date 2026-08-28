@@ -9,6 +9,7 @@ import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
@@ -486,6 +487,21 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void crcRepairedOverlongPageBoundsFailAtTheSharedReadBoundary(@TempDir Path dir)
+            throws IOException {
+        for (boolean overlongMinimum : List.of(true, false)) {
+            Path path = dir.resolve(overlongMinimum ? "overlong-min.pageseg" : "overlong-max.pageseg");
+            writeCrcRepairedOverlongBound(path, overlongMinimum);
+
+            assertThatThrownBy(() -> readBack(path))
+                    .as(overlongMinimum ? "overlong minKey" : "overlong maxKey")
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_body_corruption")
+                    .hasMessageContaining("exceeds the S3 key limit");
+        }
+    }
+
+    @Test
     void crcValidDecodedRowsMustMatchHeaderCountBoundsAndPayloadLength(@TempDir Path dir)
             throws IOException {
         List<BodyMutation> mutations = List.of(
@@ -608,6 +624,27 @@ class PageRunSegmentTest {
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
     }
 
+    private void writeCrcRepairedOverlongBound(Path path, boolean overlongMinimum) throws IOException {
+        byte[] overlong = new byte[ByteMidpoint.MAX_KEY_LEN + 1];
+        if (!overlongMinimum) {
+            Arrays.fill(overlong, (byte) 'z');
+        }
+        List<ListEntry> rows = overlongMinimum
+                ? List.of(objectWithKey(overlong), object("z"))
+                : List.of(object("a"), objectWithKey(overlong));
+        try (SortedCursor cursor = new InMemoryCursor(rows, CMP, DuplicateHook.NO_OP)) {
+            writer().writeIntermediate(cursor, path);
+        }
+        // Keep the deliberately overlong header bound but alter its bytes and repair the frame CRC:
+        // a checksum-valid corrupted input must still fail at the shared read boundary.
+        mutateFirstBodyAndRepairCrc(path, body -> {
+            int keyOffset = overlongMinimum
+                    ? Short.BYTES
+                    : Short.BYTES + (body.getShort(0) & 0xFFFF) + Short.BYTES;
+            body.put(keyOffset, (byte) (body.get(keyOffset) - 1));
+        });
+    }
+
     private static boolean isAscending(List<ListEntry> entries) {
         for (int i = 1; i < entries.size(); i++) {
             if (CMP.compare(entries.get(i - 1), entries.get(i)) >= 0) {
@@ -675,6 +712,11 @@ class PageRunSegmentTest {
 
     private static ObjectEntry objectWithSize(String key, long size) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), size, 0L, null, null, null,
+                false, null, null, null, null);
+    }
+
+    private static ObjectEntry objectWithKey(byte[] key) {
+        return new ObjectEntry(KeyBytes.of(key), 0L, 0L, null, null, null,
                 false, null, null, null, null);
     }
 }

@@ -77,6 +77,9 @@ public interface SortMetrics {
     /** Record type-2 metadata bytes read by seek planning and exact worker proof reads. */
     void recordRangeIndexBytes(long bytes);
 
+    /** Record logical page-frame bytes read by parallel range workers, including cascades. */
+    default void recordRangeFramedBytes(long bytes) { }
+
     /**
      * Record one aggregate delta of bounded proof-spool work.
      *

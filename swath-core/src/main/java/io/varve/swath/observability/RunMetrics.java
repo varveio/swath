@@ -246,6 +246,7 @@ public final class RunMetrics {
     private final Counter sortMergeOverlapClusters;
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
+    private final Counter sortMergeRangeFramedBytes;
     private final Counter sortMergeRangeIndexBytes;
     private final Counter sortMergeProofSpoolLogicalExtentBytes;
     private final Counter sortMergeProofSpoolPreallocationOperations;
@@ -595,6 +596,8 @@ public final class RunMetrics {
                 .register(registry);
         sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency")
                 .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
+        sortMergeRangeFramedBytes = Counter.builder("swath.sort.merge.range.framed.bytes")
+                .baseUnit("bytes").register(registry);
         sortMergeRangeIndexBytes = Counter.builder("swath.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
         sortMergeProofSpoolLogicalExtentBytes =
@@ -1173,6 +1176,11 @@ public final class RunMetrics {
     public void recordSortMergeOverlapState(long activePages, long retainedRows) {
         sortMergeOverlapPagesPeak.getAndAccumulate(activePages, Math::max);
         sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
+    }
+
+    /** Type-2 seek-planning and exact worker-proof metadata reads after boundary selection. */
+    public void recordSortMergeRangeFramedBytes(long bytes) {
+        sortMergeRangeFramedBytes.increment(Math.max(0L, bytes));
     }
 
     /** Type-2 seek-planning and exact worker-proof metadata reads after boundary selection. */

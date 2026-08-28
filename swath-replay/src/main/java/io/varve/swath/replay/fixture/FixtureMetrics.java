@@ -33,6 +33,7 @@ public final class FixtureMetrics implements SortMetrics {
     private final Counter sortBoundaryEmbeddedEntries;
     private final Counter sortBoundaryEmbeddedBytes;
     private final Counter sortBoundaryScanBytes;
+    private final Counter sortRangeFramedBytes;
     private final Counter sortRangeIndexBytes;
     private final Counter sortProofSpoolLogicalExtentBytes;
     private final Counter sortProofSpoolPreallocationOperations;
@@ -67,6 +68,8 @@ public final class FixtureMetrics implements SortMetrics {
         sortBoundaryEmbeddedBytes = Counter.builder("swath.replay.sort.merge.boundaries.embedded.bytes")
                 .baseUnit("bytes").register(registry);
         sortBoundaryScanBytes = Counter.builder("swath.replay.sort.merge.boundaries.scan.bytes")
+                .baseUnit("bytes").register(registry);
+        sortRangeFramedBytes = Counter.builder("swath.replay.sort.merge.range.framed.bytes")
                 .baseUnit("bytes").register(registry);
         sortRangeIndexBytes = Counter.builder("swath.replay.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
@@ -174,6 +177,11 @@ public final class FixtureMetrics implements SortMetrics {
     @Override
     public void recordRangeIndexBytes(long bytes) {
         sortRangeIndexBytes.increment(bytes);
+    }
+
+    @Override
+    public void recordRangeFramedBytes(long bytes) {
+        sortRangeFramedBytes.increment(bytes);
     }
 
     @Override

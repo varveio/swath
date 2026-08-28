@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -227,14 +228,17 @@ final class PageRunSegmentIo implements AutoCloseable {
         pagesRead++;
         checkMinMonotonic(header.minKey());
         previousMin = header.minKey();
+        int framedBytes = Math.addExact(8, record.framedLen());
+        // Every page body read by this IO instance contributes to the range's logical framed-byte
+        // total. Proof state applies only to the indexed-original physical coordinates below;
+        // cascade intermediates have no proof state but are still real page-frame reads.
+        framedBytesRead += framedBytes;
         if (proofTracking) {
-            int framedBytes = Math.addExact(8, record.framedLen());
             lastPageOrdinal = ordinal;
             lastFrameOffset = frameOffset;
             lastCumulativeEntries = cumulativeEntries;
             lastCumulativeFramedBytes = cumulativeFramedBytes;
             lastFramedBytes = framedBytes;
-            framedBytesRead += framedBytes;
             cumulativeEntries += header.count();
         }
         return new Page(body, header);
@@ -361,6 +365,11 @@ final class PageRunSegmentIo implements AutoCloseable {
     /** Structurally validate a body once and return its zero-copy persisted-page header. */
     static PageBlockCodec.Header parsePageHeader(byte[] body) {
         PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+        if (header.minKey().length > ByteMidpoint.MAX_KEY_LEN
+                || header.maxKey().length > ByteMidpoint.MAX_KEY_LEN) {
+            throw new IllegalArgumentException("malformed PageBlock: minKey/maxKey exceeds the S3 key limit of "
+                    + ByteMidpoint.MAX_KEY_LEN + " bytes");
+        }
         if (Arrays.compareUnsigned(header.minKey(), header.maxKey()) > 0) {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
@@ -425,10 +434,6 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     Path path() {
         return path;
-    }
-
-    long pagesRead() {
-        return pagesRead;
     }
 
     long framedBytesRead() {

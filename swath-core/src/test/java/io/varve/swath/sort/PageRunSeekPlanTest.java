@@ -66,7 +66,8 @@ class PageRunSeekPlanTest {
                 frontier.advance();
             }
             assertThat(frontier.proofTracking()).isFalse();
-            assertThat(frontier.framedBytesRead()).isZero();
+            assertThat(frontier.framedBytesRead())
+                    .isEqualTo(trailerStart - PageRunSegmentWriter.HEADER_BYTES);
             assertThat(frontier.indexBytesRead()).isZero();
             assertThat(frontier.nextFrameOffset()).isEqualTo(trailerStart);
         }

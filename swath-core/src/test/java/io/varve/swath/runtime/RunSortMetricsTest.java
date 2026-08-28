@@ -70,11 +70,14 @@ class RunSortMetricsTest {
     }
 
     @Test
-    void rangeIndexBytesStillReach() {
+    void rangeFramedAndIndexBytesReach() {
         var registry = new SimpleMeterRegistry();
 
-        new RunSortMetrics(new RunMetrics(registry)).recordRangeIndexBytes(789);
+        RunSortMetrics adapter = new RunSortMetrics(new RunMetrics(registry));
+        adapter.recordRangeFramedBytes(456);
+        adapter.recordRangeIndexBytes(789);
 
+        assertEquals(456.0, registry.get("swath.sort.merge.range.framed.bytes").counter().count());
         assertEquals(789.0, registry.get("swath.sort.merge.range.index.bytes").counter().count());
     }
 

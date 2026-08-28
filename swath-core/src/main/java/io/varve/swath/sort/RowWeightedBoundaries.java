@@ -45,10 +45,6 @@ final class RowWeightedBoundaries {
 
         int ranges = Math.min(desiredRanges, candidates.size());
         List<byte[]> boundaries = quantiles(candidates, weights, total, ranges);
-        if (boundaries.isEmpty()) {
-            metrics.recordStealReason("SORT", "merge_boundary_rows_fallback_zero_mass");
-            return null;
-        }
         metrics.recordStealReason("SORT", "merge_boundary_rows_on");
         return boundaries;
     }

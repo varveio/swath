@@ -127,6 +127,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.sort.merge.proof_spool.mapped.operations|{}",
             "COUNTER|swath.sort.merge.proof_spool.preallocation.attempted.bytes|{}",
             "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
+            "COUNTER|swath.sort.merge.range.framed.bytes|{}",
             "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
@@ -384,6 +385,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.sort.merge.proof_spool.mapped.operations{}=13",
             "swath.sort.merge.proof_spool.preallocation.attempted.bytes{}=6212",
             "swath.sort.merge.proof_spool.preallocation.operations{}=2",
+            "swath.sort.merge.range.framed.bytes{}=0",
             "swath.sort.merge.range.index.bytes{}=0",
             "swath.sort.merge.range.latency{}=1",
             "swath.sort.page_runs_per_buffer{}=1",
@@ -420,7 +422,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 219;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 220;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

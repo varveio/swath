@@ -573,6 +573,7 @@ final class PageRunProofSpool {
         return false;
     }
 
+    /** Package-private corruption-fixture seam for the fixed reserved-zero field. */
     static long reservedFieldOffset(int segment) {
         return slotOffset(segment) + 52;
     }
