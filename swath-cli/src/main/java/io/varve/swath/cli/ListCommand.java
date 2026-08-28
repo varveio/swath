@@ -1563,7 +1563,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
                 writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
-                        true, StopReason.COMPLETED, STRATEGY_WORK_STEALING);
+                        true, StopReason.COMPLETED, STRATEGY_WORK_STEALING, SortArm.PUBLISHED_REENTRY);
                 return ExitCodes.SUCCESS;
             }
             // Merge pending (crashed post-listing, pre-publish; or a foreign manifest.json logged
@@ -1980,6 +1980,15 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 strategy, null, null);
     }
 
+    /** As above, with an explicit sorted-output entry path for a completed no-op re-entry. */
+    private void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
+                                       RunContext ctx, long runId, long startedNs, boolean completed,
+                                       StopReason reason, String strategy, SortArm sortArm)
+            throws InvalidConfigException {
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, null, null, sortArm);
+    }
+
     /**
      * As the 9-arg {@link #writeEarlyExitSummary}, but the seed-failure path threads the
      * resolved process {@code exitCode} (so the summary reports the true exit 1, not {@code null})
@@ -1993,8 +2002,20 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                RunContext ctx, long runId, long startedNs, boolean completed,
                                StopReason reason, String strategy, Integer exitCode, String errorClass)
             throws InvalidConfigException {
+        writeEarlyExitSummary(resolved, config, argsHash, ctx, runId, startedNs, completed, reason,
+                strategy, exitCode, errorClass, null);
+    }
+
+    private void writeEarlyExitSummary(OutputFormat resolved, S3Config config, String argsHash,
+                                       RunContext ctx, long runId, long startedNs, boolean completed,
+                                       StopReason reason, String strategy, Integer exitCode, String errorClass,
+                                       SortArm sortArm)
+            throws InvalidConfigException {
         JsonRunSummaryWriter.Config summaryConfig =
                 buildJsonSummaryConfig(resolved, config, argsHash);
+        if (summaryConfig != null && sortArm != null) {
+            summaryConfig = summaryConfig.withRunConfig(summaryConfig.runConfig().withSortArm(sortArm));
+        }
         ctx.metrics().setRunId(runId);
         RunSummary summary =
                 ctx.metrics().summary(elapsedSince(startedNs), strategy, 0L, 0L);

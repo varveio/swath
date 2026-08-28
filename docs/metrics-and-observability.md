@@ -115,9 +115,11 @@ decoded page/row state. `merge_disjoint_copyable` and `merge_interleaved_segment
 source-run classifications, so they can be compared without conflating overlap with row ordering.
 
 `sort.arm` identifies the typed entry path: `LIVE_LIST_SORT` means this process performed the
-listing, while `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-entry. It is
-independent of the retained `merge_only_resume` compatibility marker. `sort-fixture` has no run
-summary artifact; its existing stdout result line is labelled `arm=SORT_FIXTURE` instead.
+listing, `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-entry, and
+`PUBLISHED_REENTRY` is a checkpoint-authorized no-op resume that found this run already published
+(so it ran neither listing nor merge). It is independent of the retained `merge_only_resume`
+compatibility marker. `sort-fixture` has no run summary artifact; its existing stdout result line
+is labelled `arm=SORT_FIXTURE` instead.
 
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall

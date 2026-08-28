@@ -13,6 +13,8 @@ public enum SortArm {
     LIVE_LIST_SORT,
     /** A checkpoint-authorized {@code --sort --resume} process that only re-ran the merge. */
     MERGE_ONLY_PAGE_RUN,
+    /** A checkpoint-authorized resume that found this run already published and did no work. */
+    PUBLISHED_REENTRY,
     /** The replay {@code sort-fixture} diagnostic, never a live-listing measurement. */
     SORT_FIXTURE,
     /** The page-run merge benchmark diagnostic, never a live-listing measurement. */

@@ -7,6 +7,8 @@ package io.varve.swath.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.varve.swath.checkpoint.NodeSpec;
 import io.varve.swath.checkpoint.PageCommit;
 import io.varve.swath.checkpoint.RunKey;
@@ -39,6 +41,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 final class SortPublishedReentryTest {
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String BUCKET = "bucket";
     private static final String ENDPOINT = "http://localhost:4566";
     private static final String PREFIX = "data/";
@@ -108,6 +111,15 @@ final class SortPublishedReentryTest {
         assertThat(finalizedPart)
                 .as("a resumed run must NOT clear finalized parts")
                 .exists();
+        JsonNode summary = MAPPER.readTree(outputDir.resolve("_swath_summary.json").toFile());
+        assertThat(summary.get("completed").asBoolean()).isTrue();
+        assertThat(summary.get("sort").get("arm").asText())
+                .as("published re-entry is neither a live listing nor a merge-only resume")
+                .isEqualTo("PUBLISHED_REENTRY");
+        assertThat(summary.get("sort").get("merge_only_resume").asBoolean()).isFalse();
+        assertThat(summary.get("objects").asLong()).isZero();
+        assertThat(summary.get("sort").get("passes").asLong()).isZero();
+        assertThat(summary.get("sort").get("merge_ms").asLong()).isZero();
     }
 
     @Test
