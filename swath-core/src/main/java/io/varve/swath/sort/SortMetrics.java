@@ -76,4 +76,15 @@ public interface SortMetrics {
 
     /** Record type-2 metadata bytes read by seek planning and exact worker proof reads. */
     void recordRangeIndexBytes(long bytes);
+
+    /**
+     * Record bounded proof-spool work. {@code operations} counts complete fixed-slot lifecycle or
+     * transfer operations, {@code bytes} counts backing-space materialization and fixed-slot bytes
+     * transferred, and {@code nanos} is the service time of the same work (including
+     * write-combining into the mapped slot).
+     *
+     * <p>The default keeps existing embedders source-compatible; the live and fixture adapters
+     * override it so production paths never silently discard this I/O.
+     */
+    default void recordProofSpool(long operations, long bytes, long nanos) { }
 }

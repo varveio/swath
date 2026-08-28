@@ -451,6 +451,7 @@ final class JsonRunSummaryWriterTest {
         registry.get("swath.sort.merge.latency").timer().record(10, TimeUnit.SECONDS);
         metrics.recordSortMergeRange(TimeUnit.SECONDS.toNanos(2));
         metrics.recordSortMergeBoundaries(TimeUnit.SECONDS.toNanos(1));
+        metrics.recordSortMergeProofSpool(21, 99_392, TimeUnit.MILLISECONDS.toNanos(12));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortFinalizeClose(TimeUnit.SECONDS.toNanos(3));
         metrics.recordSortManifestMd5(1234, TimeUnit.MILLISECONDS.toNanos(250));
@@ -506,6 +507,9 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("merge_overlap_clusters").asLong()).isEqualTo(1);
         assertThat(sort.get("merge_overlap_pages_peak").asLong()).isEqualTo(3);
         assertThat(sort.get("merge_overlap_rows_peak").asLong()).isEqualTo(12);
+        assertThat(sort.get("merge_proof_spool_operations").asLong()).isEqualTo(21);
+        assertThat(sort.get("merge_proof_spool_bytes").asLong()).isEqualTo(99_392);
+        assertThat(sort.get("merge_proof_spool_ms").asLong()).isEqualTo(12);
     }
 
     /** The pre-{@code effective_fan_in} {@code sortEnabled} constructor renders the field as JSON null. */

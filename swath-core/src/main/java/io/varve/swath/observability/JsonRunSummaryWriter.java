@@ -789,7 +789,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("merge_ms", mergeMs);
         // The parallel range merge's serial prologue. INCLUDED in merge_ms above and broken out here
         // because it is the one term that does not shrink as R rises: subtract it to see the ranges'
-        // own scaling. Zero on the default serial merge, which never samples boundaries.
+        // own scaling. Zero on explicit R=1/arbitrary serial input; a resource decline after
+        // structured parallel preflight retains the preflight time it actually spent.
         sortNode.put("merge_boundaries_ms", boundariesMs);
         sortNode.put("merge_boundary_embedded_entries",
                 (long) counterCount("swath.sort.merge.boundaries.embedded.entries"));
@@ -805,6 +806,12 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
         sortNode.put("merge_range_index_bytes",
                 (long) counterCount("swath.sort.merge.range.index.bytes"));
+        sortNode.put("merge_proof_spool_operations",
+                (long) counterCount("swath.sort.merge.proof_spool.operations"));
+        sortNode.put("merge_proof_spool_bytes",
+                (long) counterCount("swath.sort.merge.proof_spool.bytes"));
+        sortNode.put("merge_proof_spool_ms",
+                timerTotalMs("swath.sort.merge.proof_spool.latency"));
         // Concurrent range timers overlap; their maximum, not their sum, is the parallel range
         // wall. The serial path has no range samples, so its range term is the whole merge less the
         // separately measured boundary/finalize tail (clamped for millisecond truncation).

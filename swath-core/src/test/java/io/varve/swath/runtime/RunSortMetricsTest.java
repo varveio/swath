@@ -15,8 +15,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Every hook on {@code SortMetrics} must actually reach {@link RunMetrics}.
  *
- * <p>The interface makes every hook abstract, and these tests pin the live adapter's forwarding
- * contract to the actual run-scoped meters.
+ * <p>These tests pin the live adapter's forwarding contract to the actual run-scoped meters.
  */
 class RunSortMetricsTest {
 
@@ -77,5 +76,19 @@ class RunSortMetricsTest {
         new RunSortMetrics(new RunMetrics(registry)).recordRangeIndexBytes(789);
 
         assertEquals(789.0, registry.get("swath.sort.merge.range.index.bytes").counter().count());
+    }
+
+    @Test
+    void proofSpoolOperationsBytesAndTimeReach() {
+        var registry = new SimpleMeterRegistry();
+
+        new RunSortMetrics(new RunMetrics(registry)).recordProofSpool(7, 1_234, 5_000_000);
+
+        assertEquals(7.0,
+                registry.get("swath.sort.merge.proof_spool.operations").counter().count());
+        assertEquals(1_234.0,
+                registry.get("swath.sort.merge.proof_spool.bytes").counter().count());
+        assertEquals(5.0, registry.get("swath.sort.merge.proof_spool.latency")
+                .timer().totalTime(java.util.concurrent.TimeUnit.MILLISECONDS));
     }
 }

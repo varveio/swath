@@ -73,7 +73,7 @@ class PageRunSeekPlanTest {
     }
 
     @Test
-    void proofTopologyRetainsPrimitiveTablesAndOnlyOneExactKeyCachePerRange() {
+    void proofTopologyRetainsPrimitiveTablesAndOnlyBoundedExactKeyCachesPerRange() {
         assertThat(java.util.Arrays.stream(PageRunZoneVerifier.Tracker.class.getDeclaredFields())
                 .map(java.lang.reflect.Field::getType))
                 .noneMatch(type -> type == byte[].class);
@@ -81,9 +81,18 @@ class PageRunSeekPlanTest {
                 .map(java.lang.reflect.RecordComponent::getType))
                 .doesNotContain(byte[].class, Object[].class);
         assertThat(java.util.Arrays.stream(PageRunZoneVerifier.RangeBuilder.class.getDeclaredFields())
+                .filter(field -> field.getType().getSimpleName().equals("KeyCache")))
+                .hasSize(3);
+        assertThat(java.util.Arrays.stream(PageRunZoneVerifier.RangeBuilder.class.getDeclaredClasses())
+                .filter(type -> type.getSimpleName().equals("KeyCache"))
+                .flatMap(type -> java.util.Arrays.stream(type.getDeclaredFields()))
                 .filter(field -> field.getType() == byte[].class))
-                .hasSize(2);
+                .hasSize(1);
         assertThat(PageRunProofSpool.logicalBytes(10_000 * 16)).isEqualTo(993_920_000L);
+        int beyondSingleBuffer = Math.toIntExact(
+                Math.floorDiv(Integer.MAX_VALUE, PageRunProofSpool.slotBytes()) + 1);
+        assertThat(PageRunProofSpool.logicalBytes(beyondSingleBuffer))
+                .isGreaterThan(Integer.MAX_VALUE);
     }
 
     @Test

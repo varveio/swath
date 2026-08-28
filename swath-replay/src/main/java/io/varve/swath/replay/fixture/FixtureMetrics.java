@@ -34,6 +34,9 @@ public final class FixtureMetrics implements SortMetrics {
     private final Counter sortBoundaryEmbeddedBytes;
     private final Counter sortBoundaryScanBytes;
     private final Counter sortRangeIndexBytes;
+    private final Counter sortProofSpoolOperations;
+    private final Counter sortProofSpoolBytes;
+    private final Timer sortProofSpoolLatency;
     private final Counter sortOverlapClusters;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong sortOverlapPagesPeak =
@@ -64,6 +67,12 @@ public final class FixtureMetrics implements SortMetrics {
                 .baseUnit("bytes").register(registry);
         sortRangeIndexBytes = Counter.builder("swath.replay.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
+        sortProofSpoolOperations =
+                Counter.builder("swath.replay.sort.merge.proof_spool.operations").register(registry);
+        sortProofSpoolBytes = Counter.builder("swath.replay.sort.merge.proof_spool.bytes")
+                .baseUnit("bytes").register(registry);
+        sortProofSpoolLatency =
+                Timer.builder("swath.replay.sort.merge.proof_spool.latency").register(registry);
         sortOverlapClusters = Counter.builder("swath.replay.sort.merge.overlap.clusters").register(registry);
         registry.gauge("swath.replay.sort.merge.overlap.pages.peak", sortOverlapPagesPeak,
                 java.util.concurrent.atomic.AtomicLong::get);
@@ -153,6 +162,13 @@ public final class FixtureMetrics implements SortMetrics {
         sortRangeIndexBytes.increment(bytes);
     }
 
+    @Override
+    public void recordProofSpool(long operations, long bytes, long nanos) {
+        sortProofSpoolOperations.increment(Math.max(0L, operations));
+        sortProofSpoolBytes.increment(Math.max(0L, bytes));
+        sortProofSpoolLatency.record(Math.max(0L, nanos), java.util.concurrent.TimeUnit.NANOSECONDS);
+    }
+
     /**
      * How many {@code SORT.segment_flushed} engagements this instance has recorded — {@code
      * sort-fixture}'s summary line reads this back since {@code io.varve.swath.sort.SortTransformResult}
@@ -163,5 +179,17 @@ public final class FixtureMetrics implements SortMetrics {
     public long segmentsFlushed() {
         Counter counter = sortStealReasonCounters.get("SORT.segment_flushed");
         return counter == null ? 0 : (long) counter.count();
+    }
+
+    public long proofSpoolOperations() {
+        return (long) sortProofSpoolOperations.count();
+    }
+
+    public long proofSpoolBytes() {
+        return (long) sortProofSpoolBytes.count();
+    }
+
+    public long proofSpoolMillis() {
+        return (long) sortProofSpoolLatency.totalTime(java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 }

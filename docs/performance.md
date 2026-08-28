@@ -315,6 +315,11 @@ and expect a whole-run fallback to `distinct` for legacy, invalid, or mixed stag
 skew fixture establishes mechanism, not production evidence, so it does not justify a default
 change.
 
+For merge-only measurements, `boundary_ms` includes both structured catalog/index preflight and
+the selected final boundary policy (`rows` therefore includes its additional full index pass).
+`proof_spool_operations`, `proof_spool_bytes`, and `proof_spool_ms` use the same fixed-slot scope as
+the live run log and JSON report. Serial `R=1` records none of these proof-spool values.
+
 ### Diagnostic zero-LIST merge replay
 
 This procedure isolates the sorted merge from listing by deliberately re-entering a completed

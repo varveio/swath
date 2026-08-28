@@ -150,7 +150,7 @@ final class SortPublicationCrashMatrixTest {
         SortRun run = run(config, writers);
         List<PublicationStep> steps = new ArrayList<>();
         SortTransform crashing = new SortTransform(run, (step, ordinal) -> steps.add(step),
-                spool -> {
+                (spool, stats) -> {
                     throw new IOException("injected coordinator proof-reader failure");
                 });
 

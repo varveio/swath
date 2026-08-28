@@ -45,4 +45,9 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     public void recordRangeIndexBytes(long bytes) {
         metrics.recordSortMergeRangeIndexBytes(bytes);
     }
+
+    @Override
+    public void recordProofSpool(long operations, long bytes, long nanos) {
+        metrics.recordSortMergeProofSpool(operations, bytes, nanos);
+    }
 }

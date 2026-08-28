@@ -1020,11 +1020,21 @@ stops at its exclusive high key it necessarily reads through the next range's st
 each non-empty zone CRC-validates and structurally parses all of its pages without a separate pass.
 
 Each range returns exactly one primitive topology summary plus a temporary exact-key proof spool.
-Variable minima/maxima are never retained in a `segments × ranges` heap matrix: each range keeps one
-active two-key cache while workers run, and the coordinator consumes one spooled segment/range
-summary at a time. Additional proof peak is therefore `O(segments × R)` primitives plus `O(R)` key
-material, while all comparisons remain byte-exact (no hash-only proof). Spools use bounded fixed
-slots and one shared open descriptor for the whole range fleet. That descriptor is an explicit
+Variable minima/maxima are never retained in a `segments × ranges` heap matrix: each range keeps
+three reusable fixed key buffers (last minimum, zone maximum, and rolling sample prefix), and the
+coordinator consumes one spooled segment/range summary at a time. Additional proof peak is therefore
+`O(segments × R)` primitives plus `O(R)` heap key material, while all comparisons remain byte-exact
+(no hash-only proof). The writer first materializes the fixed-slot extent sequentially and forces
+its allocation, so insufficient disk is an ordinary constructor failure rather than a mapped-write
+SIGBUS. The file is then mapped through a shared foreign-memory arena while
+workers update disjoint absolute slots; source switches copy through the reusable range buffers
+without positional channel calls or per-key buffer allocation. A segment/range commits one logical
+fixed-slot write at finish, and the coordinator performs one logical fixed-slot read. The arena is
+closed deterministically before the read mapping and again before delete; offsets and mapping size
+remain `long`, including a logical spool above 2 GiB. Mapped pages are file-backed but can contribute
+to process RSS while resident, so the ordinary peak-RSS meter and merge benchmark remain the memory
+evidence rather than treating logical spool bytes as resident heap. Spools use one shared open
+descriptor for the whole range fleet. That descriptor is an explicit
 one-FD reservation in both the effective-range clamp and the dynamic output-writer allowance, not
 generic process headroom. The spool is deleted before successful writer return and joins
 range/cascade temporaries in every failure/re-entry sweep.

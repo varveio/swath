@@ -238,7 +238,7 @@ public final class RunMetrics {
     // swath.sort.merge-parallelism>1). Distinct from sortMergeLatency (the whole-run merge wall): this
     // records once per concurrent range so an A/B can see range balance and page-skip effectiveness.
     private final Timer sortMergeRangeLatency;
-    // The parallel path's SERIAL prologue: boundary sampling, once per run, before any range starts.
+    // The parallel path's SERIAL prologue: catalog/index preflight plus boundary policy, once per run.
     private final Timer sortMergeBoundariesLatency;
     private final Counter sortMergeBoundaryEmbeddedEntries;
     private final Counter sortMergeBoundaryEmbeddedBytes;
@@ -247,6 +247,9 @@ public final class RunMetrics {
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
     private final Counter sortMergeRangeIndexBytes;
+    private final Counter sortMergeProofSpoolOperations;
+    private final Counter sortMergeProofSpoolBytes;
+    private final Timer sortMergeProofSpoolLatency;
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -591,6 +594,12 @@ public final class RunMetrics {
                 .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
         sortMergeRangeIndexBytes = Counter.builder("swath.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
+        sortMergeProofSpoolOperations =
+                Counter.builder("swath.sort.merge.proof_spool.operations").register(registry);
+        sortMergeProofSpoolBytes = Counter.builder("swath.sort.merge.proof_spool.bytes")
+                .baseUnit("bytes").register(registry);
+        sortMergeProofSpoolLatency =
+                runScopedTimer("swath.sort.merge.proof_spool.latency").register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
         sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")
@@ -1125,10 +1134,11 @@ public final class RunMetrics {
     }
 
     /**
-     * Record the parallel merge's boundary-sampling prologue ({@code
-     * swath.sort.merge.boundaries.latency}) — the one phase of that path that does NOT parallelise,
-     * timed once per run before any range starts. Surfaced as {@code sort.merge_boundaries_ms} so an
-     * A/B can subtract it from {@code merge_ms} and see the ranges' own scaling.
+     * Record the parallel merge's boundary-planning prologue ({@code
+     * swath.sort.merge.boundaries.latency}) — structured catalog/index preflight plus final
+     * distinct/rows policy selection, the work that does not parallelise. Timed once per run before
+     * any range starts and surfaced as {@code sort.merge_boundaries_ms} so an A/B can subtract it
+     * from {@code merge_ms} and see the ranges' own scaling.
      */
     public void recordSortMergeBoundaries(long nanos) {
         sortMergeBoundariesLatency.record(Duration.ofNanos(nanos));
@@ -1155,6 +1165,13 @@ public final class RunMetrics {
     /** Type-2 seek-planning and exact worker-proof metadata reads after boundary selection. */
     public void recordSortMergeRangeIndexBytes(long bytes) {
         sortMergeRangeIndexBytes.increment(Math.max(0L, bytes));
+    }
+
+    /** Bounded fixed-slot proof-spool operations, transferred bytes, and service time. */
+    public void recordSortMergeProofSpool(long operations, long bytes, long nanos) {
+        sortMergeProofSpoolOperations.increment(Math.max(0L, operations));
+        sortMergeProofSpoolBytes.increment(Math.max(0L, bytes));
+        sortMergeProofSpoolLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
     }
 
     /** One final part's footer-write + fsync durability span. */

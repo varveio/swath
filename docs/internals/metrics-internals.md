@@ -74,13 +74,17 @@ so a merge-only resume has a meaningful phase rate even though the compatibility
 `keys_per_sec` correctly remains `0.0` listing keys/s.
 
 **`sort.merge_boundaries_ms`** is the run-total duration read from
-`swath.sort.merge.boundaries.latency`, recorded around `MergePlanner.boundaries` before any
-range thread starts. It is a component of, not an addition to, `sort.merge_ms` above. Therefore
+`swath.sort.merge.boundaries.latency`. It sums two non-overlapping serial spans before any range
+thread starts: the structured parallel catalog/index preflight that reads and validates embedded
+samples, plus `MergePlanner.boundaries`' final distinct-key selection and the optional `rows`
+entry-region pass. It is a component of, not an addition to, `sort.merge_ms` above. Therefore
 `merge_ms - merge_boundaries_ms` isolates the range-execution/publish remainder for scaling analysis.
-Sampling fewer than two distinct keys still records the timer sample before the run falls back to
-serial; that result cannot be known without paying the sampling pass. Because the JSON field stores
-whole milliseconds, a recorded sub-millisecond sample can still render as `0`. No sample is recorded
-when the explicit serial opt-out or a staged-size/resource gate declines the path before sampling.
+Sampling fewer than two distinct keys still records the complete timer sample before the run falls
+back to serial; that result cannot be known without paying both relevant spans. A staged-size or
+resource decline records the preflight span it already paid with `boundary_policy_engaged=false` in
+the log and a zero policy span. Explicit `merge-parallelism=1` and arbitrary-run/fixture serial
+frontiers read no extension and record no sample. Because the JSON field stores whole milliseconds,
+a recorded sub-millisecond sample can still render as `0`.
 The parallel path is otherwise default-on with configured maximum
 `max(1, min(8, availableProcessors / 2))`, subject to the gates registered in §5 below.
 The sibling JSON fields `merge_boundary_embedded_entries`, `merge_boundary_embedded_bytes`, and
@@ -104,8 +108,17 @@ already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` whe
 index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
 its worker-local `index_bytes_read` (planning is coordinator-local and therefore not charged to a
 range).
-The fleet-level `sort_merge_range_parallel` log also reports `proof_spool_fds=1`, matching the
-descriptor reserved explicitly by the FD clamp and output-writer guard.
+Proof-spool work is no longer an unmetered exclusion:
+`merge_proof_spool_operations` / `swath.sort.merge.proof_spool.operations` counts the create/map,
+one fixed-slot commit per segment/range, close/unmap, read map, one fixed-slot read per
+segment/range, close/unmap, and delete (a successful `S`-segment, `R`-range proof is therefore
+`2*S*R + 5`). `merge_proof_spool_bytes` counts the sequential backing-space materialization plus
+the complete fixed-slot bytes covered by commit/read operations (`3*S*R*slotBytes`), and
+`merge_proof_spool_ms` is their complete service time, including the write-combined mapped-memory
+updates folded into the writer close sample. The
+fleet-level `sort_merge_range_parallel` log and merge benchmark report the same three totals plus
+`proof_spool_fds=1`, matching the descriptor reserved explicitly by the FD clamp and output-writer
+guard. They are all zero on serial paths that never create a spool.
 
 **`seed`** (optional): `SeedStep`'s already-computed shape for a fresh run that actually
 seeded (`mode` is `none`/`shallow`/`hints`; `probes`/`cut_points`/`synthesized_cuts`/`ranges` are
@@ -1255,6 +1268,7 @@ legacy-transform path and the sorted-serving index derive/sanity-check path:
 | `swath.replay.sort.progress` | counter | Fixture-sort forward-progress ticks, including work that does not emit a final row. |
 | `swath.replay.sort.merge.boundaries.embedded.entries` / `.embedded.bytes` / `.scan.bytes` | counter | Complete `SortMetrics` adapter counters for boundary-selection embedded sample entries/bytes and fallback page-scan bytes. They are structurally zero for the current `sort-fixture` path because `ARBITRARY_SORTED_RUNS` disables range boundaries; the counters remain registered so the adapter stays complete and future-safe. |
 | `swath.replay.sort.merge.range.index.bytes` | counter | Exact type-2 page-index metadata bytes read after boundary selection for seek planning and physical proof. It is structurally zero for the current `sort-fixture` path because arbitrary fixture runs do not enter indexed range planning, but remains registered as part of the complete `SortMetrics` adapter. |
+| `swath.replay.sort.merge.proof_spool.operations` / `.bytes` / `.latency` | counters / timer | Fixture-prefixed mirror of the live proof-spool scope. The `sort_fixture` result line publishes the same totals as `proof_spool_operations`, `proof_spool_bytes`, and `proof_spool_ms`; all are structurally zero while arbitrary fixture runs remain on the serial frontier. |
 | `swath.replay.sort.merge.overlap.clusters` / `.overlap.pages.peak` / `.overlap.rows.peak` | counter / gauges | Complete replay `SortMetrics` overlap registry: the cluster count and bounded active decoded-page/row peaks observed by the shared page-aware merger. |
 | `swath.replay.index.load.latency{source=derived}` | timer | Time to derive the in-memory row-group routing index (the `source` tag anticipates a future `footer` value once an embedded routing blob lets the server skip deriving). |
 | `swath.replay.index.entries` | distribution | Row-group index entries produced by one derive pass. |

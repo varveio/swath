@@ -209,6 +209,7 @@ final class RunMetricsCharacterizationWorkload {
         m.recordSortMergePasses(3L);
         m.recordSortMerge(m.startSortMergeTimer());
         m.recordSortMergeRange(7_000L);
+        m.recordSortMergeProofSpool(13L, 992L, 7_000L);
 
         // S3 pool + connection churn.
         m.updateS3Pool(5, 3, 1, 32);

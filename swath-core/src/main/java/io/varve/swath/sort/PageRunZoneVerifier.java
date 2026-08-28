@@ -5,17 +5,20 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Header-to-trailer physical-zone proof for one parallel page-run merge. */
 final class PageRunZoneVerifier {
 
     @FunctionalInterface
     interface ProofReaderFactory {
-        PageRunProofSpool.Reader open(Path path) throws IOException;
+        PageRunProofSpool.Reader open(Path path, PageRunProofSpool.Stats stats) throws IOException;
     }
 
     private PageRunZoneVerifier() {
@@ -34,8 +37,9 @@ final class PageRunZoneVerifier {
         private final boolean[] opened;
         private final boolean[] finished;
         private Tracker active;
-        private byte[] activeZoneMax;
-        private byte[] activeRollingPrefix;
+        private final KeyCache activeLastMin = new KeyCache();
+        private final KeyCache activeZoneMax = new KeyCache();
+        private final KeyCache activeRollingPrefix = new KeyCache();
         private boolean handedOff;
 
         RangeBuilder(PageRunProofSpool.Writer spool, Path spoolPath,
@@ -78,24 +82,39 @@ final class PageRunZoneVerifier {
             spool.writeKey(tracker.spoolIndex(), field, key);
         }
 
-        byte[] zoneMax(Tracker tracker) throws IOException {
+        int compareZoneMax(Tracker tracker, byte[] key) throws IOException {
             activate(tracker);
-            return activeZoneMax;
+            return activeZoneMax.compareTo(key);
         }
 
         void zoneMax(Tracker tracker, byte[] key) throws IOException {
             activate(tracker);
-            activeZoneMax = key.clone();
+            activeZoneMax.set(key);
         }
 
-        byte[] rollingPrefix(Tracker tracker) throws IOException {
+        boolean hasRollingPrefix(Tracker tracker) throws IOException {
             activate(tracker);
-            return activeRollingPrefix;
+            return activeRollingPrefix.present();
+        }
+
+        boolean rollingPrefixEquals(Tracker tracker, byte[] key) throws IOException {
+            activate(tracker);
+            return activeRollingPrefix.equalsKey(key);
+        }
+
+        int compareRollingPrefix(Tracker tracker, byte[] key) throws IOException {
+            activate(tracker);
+            return activeRollingPrefix.compareTo(key);
         }
 
         void rollingPrefix(Tracker tracker, byte[] key) throws IOException {
             activate(tracker);
-            activeRollingPrefix = key.clone();
+            activeRollingPrefix.set(key);
+        }
+
+        void lastMin(Tracker tracker, byte[] key) throws IOException {
+            activate(tracker);
+            activeLastMin.set(key);
         }
 
         void complete(Tracker tracker, long pages, long entries, long framedBytes,
@@ -107,8 +126,9 @@ final class PageRunZoneVerifier {
                     firstFrameOffset, endFrameOffset, verifiedSamples, mismatch);
             finished[tracker.segmentIndex()] = true;
             active = null;
-            activeZoneMax = null;
-            activeRollingPrefix = null;
+            activeLastMin.clear();
+            activeZoneMax.clear();
+            activeRollingPrefix.clear();
         }
 
         private void activate(Tracker tracker) throws IOException {
@@ -117,28 +137,41 @@ final class PageRunZoneVerifier {
             }
             flushActive();
             active = tracker;
-            activeZoneMax = tracker.zoneMaxStored
-                    ? spool.readKey(tracker.spoolIndex(), PageRunProofSpool.KeyField.ZONE_MAX)
-                    : null;
-            activeRollingPrefix = tracker.rollingPrefixStored
-                    ? spool.readKey(tracker.spoolIndex(),
-                            PageRunProofSpool.KeyField.ROLLING_SAMPLE_PREFIX)
-                    : null;
+            load(activeLastMin, tracker.lastMinStored, tracker,
+                    PageRunProofSpool.KeyField.LAST_MIN);
+            load(activeZoneMax, tracker.zoneMaxStored, tracker,
+                    PageRunProofSpool.KeyField.ZONE_MAX);
+            load(activeRollingPrefix, tracker.rollingPrefixStored, tracker,
+                    PageRunProofSpool.KeyField.ROLLING_SAMPLE_PREFIX);
         }
 
         private void flushActive() throws IOException {
             if (active == null) {
                 return;
             }
-            if (activeZoneMax != null) {
+            if (activeLastMin.present()) {
+                spool.writeKey(active.spoolIndex(), PageRunProofSpool.KeyField.LAST_MIN,
+                        activeLastMin.bytes(), activeLastMin.length());
+                active.lastMinStored = true;
+            }
+            if (activeZoneMax.present()) {
                 spool.writeKey(active.spoolIndex(), PageRunProofSpool.KeyField.ZONE_MAX,
-                        activeZoneMax);
+                        activeZoneMax.bytes(), activeZoneMax.length());
                 active.zoneMaxStored = true;
             }
-            if (activeRollingPrefix != null) {
+            if (activeRollingPrefix.present()) {
                 spool.writeKey(active.spoolIndex(),
-                        PageRunProofSpool.KeyField.ROLLING_SAMPLE_PREFIX, activeRollingPrefix);
+                        PageRunProofSpool.KeyField.ROLLING_SAMPLE_PREFIX,
+                        activeRollingPrefix.bytes(), activeRollingPrefix.length());
                 active.rollingPrefixStored = true;
+            }
+        }
+
+        private void load(KeyCache cache, boolean stored, Tracker tracker,
+                          PageRunProofSpool.KeyField field) throws IOException {
+            cache.clear();
+            if (stored) {
+                cache.setLength(spool.readKey(tracker.spoolIndex(), field, cache.bytes()));
             }
         }
 
@@ -152,6 +185,48 @@ final class PageRunZoneVerifier {
 
         private int slot(int segment) {
             return Math.addExact(Math.multiplyExact(range, segments), segment);
+        }
+
+        /** Reusable exact-key storage: three fixed buffers per active range, never per page. */
+        private static final class KeyCache {
+            private final byte[] bytes = new byte[ByteMidpoint.MAX_KEY_LEN];
+            private int length = -1;
+
+            byte[] bytes() {
+                return bytes;
+            }
+
+            int length() {
+                return length;
+            }
+
+            boolean present() {
+                return length >= 0;
+            }
+
+            void clear() {
+                length = -1;
+            }
+
+            void set(byte[] key) {
+                System.arraycopy(key, 0, bytes, 0, key.length);
+                length = key.length;
+            }
+
+            void setLength(int length) {
+                this.length = length;
+            }
+
+            int compareTo(byte[] key) {
+                return present()
+                        ? Arrays.compareUnsigned(bytes, 0, length, key, 0, key.length)
+                        : -1;
+            }
+
+            boolean equalsKey(byte[] key) {
+                return present() && length == key.length
+                        && Arrays.equals(bytes, 0, length, key, 0, key.length);
+            }
         }
     }
 
@@ -171,6 +246,7 @@ final class PageRunZoneVerifier {
         private long endFrameOffset = -1;
         private int verifiedSamples;
         private boolean sampleMismatch;
+        private boolean lastMinStored;
         private boolean zoneMaxStored;
         private boolean rollingPrefixStored;
         private boolean finished;
@@ -215,13 +291,12 @@ final class PageRunZoneVerifier {
                 firstFrameOffset = frameOffset;
                 builder.writeKey(this, PageRunProofSpool.KeyField.FIRST_MIN, minKey);
             }
-            builder.writeKey(this, PageRunProofSpool.KeyField.LAST_MIN, minKey);
-            byte[] zoneMaximum = builder.zoneMax(this);
-            if (zoneMaximum == null || Arrays.compareUnsigned(maxKey, zoneMaximum) > 0) {
+            builder.lastMin(this, minKey);
+            if (builder.compareZoneMax(this, maxKey) < 0) {
                 builder.zoneMax(this, maxKey);
             }
-            byte[] rolling = builder.rollingPrefix(this);
-            if (rolling != null && Arrays.compareUnsigned(maxKey, rolling) > 0) {
+            if (builder.hasRollingPrefix(this)
+                    && builder.compareRollingPrefix(this, maxKey) < 0) {
                 builder.rollingPrefix(this, maxKey);
             }
 
@@ -279,7 +354,7 @@ final class PageRunZoneVerifier {
                     sampleMismatch = true;
                 }
                 builder.rollingPrefix(this, sample.prefixMax());
-            } else if (!Arrays.equals(sample.prefixMax(), builder.rollingPrefix(this))) {
+            } else if (!builder.rollingPrefixEquals(this, sample.prefixMax())) {
                 sampleMismatch = true;
             }
             verifiedSamples++;
@@ -288,17 +363,19 @@ final class PageRunZoneVerifier {
 
     static void verify(PageRunSeekPlan plan, List<RangeSummary> supplied,
                        SortMetrics metrics) throws IOException {
-        verify(plan, supplied, metrics, PageRunProofSpool.Reader::new);
+        PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(metrics);
+        verify(plan, supplied, metrics, PageRunProofSpool.Reader::new, stats);
     }
 
     static void verify(PageRunSeekPlan plan, List<RangeSummary> supplied,
-                       SortMetrics metrics, ProofReaderFactory readerFactory) throws IOException {
+                       SortMetrics metrics, ProofReaderFactory readerFactory,
+                       PageRunProofSpool.Stats stats) throws IOException {
         MergeCancellation.check();
         PageRunProofSpool.Reader reader = null;
         Throwable primary = null;
         try {
             RangeSummary[] ranges = topology(plan, supplied);
-            reader = readerFactory.open(ranges[0].spool());
+            reader = readerFactory.open(ranges[0].spool(), stats);
             for (PageRunSeekPlan.SegmentPlan segment : plan.segments()) {
                 MergeCancellation.check();
                 verifySegment(segment, plan.ranges(), plan.segments().size(), reader, metrics);
@@ -316,13 +393,17 @@ final class PageRunZoneVerifier {
                     failure = append(failure, e);
                 }
             }
+            Set<Path> spools = new LinkedHashSet<>();
             for (RangeSummary summary : supplied) {
                 if (summary != null && summary.spool() != null) {
-                    try {
-                        PageRunProofSpool.delete(summary.spool());
-                    } catch (IOException e) {
-                        failure = append(failure, e);
-                    }
+                    spools.add(summary.spool());
+                }
+            }
+            for (Path spool : spools) {
+                try {
+                    PageRunProofSpool.delete(spool, stats);
+                } catch (IOException e) {
+                    failure = append(failure, e);
                 }
             }
             if (failure != null && primary != null) {

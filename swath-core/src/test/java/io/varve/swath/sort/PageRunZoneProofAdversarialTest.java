@@ -274,6 +274,26 @@ class PageRunZoneProofAdversarialTest {
     }
 
     @Test
+    void proofSpoolFixedSlotOperationsScaleWithSegmentsAndRangesNotPages(@TempDir Path root)
+            throws IOException {
+        int segments = 2;
+        int ranges = 4;
+        SortTestSupport.CountingMetrics small = proofWorkload(
+                root.resolve("small"), segments, ranges, 8);
+        SortTestSupport.CountingMetrics large = proofWorkload(
+                root.resolve("large"), segments, ranges, 256);
+        long slots = (long) segments * ranges;
+        long expectedOperations = 2 * slots + 5; // writer/reader lifecycle + one delete
+        long expectedBytes = 3 * slots * PageRunProofSpool.slotBytes();
+
+        assertThat(small.proofSpoolOperations.sum()).isEqualTo(expectedOperations);
+        assertThat(large.proofSpoolOperations.sum()).isEqualTo(expectedOperations);
+        assertThat(small.proofSpoolBytes.sum()).isEqualTo(expectedBytes);
+        assertThat(large.proofSpoolBytes.sum()).isEqualTo(expectedBytes);
+        assertThat(large.proofSpoolNanos.sum()).isPositive();
+    }
+
+    @Test
     void seekPlanningPollsCancellationBeforeOpeningWorkers(@TempDir Path root)
             throws IOException {
         Path segment = SortTestSupport.writeIndexedPages(root.resolve("segment.pageseg"), 8, 0);
@@ -362,7 +382,7 @@ class PageRunZoneProofAdversarialTest {
                 RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
                 StaleFinalSweep.OWN_PARTS_ONLY);
         AtomicBoolean proofEntered = new AtomicBoolean();
-        ParallelRangeMerge merge = new ParallelRangeMerge(run, spool -> {
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, (spool, stats) -> {
             assertThat(spool).exists();
             assertThat(writers.opened.get()).isEqualTo(4);
             assertThat(writers.openNow.get()).isEqualTo(4);
@@ -370,7 +390,7 @@ class PageRunZoneProofAdversarialTest {
             assertNoLiveWorkers();
             proofEntered.set(true);
             Thread.currentThread().interrupt();
-            return new PageRunProofSpool.Reader(spool);
+            return new PageRunProofSpool.Reader(spool, stats);
         });
 
         try {
@@ -467,6 +487,28 @@ class PageRunZoneProofAdversarialTest {
                 EqualKeyPolicy.ALLOW, metrics, writers,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+    }
+
+    private static SortTestSupport.CountingMetrics proofWorkload(
+            Path root, int segments, int ranges, int pages) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        List<Path> inputs = new ArrayList<>();
+        for (int segment = 0; segment < segments; segment++) {
+            List<List<ListEntry>> pageRows = new ArrayList<>();
+            for (int page = 0; page < pages; page++) {
+                pageRows.add(List.of(SortTestSupport.object(
+                        String.format("k%08d", page * segments + segment))));
+            }
+            inputs.add(SortTestSupport.writeIndexedPages(
+                    staging.resolve("segment-" + segment + ".pageseg"), pageRows));
+        }
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortTransformResult result = transform(ranges, metrics, SortedFileWriterFactory.DEFAULT)
+                .transform(inputs, output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+        assertThat(result.finalizationParallelism()).isEqualTo(ranges);
+        return metrics;
     }
 
     private static List<List<ListEntry>> indexedPages() {
@@ -593,7 +635,9 @@ class PageRunZoneProofAdversarialTest {
             throws IOException {
         Path spoolPath = dir.resolve(StagingNames.rangeProofTmp());
         List<PageRunZoneVerifier.RangeSummary> summaries = new ArrayList<>();
-        try (PageRunProofSpool.Writer spool = new PageRunProofSpool.Writer(spoolPath)) {
+        PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(SortMetrics.NO_OP);
+        try (PageRunProofSpool.Writer spool =
+                     new PageRunProofSpool.Writer(spoolPath, 0, stats)) {
             for (int range = 0; range < ranges; range++) {
                 try (PageRunZoneVerifier.RangeBuilder builder =
                              new PageRunZoneVerifier.RangeBuilder(

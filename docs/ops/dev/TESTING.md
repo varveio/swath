@@ -166,6 +166,10 @@ the three serial brackets and the two candidate samples. `swath.bench.max-varian
 likewise invalid. Every output must be physically sorted and match the independent source oracle.
 Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
 `corpus_id`, and the stable ordered logical-output fingerprint when output exists.
+The row also reports `proof_spool_operations`, `proof_spool_bytes`, and `proof_spool_ms` with the
+same scope as the live log and run summary. `PageRunZoneProofAdversarialTest` pins the successful
+operation count to `2*S*R + 5` and holds it constant while page count grows; `PageRunSeekPlanTest`
+pins long-sized logical topology above the single-buffer 2 GiB boundary.
 
 ## JMH micro-benchmarks
 

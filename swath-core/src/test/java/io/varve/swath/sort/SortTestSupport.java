@@ -244,6 +244,9 @@ final class SortTestSupport {
     static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
         final LongAdder rangeIndexBytes = new LongAdder();
+        final LongAdder proofSpoolOperations = new LongAdder();
+        final LongAdder proofSpoolBytes = new LongAdder();
+        final LongAdder proofSpoolNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -269,6 +272,13 @@ final class SortTestSupport {
         @Override
         public void recordRangeIndexBytes(long bytes) {
             rangeIndexBytes.add(bytes);
+        }
+
+        @Override
+        public void recordProofSpool(long operations, long bytes, long nanos) {
+            proofSpoolOperations.add(operations);
+            proofSpoolBytes.add(bytes);
+            proofSpoolNanos.add(nanos);
         }
 
         int count(String key) {

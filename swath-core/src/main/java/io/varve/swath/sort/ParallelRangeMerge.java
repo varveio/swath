@@ -177,7 +177,10 @@ final class ParallelRangeMerge {
         // proof below chains them from the fixed header to the trailer.
         PageRunSeekPlan seekPlan = PageRunSeekPlan.plan(segmentDescriptors, boundaries, metrics);
         Path proofSpoolPath = stagingDir.resolve(StagingNames.rangeProofTmp());
-        PageRunProofSpool.Writer proofSpool = new PageRunProofSpool.Writer(proofSpoolPath);
+        PageRunProofSpool.Stats proofSpoolStats = new PageRunProofSpool.Stats(metrics);
+        int proofSlots = Math.multiplyExact(ranges, seekPlan.segments().size());
+        PageRunProofSpool.Writer proofSpool =
+                new PageRunProofSpool.Writer(proofSpoolPath, proofSlots, proofSpoolStats);
         Object progressLock = new Object();
         LongConsumer safeProgress = units -> {
             synchronized (progressLock) {
@@ -230,10 +233,15 @@ final class ParallelRangeMerge {
             List<PageRunZoneVerifier.RangeSummary> proof = results.stream()
                     .map(ParallelRangeWorker.Result::zoneSummary)
                     .toList();
-            PageRunZoneVerifier.verify(seekPlan, proof, metrics, proofReaderFactory);
+            PageRunZoneVerifier.verify(
+                    seekPlan, proof, metrics, proofReaderFactory, proofSpoolStats);
+            PageRunProofSpool.Snapshot proofSpoolSnapshot = proofSpoolStats.snapshot();
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
-                            + "proof_spool_fds={}",
-                    ranges, threads, perRangeFanIn, MergePlanner.PROOF_SPOOL_FDS);
+                            + "proof_spool_fds={} proof_spool_operations={} "
+                            + "proof_spool_bytes={} proof_spool_ms={}",
+                    ranges, threads, perRangeFanIn, MergePlanner.PROOF_SPOOL_FDS,
+                    proofSpoolSnapshot.operations(), proofSpoolSnapshot.bytes(),
+                    proofSpoolSnapshot.nanos() / 1_000_000L);
             return results;
         } catch (InterruptedException e) {
             abortAndCleanUp(pool, futures, stagingDir, proofSpool);

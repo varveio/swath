@@ -530,6 +530,9 @@ class ParallelMergeBenchmark {
         ar.sampleCappedSegments = metrics.count("SORT.merge_range_sample_capped");
         ar.pageWholeEmissions = metrics.count("SORT.page_whole_emitted");
         ar.pageOverlapKeyMerges = metrics.count("SORT.page_overlap_keymerge");
+        ar.proofSpoolOperations = metrics.proofSpoolOperations.sum();
+        ar.proofSpoolBytes = metrics.proofSpoolBytes.sum();
+        ar.proofSpoolNanos = metrics.proofSpoolNanos.sum();
         ar.boundaryNanos = timer.boundaryNanos;
         ar.rangeLatenciesNanos = timer.rangeLatenciesNanos.stream().toList();
         ar.samplerCleanupNanos = sampler.cleanupNanos;
@@ -1051,6 +1054,9 @@ class ParallelMergeBenchmark {
         long sampleCappedSegments;
         long pageWholeEmissions;
         long pageOverlapKeyMerges;
+        long proofSpoolOperations;
+        long proofSpoolBytes;
+        long proofSpoolNanos;
         long boundaryNanos;
         List<Long> rangeLatenciesNanos;
         boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
@@ -1074,7 +1080,8 @@ class ParallelMergeBenchmark {
                             + "range_would_cascade_count=%d range_unsplittable_count=%d "
                             + "page_skip_engaged_ranges=%d "
                             + "sample_capped_segments=%d page_whole_emissions=%d "
-                            + "page_overlap_keymerges=%d page_reads=unavailable "
+                            + "page_overlap_keymerges=%d proof_spool_operations=%d "
+                            + "proof_spool_bytes=%d proof_spool_ms=%d page_reads=unavailable "
                             + "read_amplification=unavailable identity_check=full-row "
                             + "full_row_exact=%s multiset_digest=%s sampler_cleanup_ms=%d "
                             + "range_latencies_ms=%s",
@@ -1086,7 +1093,8 @@ class ParallelMergeBenchmark {
                     rangeBelowStagedFloorCount, rangeFdLimitedCount, rangeFdExhaustedCount,
                     rangeWouldCascadeCount, rangeUnsplittableCount, pageSkipEngagedCount,
                     sampleCappedSegments, pageWholeEmissions,
-                    pageOverlapKeyMerges, fullRowExact, multisetDigest,
+                    pageOverlapKeyMerges, proofSpoolOperations, proofSpoolBytes,
+                    proofSpoolNanos / 1_000_000L, fullRowExact, multisetDigest,
                     samplerCleanupNanos / 1_000_000, rangeLatenciesMs);
         }
     }
@@ -1110,6 +1118,9 @@ class ParallelMergeBenchmark {
     /** Thread-safe {@link SortMetrics} — the parallel path records from several range threads at once. */
     private static final class ThreadSafeMetrics implements SortMetrics {
         private final Map<String, LongAdder> counts = new ConcurrentHashMap<>();
+        private final LongAdder proofSpoolOperations = new LongAdder();
+        private final LongAdder proofSpoolBytes = new LongAdder();
+        private final LongAdder proofSpoolNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -1134,6 +1145,13 @@ class ParallelMergeBenchmark {
 
         @Override
         public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long operations, long bytes, long nanos) {
+            proofSpoolOperations.add(operations);
+            proofSpoolBytes.add(bytes);
+            proofSpoolNanos.add(nanos);
         }
 
         long count(String key) {
