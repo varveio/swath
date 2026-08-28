@@ -635,11 +635,15 @@ its checkpoint/publication state.
     failure in a post-completion step inside the same guarded region), and not
     a flag-unset `FAILED` a caller chose above — a publish failure rethrown
     into that guard stays resumable.
-    Direct-dataset terminal publication is the other explicit exception: it throws
+    Direct-dataset terminal publication is one explicit exception: it throws
     `PublicationPendingException`, leaves the run `RUNNING`, and can be retried from finalized
-    checkpoint parts. Sorted merge/publication currently remains a plain `OutputException` and
-    therefore follows this fatal-error rule; its checkpointed merge-pending re-entry covers raw
-    process death, not a caught in-process publication failure.
+    checkpoint parts. Sorted publication has the same typed recovery only after its authority
+    listener returns: `manifest.json`, `.swath-state.json`, `symlink.txt`, and last-written
+    `_SUCCESS` already describe the valid dataset, so a subsequent sorter-local hook or staging
+    cleanup failure latches `sort_phase=PUBLISHED`, throws `PublicationPendingException`, and leaves
+    the run non-fatal for cleanup-only resume. A failure before the listener returns remains a plain
+    `OutputException` and follows the fatal-error rule; it must re-enter neither PUBLISHED cleanup
+    nor claim that publication committed.
   - A **protocol violation** (a response no conforming store may produce, e.g.
     `oversized_page`) is the one failure the run must never resume into, so it
     marks `FAILED` with `fatal_error=1` whatever ended the scan — including an
@@ -818,11 +822,18 @@ which owns the at-most-once-text durability questions it would reopen):
   step writes `manifest.json` or `_SUCCESS`: those authority artifacts belong exclusively to the
   listener/runtime and `_SUCCESS` remains the last one. Re-entry from the same originals removes
   every owned final/range/cascade/proof temporary and converges to one dense, gap-free part set;
-  staging is still present while the listener runs and is completed only after it returns. A failure
-  after staging completion is already after the direct transform's complete file publication; in
-  the managed runtime the listener has committed `_SUCCESS` before that point, so PUBLISHED re-entry
-  performs cleanup/status repair rather than relisting. If the durable originals themselves are no
-  longer available, the separately tested `--restart` route discards that run and lists fresh.
+  staging is still present while the listener runs and is completed only after it returns. Once the
+  listener returns, publication is committed and cannot be rolled back: an `IOException` or runtime
+  failure from the later WP8 hook, disposable-intermediate deletion, staging deletion/reconciliation,
+  or final hook is classified as post-publish cleanup pending, records
+  `SORT.post_publish_cleanup_pending` plus the stable
+  `sort_post_publish_cleanup_pending publication_committed=true cleanup_pending=true stage=...` log,
+  and leaves/marks the managed checkpoint `PUBLISHED` rather than fatal. The next resume validates
+  this run's identity + `_SUCCESS`, performs cleanup only with zero LIST requests, then marks the run
+  `COMPLETED`; `sort.keep-staging=on` reconciles back to the checkpoint originals while the default
+  removes them. Pre-listener failures retain their existing merge/publish failure behavior. If the
+  durable originals themselves are no longer available before publication, the separately tested
+  `--restart` route discards that run and lists fresh.
 - By default the staging dir is cleaned on successful publish and a co-located
   checkpoint is deleted; **a crash mid-sort redoes only the sort (the LIST work
   is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the

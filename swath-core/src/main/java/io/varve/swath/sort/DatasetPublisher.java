@@ -130,13 +130,27 @@ final class DatasetPublisher {
         Durability.directory(pending.outputDir);
         publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
         publishListener.onPublished(finalParts(pending.finalFiles, pending.writers), totalRows);
-        publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
+        CommittedPublicationCleanupException.Stage cleanupStage =
+                CommittedPublicationCleanupException.Stage.AFTER_PUBLISH_LISTENER_HOOK;
+        try {
+            publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
 
-        for (Path intermediate : disposableIntermediates) {
-            Files.deleteIfExists(intermediate);
+            cleanupStage = CommittedPublicationCleanupException.Stage.DISPOSABLE_INTERMEDIATE_CLEANUP;
+            for (Path intermediate : disposableIntermediates) {
+                Files.deleteIfExists(intermediate);
+            }
+            cleanupStage = CommittedPublicationCleanupException.Stage.ORIGINAL_STAGING_COMPLETION;
+            completeOriginalStaging(stagingSegments, pending.stagingDir, retainedOriginals);
+            cleanupStage = CommittedPublicationCleanupException.Stage.AFTER_STAGING_COMPLETION_HOOK;
+            publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
+        } catch (IOException | RuntimeException failure) {
+            metrics.recordStealReason("SORT", "post_publish_cleanup_pending");
+            log.warn("sort_post_publish_cleanup_pending publication_committed=true "
+                            + "cleanup_pending=true stage={} output_dir={} staging_dir={} message={}",
+                    cleanupStage.logValue(), pending.outputDir, pending.stagingDir,
+                    failure.getMessage());
+            throw new CommittedPublicationCleanupException(cleanupStage, failure);
         }
-        completeOriginalStaging(stagingSegments, pending.stagingDir, retainedOriginals);
-        publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
     }
 
     private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir,
@@ -154,7 +168,7 @@ final class DatasetPublisher {
         tryDeleteEmptyStagingDir(stagingDir);
     }
 
-    private void tryDeleteEmptyStagingDir(Path stagingDir) {
+    private void tryDeleteEmptyStagingDir(Path stagingDir) throws IOException {
         if (!Files.isDirectory(stagingDir)) {
             return;
         }
@@ -163,15 +177,8 @@ final class DatasetPublisher {
                 log.info("sort staging dir left in place: unexpected content remains in {}", stagingDir);
                 return;
             }
-        } catch (IOException e) {
-            log.debug("failed to list sort staging dir {} before removal; leaving it in place", stagingDir, e);
-            return;
         }
-        try {
-            Files.delete(stagingDir);
-        } catch (IOException e) {
-            log.debug("failed to remove empty sort staging dir {}", stagingDir, e);
-        }
+        Files.delete(stagingDir);
     }
 
     /**

@@ -74,7 +74,8 @@ public final class SortTransform {
         this(run, PublicationStepHook.NO_OP, PageRunProofSpool.Reader::new);
     }
 
-    SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
+    /** Build a transform with the internal deterministic publication crash-test seam. */
+    public SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
         this(run, publicationStepHook, PageRunProofSpool.Reader::new);
     }
 

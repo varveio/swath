@@ -131,7 +131,11 @@ executor, seek-plan construction, global proof, cancellation/quiescence, writer 
 failure sweep, while `ParallelRangeWorker` executes exactly one range; and `DatasetPublisher` owns
 sorted tmp/stamp/close, stale-final replacement, rename/fsync/listener ordering, and staging
 completion. `DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the
-owner of consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`.
+owner of consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`. After that listener
+returns, `DatasetPublisher` owns only disposable-intermediate and staging reconciliation. A failure
+in that suffix is typed as committed-publication cleanup pending; the runtime records PUBLISHED and
+lets the next resume clean without LIST work instead of sending the valid dataset through the fatal
+merge/publish guard.
 
 The terminal output stage is observed first so broken pipes, full disks, and writer failures
 cancel producers promptly. On shutdown, downstream receivers close before producer joins;

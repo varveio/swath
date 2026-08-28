@@ -5,8 +5,12 @@
  */
 package io.varve.swath.sort;
 
-/** Typed checkpoints in the replacement-publication tail. Package-private test seam. */
-enum PublicationStep {
+/**
+ * Typed checkpoints in the replacement-publication tail.
+ *
+ * <p>This is an internal deterministic crash-test seam, not a third-party extension point.
+ */
+public enum PublicationStep {
     AFTER_WORKING_SWEEP,
     AFTER_ALL_TMP_PARTS_DURABLE,
     AFTER_STALE_FINAL_SWEEP,

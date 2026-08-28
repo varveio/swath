@@ -58,12 +58,18 @@ final class SortPublicationCrashMatrixTest {
                 }
             };
 
-            assertThatThrownBy(() -> transform(shape.config(retain), SortedFileWriterFactory.DEFAULT,
+            var failure = assertThatThrownBy(() -> transform(shape.config(retain), SortedFileWriterFactory.DEFAULT,
                     crashingHook).transform(originals, output, staging,
                             (parts, rows) -> listenerCalls.incrementAndGet(),
                             units -> { }, FinalPassListener.NO_OP))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("injected publication crash");
+                    .isInstanceOf(IOException.class);
+            if (crash.afterListener()) {
+                failure.isInstanceOf(CommittedPublicationCleanupException.class)
+                        .hasRootCauseMessage("injected publication crash at " + crash);
+            } else {
+                failure.isNotInstanceOf(CommittedPublicationCleanupException.class)
+                        .hasMessageContaining("injected publication crash");
+            }
 
             assertThat(listenerCalls.get()).isEqualTo(crash.afterListener() ? 1 : 0);
             assertThat(scenario.resolve(Manifest.FILE_NAME)).doesNotExist();
@@ -204,6 +210,46 @@ final class SortPublicationCrashMatrixTest {
         assertThat(root.resolve(Manifest.FILE_NAME)).exists();
         assertThat(root.resolve(Manifest.SUCCESS_FILE_NAME)).exists();
         assertThat(originals).as("listener precedes staging completion").allMatch(Files::exists);
+    }
+
+    @Test
+    void ordinaryStagingDeletionFailureAfterAuthorityIsTypedAndObservable(@TempDir Path root)
+            throws Exception {
+        Path output = Files.createDirectories(root.resolve("data"));
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        List<Path> originals = stage(staging, MergeShape.SERIAL.segmentRows());
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PublishListener authorityListener = (parts, rows) -> {
+            Files.writeString(root.resolve(Manifest.FILE_NAME), "listener-owned manifest");
+            Files.writeString(root.resolve(Manifest.SUCCESS_FILE_NAME), "");
+            // The merge has already consumed this original. Replacing it with a non-empty directory
+            // makes the ordinary Files.deleteIfExists staging completion fail deterministically,
+            // without relying on platform-specific permission behavior.
+            Path blocked = originals.getFirst();
+            Files.delete(blocked);
+            Files.createDirectory(blocked);
+            Files.writeString(blocked.resolve("still-present"), "cleanup blocker");
+        };
+        SortRun run = new SortRun(MergeShape.SERIAL.config(false), comparator,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, metrics,
+                SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+
+        assertThatThrownBy(() -> new SortTransform(run).transform(
+                originals, output, staging, authorityListener,
+                units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(CommittedPublicationCleanupException.class)
+                .satisfies(failure -> assertThat(
+                        ((CommittedPublicationCleanupException) failure).stage())
+                        .isEqualTo(CommittedPublicationCleanupException.Stage.ORIGINAL_STAGING_COMPLETION))
+                .hasRootCauseInstanceOf(java.nio.file.DirectoryNotEmptyException.class);
+
+        assertThat(root.resolve(Manifest.FILE_NAME)).hasContent("listener-owned manifest");
+        assertThat(root.resolve(Manifest.SUCCESS_FILE_NAME)).exists();
+        assertPublishedSet(output, MergeShape.SERIAL.expectedKeys(),
+                MergeShape.SERIAL.expectedParts());
+        assertThat(metrics.count("SORT.post_publish_cleanup_pending")).isEqualTo(1);
     }
 
     private static Stream<Arguments> publicationMatrix() {

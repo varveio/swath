@@ -14,7 +14,7 @@ import java.io.IOException;
  * PublicationStep#AFTER_PART_RENAME}; it is {@code -1} at every other step.
  */
 @FunctionalInterface
-interface PublicationStepHook {
+public interface PublicationStepHook {
 
     PublicationStepHook NO_OP = (step, ordinal) -> { };
 

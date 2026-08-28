@@ -20,6 +20,7 @@ import io.varve.swath.engine.WorkStealingScan;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.OutputException;
+import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.error.SwathException;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListEntry;
@@ -53,6 +54,7 @@ import io.varve.swath.output.parquet.PartListener;
 import io.varve.swath.output.text.TextWriterPool;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
+import io.varve.swath.sort.CommittedPublicationCleanupException;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
@@ -60,6 +62,7 @@ import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.MergeInputProfile;
 import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.PublicationStepHook;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
@@ -96,6 +99,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -118,6 +122,17 @@ import org.slf4j.LoggerFactory;
 public final class ListRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ListRunner.class);
+    private final PublicationStepHook publicationStepHook;
+
+    /** Build a production runner with no publication crash injection. */
+    public ListRunner() {
+        this(PublicationStepHook.NO_OP);
+    }
+
+    /** Build a runner with the internal deterministic publication crash-test seam. */
+    public ListRunner(PublicationStepHook publicationStepHook) {
+        this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
+    }
 
     /**
      * The process exit code a CLASSIFIED fatal crash reports in the JSON summary. Every
@@ -820,7 +835,7 @@ public final class ListRunner {
                     ctx.metrics().setPhase(Phase.MERGING);
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
-                    merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
+                    merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                             sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                             spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
                             StaleFinalSweep.OWN_PARTS_ONLY);
@@ -873,7 +888,7 @@ public final class ListRunner {
             List<PartRef> segRows = sortedSegmentRows(store, runId);
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
-            SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
+            SortTransformResult result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                     segRows, sortConfig, mode, spec.bucket(),
                     spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
                     StaleFinalSweep.ALL_PARQUET);
@@ -923,7 +938,8 @@ public final class ListRunner {
     }
 
     /**
-     * Merge the durable staging segments into the published sorted output; manifest written LAST.
+     * Merge the durable staging segments into the published sorted output; authority listener writes
+     * {@code _SUCCESS} last.
      * The final sorted files are written under {@code <root>/data/}, the pure-parquet subdir,
      * so the transform operates on the {@code data/} directory while the consumer manifest + markers
      * land at the dataset root.
@@ -939,7 +955,8 @@ public final class ListRunner {
      *         reaching this method. The normal listing-completion caller ({@link #run}) passes
      *         {@code false}: it has no such identity guarantee.
      */
-    private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
+    private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
+            Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
             Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
             throws SwathException {
@@ -984,7 +1001,8 @@ public final class ListRunner {
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
-                        staleFinalSweep));
+                        staleFinalSweep),
+                publicationStepHook);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).
@@ -1012,6 +1030,23 @@ public final class ListRunner {
             ctx.metrics().recordSortMergePasses(result.mergePasses());
             ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
             return result;
+        } catch (CommittedPublicationCleanupException e) {
+            // The listener returned, so _SUCCESS already commits the dataset. Preserve that fact in
+            // the checkpoint when possible and route through the existing non-fatal publication
+            // seam. If the phase latch itself is unavailable, identity + _SUCCESS still makes the
+            // next resume choose PUBLISHED cleanup; retain the latch error only as a suppressed
+            // diagnostic rather than poisoning an otherwise valid dataset.
+            ctx.metrics().recordSortMerge(mergeSample);
+            try {
+                store.setSortPhase(runId, SortPhase.PUBLISHED);
+            } catch (CheckpointException phaseFailure) {
+                e.addSuppressed(phaseFailure);
+                log.warn("sort_post_publish_phase_latch_failed publication_committed=true "
+                                + "cleanup_pending=true run_id={} stage={} message={}",
+                        runId, e.stage().logValue(), phaseFailure.getMessage());
+            }
+            throw new PublicationPendingException(
+                    "sorted dataset publication committed; cleanup pending", e);
         } catch (IOException | UncheckedIOException e) {
             // A CLASSIFIED merge failure (today: a staged page-run segment whose
             // page minKeys regress — SegmentCorruptionException, error_class=page_run_min_regression) must

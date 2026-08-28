@@ -200,6 +200,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     PageFetcher fetcherOverride;
 
+    /** Test-only deterministic sorted-publication runner seam. */
+    ListRunner listRunnerOverride;
+
     /** Test-only deterministic maximum-heap seam for writer-admission ordering checks. */
     Long maxHeapBytesOverride;
 
@@ -282,6 +285,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
     /** Bundle the resolved retry policy + (test-only) backoff sleeper for the engine seam. */
     private RetryConfig retryConfig() {
         return new RetryConfig(retryPolicy, backoffSleeperOverride);
+    }
+
+    private ListRunner listRunner() {
+        return listRunnerOverride != null ? listRunnerOverride : new ListRunner();
     }
 
     @Override
@@ -1112,7 +1119,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 s3uri, resolved, channelCapacity, pageMax, filterChain,
                                 argsHash, config);
                         return runEngineGuarded(store, run.id(), () -> {
-                            new ListRunner().runWorkStealingDiscard(
+                            listRunner().runWorkStealingDiscard(
                                     ctx, fetcher, listSpec, store, run.id(),
                                     connection.maxParallelListings, nodes, engine.toggles,
                                     traceSink, retryConfig());
@@ -1140,7 +1147,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     try {
                         try (Writer out = output.openSink()) {
                             runEngineGuarded(store, run.id(), () -> {
-                                new ListRunner().runWorkStealing(ctx, fetcher, out, listSpec, store, run.id(),
+                                listRunner().runWorkStealing(ctx, fetcher, out, listSpec, store, run.id(),
                                         connection.maxParallelListings, nodes, engine.toggles, traceSink,
                                         retryConfig(), publisher);
                                 return null;
@@ -1187,8 +1194,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      * its own {@code markRunFinished(COMPLETED)}) nor the flag-unset {@code FAILED} {@link
      * ListRunner} records for a failed single-file output publish before rethrowing through here.
      * A {@link PublicationPendingException} from terminal dataset publication is likewise passed
-     * through without the generic fatal mark: its checkpoint-finalized parts are sufficient to
-     * retry publication after an external failure without re-listing the bucket.
+     * through without the generic fatal mark: direct output can retry from checkpoint-finalized
+     * parts, while sorted output whose authority listener already returned re-enters PUBLISHED
+     * cleanup. Neither path re-lists the bucket.
      *
      * <p>Deliberately scoped to {@link ListCommand} rather than {@link ListRunner} itself: several
      * engine-level crash-resume tests (e.g. {@code HardCrashResumeExactlyOnceTest}) inject a
@@ -1222,10 +1230,10 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         try {
             return body.get();
         } catch (PublicationPendingException e) {
-            // Every part is already checkpoint-authoritative. Leave managed Parquet RUNNING so an
-            // operator can fix the local publication failure (for example free disk space) and
-            // resume into the empty-worklist publication-pending branch. One-shot sinks have no
-            // persistent checkpoint, so the same classification changes nothing for them.
+            // Direct parts are checkpoint-authoritative; sorted output may instead have committed
+            // its listener-owned _SUCCESS and be waiting only on PUBLISHED cleanup. Leave managed
+            // Parquet non-fatal so resume can take the corresponding zero-LIST branch. One-shot
+            // sinks have no persistent checkpoint, so the same classification changes nothing.
             markUnresumableIfProtocolViolation(store, runId, e);
             throw e;
         } catch (CancelledException | InterruptedException | InvalidUriException
@@ -1377,7 +1385,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                     p.path(), p.writerId(), p.rows(), p.bytes(), md5));
         }
 
-        new ListRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
+        listRunner().runToParquetWorkStealing(ctx, fetcher, dir, parquetSpec, store, run.id(),
                 connection.maxParallelListings, nodes, existing, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
     }
@@ -1398,7 +1406,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 directory, argsHash, run.id(), freshDatasetDirectoryState);
         ListRunner.Spec listing = listSpec(
                 s3uri, format, channelCapacity, pageMax, filterChain, argsHash, config);
-        new ListRunner().runToTextDatasetWorkStealing(
+        listRunner().runToTextDatasetWorkStealing(
                 ctx, fetcher, new ListRunner.TextDatasetSpec(listing, writer), store, run.id(),
                 connection.maxParallelListings, nodes, engine.toggles, traceSink, retryConfig());
         return ExitCodes.SUCCESS;
@@ -1571,7 +1579,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // merge-budget fix; widened to ALL data/*.parquet) sweeps any stale finals before
             // this run writes its own, so a foreign manifest's finals never survive into this run's
             // published output.
-            new ListRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
+            listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
                     sortConfig, sortMode, parquetSpec);
             return ExitCodes.SUCCESS;
         }
@@ -1581,7 +1589,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // it. See SortDiskGuard's class javadoc for why it halts directly rather than throwing.
         try (SortDiskGuard diskGuard = SortDiskGuard.arm(
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
-            new ListRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
+            listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
                     store, run.id(), connection.maxParallelListings, nodes, sortConfig, sortMode, engine.toggles,
                     traceSink, run.resumed(), retryConfig());
         }
