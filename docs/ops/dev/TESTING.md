@@ -138,7 +138,15 @@ a constant-memory row-count/multiset oracle, then opens every input for the per-
 Every arm is therefore explicitly `cache_state=warm_primed`; this harness cannot produce a cold
 result. A true cold bracket needs a separate fresh-process protocol that prepares first, drops
 caches under external control, and launches exactly one measured arm without the oracle/heap probe
-in that process. Every output must be physically sorted and match the independent source oracle.
+in that process.
+
+The warm-cache sweep first runs one complete **untimed** R=1 transform to absorb class loading, JIT,
+Parquet initialization, and RSS-sampler first use. Measurements then run serial A, candidates in
+ascending order, serial B, candidates in descending order, and serial C. Speedups use the median of
+the three serial brackets and the two candidate samples. `swath.bench.max-variance-pct` defaults to
+`15.0`; a baseline or candidate spread above it produces `status=invalid_variance` and
+`speedup=unavailable`, never a publishable speedup. An inconsistent clamp/engagement disposition is
+likewise invalid. Every output must be physically sorted and match the independent source oracle.
 Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
 `corpus_id`, and the stable ordered logical-output fingerprint when output exists.
 

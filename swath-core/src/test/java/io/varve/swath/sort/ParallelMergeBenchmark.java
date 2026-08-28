@@ -43,8 +43,10 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * {@link SortTransform}'s merge-phase wall clock, and whether the effect is CPU-parallelizable or
  * disk-bandwidth-bound. Runs the ACTUAL production merge path — {@link SortTransform#transform}
  * with {@link SortedParquetWriterFactory} over live-format page-run staging segments produced through
- * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing, once per
- * requested {@code R} in {1, 2, 4, 8} (plus an R=1 repeat to bound run-to-run variance).
+ * the same {@link SortBuffer} seal and {@link PageRunSegmentWriter#flush} seam as listing. After one
+ * untimed full-transform warm-up, measured arms are interleaved as serial A, ascending candidates,
+ * serial B, descending candidates, serial C; speedups use medians and are invalidated when either
+ * bracket exceeds the explicit variance threshold.
  *
  * <p>NOT part of the normal build or CI: this class only runs when {@code -Dswath.bench=on} is
  * passed (see {@link EnabledIfSystemProperty}), so {@code ./gradlew build} never executes it.
@@ -72,6 +74,8 @@ class ParallelMergeBenchmark {
     private static final long TOTAL_ROWS = Long.getLong("swath.bench.rows", 12_000_000L);
     private static final int BLOCK_ROWS = Integer.getInteger("swath.bench.blockRows", 4_000);
     private static final int PAGE_ROWS = Integer.getInteger("swath.bench.pageRows", 1_000);
+    private static final String MAX_VARIANCE_PROPERTY = "swath.bench.max-variance-pct";
+    private static final double MAX_VARIANCE_PCT = parseMaxVariancePct();
     /**
      * The {@code R} values to sweep, in order. {@code R=1} must be FIRST — it is the identity baseline
      * every later arm is full-row compared against. The sweep is user-settable through
@@ -124,6 +128,20 @@ class ParallelMergeBenchmark {
         return new IllegalArgumentException(
                 "invalid swath.bench.ranges='" + configured + "': " + reason);
     }
+
+    private static double parseMaxVariancePct() {
+        String configured = System.getProperty(MAX_VARIANCE_PROPERTY, "15.0");
+        try {
+            double value = Double.parseDouble(configured);
+            if (Double.isFinite(value) && value > 0.0) {
+                return value;
+            }
+        } catch (NumberFormatException ignored) {
+            // The typed error below owns the diagnostic.
+        }
+        throw new IllegalArgumentException("invalid " + MAX_VARIANCE_PROPERTY + "='" + configured
+                + "': expected a finite percentage > 0");
+    }
     private static final int TOTAL_DAYS = 1_500;
     // Generous: the corpus knobs above (and swath.bench.ranges) govern how long a sweep actually takes,
     // and this class never runs under the default suite — the timeout is a runaway backstop, not a budget.
@@ -166,74 +184,60 @@ class ParallelMergeBenchmark {
             measureOpenReaderHeap(corpus, context);
 
             List<Integer> ranges = RANGES;
-            Map<Integer, ArmResult> results = new LinkedHashMap<>();
-            List<Path> baselineFinals = null;
+            List<Integer> candidates = ranges.stream().filter(range -> range != 1).toList();
+            WriterFactoryProvider writerProvider =
+                    config -> new SortedParquetWriterFactory(config, SortMode.OBJECTS);
 
-            for (int r : ranges) {
-                ArmResult ar = runArm(root, corpus, r, "r" + r,
-                        config -> new SortedParquetWriterFactory(config, SortMode.OBJECTS));
-                results.put(r, ar);
-                if (r == 1) {
-                    baselineFinals = ar.finalFiles;
-                } else {
-                    boolean exact = fullRowsEqual(baselineFinals, ar.finalFiles);
-                    ar.fullRowExact = exact;
-                    if (!exact) {
-                        bench(context, "BENCH_FULL_ROW_EXACT_FAIL", ar.logicalOutputFingerprint,
-                                "requested_r=" + r + " actual_ranges=" + ar.actualRanges
-                                        + " baseline_fingerprint=" + results.get(1).logicalOutputFingerprint);
-                        throw new AssertionError(
-                                "full-row mismatch at requested R=" + r + " (actual ranges="
-                                        + ar.actualRanges + ") vs the R=1 baseline — silent data loss");
-                    }
-                    SortBenchCorpus.deleteTree(ar.armRoot);
-                }
-                System.out.println(ar.toLine(context));
+            // Prime class loading, JIT compilation, Parquet writer initialization, and the RSS sampler
+            // with a complete transform whose timing is deliberately discarded.
+            ArmResult warmup = runArm(root, corpus, 1, "warmup-r1", writerProvider);
+            bench(context, "BENCH_WARMUP", warmup.logicalOutputFingerprint,
+                    "requested_r=1 actual_ranges=" + warmup.actualRanges + " rows=" + warmup.totalRows
+                            + " elapsed_ignored=true");
+            SortBenchCorpus.deleteTree(warmup.armRoot);
+
+            Map<Integer, List<ArmResult>> samples = new LinkedHashMap<>();
+            for (int range : ranges) {
+                samples.put(range, new ArrayList<>());
             }
 
-            // R=1 repeat, for run-to-run variance.
-            ArmResult repeat = runArm(root, corpus, 1, "r1-repeat",
-                    config -> new SortedParquetWriterFactory(config, SortMode.OBJECTS));
-            boolean repeatExact = fullRowsEqual(baselineFinals, repeat.finalFiles);
-            if (!repeatExact) {
-                bench(context, "BENCH_FULL_ROW_EXACT_FAIL", repeat.logicalOutputFingerprint,
-                        "requested_r=1 actual_ranges=" + repeat.actualRanges
-                                + " baseline_fingerprint=" + results.get(1).logicalOutputFingerprint);
-                throw new AssertionError("R=1 repeat mismatched the R=1 baseline");
-            }
-            System.out.println(repeat.toLine(context));
-            SortBenchCorpus.deleteTree(repeat.armRoot);
-
-            ArmResult baseline = results.get(1);
-            bench(context, "BENCH_VARIANCE", baseline.logicalOutputFingerprint,
-                    String.format("requested_r=1 actual_ranges=1 first_elapsed_ms=%d repeat_elapsed_ms=%d"
-                                    + " delta_pct=%.1f",
-                            baseline.elapsedNanos / 1_000_000, repeat.elapsedNanos / 1_000_000,
-                            100.0 * (repeat.elapsedNanos - baseline.elapsedNanos) / baseline.elapsedNanos));
-
-            for (int r : ranges) {
-                ArmResult ar = results.get(r);
-                if (r == 1) {
-                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
-                            "requested_r=1 actual_ranges=1 status=baseline speedup=1.000");
-                } else if (ar.rangeBelowStagedFloorCount > 0
-                        || ar.rangeFdLimitedCount > 0
-                        || ar.rangeFdExhaustedCount > 0
-                        || ar.rangeWouldCascadeCount > 0
-                        || ar.rangeUnsplittableCount > 0
-                        || ar.actualRanges != ar.requestedRanges) {
-                    String status = ar.actualRanges <= 1 ? "not_engaged" : "clamped_or_reduced";
-                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
-                            "requested_r=" + r + " actual_ranges=" + ar.actualRanges + " status=" + status
-                                    + " speedup=unavailable");
-                } else {
-                    double speedup = (double) baseline.elapsedNanos / ar.elapsedNanos;
-                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
-                            String.format("requested_r=%d actual_ranges=%d status=engaged speedup=%.3f",
-                                    r, ar.actualRanges, speedup));
-                }
+            // Round A: serial bracket, then candidates in ascending order.
+            ArmResult baseline = runArm(root, corpus, 1, "r1-a", writerProvider);
+            samples.get(1).add(baseline);
+            System.out.println(baseline.toLine(context));
+            for (int r : candidates) {
+                ArmResult sample = runCheckedArm(root, corpus, r, "r" + r + "-a",
+                        writerProvider, baseline, context);
+                samples.get(r).add(sample);
+                System.out.println(sample.toLine(context));
+                SortBenchCorpus.deleteTree(sample.armRoot);
             }
 
+            // Middle serial bracket.
+            ArmResult middle = runCheckedArm(root, corpus, 1, "r1-b",
+                    writerProvider, baseline, context);
+            samples.get(1).add(middle);
+            System.out.println(middle.toLine(context));
+            SortBenchCorpus.deleteTree(middle.armRoot);
+
+            // Round B reverses candidate order to counter monotone temperature/JIT drift.
+            for (int i = candidates.size() - 1; i >= 0; i--) {
+                int r = candidates.get(i);
+                ArmResult sample = runCheckedArm(root, corpus, r, "r" + r + "-b",
+                        writerProvider, baseline, context);
+                samples.get(r).add(sample);
+                System.out.println(sample.toLine(context));
+                SortBenchCorpus.deleteTree(sample.armRoot);
+            }
+
+            // Closing serial bracket.
+            ArmResult closing = runCheckedArm(root, corpus, 1, "r1-c",
+                    writerProvider, baseline, context);
+            samples.get(1).add(closing);
+            System.out.println(closing.toLine(context));
+            SortBenchCorpus.deleteTree(closing.armRoot);
+
+            reportMeasurements(context, samples);
             SortBenchCorpus.deleteTree(baseline.armRoot);
         } catch (IOException | RuntimeException | Error e) {
             failure = e;
@@ -312,6 +316,127 @@ class ParallelMergeBenchmark {
                     throw immutableFailure;
                 }
             }
+        }
+    }
+
+    private static ArmResult runCheckedArm(Path root, CorpusCatalog corpus, int mergeParallelism,
+            String label, WriterFactoryProvider writerProvider, ArmResult baseline,
+            BenchContext context) throws IOException {
+        ArmResult sample = runArm(root, corpus, mergeParallelism, label, writerProvider);
+        boolean exact = fullRowsEqual(baseline.finalFiles, sample.finalFiles)
+                && baseline.logicalOutputFingerprint.equals(sample.logicalOutputFingerprint)
+                && baseline.multisetDigest.equals(sample.multisetDigest);
+        sample.fullRowExact = exact;
+        if (!exact) {
+            bench(context, "BENCH_FULL_ROW_EXACT_FAIL", sample.logicalOutputFingerprint,
+                    "requested_r=" + mergeParallelism + " actual_ranges=" + sample.actualRanges
+                            + " baseline_fingerprint=" + baseline.logicalOutputFingerprint);
+            throw new AssertionError("full-row mismatch at requested R=" + mergeParallelism
+                    + " (actual ranges=" + sample.actualRanges
+                    + ") vs the R=1 baseline — silent data loss");
+        }
+        return sample;
+    }
+
+    private static void reportMeasurements(BenchContext context,
+                                           Map<Integer, List<ArmResult>> samples) {
+        Map<Integer, SampleStats> stats = new LinkedHashMap<>();
+        for (Map.Entry<Integer, List<ArmResult>> entry : samples.entrySet()) {
+            SampleStats sampleStats = sampleStats(entry.getValue());
+            stats.put(entry.getKey(), sampleStats);
+            ArmResult first = entry.getValue().getFirst();
+            bench(context, "BENCH_VARIANCE", first.logicalOutputFingerprint,
+                    String.format("requested_r=%d samples=%d median_elapsed_ms=%d min_elapsed_ms=%d "
+                                    + "max_elapsed_ms=%d spread_pct=%.1f threshold_pct=%.1f status=%s",
+                            entry.getKey(), entry.getValue().size(), sampleStats.medianNanos / 1_000_000,
+                            sampleStats.minNanos / 1_000_000, sampleStats.maxNanos / 1_000_000,
+                            sampleStats.spreadPct, MAX_VARIANCE_PCT,
+                            sampleStats.stable(MAX_VARIANCE_PCT) ? "stable" : "invalid_variance"));
+        }
+
+        SampleStats baseline = stats.get(1);
+        ArmResult baselineArm = samples.get(1).getFirst();
+        boolean baselineStable = baseline.stable(MAX_VARIANCE_PCT);
+        bench(context, "BENCH_SPEEDUP", baselineArm.logicalOutputFingerprint,
+                String.format("requested_r=1 actual_ranges=1 status=%s speedup=%s "
+                                + "baseline_median_ms=%d baseline_spread_pct=%.1f",
+                        baselineStable ? "baseline" : "invalid_variance",
+                        baselineStable ? "1.000" : "unavailable",
+                        baseline.medianNanos / 1_000_000, baseline.spreadPct));
+
+        for (Map.Entry<Integer, List<ArmResult>> entry : samples.entrySet()) {
+            int requested = entry.getKey();
+            if (requested == 1) {
+                continue;
+            }
+            List<ArmResult> arms = entry.getValue();
+            ArmResult first = arms.getFirst();
+            SampleStats candidate = stats.get(requested);
+            ArmDisposition disposition = ArmDisposition.of(first);
+            boolean consistent = arms.stream().allMatch(arm -> disposition.equals(ArmDisposition.of(arm)));
+            String engagementStatus = !consistent ? "inconsistent"
+                    : disposition.engaged(requested) ? "engaged"
+                    : disposition.actualRanges <= 1 ? "not_engaged" : "clamped_or_reduced";
+            String status;
+            String speedup = "unavailable";
+            if (!consistent) {
+                status = "invalid_inconsistent_disposition";
+            } else if (!baselineStable || !candidate.stable(MAX_VARIANCE_PCT)) {
+                status = "invalid_variance";
+            } else if (!disposition.engaged(requested)) {
+                status = engagementStatus;
+            } else {
+                status = "engaged";
+                speedup = String.format("%.3f", (double) baseline.medianNanos / candidate.medianNanos);
+            }
+            String actualRanges = consistent ? String.valueOf(disposition.actualRanges) : "mixed";
+            bench(context, "BENCH_SPEEDUP", first.logicalOutputFingerprint,
+                    String.format("requested_r=%d actual_ranges=%s status=%s engagement_status=%s speedup=%s "
+                                    + "baseline_median_ms=%d candidate_median_ms=%d "
+                                    + "baseline_spread_pct=%.1f candidate_spread_pct=%.1f",
+                            requested, actualRanges, status, engagementStatus, speedup,
+                            baseline.medianNanos / 1_000_000, candidate.medianNanos / 1_000_000,
+                            baseline.spreadPct, candidate.spreadPct));
+        }
+    }
+
+    static SampleStats sampleStats(List<ArmResult> samples) {
+        if (samples.isEmpty()) {
+            throw new IllegalArgumentException("benchmark sample set must not be empty");
+        }
+        List<Long> elapsed = samples.stream().map(sample -> {
+            if (sample.elapsedNanos <= 0) {
+                throw new IllegalArgumentException("benchmark elapsed time must be positive");
+            }
+            return sample.elapsedNanos;
+        }).sorted().toList();
+        long min = elapsed.getFirst();
+        long max = elapsed.getLast();
+        int middle = elapsed.size() / 2;
+        long median = elapsed.size() % 2 == 1
+                ? elapsed.get(middle)
+                : elapsed.get(middle - 1) + (elapsed.get(middle) - elapsed.get(middle - 1)) / 2;
+        double spreadPct = 100.0 * (max - min) / Math.max(1.0, median);
+        return new SampleStats(min, median, max, spreadPct);
+    }
+
+    record SampleStats(long minNanos, long medianNanos, long maxNanos, double spreadPct) {
+        boolean stable(double thresholdPct) {
+            return spreadPct <= thresholdPct;
+        }
+    }
+
+    private record ArmDisposition(long actualRanges, long belowStagedFloor, long fdLimited,
+                                  long fdExhausted, long wouldCascade, long unsplittable) {
+        static ArmDisposition of(ArmResult arm) {
+            return new ArmDisposition(arm.actualRanges, arm.rangeBelowStagedFloorCount,
+                    arm.rangeFdLimitedCount, arm.rangeFdExhaustedCount,
+                    arm.rangeWouldCascadeCount, arm.rangeUnsplittableCount);
+        }
+
+        boolean engaged(int requestedRanges) {
+            return actualRanges == requestedRanges && belowStagedFloor == 0 && fdLimited == 0
+                    && fdExhausted == 0 && wouldCascade == 0 && unsplittable == 0;
         }
     }
 

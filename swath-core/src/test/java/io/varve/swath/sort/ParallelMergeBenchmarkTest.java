@@ -264,6 +264,27 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
+    void bracketStatisticsUseOverflowSafeMediansAndRejectHighVariance() {
+        ParallelMergeBenchmark.SampleStats stable = ParallelMergeBenchmark.sampleStats(
+                List.of(sample(100), sample(105), sample(110)));
+        assertThat(stable.minNanos()).isEqualTo(100);
+        assertThat(stable.medianNanos()).isEqualTo(105);
+        assertThat(stable.maxNanos()).isEqualTo(110);
+        assertThat(stable.spreadPct()).isCloseTo(1000.0 / 105.0,
+                org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(stable.stable(15.0)).isTrue();
+
+        ParallelMergeBenchmark.SampleStats unstable = ParallelMergeBenchmark.sampleStats(
+                List.of(sample(100), sample(200)));
+        assertThat(unstable.medianNanos()).isEqualTo(150);
+        assertThat(unstable.stable(15.0)).isFalse();
+
+        ParallelMergeBenchmark.SampleStats nearOverflow = ParallelMergeBenchmark.sampleStats(
+                List.of(sample(Long.MAX_VALUE - 10), sample(Long.MAX_VALUE - 2)));
+        assertThat(nearOverflow.medianNanos()).isEqualTo(Long.MAX_VALUE - 6);
+    }
+
+    @Test
     @ResourceLock("SYSTEM_PROPERTIES")
     void externalPropertyRejectsAMissingDirectory(@TempDir Path temp) {
         assertThatIllegalArgumentException().isThrownBy(() -> external(temp.resolve("missing")))
@@ -345,6 +366,12 @@ class ParallelMergeBenchmarkTest {
         } else {
             System.setProperty(key, value);
         }
+    }
+
+    private static ParallelMergeBenchmark.ArmResult sample(long elapsedNanos) {
+        ParallelMergeBenchmark.ArmResult result = new ParallelMergeBenchmark.ArmResult();
+        result.elapsedNanos = elapsedNanos;
+        return result;
     }
 
     private record Retained(Path output, Path staging, Path checkpoint, Path segment, long runId) {
