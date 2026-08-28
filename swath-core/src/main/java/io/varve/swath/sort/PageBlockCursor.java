@@ -63,6 +63,13 @@ final class PageBlockCursor {
         }
     }
 
+    /** Decode the unconsumed tail so row count, payload exhaustion, and persisted bounds are checked. */
+    void drainAndValidate() {
+        while (hasNext()) {
+            next();
+        }
+    }
+
     private ObjectEntry object() {
         KeyBytes key = key();
         long size = fixedLong();

@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -120,7 +119,13 @@ final class PageAwareMerger implements SortedCursor {
         try {
             this.pending = computeNext();
         } catch (RuntimeException e) {
-            close();
+            try {
+                close();
+            } catch (RuntimeException closeFailure) {
+                if (closeFailure != e) {
+                    e.addSuppressed(closeFailure);
+                }
+            }
             throw e;
         }
     }
@@ -274,6 +279,8 @@ final class PageAwareMerger implements SortedCursor {
             return;
         }
         closed = true;
+
+        RuntimeException failure = validateDecodedPages();
         long copyable = 0;
         long interleaved = 0;
         for (int source = 0; source < allStreams.size(); source++) {
@@ -284,23 +291,58 @@ final class PageAwareMerger implements SortedCursor {
                 interleaved++;
             }
         }
-        runSink.accept(copyable, interleaved);
-        List<IOException> failures = new ArrayList<>();
+        try {
+            runSink.accept(copyable, interleaved);
+        } catch (RuntimeException e) {
+            failure = append(failure, e);
+        }
         for (PageFrontierStream s : allStreams) {
             try {
                 s.close();
             } catch (IOException e) {
-                failures.add(e);
+                failure = append(failure,
+                        new UncheckedIOException("closing page frontier stream failed", e));
+            } catch (RuntimeException e) {
+                failure = append(failure, e);
             }
         }
-        if (!failures.isEmpty()) {
-            UncheckedIOException wrapped =
-                    new UncheckedIOException("closing page frontier streams failed", failures.get(0));
-            for (int i = 1; i < failures.size(); i++) {
-                wrapped.addSuppressed(failures.get(i));
-            }
-            throw wrapped;
+        if (failure != null) {
+            throw failure;
         }
+    }
+
+    /**
+     * A range cutoff may stop above this merger while it still owns decoded pages. Drain only those
+     * cursors — never untouched frontier pages — so their payload/bounds validation cannot be skipped.
+     * Direct cursor drains deliberately bypass source-run, duplicate, engagement, and progress signals.
+     */
+    private RuntimeException validateDecodedPages() {
+        RuntimeException failure = null;
+        if (wholeCursor != null) {
+            try {
+                wholeCursor.drainAndValidate();
+            } catch (RuntimeException e) {
+                failure = append(failure, e);
+            }
+        }
+        for (DecodedPage page : active) {
+            try {
+                page.drainAndValidate();
+            } catch (RuntimeException e) {
+                failure = append(failure, e);
+            }
+        }
+        return failure;
+    }
+
+    private static RuntimeException append(RuntimeException first, RuntimeException next) {
+        if (first == null) {
+            return next;
+        }
+        if (next != first) {
+            first.addSuppressed(next);
+        }
+        return first;
     }
 
     /** One page-run segment at its current (undecoded) frontier page. Only mutated while OUT of the heap. */
@@ -347,6 +389,10 @@ final class PageAwareMerger implements SortedCursor {
 
         void advanceHead() {
             head = cursor.hasNext() ? cursor.next() : null;
+        }
+
+        void drainAndValidate() {
+            cursor.drainAndValidate();
         }
     }
 }

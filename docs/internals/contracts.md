@@ -919,7 +919,13 @@ Every CRC-valid record body is structurally checked before its frontier is trust
 dictionary counts and lengths, positive row count, codec, raw/stored payload lengths, no trailing
 bytes, and `minKey <= maxKey` are bounded and validated before allocation. When a page is decoded,
 the decoded row count/payload exhaustion and first/last raw keys are checked against that header.
-Malformed bodies raise typed `page_run_body_corruption`; no replacement output is published.
+If a range cutoff or downstream close stops partway through a decoded page, the page-aware merger
+drains every cursor it already owns solely to complete those checks; it emits none of the drained
+rows and records no source-run, duplicate, engagement, or progress signal for them. It does not
+decode untouched frontier pages, so cutoff validation work is bounded by the whole/overlap pages
+already decoded for that range. Malformed bodies raise typed `page_run_body_corruption`; no
+replacement output is published. An earlier read/consumer failure remains primary, with validation
+and stream-close failures suppressed, and every opened frontier stream is still closed.
 The read side owns one immutable CRC-validated record-body array for the required page lifetime and
 parses its header exactly once into a stored-payload offset/length. A decoded `PageBlock` retains
 that same body when the frontier advances or closes. `NONE` cursors read the slice directly;
