@@ -5,15 +5,11 @@
  */
 package io.varve.swath.sort;
 
-import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -96,7 +92,7 @@ import org.slf4j.LoggerFactory;
  * reader can tell a complete file set from a truncated one without trusting a sidecar. It is assigned
  * late by necessity: a part's index is its position in the GLOBAL roll sequence, which depends on how
  * many parts every lower range produced, and no range knows that while it is writing. Each range
- * therefore hands its parts back OPEN ({@link RangeResult#writers}), and {@link SortTransform} — which
+ * therefore hands its parts back OPEN ({@link ParallelRangeWorker.Result#writers}), and {@link SortTransform} — which
  * collects the results in range order — assigns the indices, marks the last part final, and closes.
  * Deferring the footer rather than the data keeps the cost small: a drained-but-unclosed writer has
  * already flushed its row groups and retains only their metadata plus at most one buffered row group.
@@ -106,15 +102,10 @@ final class ParallelRangeMerge {
     private static final Logger log = LoggerFactory.getLogger(ParallelRangeMerge.class);
 
     private static final AtomicLong MERGE_SEQUENCE = new AtomicLong();
-    private final SortRun run;
-    private final SortConfig config;
-    private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
-    private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
-    private final SortedFileWriterFactory finalWriterFactory;
-    private final RangeMergeTimer rangeTimer;
     private final MergePlanner planner;
+    private final ParallelRangeWorker worker;
     private final String workerThreadPrefix;
     private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
 
@@ -135,15 +126,10 @@ final class ParallelRangeMerge {
 
     ParallelRangeMerge(SortRun run, MergePlanner planner,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
-        this.run = run;
-        this.config = run.config();
-        this.comparator = run.comparator();
         this.hook = run.hook();
-        this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
-        this.finalWriterFactory = run.finalWriterFactory();
-        this.rangeTimer = run.rangeMergeTimer();
         this.planner = planner;
+        this.worker = new ParallelRangeWorker(run, log);
         this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
         this.proofReaderFactory = proofReaderFactory;
     }
@@ -162,12 +148,7 @@ final class ParallelRangeMerge {
      * {@link SortTransform} collects these results in range order, assigns the indices, marks the very
      * last part final, and closes. {@code writers} is index-aligned with {@code tmpParts}.
      */
-    record RangeResult(List<Path> tmpParts, List<SortedFileWriter> writers, long rows, long mergePasses,
-                       long cascadedPasses, long fastPathEmissions,
-                       PageRunZoneVerifier.RangeSummary zoneSummary) {
-    }
-
-    private record IndexedRangeResult(int range, RangeResult result) {
+    private record IndexedRangeResult(int range, ParallelRangeWorker.Result result) {
     }
 
 
@@ -181,14 +162,14 @@ final class ParallelRangeMerge {
      * immediately even while an earlier range is still draining. Siblings are interrupted, joined to
      * proven quiescence, and only afterwards are writers closed and owned files swept.
      */
-    List<RangeResult> run(List<PageRunSegmentDescriptor> segmentDescriptors, Path stagingDir,
+    List<ParallelRangeWorker.Result> run(List<PageRunSegmentDescriptor> segmentDescriptors, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
         return run(PageRunCatalog.fromDescriptors(segmentDescriptors), stagingDir, boundaries,
                 progressCallback);
     }
 
-    List<RangeResult> run(PageRunCatalog catalog, Path stagingDir,
+    List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
@@ -232,12 +213,17 @@ final class ParallelRangeMerge {
                 int range = r;
                 byte[] lo = range == 0 ? null : boundaries.get(range - 1);
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
-                Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
-                        perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit,
+                Callable<ParallelRangeWorker.Result> task = worker.task(
+                        range, lo, hi, stagingSegments, stagingDir,
+                        perRangeFanIn, safeProgress, safeHook,
+                        (ownedStaging, ownedRange, tmpParts, rangeWriterFactory) ->
+                                openRangePart(ownedStaging, ownedRange, tmpParts,
+                                        rangeWriterFactory, openPartCount, openPartLimit),
                         descriptorsByPath, seekPlan, proofSpool, proofSpoolPath);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
-            List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
+            List<ParallelRangeWorker.Result> results =
+                    new ArrayList<>(Collections.nCopies(ranges, null));
             for (int completed = 0; completed < ranges; completed++) {
                 IndexedRangeResult result = completions.take().get();
                 results.set(result.range(), result.result());
@@ -247,7 +233,7 @@ final class ParallelRangeMerge {
             }
             proofSpool.close();
             List<PageRunZoneVerifier.RangeSummary> proof = results.stream()
-                    .map(RangeResult::zoneSummary)
+                    .map(ParallelRangeWorker.Result::zoneSummary)
                     .toList();
             PageRunZoneVerifier.verify(seekPlan, proof, metrics, proofReaderFactory);
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
@@ -294,107 +280,6 @@ final class ParallelRangeMerge {
         }
     }
 
-    private Callable<RangeResult> mergeRange(int range, byte[] lo, byte[] hi, List<Path> stagingSegments,
-                                             Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
-                                             DuplicateHook safeHook, AtomicInteger openPartCount,
-                                             int openPartLimit,
-                                             Map<Path, PageRunSegmentDescriptor> descriptorsByPath,
-                                             PageRunSeekPlan seekPlan,
-                                             PageRunProofSpool.Writer proofSpool,
-                                             Path proofSpoolPath) {
-        return () -> {
-            try (PageRunZoneVerifier.RangeBuilder proofBuilder =
-                         new PageRunZoneVerifier.RangeBuilder(
-                                 proofSpool, proofSpoolPath, range, seekPlan.segments().size())) {
-            SortedFileWriterFactory rangeWriterFactory =
-                    finalWriterFactory.forOutputSequence();
-            long startNanos = System.nanoTime();
-            // Page-skip counters live on the frontier wrappers this range opened (one per page-run
-            // input); collected after the merge drains, for the same read-vs-skipped signal.
-            List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
-            // Page-run ranges see whole straddling boundary pages, so a duplicate pair lying OUTSIDE
-            // this range would be reported by both adjacent ranges. Scope the hook to [lo, hi) so the
-            // run's duplicate counts match the serial merge's exactly.
-            DuplicateHook rangeHook = (prev, dup) -> {
-                if (inRange(dup.key().rawUnsafe(), lo, hi)) {
-                    safeHook.onDuplicate(prev, dup);
-                }
-            };
-            PageRunSegmentWriter pageRunWriter =
-                    new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
-            PageRunMergeIo io = new PageRunMergeIo(run, pageRunWriter, stagingDir,
-                    "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
-                    pageFrontiers::add, range, seekPlan, proofBuilder);
-            KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
-
-            List<Path> tmpParts = new ArrayList<>();
-            List<SortedFileWriter> parts = new ArrayList<>();
-            long rows;
-            // Inputs are page frontiers, so the merged stream can still carry the far side of a
-            // straddling boundary page. Trim once above the page-aware merge.
-            try (SortedCursor merged = new RangeFilteredCursor(
-                    merge.merge(stagingSegments, safeProgress), lo, hi)) {
-                // drainOpen, not drain: the parts are left OPEN and unstamped. Their file_index is a
-                // position in the GLOBAL roll sequence, which this range cannot know -- it depends on
-                // how many parts the ranges below it produce. SortTransform assigns the indices and
-                // closes, once every range has drained.
-                rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
-                        () -> openRangePart(stagingDir, range, tmpParts, rangeWriterFactory,
-                                openPartCount, openPartLimit), safeProgress, metrics, equalKeyPolicy,
-                        comparator, parts, false);
-            } catch (IOException | RuntimeException e) {
-                // This range failed, so nothing it wrote will be published: release the open parts
-                // rather than strand their descriptors until the sweep. Never stamped -- an aborted
-                // range's files must not claim a position in a sequence that will not exist.
-                try {
-                    RolledPartWriter.closeQuietly(parts);
-                } catch (IOException closeFailure) {
-                    e.addSuppressed(closeFailure);
-                }
-                throw e;
-            }
-            // Reclaim this range's cascade intermediates (KWayMerge already deleted the ones it folded;
-            // deleteIfExists is a no-op on those). Originals are shared across ranges and are NEVER
-            // deleted here — SortTransform deletes them once, after the whole publish.
-            for (Path p : io.intermediates()) {
-                Files.deleteIfExists(p);
-            }
-            // Instrumentation (metrics discipline, §5a): one increment per range engaged — the total
-            // across a run equals the range count, the cheap keyspace-partition signal.
-            metrics.recordStealReason("SORT", "merge_range_parallel");
-            long pagesKept = 0;
-            long pagesSkipped = 0;
-            long pagesUnread = 0;
-            long pagesSeekedOver = 0;
-            long bytesRead = 0;
-            long indexBytesRead = 0;
-            for (RangeScopedPageFrontier f : pageFrontiers) {
-                pagesKept += f.pagesKept();
-                pagesSkipped += f.pagesSkipped();
-                pagesUnread += f.pagesUnread();
-                pagesSeekedOver += f.pagesSeekedOver();
-                bytesRead += f.bytesRead();
-                indexBytesRead += f.indexBytesRead();
-            }
-            // Page skip signal (§5a): fire once per range that avoided decoding at least one page,
-            // whether by an indexed seek, a frontier step, or the bounded tail stop.
-            if (pagesSeekedOver + pagesSkipped + pagesUnread > 0) {
-                metrics.recordStealReason("SORT", "merge_range_page_skipped");
-            }
-            long rangeNanos = System.nanoTime() - startNanos;
-            rangeTimer.recordRangeMerge(rangeNanos);
-            log.info("sort_merge_range range={} rows={} pages_kept={} pages_skipped={} "
-                            + "pages_unread={} pages_seeked_over={} bytes_read={} "
-                            + "index_bytes_read={} duration_ms={}",
-                    range, rows, pagesKept, pagesSkipped, pagesUnread, pagesSeekedOver, bytesRead,
-                    indexBytesRead,
-                    rangeNanos / 1_000_000L);
-            PageRunZoneVerifier.RangeSummary zoneSummary = proofBuilder.finish();
-            return new RangeResult(tmpParts, parts, rows, merge.mergePasses(), merge.cascadedPasses(),
-                    merge.fastPathEmissions(), zoneSummary);
-            }
-        };
-    }
 
     private SortedFileWriter openRangePart(Path stagingDir, int range, List<Path> tmpParts,
             SortedFileWriterFactory rangeWriterFactory, AtomicInteger openPartCount,
@@ -428,11 +313,6 @@ final class ParallelRangeMerge {
         return writer;
     }
 
-
-    private static boolean inRange(byte[] key, byte[] lo, byte[] hi) {
-        return (lo == null || KeyBytes.compareUnsigned(key, lo) >= 0)
-                && (hi == null || KeyBytes.compareUnsigned(key, hi) < 0);
-    }
 
     /**
      * Stop the pool and prove every range thread has exited before cleanup or return. Cancellation

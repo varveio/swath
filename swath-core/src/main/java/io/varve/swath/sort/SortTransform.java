@@ -288,7 +288,7 @@ public final class SortTransform {
         onFinalPassStarting.onFinalPassStarting(
                 segmentDescriptors.size()
                         <= mergePlanner.perRangeFanIn(boundaries.size() + 1, catalog));
-        List<ParallelRangeMerge.RangeResult> results =
+        List<ParallelRangeWorker.Result> results =
                 rangeMerge.run(catalog, stagingDir, boundaries, progressCallback);
 
         List<Path> tmpsInOrder = new ArrayList<>();
@@ -300,7 +300,7 @@ public final class SortTransform {
         // results are in RANGE order, and ranges are contiguous and ascending, so concatenating each
         // range's parts in its own write order gives the output's global key order — which is exactly
         // the roll sequence the completeness stamp describes.
-        for (ParallelRangeMerge.RangeResult rr : results) {
+        for (ParallelRangeWorker.Result rr : results) {
             tmpsInOrder.addAll(rr.tmpParts());
             partsInOrder.addAll(rr.writers());
             totalRows += rr.rows();

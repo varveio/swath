@@ -177,14 +177,14 @@ class SortTransformPageRunParallelMergePropTest {
         if (boundaries == null) {
             return null;
         }
-        List<ParallelRangeMerge.RangeResult> results =
+        List<ParallelRangeWorker.Result> results =
                 merge.run(descriptors, staging, boundaries, units -> { });
 
         List<Path> parts = new ArrayList<>();
         List<SortedFileWriter> writers = new ArrayList<>();
         long cascaded = 0;
         long rows = 0;
-        for (ParallelRangeMerge.RangeResult rr : results) {
+        for (ParallelRangeWorker.Result rr : results) {
             parts.addAll(rr.tmpParts());
             writers.addAll(rr.writers());
             cascaded += rr.cascadedPasses();
