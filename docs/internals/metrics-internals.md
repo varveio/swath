@@ -95,6 +95,13 @@ are disjoint: attempted extension bytes land only in `embedded_bytes`, framed pa
 `scan_bytes`. `merge_boundary_bytes` is their sum. The source is
 classified once per boundary phase by `SORT.merge_boundary_source_{embedded,scan,mixed}`; each
 page-run fallback also emits its exact `SORT.merge_boundary_fallback_*` reason.
+`merge_range_index_bytes` is separate post-boundary type-2 metadata overhead: the full entry region
+streamed once during seek planning plus each exact positional target/sample entry read by workers.
+It excludes page bodies, header/trailer reads, proof-spool I/O, and the descriptor preflight bytes
+already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` when comparing total
+index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
+its worker-local `index_bytes_read` (planning is coordinator-local and therefore not charged to a
+range).
 
 **`seed`** (optional): `SeedStep`'s already-computed shape for a fresh run that actually
 seeded (`mode` is `none`/`shallow`/`hints`; `probes`/`cut_points`/`synthesized_cuts`/`ranges` are
@@ -1006,7 +1013,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `RESUME` | `context_mismatch_` | a resumed run's re-passed CLI value overrode the connection/output context its checkpoint recorded; the reason is suffixed with the field (`no_sign_request`, `profile`, `region`, `fetch_owner`, `raw_output`, `output`, `output_type`, `request_payer`). The counter is how a post-hoc consumer holding only the run report learns that a resume silently changed context, and which field it changed — the overridden checkpoint VALUE stays in the `list_resume_context_mismatch` DEBUG line (a region/profile/path is unbounded text, never a tag), and the report already carries the effective value | |
 | `SORT` | `merge_redone` | a crash-interrupted merge was re-run from staging (listing complete, manifest absent) | |
 | `SORT` | `merge_range_parallel` | one contiguous key range of the default final merge was merged concurrently on its own thread into a separate ordered part file (`ParallelRangeMerge`). Fires once per range engaged, so the run total equals the effective range count `R` — the cheap keyspace-partition signal (was the keyspace split, into how many ranges). Absent when `merge-parallelism=1` or an eligibility/resource/keyspace decline selects the serial merge | |
-| `SORT` | `merge_range_page_skipped` | page skip on the parallel range-merge path: a range either sought over, stepped over, or left unread at least one page whose rows it did not decode (`RangeScopedPageFrontier`). Type-2 seeks use monotone `prefixMax`; legacy/type-1 inputs retain the header walk. The per-range `sort_merge_range` log carries `pages_kept`, `pages_skipped`, `pages_unread`, `pages_seeked_over`, and logical framed `bytes_read` | |
+| `SORT` | `merge_range_page_skipped` | page skip on the parallel range-merge path: a range either sought over, stepped over, or left unread at least one page whose rows it did not decode (`RangeScopedPageFrontier`). Type-2 seeks use monotone `prefixMax`; legacy/type-1 inputs retain the header walk. The per-range `sort_merge_range` log carries `pages_kept`, `pages_skipped`, `pages_unread`, `pages_seeked_over`, logical framed `bytes_read`, and exact worker `index_bytes_read` | |
 | `SORT` | `merge_range_index_seek` | one range/segment frontier used a non-zero type-2 page-index seek target. The entry remains untrusted until `merge_zone_proof_complete` | |
 | `SORT` | `merge_range_index_absent` | one range/segment frontier had no valid type-2 seek index (absent, type 1, unknown, or structurally invalid) and retained the header start | |
 | `SORT` | `page_run_index_mismatch` | a CRC-valid type-2 seek/sample claim disagreed with the physical page-run body or zone chain. The merge fails with `error_class=page_run_index_mismatch`; no output is published | |

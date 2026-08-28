@@ -937,6 +937,15 @@ Explicit `R=1` and arbitrary-sorted-run merges perform zero extension/index I/O.
 state is the global candidate cap plus at most one segment's 4,096-key validation sample, one 64 KiB
 scratch buffer, and the primitive seek seams, never `O(segments × samples)`.
 
+Planning uses one shared 64 KiB cursor per segment because it consumes that segment's whole bounded
+entry region. Worker target/sample verification uses exact positional entry reads instead: fixed
+fields plus the two actual keys, with no adjacent-entry prefetch or 64 KiB per-seam buffer. Those
+post-boundary metadata bytes are counted separately as `sort.merge_range_index_bytes` /
+`swath.sort.merge.range.index.bytes`; the per-range log carries `index_bytes_read`. The serial reader
+uses a tracked primitive frame offset: after its one open-time channel positioning it performs no
+per-page `FileChannel.position()` query, allocates no physical-position record/observer, and updates
+no proof or index-byte accounting.
+
 Across all segments, boundary selection deduplicates candidates and retains the deterministic
 bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
 retained boundary state independent of segment
@@ -949,9 +958,17 @@ range. The physical proof zones are `[start_r,start_(r+1))`, with the last endin
 stops at its exclusive high key it necessarily reads through the next range's start, so the owner of
 each non-empty zone CRC-validates and structurally parses all of its pages without a separate pass.
 
-Each range returns exactly one summary containing every segment's actual start/end frame positions,
-page/entry/framed-byte counts, minima, maxima, and the verification result for every type-2 sample
-inside its zone. The coordinator chains zones from `HEADER_BYTES` to `trailerStart`, checks claimed
+Each range returns exactly one primitive topology summary plus a temporary exact-key proof spool.
+Variable minima/maxima are never retained in a `segments × ranges` heap matrix: each range keeps one
+active two-key cache while workers run, and the coordinator consumes one spooled segment/range
+summary at a time. Additional proof peak is therefore `O(segments × R)` primitives plus `O(R)` key
+material, while all comparisons remain byte-exact (no hash-only proof). Spools use bounded fixed
+slots, are deleted before successful writer return, and join range/cascade temporaries in every
+failure/re-entry sweep.
+
+The coordinator requires the independently planned range count even for an empty segment set and
+rejects missing, extra, out-of-range, or duplicate range summaries. It chains zones from
+`HEADER_BYTES` to `trailerStart`, checks claimed
 cumulative seams against prior physical totals, checks cross-zone min monotonicity, verifies every
 sampled ordinal/offset/cumulative/minimum/prefix maximum, and anchors total pages/entries/framed bytes
 plus first minimum/global maximum to the fixed trailer. Because a structurally valid type-2 block
@@ -964,7 +981,8 @@ The coordinator performs this proof before returning the ranges' still-open writ
 is polled during planning and proof. Any worker or post-worker proof failure closes writers after
 worker quiescence and sweeps range/cascade temporaries; no manifest, state, or success marker is
 published. Successful parallel merges emit `SORT.merge_zone_proof_complete` once; per-range logs
-carry `pages_seeked_over` and logical framed `bytes_read` alongside the existing page counts.
+carry `pages_seeked_over`, logical framed `bytes_read`, and exact worker `index_bytes_read` alongside
+the existing page counts.
 
 ---
 

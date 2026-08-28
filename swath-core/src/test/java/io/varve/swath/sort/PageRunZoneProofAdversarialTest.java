@@ -115,6 +115,7 @@ class PageRunZoneProofAdversarialTest {
         assertThat(metrics.count("SORT.merge_range_index_seek")).isPositive();
         assertThat(metrics.count("SORT.merge_range_index_absent")).isPositive();
         assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
+        assertThat(metrics.rangeIndexBytes.sum()).isEqualTo(1_296);
         assertThat(appender.list.stream()
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(message -> message.startsWith("sort_merge_range range=")))
@@ -122,6 +123,71 @@ class PageRunZoneProofAdversarialTest {
                 .allSatisfy(message -> assertThat(message)
                         .contains("pages_seeked_over=")
                         .contains("bytes_read="));
+        assertThat(appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.startsWith("sort_merge_range range="))
+                .mapToLong(message -> longField(message, "index_bytes_read"))
+                .sum()).isEqualTo(720);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(StructuralLie.class)
+    void structurallyImpossibleOrdinalAndCumulativeByteLiesUseFullHeaderProof(
+            StructuralLie lie, @TempDir Path root) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path segment = SortTestSupport.writeIndexedPages(
+                staging.resolve("segment.pageseg"), indexedPages());
+        lie.mutate(segment);
+        List<PageRunSegmentDescriptor> descriptors = descriptors(segment);
+        assertThat(descriptors.getFirst().extension().status()).isEqualTo(lie.status);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortTransformResult result = transform(3, metrics, SortedFileWriterFactory.DEFAULT)
+                .transform(List.of(segment), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(result.totalRows()).isEqualTo(24);
+        assertThat(metrics.count(lie.reason)).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_range_index_absent")).isPositive();
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+        assertThat(metrics.rangeIndexBytes.sum()).isZero();
+    }
+
+    @Test
+    void plannedRangeCountRejectsMissingExtraAndDuplicateTopologyEvenWithoutSegments(
+            @TempDir Path root) throws IOException {
+        PageRunSeekPlan plan = PageRunSeekPlan.plan(List.of(), List.of(bytes("m")),
+                SortMetrics.NO_OP);
+        assertThat(plan.ranges()).isEqualTo(2);
+
+        Path missingDir = Files.createDirectories(root.resolve("missing"));
+        PageRunZoneVerifier.RangeSummary only = emptySummaries(missingDir, 1).getFirst();
+        assertThatThrownBy(() -> PageRunZoneVerifier.verify(plan, List.of(only), SortMetrics.NO_OP))
+                .isInstanceOf(IOException.class).hasMessageContaining("2 planned ranges");
+        Files.deleteIfExists(only.spool());
+
+        Path duplicateDir = Files.createDirectories(root.resolve("duplicate"));
+        PageRunZoneVerifier.RangeSummary duplicate = emptySummaries(duplicateDir, 1).getFirst();
+        assertThatThrownBy(() -> PageRunZoneVerifier.verify(
+                plan, List.of(duplicate, duplicate), SortMetrics.NO_OP))
+                .isInstanceOf(IOException.class).hasMessageContaining("duplicate");
+        Files.deleteIfExists(duplicate.spool());
+
+        Path extraDir = Files.createDirectories(root.resolve("extra"));
+        List<PageRunZoneVerifier.RangeSummary> extra = emptySummaries(extraDir, 3);
+        assertThatThrownBy(() -> PageRunZoneVerifier.verify(plan, extra, SortMetrics.NO_OP))
+                .isInstanceOf(IOException.class).hasMessageContaining("2 planned ranges");
+        for (PageRunZoneVerifier.RangeSummary summary : extra) {
+            Files.deleteIfExists(summary.spool());
+        }
+
+        Path exactDir = Files.createDirectories(root.resolve("exact"));
+        List<PageRunZoneVerifier.RangeSummary> exact = emptySummaries(exactDir, 2);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PageRunZoneVerifier.verify(plan, exact, metrics);
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+        assertThat(exact).allSatisfy(summary -> assertThat(summary.spool()).doesNotExist());
     }
 
     @Test
@@ -205,7 +271,8 @@ class PageRunZoneProofAdversarialTest {
     private static void assertNoOwnedDebris(Path staging) throws IOException {
         for (String glob : List.of(StagingNames.RANGE_TMP_GLOB,
                 StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB,
-                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB)) {
+                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB,
+                StagingNames.RANGE_PROOF_TMP_GLOB)) {
             try (var files = Files.newDirectoryStream(staging, glob)) {
                 assertThat(files.iterator().hasNext()).as("no debris matching %s", glob).isFalse();
             }
@@ -222,6 +289,28 @@ class PageRunZoneProofAdversarialTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static long longField(String message, String field) {
+        int start = message.indexOf(field + "=") + field.length() + 1;
+        int end = message.indexOf(' ', start);
+        return Long.parseLong(end < 0 ? message.substring(start) : message.substring(start, end));
+    }
+
+    private static List<PageRunZoneVerifier.RangeSummary> emptySummaries(Path dir, int ranges)
+            throws IOException {
+        Path spoolPath = dir.resolve(StagingNames.rangeProofTmp());
+        List<PageRunZoneVerifier.RangeSummary> summaries = new ArrayList<>();
+        try (PageRunProofSpool.Writer spool = new PageRunProofSpool.Writer(spoolPath)) {
+            for (int range = 0; range < ranges; range++) {
+                try (PageRunZoneVerifier.RangeBuilder builder =
+                             new PageRunZoneVerifier.RangeBuilder(
+                                     spool, spoolPath, range, 0)) {
+                    summaries.add(builder.finish());
+                }
+            }
+        }
+        return List.copyOf(summaries);
     }
 
     private enum LogicalLie {
@@ -278,6 +367,44 @@ class PageRunZoneProofAdversarialTest {
         LogicalLie(String errorClass, boolean postWorker) {
             this.errorClass = errorClass;
             this.postWorker = postWorker;
+        }
+
+        void mutate(Path path) throws IOException {
+            byte[] bytes = Files.readAllBytes(path);
+            Layout layout = layout(bytes);
+            apply(bytes, layout);
+            rewriteExtensionCrc(bytes, layout);
+            Files.write(path, bytes);
+        }
+
+        abstract void apply(byte[] bytes, Layout layout);
+    }
+
+    private enum StructuralLie {
+        ORDINAL(PageRunPageIndex.Status.INVALID_COUNT,
+                "SORT.merge_boundary_fallback_invalid_count") {
+            @Override
+            void apply(byte[] bytes, Layout layout) {
+                int entry = layout.entries().get(2);
+                ByteBuffer.wrap(bytes).putLong(entry, 3);
+            }
+        },
+        CUMULATIVE_FRAMED_BYTES(PageRunPageIndex.Status.INVALID_CUMULATIVE,
+                "SORT.merge_boundary_fallback_invalid_cumulative") {
+            @Override
+            void apply(byte[] bytes, Layout layout) {
+                int position = layout.entries().get(2) + 24;
+                ByteBuffer data = ByteBuffer.wrap(bytes);
+                data.putLong(position, data.getLong(position) + 1);
+            }
+        };
+
+        private final PageRunPageIndex.Status status;
+        private final String reason;
+
+        StructuralLie(PageRunPageIndex.Status status, String reason) {
+            this.status = status;
+            this.reason = reason;
         }
 
         void mutate(Path path) throws IOException {
