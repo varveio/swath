@@ -11,9 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -214,7 +212,7 @@ class PageRunZoneProofAdversarialTest {
             Path caseRoot = Files.createDirectories(root.resolve(overlongMinimum ? "min" : "max"));
             Path output = Files.createDirectories(caseRoot.resolve("out"));
             Path staging = Files.createDirectories(output.resolve("_staging"));
-            Path corrupt = writeCrcRepairedOverlongBound(
+            Path corrupt = PageRunRawFixtures.writeCrcRepairedOverlongBound(
                     staging.resolve("corrupt.pageseg"), overlongMinimum);
             Path valid = SortTestSupport.writePageRun(staging.resolve("valid.pageseg"),
                     List.of(SortTestSupport.object("a"), SortTestSupport.object("z")), CMP);
@@ -571,42 +569,6 @@ class PageRunZoneProofAdversarialTest {
                     SortTestSupport.object(base + "-z")));
         }
         return pages;
-    }
-
-    private static Path writeCrcRepairedOverlongBound(Path path, boolean overlongMinimum)
-            throws IOException {
-        byte[] overlong = new byte[ByteMidpoint.MAX_KEY_LEN + 1];
-        if (!overlongMinimum) {
-            java.util.Arrays.fill(overlong, (byte) 'z');
-        }
-        List<ListEntry> rows = overlongMinimum
-                ? List.of(objectWithKey(overlong), SortTestSupport.object("z"))
-                : List.of(SortTestSupport.object("a"), objectWithKey(overlong));
-        PageRunSegmentWriter writer = new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP,
-                SortMetrics.NO_OP, PageCodec.NONE);
-        try (SortedCursor cursor = new InMemoryCursor(rows, CMP, DuplicateHook.NO_OP)) {
-            writer.writeIntermediate(cursor, path);
-        }
-        byte[] file = Files.readAllBytes(path);
-        int frameOffset = PageRunSegmentWriter.HEADER_BYTES;
-        int bodyLength = ByteBuffer.wrap(file, frameOffset, Integer.BYTES).getInt();
-        int bodyOffset = frameOffset + 8;
-        ByteBuffer body = ByteBuffer.wrap(file, bodyOffset, bodyLength).slice();
-        int keyOffset = overlongMinimum
-                ? Short.BYTES
-                : Short.BYTES + (body.getShort(0) & 0xFFFF) + Short.BYTES;
-        body.put(keyOffset, (byte) (body.get(keyOffset) - 1));
-        CRC32C crc = new CRC32C();
-        crc.update(file, bodyOffset, bodyLength);
-        ByteBuffer.wrap(file, frameOffset + Integer.BYTES, Integer.BYTES)
-                .putInt((int) crc.getValue());
-        Files.write(path, file);
-        return path;
-    }
-
-    private static ObjectEntry objectWithKey(byte[] key) {
-        return new ObjectEntry(io.varve.swath.model.KeyBytes.of(key), 0L, 0L, null, null, null,
-                false, null, null, null, null);
     }
 
     private static List<PageRunSegmentDescriptor> descriptors(Path path) throws IOException {

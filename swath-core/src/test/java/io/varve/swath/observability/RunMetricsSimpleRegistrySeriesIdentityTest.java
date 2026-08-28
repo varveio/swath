@@ -33,7 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT emit the same set. In particular Micrometer's {@code SimpleMeterRegistry.newTimer}
  * registers {@code HistogramGauges} — 3 extra {@code *.percentile{phi}} GAUGE meters per
- * percentile-publishing timer, 66 in total here — that {@code OtlpMeterRegistry.newTimer} does not
+ * percentile-publishing timer series, 69 in total here — that {@code OtlpMeterRegistry.newTimer} does not
  * create at all (OTLP encodes percentiles as Summary quantiles on the wire instead). So this
  * snapshot holds {@value #EXPECTED_SIMPLE_METER_COUNT} ids where the same run yields
  * {@value RunMetricsOtlpSeriesIdentityTest#EXPECTED_OTLP_METER_COUNT} meters under OTLP. That side

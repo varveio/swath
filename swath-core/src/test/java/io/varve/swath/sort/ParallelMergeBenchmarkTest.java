@@ -77,6 +77,15 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
+    void incompleteIdentityIsRefusedAsAnArgumentError(@TempDir Path root) throws Exception {
+        Retained retained = completedRetained(root, "hash", "seg");
+
+        assertThatIllegalArgumentException().isThrownBy(() -> BenchmarkCheckpointCatalog.read(
+                        retained.output(), retained.staging(), new Manifest.Identity(null, retained.runId())))
+                .withMessageContaining("complete checkpoint-backed run identity");
+    }
+
+    @Test
     @ResourceLock("SYSTEM_PROPERTIES")
     void missingSuccessAndTrackedMergeNamingAreRejected(@TempDir Path root) throws Exception {
         Retained noSuccess = retained(root.resolve("no-success"), "hash", "seg", true, false);

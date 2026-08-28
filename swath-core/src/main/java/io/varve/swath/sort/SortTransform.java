@@ -24,7 +24,8 @@ import org.slf4j.LoggerFactory;
  * The batch merge/publish step of {@code --sort}: cascaded {@link KWayMerge} over staged {@code
  * .pageseg} page-run segments into final sorted Parquet, written to {@code *.tmp} and renamed in key order, with
  * staging deleted or exactly reconciled only after the {@link PublishListener} fires. The full publish/resume state
- * machine (manifest-last commit, idempotent re-entry, stale-tmp/stale-final cleanup) is
+ * machine (authority-artifact commit with {@code _SUCCESS} written last, idempotent re-entry,
+ * stale-tmp/stale-final cleanup) is
  * {@code docs/internals/contracts.md} §6; this class's own re-entry sweep-scope safety proof lives at
  * {@link DatasetPublisher#cleanStaleFinals}, not here.
  *
@@ -111,7 +112,8 @@ public final class SortTransform {
     /**
      * Merge {@code stagingSegments} into the final sorted output under {@code outputDir}, using
      * {@code stagingDir} for cascade intermediates. {@code publishListener} fires after the renames
-     * and before staging deletion/reconciliation (the manifest-last commit point). {@code progressCallback} is
+     * and before staging deletion/reconciliation (the authority-artifact commit point; the listener
+     * writes {@code _SUCCESS} last). {@code progressCallback} is
      * invoked with the row count of each completed batch — {@code swath.progress.units}'
      * merge-phase feed, wired by {@code ListRunner} to {@code RunMetrics.recordProgress}. Batched
      * ({@link KWayMerge#PROGRESS_BATCH_ROWS}), not per-row, and threaded through <em>every</em> merge

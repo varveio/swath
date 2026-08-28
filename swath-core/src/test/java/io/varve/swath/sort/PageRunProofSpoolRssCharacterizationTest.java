@@ -35,18 +35,26 @@ class PageRunProofSpoolRssCharacterizationTest {
         Path path = root.resolve("rss-proof.tmp");
         PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(SortMetrics.NO_OP);
         PageRunProofSpool.Writer writer = new PageRunProofSpool.Writer(path, slots, stats);
-        long beforeTouch = readVmRssBytes();
-        byte[] key = {(byte) 0xa5};
-        for (int slot = 0; slot < slots; slot++) {
-            writer.markOpen(slot);
-            writer.writeKey(slot, PageRunProofSpool.KeyField.FIRST_MIN, key);
-            writer.finish(slot, 0, 0, 0, -1, -1, 0, false);
+        long beforeTouch;
+        long touched;
+        try {
+            beforeTouch = readVmRssBytes();
+            byte[] key = {(byte) 0xa5};
+            for (int slot = 0; slot < slots; slot++) {
+                writer.markOpen(slot);
+                writer.writeKey(slot, PageRunProofSpool.KeyField.FIRST_MIN, key);
+                writer.finish(slot, 0, 0, 0, -1, -1, 0, false);
+            }
+            touched = readVmRssBytes();
+        } finally {
+            writer.close();
         }
-        long touched = readVmRssBytes();
-        writer.close();
-        long afterUnmap = awaitRssAtMost(
-                beforeTouch + RSS_NOISE_ALLOWANCE, Duration.ofSeconds(10));
-        PageRunProofSpool.delete(path, stats);
+        long afterUnmap;
+        try {
+            afterUnmap = awaitRssAtMost(beforeTouch + RSS_NOISE_ALLOWANCE, Duration.ofSeconds(10));
+        } finally {
+            PageRunProofSpool.delete(path, stats);
+        }
 
         long touchedDelta = touched - beforeTouch;
         assertThat(touchedDelta)

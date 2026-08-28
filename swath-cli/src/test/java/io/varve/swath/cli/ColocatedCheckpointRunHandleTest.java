@@ -49,13 +49,11 @@ import picocli.CommandLine;
  */
 final class ColocatedCheckpointRunHandleTest {
 
-    private static final String BUCKET = "bucket";
-    private static final String PREFIX = "data/";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static ListCommand autoCommand(Path outputDir, MockPageFetcher fetcher) {
         ListCommand cmd = new ListCommand();
-        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.uri = "s3://" + CliTestS3Defaults.BUCKET + "/" + CliTestS3Defaults.PREFIX;
         cmd.connection.region = "us-east-1";
         cmd.connection.noSignRequest = true;
         // checkpoint.location left at its "auto" field default — the co-located run handle.
@@ -68,7 +66,8 @@ final class ColocatedCheckpointRunHandleTest {
     private static MockPageFetcher fetcher(int count) {
         List<byte[]> keys = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            keys.add(String.format("data/key-%05d", i).getBytes(StandardCharsets.UTF_8));
+            keys.add(String.format(CliTestS3Defaults.PREFIX + "key-%05d", i)
+                    .getBytes(StandardCharsets.UTF_8));
         }
         return MockPageFetcher.builder().keys(keys).build();
     }
@@ -420,7 +419,7 @@ final class ColocatedCheckpointRunHandleTest {
                 .build();
 
         ListCommand cmd = new ListCommand();
-        cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
+        cmd.uri = "s3://" + CliTestS3Defaults.BUCKET + "/" + CliTestS3Defaults.PREFIX;
         cmd.connection.region = "us-east-1";
         cmd.connection.noSignRequest = true;
         // checkpoint.location "auto" + stdout (no -o) = ephemeral.

@@ -33,8 +33,8 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code MeterRegistries} builds a {@code SimpleMeterRegistry} by default and an {@link
  * OtlpMeterRegistry} when {@code SWATH_OTLP_ENDPOINT}/{@code --metrics-export=otlp} is set, and the
  * two do NOT register the same meters: {@code SimpleMeterRegistry.newTimer} registers {@code
- * HistogramGauges} — 54 extra {@code *.percentile{phi}} GAUGE meters for the 18
- * percentile-publishing timers — that {@code OtlpMeterRegistry.newTimer} never creates, because
+ * HistogramGauges} — 69 extra {@code *.percentile{phi}} GAUGE meters for the 23
+ * percentile-publishing timer series — that {@code OtlpMeterRegistry.newTimer} never creates, because
  * OTLP encodes those percentiles as {@code SUMMARY} quantiles on the wire instead. So the same run
  * is {@value RunMetricsSimpleRegistrySeriesIdentityTest#EXPECTED_SIMPLE_METER_COUNT} Simple meters
  * and {@value #EXPECTED_OTLP_METER_COUNT} OTLP meters.
@@ -45,7 +45,7 @@ import org.junit.jupiter.api.io.TempDir;
  * swath-owned, environment-independent, and precisely what an extraction can break.
  *
  * <p><b>Deliberately NOT pinned: a full literal snapshot of the exported protobuf payload.</b> An
- * earlier draft froze all 134 exported data points. That is a worse guard than it looks, because
+ * earlier draft froze the entire exported series set. That is a worse guard than it looks, because
  * most of what it pins is Micrometer exporter behaviour rather than swath behaviour:
  * <ul>
  *   <li>The bucket layout and datapoint encoding a histogram produces are Micrometer exporter

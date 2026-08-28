@@ -14,6 +14,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 class PageRunProofSpoolLargeMapTest {
 
     @Test
+    @Tag("perf")
     @Timeout(30)
     void sparseFfmMappingAboveTwoGiBTouchesBothEndsThenUnmapsAndDeletes(@TempDir Path root)
             throws Exception {

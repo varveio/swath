@@ -13,6 +13,8 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.sort.SortMetrics;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Micrometer-backed counters/timers for the {@code io.varve.swath.replay.fixture} package: the
@@ -43,10 +45,8 @@ public final class FixtureMetrics implements SortMetrics {
     private final Timer sortProofSpoolLatency;
     private final Counter sortOverlapClusters;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
-    private final java.util.concurrent.atomic.AtomicLong sortOverlapPagesPeak =
-            new java.util.concurrent.atomic.AtomicLong();
-    private final java.util.concurrent.atomic.AtomicLong sortOverlapRowsPeak =
-            new java.util.concurrent.atomic.AtomicLong();
+    private final AtomicLong sortOverlapPagesPeak = new AtomicLong();
+    private final AtomicLong sortOverlapRowsPeak = new AtomicLong();
 
     public FixtureMetrics() {
         this(new SimpleMeterRegistry());
@@ -92,9 +92,9 @@ public final class FixtureMetrics implements SortMetrics {
                 Timer.builder("swath.replay.sort.merge.proof_spool.latency").register(registry);
         sortOverlapClusters = Counter.builder("swath.replay.sort.merge.overlap.clusters").register(registry);
         registry.gauge("swath.replay.sort.merge.overlap.pages.peak", sortOverlapPagesPeak,
-                java.util.concurrent.atomic.AtomicLong::get);
+                AtomicLong::get);
         registry.gauge("swath.replay.sort.merge.overlap.rows.peak", sortOverlapRowsPeak,
-                java.util.concurrent.atomic.AtomicLong::get);
+                AtomicLong::get);
     }
 
     public MeterRegistry registry() {
@@ -198,7 +198,7 @@ public final class FixtureMetrics implements SortMetrics {
         sortProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
         sortProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
         sortProofSpoolLatency.record(
-                Math.max(0L, serviceNanos), java.util.concurrent.TimeUnit.NANOSECONDS);
+                Math.max(0L, serviceNanos), TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -234,6 +234,6 @@ public final class FixtureMetrics implements SortMetrics {
     }
 
     public long proofSpoolMillis() {
-        return (long) sortProofSpoolLatency.totalTime(java.util.concurrent.TimeUnit.MILLISECONDS);
+        return (long) sortProofSpoolLatency.totalTime(TimeUnit.MILLISECONDS);
     }
 }

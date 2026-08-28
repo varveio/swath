@@ -45,14 +45,11 @@ final class SortTestSupport {
 
     /** Write one single-row listing page per ordinal, including the production type-2 index. */
     static Path writeIndexedPages(Path path, int pages, int keyOffset) throws IOException {
-        ListEntryComparator comparator = new ListEntryComparator();
-        SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
+        List<List<ListEntry>> generated = new ArrayList<>(pages);
         for (int page = 0; page < pages; page++) {
-            buffer.admit(page, List.of(object(String.format("k%05d", keyOffset + page))));
+            generated.add(List.of(object(String.format("k%05d", keyOffset + page))));
         }
-        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
-                .flush(buffer.seal(SealTrigger.DRAIN), path);
-        return path;
+        return writeIndexedPages(path, generated);
     }
 
     /** Write caller-supplied sorted listing pages, including the production type-2 index. */

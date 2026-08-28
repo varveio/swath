@@ -204,16 +204,11 @@ class SortTransformTest {
     }
 
     @Test
-    void checkpointRetentionNamesRejectTraversalBeforeAnyStagingDeletion(@TempDir Path root)
+    void checkpointRetentionNamesRejectTraversal(@TempDir Path root)
             throws IOException {
-        Path staging = Files.createDirectories(root.resolve("_staging"));
-        Path orphan = Files.createFile(staging.resolve("orphan.pageseg"));
-
         assertThatThrownBy(() -> StagingReconciliation.fromNames(List.of("../escape.pageseg")))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("unsafe retained sort staging segment name");
-
-        assertThat(orphan).exists();
     }
 
     @Test

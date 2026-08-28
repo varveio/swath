@@ -5,7 +5,10 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -188,6 +191,35 @@ final class PageRunRawFixtures {
         Files.write(path, bytes);
     }
 
+    /** Write a checksum-valid segment with a page bound one byte over the S3 key limit. */
+    static Path writeCrcRepairedOverlongBound(Path path, boolean overlongMinimum) throws IOException {
+        byte[] overlong = new byte[ByteMidpoint.MAX_KEY_LEN + 1];
+        if (!overlongMinimum) {
+            Arrays.fill(overlong, (byte) 'z');
+        }
+        List<ListEntry> rows = overlongMinimum
+                ? List.of(objectWithKey(overlong), SortTestSupport.object("z"))
+                : List.of(SortTestSupport.object("a"), objectWithKey(overlong));
+        ListEntryComparator comparator = new ListEntryComparator();
+        PageRunSegmentWriter writer = new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP,
+                SortMetrics.NO_OP, PageCodec.NONE);
+        try (SortedCursor cursor = new InMemoryCursor(rows, comparator, DuplicateHook.NO_OP)) {
+            writer.writeIntermediate(cursor, path);
+        }
+        byte[] file = Files.readAllBytes(path);
+        int frameOffset = PageRunSegmentWriter.HEADER_BYTES;
+        int bodyLength = ByteBuffer.wrap(file, frameOffset, Integer.BYTES).getInt();
+        int bodyOffset = frameOffset + 2 * Integer.BYTES;
+        ByteBuffer body = ByteBuffer.wrap(file, bodyOffset, bodyLength).slice();
+        int keyOffset = overlongMinimum
+                ? Short.BYTES
+                : Short.BYTES + (body.getShort(0) & 0xFFFF) + Short.BYTES;
+        body.put(keyOffset, (byte) (body.get(keyOffset) - 1));
+        rewriteRecordCrc(file, frameOffset, bodyOffset, bodyLength);
+        Files.write(path, file);
+        return path;
+    }
+
     private static void rewriteRecordCrc(byte[] bytes, int frameStart, int bodyStart, int bodyLength) {
         CRC32C crc = new CRC32C();
         crc.update(bytes, bodyStart, bodyLength);
@@ -204,6 +236,11 @@ final class PageRunRawFixtures {
 
     private static int unsignedShort(byte[] bytes, int position) {
         return ByteBuffer.wrap(bytes).getShort(position) & 0xffff;
+    }
+
+    private static ObjectEntry objectWithKey(byte[] key) {
+        return new ObjectEntry(KeyBytes.of(key), 0L, 0L, null, null, null,
+                false, null, null, null, null);
     }
 
     /** The per-page {@code minKey}s in physical FILE order — proves what a fixture actually stores. */

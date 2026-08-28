@@ -50,7 +50,8 @@ public final class BenchmarkCheckpointCatalog {
         if (!stagingReal.getParent().equals(outputReal)) {
             throw new IllegalArgumentException("external staging real path escapes benchmark output: " + stagingReal);
         }
-        if (identity.runId() == null || identity.runId() <= 0 || identity.argsHash().isBlank()) {
+        if (identity.runId() == null || identity.runId() <= 0 || identity.argsHash() == null
+                || identity.argsHash().isBlank()) {
             throw new IllegalArgumentException("external staging requires a complete checkpoint-backed run identity: "
                     + normalizedOutput);
         }
