@@ -29,8 +29,8 @@ import java.util.function.LongConsumer;
  * {@link #close()}, with the accumulated total ({@code SORT.merge_fastpath}) — a big merge can take
  * the fast path millions of times, so the per-row metric call is avoided.
  *
- * <p>Adjacent duplicates (comparator says equal to the previously emitted entry) fire the
- * {@link DuplicateHook}. Read failures surface as {@link UncheckedIOException}.
+ * <p>Read failures surface as {@link UncheckedIOException}. Adjacent duplicate reporting is applied
+ * once around this merger's output by {@link DuplicateReporting}.
  *
  * <p><b>Disjoint-copyable classification.</b> Before building a byte-copy merge for
  * segments that are range-disjoint from every other input (so their rows could be copied straight
@@ -73,7 +73,6 @@ final class StreamingMerger implements SortedCursor {
     }
 
     private final Comparator<ListEntry> comparator;
-    private final DuplicateHook hook;
     private final LongConsumer fastPathSink;
     private final DisjointSink disjointSink;
     private final List<EntryStream> allStreams;
@@ -82,20 +81,18 @@ final class StreamingMerger implements SortedCursor {
     private final int[] runCounts;   // per-input-stream count of runs it contributed to the output
 
     private EntryStream currentStream;   // stream held out of the heap (fast-path candidate)
-    private ListEntry previousEmitted;
     private ListEntry pending;           // next entry to return; null once fully drained
     private long fastPathCount;
     private boolean closed;
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
-                    DuplicateHook hook, LongConsumer fastPathSink) {
-        this(streams, comparator, hook, fastPathSink, DisjointSink.NO_OP);
+                    LongConsumer fastPathSink) {
+        this(streams, comparator, fastPathSink, DisjointSink.NO_OP);
     }
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
-                    DuplicateHook hook, LongConsumer fastPathSink, DisjointSink disjointSink) {
+                    LongConsumer fastPathSink, DisjointSink disjointSink) {
         this.comparator = comparator;
-        this.hook = hook;
         this.fastPathSink = fastPathSink;
         this.disjointSink = disjointSink;
         this.allStreams = streams;
@@ -165,12 +162,7 @@ final class StreamingMerger implements SortedCursor {
                 runCounts[streamIndex.get(src)]++;
             }
             currentStream = src;
-            ListEntry emitted = src.next();
-            if (previousEmitted != null && comparator.compare(previousEmitted, emitted) == 0) {
-                hook.onDuplicate(previousEmitted, emitted);
-            }
-            previousEmitted = emitted;
-            return emitted;
+            return src.next();
         } catch (IOException e) {
             throw new UncheckedIOException("k-way merge read failed", e);
         }

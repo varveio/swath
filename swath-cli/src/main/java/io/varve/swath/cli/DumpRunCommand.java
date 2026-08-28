@@ -6,6 +6,7 @@
 package io.varve.swath.cli;
 
 import io.varve.swath.sort.PageRunSegmentInspector;
+import io.varve.swath.sort.PageRunTrailer;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
@@ -67,7 +68,7 @@ public final class DumpRunCommand implements Callable<Integer>, GlobalOptions.Ca
                     r.index(), hex(r.minKey()), hex(r.maxKey()), r.count(), r.codec(),
                     r.framedLen(), r.crcOk() ? "OK" : "FAIL");
         }
-        PageRunSegmentInspector.TrailerInfo t = dump.trailer();
+        PageRunTrailer.Trailer t = dump.trailer();
         out.printf("trailer: segMin=%s segMax=%s totalRecords=%d totalEntries=%d maxRecordLen=%d%n",
                 hex(t.segMinKey()), hex(t.segMaxKey()), t.totalRecords(), t.totalEntries(),
                 t.maxRecordLen());

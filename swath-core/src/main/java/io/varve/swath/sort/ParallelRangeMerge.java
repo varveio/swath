@@ -9,7 +9,6 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -108,15 +107,16 @@ final class ParallelRangeMerge {
     /** At the supported 16-range maximum this retains 1,024 candidates per range. */
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
 
+    private final SortRun run;
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
+    private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final RangeMergeTimer rangeTimer;
     private final IntSupplier softFdLimitSupplier;
     private final String workerThreadPrefix;
-    private final Map<Path, PageRunSegmentReader.Trailer> validatedTrailers;
 
     private enum SampleSource {
         EMBEDDED,
@@ -130,27 +130,17 @@ final class ParallelRangeMerge {
      */
     private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
 
-    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer) {
-        this(run, rangeTimer, MergeFdBudget::softOpenFileLimit);
-    }
-
-    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer, IntSupplier softFdLimitSupplier) {
-        this(run, rangeTimer, softFdLimitSupplier, List.of());
-    }
-
-    ParallelRangeMerge(SortRun run, RangeMergeTimer rangeTimer, IntSupplier softFdLimitSupplier,
-                       List<PageRunSegmentDescriptor> descriptors) {
+    ParallelRangeMerge(SortRun run) {
+        this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
+        this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
-        this.rangeTimer = rangeTimer;
-        this.softFdLimitSupplier = softFdLimitSupplier;
+        this.rangeTimer = run.rangeMergeTimer();
+        this.softFdLimitSupplier = run.softFdLimitSupplier();
         this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
-        this.validatedTrailers = descriptors.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
-                PageRunSegmentDescriptor::path, PageRunSegmentDescriptor::trailer,
-                (first, duplicate) -> first));
     }
 
     String workerThreadPrefix() {
@@ -204,25 +194,17 @@ final class ParallelRangeMerge {
      * Sample evenly-spaced key boundaries partitioning {@code segments} into up to {@code desiredRanges}
      * contiguous ranges. Returns the {@code R-1} boundary keys (so the range count is
      * {@code boundaries.size() + 1}), or {@code null} when the keyspace has fewer than two distinct
-     * sample keys and so cannot be split (the caller then uses the serial path).
+     * sample keys and so cannot be split (the caller then uses the serial path). {@code distinct}
+     * already contains every validated embedded key streamed during descriptor kickoff; legacy or
+     * invalid descriptors add their scan samples here.
      */
-    static List<byte[]> boundaries(List<Path> segments, int desiredRanges, SortMetrics metrics)
+    static List<byte[]> boundaries(List<PageRunSegmentDescriptor> segments,
+                                   BoundaryCandidates distinct, int desiredRanges,
+                                   SortMetrics metrics)
             throws IOException {
-        return boundariesForPaths(segments, desiredRanges, metrics);
-    }
-
-    static List<byte[]> boundariesForDescriptors(List<PageRunSegmentDescriptor> segments,
-                                                 int desiredRanges, SortMetrics metrics)
-            throws IOException {
-        return boundariesForPaths(PageRunSegmentDescriptor.paths(segments), desiredRanges, metrics);
-    }
-
-    private static List<byte[]> boundariesForPaths(List<Path> segments, int desiredRanges,
-                                                   SortMetrics metrics) throws IOException {
-        BoundaryCandidates distinct = new BoundaryCandidates();
         boolean embedded = false;
         boolean scanned = false;
-        for (Path segment : segments) {
+        for (PageRunSegmentDescriptor segment : segments) {
             SampleSource source = sampleKeys(segment, distinct, metrics);
             embedded |= source == SampleSource.EMBEDDED;
             scanned |= source == SampleSource.SCAN;
@@ -258,31 +240,20 @@ final class ParallelRangeMerge {
     }
 
     /**
-     * Add one page-run segment's page-minimum boundary candidates. The bounded trailer extension is
-     * preferred; absent, unknown, or invalid extensions fall back transactionally to a frontier scan
-     * without exposing provisional keys to the global set.
+     * Account for one page-run segment's page-minimum boundary candidates. A validated extension was
+     * already streamed into {@code distinct} during the descriptor's open; absent, unknown, or invalid
+     * extensions open the same frontier fallback and add its samples here.
      */
-    private static SampleSource sampleKeys(Path segment, BoundaryCandidates distinct,
+    private static SampleSource sampleKeys(PageRunSegmentDescriptor descriptor,
+                                           BoundaryCandidates distinct,
                                            SortMetrics metrics)
             throws IOException {
-        PageRunBoundarySample.ReadResult embedded;
-        long framedRecordBytes;
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment)) {
-            embedded = PageRunBoundarySample.read(io);
-            long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            framedRecordBytes = io.trailerStart >= PageRunSegmentWriter.HEADER_BYTES
-                            && io.trailerStart <= fixedTailStart
-                    ? io.trailerStart - PageRunSegmentWriter.HEADER_BYTES
-                    : 0;
-        }
+        PageRunBoundarySample.ReadResult embedded = descriptor.sample();
         if (embedded.valid()) {
-            for (byte[] key : embedded.keys()) {
-                distinct.add(key);
-            }
             if (embedded.totalRecords() > PageRunBoundarySample.MAX_ENTRIES) {
                 metrics.recordStealReason("SORT", "merge_range_sample_capped");
             }
-            metrics.recordBoundaryIo(embedded.keys().size(), embedded.bytesRead(), 0);
+            metrics.recordBoundaryIo(embedded.entryCount(), embedded.bytesRead(), 0);
             metrics.markProgress();
             return SampleSource.EMBEDDED;
         }
@@ -293,7 +264,7 @@ final class ParallelRangeMerge {
         if (stride > 1) {
             metrics.recordStealReason("SORT", "merge_range_sample_capped");
         }
-        try (PageFrontierReader frontier = new PageFrontierReader(segment, metrics)) {
+        try (PageFrontierReader frontier = new PageFrontierReader(descriptor.path(), metrics)) {
             for (long page = 0; frontier.hasPage(); page++) {
                 if (page % stride == 0) {
                     distinct.add(frontier.minKey().clone());
@@ -302,6 +273,12 @@ final class ParallelRangeMerge {
                 frontier.advance();
             }
         }
+        long fixedTailStart = descriptor.fileSize()
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        long framedRecordBytes = descriptor.trailerStart() >= PageRunSegmentWriter.HEADER_BYTES
+                        && descriptor.trailerStart() <= fixedTailStart
+                ? descriptor.trailerStart() - PageRunSegmentWriter.HEADER_BYTES
+                : 0;
         metrics.recordBoundaryIo(0, embedded.bytesRead(), framedRecordBytes);
         return SampleSource.SCAN;
     }
@@ -398,6 +375,7 @@ final class ParallelRangeMerge {
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_order");
             case INVALID_BOUNDS ->
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_bounds");
+            case SKIPPED -> throw new AssertionError("parallel boundary sampling was skipped");
             case EMBEDDED -> throw new AssertionError("valid sample cannot fall back");
         }
     }
@@ -412,10 +390,14 @@ final class ParallelRangeMerge {
      * immediately even while an earlier range is still draining. Siblings are interrupted, joined to
      * proven quiescence, and only afterwards are writers closed and owned files swept.
      */
-    List<RangeResult> run(List<Path> stagingSegments, Path stagingDir, List<byte[]> boundaries,
+    List<RangeResult> run(List<PageRunSegmentDescriptor> segmentDescriptors, Path stagingDir,
+                          List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
+        List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
+        Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
+                PageRunSegmentDescriptor.byPath(segmentDescriptors);
         int ranges = boundaries.size() + 1;
-        int perRangeFanIn = perRangeFanIn(ranges, stagingSegments);
+        int perRangeFanIn = perRangeFanIn(ranges, segmentDescriptors);
         Object progressLock = new Object();
         LongConsumer safeProgress = units -> {
             synchronized (progressLock) {
@@ -447,7 +429,8 @@ final class ParallelRangeMerge {
                 byte[] lo = range == 0 ? null : boundaries.get(range - 1);
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
                 Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
-                        perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit);
+                        perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit,
+                        descriptorsByPath);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
             List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
@@ -462,20 +445,11 @@ final class ParallelRangeMerge {
                     ranges, threads, perRangeFanIn);
             return results;
         } catch (InterruptedException e) {
-            futures.forEach(f -> f.cancel(true));
-            shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir);
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
-            futures.forEach(f -> f.cancel(true));
-            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
-            if (interruptedWhileJoining) {
-                Thread.currentThread().interrupt();
-            }
+            abortAndCleanUp(pool, futures, stagingDir);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -484,7 +458,7 @@ final class ParallelRangeMerge {
                 throw uio.getCause() == null ? new IOException(uio.getMessage(), uio) : uio.getCause();
             }
             if (cause instanceof RuntimeException runtime) {
-                // Preserve policy exceptions such as CaptureSorter's DuplicateKeyException. The
+                // Preserve policy exceptions such as DuplicateKeyException. The
                 // parallel coordinator must not change the public failure type relative to serial.
                 throw runtime;
             }
@@ -493,13 +467,7 @@ final class ParallelRangeMerge {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
-            futures.forEach(f -> f.cancel(true));
-            boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
-            releaseOpenParts();
-            sweepOwnFiles(stagingDir);
-            if (interruptedWhileJoining) {
-                Thread.currentThread().interrupt();
-            }
+            abortAndCleanUp(pool, futures, stagingDir);
             throw e;
         } finally {
             pool.shutdownNow();
@@ -509,12 +477,12 @@ final class ParallelRangeMerge {
     private Callable<RangeResult> mergeRange(int range, byte[] lo, byte[] hi, List<Path> stagingSegments,
                                              Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
                                              DuplicateHook safeHook, AtomicInteger openPartCount,
-                                             int openPartLimit) {
+                                             int openPartLimit,
+                                             Map<Path, PageRunSegmentDescriptor> descriptorsByPath) {
         return () -> {
             SortedFileWriterFactory rangeWriterFactory =
                     finalWriterFactory.forOutputSequence();
             long startNanos = System.nanoTime();
-            List<Path> intermediates = new ArrayList<>();
             // Page-skip counters live on the frontier wrappers this range opened (one per page-run
             // input); collected after the merge drains, for the same read-vs-skipped signal.
             List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
@@ -528,8 +496,9 @@ final class ParallelRangeMerge {
             };
             PageRunSegmentWriter pageRunWriter =
                     new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
-            KWayMerge.SegmentIo<Path> io = rangeSegmentIo(pageRunWriter, stagingDir, range,
-                    lo, hi, intermediates, pageFrontiers);
+            PageRunMergeIo io = new PageRunMergeIo(run, pageRunWriter, stagingDir,
+                    "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
+                    pageFrontiers::add);
             KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
 
             List<Path> tmpParts = new ArrayList<>();
@@ -545,7 +514,8 @@ final class ParallelRangeMerge {
                 // closes, once every range has drained.
                 rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
                         () -> openRangePart(stagingDir, range, tmpParts, rangeWriterFactory,
-                                openPartCount, openPartLimit), safeProgress, metrics, parts, false);
+                                openPartCount, openPartLimit), safeProgress, metrics, equalKeyPolicy,
+                        comparator, parts, false);
             } catch (IOException | RuntimeException e) {
                 // This range failed, so nothing it wrote will be published: release the open parts
                 // rather than strand their descriptors until the sweep. Never stamped -- an aborted
@@ -560,7 +530,7 @@ final class ParallelRangeMerge {
             // Reclaim this range's cascade intermediates (KWayMerge already deleted the ones it folded;
             // deleteIfExists is a no-op on those). Originals are shared across ranges and are NEVER
             // deleted here — SortTransform deletes them once, after the whole publish.
-            for (Path p : intermediates) {
+            for (Path p : io.intermediates()) {
                 Files.deleteIfExists(p);
             }
             // Instrumentation (metrics discipline, §5a): one increment per range engaged — the total
@@ -598,7 +568,7 @@ final class ParallelRangeMerge {
         // file_index is assigned by SortTransform once every range has drained and the global roll
         // sequence is known; the footer is not written until then (see setFileIndex).
         int localIndex = tmpParts.size() + 1;
-        Path tmp = stagingDir.resolve("prange-" + range + "-" + localIndex + ".parquet.tmp");
+        Path tmp = stagingDir.resolve(StagingNames.rangeTmp(range, localIndex));
         int open = openPartCount.incrementAndGet();
         if (open > openPartLimit) {
             openPartCount.decrementAndGet();
@@ -623,73 +593,13 @@ final class ParallelRangeMerge {
         return writer;
     }
 
-    private KWayMerge.SegmentIo<Path> rangeSegmentIo(PageRunSegmentWriter pageRunWriter,
-                                                     Path stagingDir, int range, byte[] lo, byte[] hi,
-                                                     List<Path> intermediates,
-                                                     List<RangeScopedPageFrontier> pageFrontiers) {
-        int[] seq = {0};
-        return new KWayMerge.SegmentIo<>() {
-            @Override
-            public EntryStream open(Path segment) throws IOException {
-                // Generic entry-stream fallback retained for KWayMerge's storage seam. Production
-                // groups take the page frontier below and are trimmed once above the merge.
-                return new PageRunSegmentReader(openScopedFrontier(segment), comparator, metrics);
-            }
-
-            @Override
-            public boolean supportsPageFrontier(Path segment) {
-                // Page-run inputs expose a decode-free frontier, so KWayMerge keeps PageAwareMerger's
-                // page-whole fast path INSIDE each range. Without this the parallel path would quietly
-                // fall back to the entry-typed StreamingMerger while the serial R=1 baseline kept the
-                // fast path — every range would pay a per-entry heap the control arm does not, and an
-                // A/B would be measuring a merger downgrade on top of the range parallelism.
-                return true;
-            }
-
-            @Override
-            public PageFrontierStream openFrontier(Path segment) throws IOException {
-                return openScopedFrontier(segment);
-            }
-
-            /** The range-scoped page frontier for {@code segment}, registered for its skip counters. */
-            private PageFrontierStream openScopedFrontier(Path segment) throws IOException {
-                PageRunSegmentReader.Trailer trailer = validatedTrailers.get(segment);
-                if (trailer != null) {
-                    metrics.recordStealReason("SORT", "merge_scoped_frontier_validated_trailer");
-                } else {
-                    metrics.recordStealReason("SORT", "merge_scoped_frontier_trailer_reread");
-                    trailer = PageRunSegmentReader.readTrailer(segment);
-                }
-                long totalPages = trailer.totalRecords();
-                RangeScopedPageFrontier scoped = new RangeScopedPageFrontier(
-                        new PageFrontierReader(segment, metrics), lo, hi, totalPages, metrics);
-                pageFrontiers.add(scoped);
-                return scoped;
-            }
-
-            @Override
-            public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve("merge-r" + range + "-" + (seq[0]++)
-                        + SortTransform.SEGMENT_SUFFIX);
-                pageRunWriter.writeIntermediate(sorted, dest);
-                intermediates.add(dest);
-                return dest;
-            }
-
-            @Override
-            public void delete(Path segment) throws IOException {
-                Files.deleteIfExists(segment);
-            }
-        };
-    }
-
     /**
      * Per-range merge budget = total / R, expressed as a {@link KWayMerge} pass width. Package-private
      * because {@link SortTransform} asks the same question before the merge starts: staged segments
      * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
      */
-    int perRangeFanIn(int ranges, List<Path> stagingSegments) throws IOException {
-        return perRangeFanIn(ranges, perStreamBytes(stagingSegments), ranges);
+    int perRangeFanIn(int ranges, List<PageRunSegmentDescriptor> segmentDescriptors) {
+        return perRangeFanIn(ranges, perStreamBytes(segmentDescriptors), ranges);
     }
 
     /**
@@ -757,14 +667,10 @@ final class ParallelRangeMerge {
     }
 
     /** Total staged bytes, best-effort: an unreadable segment counts as zero and only shrinks R. */
-    private static long stagedBytes(List<Path> stagingSegments) {
+    private static long stagedBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
         long total = 0;
-        for (Path segment : stagingSegments) {
-            try {
-                total += Files.size(segment);
-            } catch (IOException e) {
-                log.debug("could not size a staging segment for the parallel-merge floor", e);
-            }
+        for (PageRunSegmentDescriptor descriptor : segmentDescriptors) {
+            total += descriptor.fileSize();
         }
         return total;
     }
@@ -797,8 +703,8 @@ final class ParallelRangeMerge {
      * represented in that estimate, so it evaluates {@link #perRangeFanIn} a couple of times, not
      * {@code R} times.
      */
-    EffectiveRanges effectiveRangesForDescriptors(int requested,
-                                                   List<PageRunSegmentDescriptor> segmentDescriptors) {
+    EffectiveRanges effectiveRanges(int requested,
+                                    List<PageRunSegmentDescriptor> segmentDescriptors) {
         int segments = segmentDescriptors.size();
         if (requested <= 1 || segments <= 0) {
             return new EffectiveRanges(Math.max(1, requested), ClampReason.NONE);
@@ -806,11 +712,10 @@ final class ParallelRangeMerge {
         // Too small to be worth splitting: the speedup would be seconds and the cost is a permanent
         // change to the published file count. Checked before anything else, because it is the cheapest
         // test and the most common answer on ordinary runs.
-        if (stagedBytes(PageRunSegmentDescriptor.paths(segmentDescriptors))
-                < config.minParallelStagedBytes()) {
+        if (stagedBytes(segmentDescriptors) < config.minParallelStagedBytes()) {
             return new EffectiveRanges(1, ClampReason.BELOW_STAGED_FLOOR);
         }
-        long perStream = descriptorPerStreamBytes(segmentDescriptors);
+        long perStream = perStreamBytes(segmentDescriptors);
         // Reserve one output writer per candidate range. Additional rolls are not estimated from
         // staging bytes (that is not a valid upper bound); openRangePart enforces the remaining
         // output-writer allowance dynamically. If even one output plus a two-way merge cannot fit,
@@ -850,25 +755,7 @@ final class ParallelRangeMerge {
         return new EffectiveRanges(candidate, reason);
     }
 
-    /** Test/support entry point that performs the same fail-fast descriptor preflight as production. */
-    EffectiveRanges effectiveRanges(int requested, List<Path> stagingSegments) throws IOException {
-        return effectiveRangesForDescriptors(requested,
-                PageRunSegmentDescriptor.readAll(stagingSegments));
-    }
-
-    /**
-     * Per-stream planning price: never less than the configured working-set estimate, and tightened
-     * when a segment trailer reports a larger encoded record. The trailer size is an allocation guard,
-     * not a complete measurement of decoded/overlap heap.
-     */
-    private long perStreamBytes(List<Path> stagingSegments) throws IOException {
-        long pageRun = MergeFanInPlanner.maxPageRunRecordLen(stagingSegments);
-        return pageRun > 0
-                ? Math.max(config.mergePerStreamBytes(), pageRun)
-                : config.mergePerStreamBytes();
-    }
-
-    private long descriptorPerStreamBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
+    private long perStreamBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
         long pageRun = PageRunSegmentDescriptor.maxRecordLen(segmentDescriptors);
         return pageRun > 0
                 ? Math.max(config.mergePerStreamBytes(), pageRun)
@@ -905,6 +792,17 @@ final class ParallelRangeMerge {
         return interrupted;
     }
 
+    /** Cancel, prove worker quiescence, release writers, then sweep owned files. */
+    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir) {
+        futures.forEach(future -> future.cancel(true));
+        boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
+        releaseOpenParts();
+        sweepOwnFiles(stagingDir);
+        if (interruptedWhileJoining) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /**
      * Release the open, unstamped parts of ranges that SUCCEEDED before a sibling failed. Their
      * writers are handed back open by design (the global index is assigned later), so a failure that
@@ -927,19 +825,14 @@ final class ParallelRangeMerge {
 
     /** Best-effort sweep of THIS run's own tmp parts and cascade intermediates on the failure path. */
     private static void sweepOwnFiles(Path stagingDir) {
-        sweep(stagingDir, "prange-*.parquet.tmp");
-        sweep(stagingDir, "merge-r*-*.parquet");
-        sweep(stagingDir, "merge-r*-*" + SortTransform.SEGMENT_SUFFIX);   // page-run cascade intermediates
+        sweep(stagingDir, StagingNames.RANGE_TMP_GLOB);
+        sweep(stagingDir, StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB);
+        sweep(stagingDir, StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB);
     }
 
     private static void sweep(Path stagingDir, String glob) {
-        if (!Files.isDirectory(stagingDir)) {
-            return;
-        }
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(stagingDir, glob)) {
-            for (Path stale : stream) {
-                Files.deleteIfExists(stale);
-            }
+        try {
+            Sweeps.sweep(stagingDir, stale -> { }, glob);
         } catch (IOException e) {
             log.debug("failed to sweep {} in {} after a parallel merge failure", glob, stagingDir, e);
         }

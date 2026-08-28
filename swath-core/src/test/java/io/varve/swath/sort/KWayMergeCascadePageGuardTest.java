@@ -139,7 +139,8 @@ class KWayMergeCascadePageGuardTest {
         assertThat(countKey(out, "m")).as("all three \"m\" rows survive the cascade").isEqualTo(3);
         assertThat(countKey(out, "z")).isEqualTo(1);
         assertThat(duplicatesReported.get())
-                .as("adjacent equals are REPORTED to the hook (never dropped)").isGreaterThan(0);
+                .as("three callbacks in the cascade pass plus five in the final pass")
+                .isEqualTo(8);
         assertGloballySorted(out);
         assertThat(metrics.count("SORT.page_run_min_regression"))
                 .as("neither flush() nor writeIntermediate() may emit a page-min regression").isZero();
@@ -155,7 +156,7 @@ class KWayMergeCascadePageGuardTest {
 
             @Override
             public EntryStream open(Path segment) throws IOException {
-                return new PageRunSegmentReader(segment);
+                return PageRunReads.open(segment);
             }
 
             @Override
@@ -224,7 +225,7 @@ class KWayMergeCascadePageGuardTest {
     private List<ListEntry> sortedOracle(List<Path> files) throws IOException {
         List<ListEntry> all = new ArrayList<>();
         for (Path f : files) {
-            try (PageRunSegmentReader reader = new PageRunSegmentReader(f)) {
+            try (PageRunSegmentReader reader = PageRunReads.open(f)) {
                 while (reader.hasNext()) {
                     all.add(reader.next());
                 }
@@ -244,7 +245,7 @@ class KWayMergeCascadePageGuardTest {
 
     /** True iff the physical segment holds two adjacent pages whose ranges overlap. */
     private boolean hasOverlappingAdjacentPages(Path file) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(file)) {
+        try (PageFrontierReader reader = new PageFrontierReader(file, SortMetrics.NO_OP)) {
             byte[] prevMax = null;
             while (reader.hasPage()) {
                 if (prevMax != null && Arrays.compareUnsigned(reader.minKey(), prevMax) <= 0) {

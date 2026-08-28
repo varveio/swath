@@ -40,7 +40,8 @@ class SortTransformTest {
                 writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d", "f")));
 
         SortTransform transform = transform(SortConfig.fromSystemProperties());
-        SortTransformResult result = transform.transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+        SortTransformResult result = transform.transform(staging, dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
         assertThat(result.totalRows()).isEqualTo(6);
@@ -66,7 +67,8 @@ class SortTransformTest {
 
         List<Long> batches = new ArrayList<>();
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP, batches::add,
+                        FinalPassListener.NO_OP);
 
         assertThat(result.totalRows()).isEqualTo(6);
         assertThat(batches).isNotEmpty();
@@ -107,7 +109,8 @@ class SortTransformTest {
         // final-file-bytes = 1 ⇒ roll after every row: one entry per file.
         SortConfig rolling = SortConfigs.base().withFinalFileBytes(1L);
         SortTransformResult result = transform(rolling)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(6);
         List<String> names = result.finalFiles().stream().map(p -> p.getFileName().toString()).toList();
@@ -131,7 +134,8 @@ class SortTransformTest {
         }
         SortConfig smallFanIn = SortConfigs.base().withFanIn(2);
         SortTransformResult result = transform(smallFanIn)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(keys(result.finalFiles())).containsExactly("a", "b", "c", "d", "e");
         // Staging dir fully reclaimed (originals + cascade intermediates) AND the dir itself removed:
@@ -153,7 +157,8 @@ class SortTransformTest {
             assertThat(staging).allMatch(Files::exists);               // staging NOT yet deleted
             assertThat(Files.exists(dirs.staging)).as("staging dir not yet removed").isTrue();
         };
-        transform(SortConfig.fromSystemProperties()).transform(staging, dirs.output, dirs.staging, listener);
+        transform(SortConfig.fromSystemProperties()).transform(staging, dirs.output, dirs.staging,
+                listener, units -> { }, FinalPassListener.NO_OP);
 
         assertThat(observed[0]).isTrue();
         assertThat(staging).allMatch(p -> !Files.exists(p));           // deleted after the callback
@@ -168,7 +173,8 @@ class SortTransformTest {
         List<Path> staging1 = List.of(
                 writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c")),
                 writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d")));
-        SortTransformResult first = transform.transform(staging1, dirs.output, dirs.staging, PublishListener.NO_OP);
+        SortTransformResult first = transform.transform(staging1, dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
         assertThat(Files.exists(dirs.staging)).as("first publish removed the empty staging dir").isFalse();
 
         // A crash-then-retry re-stages the same segments and re-runs the merge into the same output.
@@ -178,7 +184,8 @@ class SortTransformTest {
         List<Path> staging2 = List.of(
                 writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c")),
                 writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d")));
-        SortTransformResult second = transform.transform(staging2, dirs.output, dirs.staging, PublishListener.NO_OP);
+        SortTransformResult second = transform.transform(staging2, dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
 
         assertThat(keys(second.finalFiles())).containsExactly("a", "b", "c", "d");
         assertThat(second.totalRows()).isEqualTo(first.totalRows());
@@ -194,7 +201,8 @@ class SortTransformTest {
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b")));
 
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(Files.exists(stale)).isFalse();                    // stale tmp removed
         assertThat(keys(result.finalFiles())).containsExactly("a", "b");
@@ -210,7 +218,8 @@ class SortTransformTest {
         Path staleFinal = Files.createFile(dirs.output.resolve("part-00000.parquet"));
 
         assertThatThrownBy(() -> transform(SortConfigs.base())
-                .transform(List.of(unsupported), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .transform(List.of(unsupported), dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("expected .pageseg");
 
@@ -227,7 +236,8 @@ class SortTransformTest {
         Path staleFinal = Files.createFile(dirs.output.resolve("part-00000.parquet"));
 
         assertThatThrownBy(() -> transform(SortConfigs.base())
-                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("file too small to be a page-run segment");
 
@@ -248,7 +258,8 @@ class SortTransformTest {
         Files.write(priorFinal, priorContents);
 
         assertThatThrownBy(() -> transform(SortConfigs.base())
-                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP))
+                .transform(List.of(corrupt), dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("CRC32C mismatch");
 
@@ -284,7 +295,8 @@ class SortTransformTest {
 
         assertThatThrownBy(() -> transform(SortConfigs.base())
                 .transform(List.of(corrupt), dirs.output, dirs.staging,
-                        (parts, rows) -> published.add(parts)))
+                        (parts, rows) -> published.add(parts), units -> { },
+                        FinalPassListener.NO_OP))
                 .isInstanceOf(SegmentCorruptionException.class)
                 .hasMessageContaining("error_class=page_run_body_corruption");
 
@@ -312,7 +324,8 @@ class SortTransformTest {
         assertThat(tinyBudget.effectiveFanIn()).isEqualTo(3);
 
         SortTransformResult result = transform(tinyBudget)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(keys(result.finalFiles()))
                 .containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i", "j");
@@ -334,7 +347,8 @@ class SortTransformTest {
         PublishListener listener = (finalFiles, rows) ->
                 published.addAll(finalFiles.stream().map(FinalPart::path).toList());
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
-                .transform(staging, dirs.output, dirs.staging, listener);
+                .transform(staging, dirs.output, dirs.staging, listener,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(Files.exists(staleFinal)).as("stale final swept before republish").isFalse();
         assertThat(keys(result.finalFiles())).containsExactly("a", "b");
@@ -361,7 +375,8 @@ class SortTransformTest {
                 writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d")));
 
         SortTransformResult result = transform(SortConfig.fromSystemProperties())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(Files.exists(staleIntermediate))
                 .as("m2: stale cascade intermediate swept before the re-merge").isFalse();
@@ -372,23 +387,26 @@ class SortTransformTest {
     }
 
     @Test
-    void liveSortNeverAppliesTheSortFixtureCrossRowTypeDuplicateCheck(@TempDir Path root) throws IOException {
-        // sort-fixture's key-unique-across-row-types policy (CaptureSorter.DuplicateKeyCheckingWriterFactory)
-        // wraps SortedFileWriterFactory OUTSIDE this class; swath --sort (ListRunner) drives this class
-        // with an unwrapped SortedFileWriterFactory (SortedParquetWriterFactory/DEFAULT directly), so a
-        // same-key OBJECT/COMMON_PREFIX pair — adjacent under ListEntryComparator but never
-        // comparator-EQUAL — must publish successfully here, never throwing
-        // CaptureSorter.DuplicateKeyException (§0.5: --sort never drops or rejects user entries).
+    void liveAllowPolicyPreservesEqualRawKeysAcrossARollThreshold(@TempDir Path root)
+            throws IOException {
+        // Live --sort selects ALLOW, so a same-key OBJECT/COMMON_PREFIX pair must publish without
+        // rejection. A one-byte target also proves the shared raw-key comparison still defers the
+        // roll and keeps the group in one file.
         Dirs dirs = dirs(root);
         List<ListEntry> rows = new ArrayList<>(objects("a"));
         rows.add(new CommonPrefixEntry(KeyBytes.ofUtf8("a")));
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", rows));
 
-        SortTransformResult result = transform(SortConfig.fromSystemProperties())
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortTransformResult result = transformWithMetrics(SortConfigs.rolledPerEntry(), metrics)
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.totalRows()).isEqualTo(2);
+        assertThat(result.finalFiles()).hasSize(1);
         assertThat(keys(result.finalFiles())).containsExactly("a", "a");
+        assertThat(metrics.count("SORT.equal_key_rejected")).isZero();
+        assertThat(metrics.count("SORT.final_roll_equal_key_deferred")).isEqualTo(1);
     }
 
     @Test
@@ -407,7 +425,8 @@ class SortTransformTest {
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         transformWithMetrics(tinyBudget, metrics)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(metrics.count("SORT.merge_cascade_predicted")).isEqualTo(1);
     }
@@ -422,7 +441,8 @@ class SortTransformTest {
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         transformWithMetrics(SortConfig.fromSystemProperties(), metrics)
-                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP);
+                .transform(staging, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         assertThat(metrics.count("SORT.merge_cascade_predicted")).isZero();
     }
@@ -445,8 +465,12 @@ class SortTransformTest {
             tmpPathsSeen.add(path);
             return SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
         };
-        SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, spy));
-        SortTransformResult result = transform.transform(staged, output, staging, PublishListener.NO_OP);
+        SortTransform transform = new SortTransform(new SortRun(rolling, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, spy,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+        SortTransformResult result = transform.transform(staged, output, staging, PublishListener.NO_OP,
+                units -> { }, FinalPassListener.NO_OP);
 
         // Every tmp the writer was ever handed lived under staging, never under the data/ output dir.
         assertThat(tmpPathsSeen).isNotEmpty();
@@ -465,11 +489,17 @@ class SortTransformTest {
     // --- helpers ---
 
     private SortTransform transform(SortConfig config) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private SortTransform transformWithMetrics(SortConfig config, SortMetrics metrics) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT));
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private record Dirs(Path output, Path staging) {
@@ -483,7 +513,7 @@ class SortTransformTest {
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
         return SortTestSupport.writePageRun(
-                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
+                dir.resolve(name.replace(".parquet", StagingNames.PAGE_RUN_SUFFIX)), sorted, cmp);
     }
 
     private List<ListEntry> objects(String... keys) {

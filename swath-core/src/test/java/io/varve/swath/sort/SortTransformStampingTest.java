@@ -50,10 +50,14 @@ class SortTransformStampingTest {
         SortConfig config = SortConfig.fromProperties(
                 key -> Map.of("final-row-group-bytes", "4096").get(key.substring("swath.sort.".length())));
         SortedParquetWriterFactory stampedFactory = new SortedParquetWriterFactory(config, SortMode.OBJECTS);
-        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, stampedFactory));
+        SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, stampedFactory,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         SortTransformResult result = transform.transform(
-                List.of(seg0, seg1), output, staging, PublishListener.NO_OP);
+                List.of(seg0, seg1), output, staging, PublishListener.NO_OP,
+                units -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.finalFiles()).hasSize(1);
         Path finalFile = result.finalFiles().get(0);
@@ -69,7 +73,7 @@ class SortTransformStampingTest {
 
     private Path writeSegment(Path dir, String name, List<ListEntry> sorted) throws IOException {
         return SortTestSupport.writePageRun(
-                dir.resolve(name.replace(".parquet", SortTransform.SEGMENT_SUFFIX)), sorted, cmp);
+                dir.resolve(name.replace(".parquet", StagingNames.PAGE_RUN_SUFFIX)), sorted, cmp);
     }
 
     private static ObjectEntry objectEntry(String key) {

@@ -7,7 +7,9 @@ package io.varve.swath.sort;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -90,7 +92,8 @@ final class SortLaneTest {
 
         SortLane lane = new SortLane(zstdConfig, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, NO_OP_METERS,
                 staging, "seg-test", finalized::add);
-        lane.admit(1L, page("a", "a", "c"));   // comparator tie forces safe re-pack at flush
+        lane.admit(1L, List.of(version("k", "v2"), version("k", "v1"),
+                SortTestSupport.object("z")));
         lane.close();
 
         assertThat(finalized).hasSize(1);
@@ -117,10 +120,16 @@ final class SortLaneTest {
         return out;
     }
 
+    private static ListEntry version(String key, String versionId) {
+        return new ObjectEntry(
+                KeyBytes.ofUtf8(key), 1L, 0L, null, null, versionId,
+                false, null, null, null, null);
+    }
+
     private List<String> keys(Path segment) throws IOException {
         // The lane stages page-run (.pageseg) segments; read them back with the page-run reader.
         List<String> out = new ArrayList<>();
-        try (PageRunSegmentReader r = new PageRunSegmentReader(segment)) {
+        try (PageRunSegmentReader r = PageRunReads.open(segment)) {
             while (r.hasNext()) {
                 out.add(r.next().key().asString());
             }

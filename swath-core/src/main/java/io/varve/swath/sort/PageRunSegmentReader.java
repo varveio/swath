@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 
@@ -40,12 +39,9 @@ import java.util.List;
  *       fallback), so the emitted stream is sorted by construction ({@code
  *       SORT.page_run_entry_overlap_keymerge}; 0 on a segment whose pages are range-disjoint).</li>
  * </ul>
- * The inner merger's own {@code page_whole_emitted}/{@code page_overlap_keymerge} counters are
- * re-labelled to the two above so those two keep meaning "the MERGE saw (interleaved) pages across
- * its inputs", undiluted by this route's intra-segment reads — see {@link #relabelled} for the
- * re-labelling itself. The inner merger is given {@link DuplicateHook#NO_OP} because the outer
- * merger fires the hook on the merged output — reporting an adjacent duplicate here too would
- * double-count it.
+ * The inner merger is scoped as {@link MergeScope#INTRA_SEGMENT}, so it emits the two route-specific
+ * counters directly. The outer merge owns duplicate reporting; doing it inside this reader as well
+ * would double-count adjacent equals.
  *
  * <p><b>Intra-segment min-monotonicity guard.</b> Every page advance goes through
  * {@link PageRunSegmentIo#nextPage()}, the single page-advance primitive shared with
@@ -75,46 +71,12 @@ import java.util.List;
  */
 final class PageRunSegmentReader implements EntryStream {
 
-    /** This route's engagement counters (SORT category) — see the class javadoc. */
-    static final String ENTRY_WHOLE_PAGE = "page_run_entry_whole_page";
-    static final String ENTRY_OVERLAP_KEYMERGE = "page_run_entry_overlap_keymerge";
-
     private final PageAwareMerger merger;
     private ListEntry head;
 
     /**
-     * Open {@code path} with no metrics recorder (tests / direct readers): as
-     * {@link #PageRunSegmentReader(Path, Comparator, SortMetrics)} with the
-     * {@link ListEntryComparator} and {@link SortMetrics#NO_OP}.
-     */
-    PageRunSegmentReader(Path path) throws IOException {
-        this(path, SortMetrics.NO_OP);
-    }
-
-    /**
-     * Open {@code path} under the {@link ListEntryComparator}. {@code metrics} carries the
-     * {@code SORT.page_run_min_regression} guard counter and this route's page counters.
-     */
-    PageRunSegmentReader(Path path, SortMetrics metrics) throws IOException {
-        this(path, new ListEntryComparator(), metrics);
-    }
-
-    /**
-     * Open {@code path}, validate the header magic/version and the trailing magic (completeness /
-     * truncation check), then position at the first entry of the segment's sorted run. {@code comparator}
-     * is the order the merge itself uses — the same one that resolves overlapping pages here, so the
-     * run this stream presents and the order the caller merges under can never disagree.
-     */
-    PageRunSegmentReader(Path path, Comparator<ListEntry> comparator, SortMetrics metrics)
-            throws IOException {
-        // The frontier reader carries the RAW metrics (its page advances fire the guard counter
-        // under its own name); only the merger's two page counters are re-labelled to this route's.
-        this(new PageFrontierReader(path, metrics), comparator, metrics);
-    }
-
-    /**
-     * As {@link #PageRunSegmentReader(Path, Comparator, SortMetrics)}, but over a frontier the
-     * caller supplies and this reader then OWNS (closing this closes it). The seam exists for
+     * Present a genuinely sorted entry stream over a frontier the caller supplies and this reader
+     * then owns (closing this closes it). The seam lets
      * {@link ParallelRangeMerge}'s page skip: a {@link RangeScopedPageFrontier} steps over the pages
      * that cannot reach the range without decoding them, and everything below this constructor —
      * the {@link PageAwareMerger}, the disjoint-page fast path, the overlap key-merge, the
@@ -124,8 +86,8 @@ final class PageRunSegmentReader implements EntryStream {
     PageRunSegmentReader(PageFrontierStream frontier, Comparator<ListEntry> comparator,
                          SortMetrics metrics) throws IOException {
         try {
-            this.merger = new PageAwareMerger(List.of(frontier), comparator, DuplicateHook.NO_OP,
-                    relabelled(metrics));
+            this.merger = new PageAwareMerger(
+                    List.of(frontier), comparator, MergeScope.INTRA_SEGMENT, metrics);
         } catch (UncheckedIOException e) {
             throw e.getCause();   // PageAwareMerger's constructor already closed the frontier stream
         }
@@ -177,72 +139,4 @@ final class PageRunSegmentReader implements EntryStream {
         }
     }
 
-    /**
-     * The inner single-segment {@link PageAwareMerger}'s two page counters, re-labelled to this route's
-     * (see the class javadoc): the merge-level {@code page_whole_emitted}/{@code page_overlap_keymerge}
-     * must keep meaning "the MERGE saw (interleaved) pages across its inputs", so an intra-segment page
-     * resolution done inside one input stream is counted under its own reason instead. Anything else the
-     * merger might emit passes through unchanged.
-     *
-     * <p>The re-labelled reasons are passed as STRING LITERALS, not via the {@link #ENTRY_WHOLE_PAGE}
-     * /{@link #ENTRY_OVERLAP_KEYMERGE} constants: {@code scripts/ci/check-instrumentation-drift.sh}
-     * statically reconciles {@code recordStealReason} call sites against the §5 registry table and can
-     * only resolve literals — passing a constant makes the counter a "ghost row" and fails the build.
-     * The constants remain for {@code equals} comparisons and for tests to reference by name.
-     */
-    private static SortMetrics relabelled(SortMetrics metrics) {
-        return (outcome, reason) -> {
-            // "SORT" is a literal, not the forwarded `outcome`, for the same drift-guard reason: both
-            // arguments must be literals for the guard to resolve the counter. PageAwareMerger only ever
-            // emits these two reasons under the SORT outcome, so pinning it here is faithful, not a guess.
-            if (PageAwareMerger.WHOLE_PAGE_EMITTED.equals(reason)) {
-                metrics.recordStealReason("SORT", "page_run_entry_whole_page");
-            } else if (PageAwareMerger.OVERLAP_KEYMERGE.equals(reason)) {
-                metrics.recordStealReason("SORT", "page_run_entry_overlap_keymerge");
-            } else {
-                metrics.recordStealReason(outcome, reason);
-            }
-        };
-    }
-
-    /**
-     * The completeness trailer of a page-run segment: the actual segment key bounds plus the record /
-     * entry counts and the max framed record length. This is the seam {@code SortedFileIndex}
-     * consumes for {@code bounds} ({@code segMinKey}/{@code segMaxKey} are exact keys, no truncated-stats
-     * hazard) and the runtime merge fan-in planner consumes {@code maxRecordLen} as an encoded-record
-     * refinement of its configured per-stream estimate.
-     */
-    record Trailer(byte[] segMinKey, byte[] segMaxKey, long totalRecords, long totalEntries, long maxRecordLen) {
-    }
-
-    /**
-     * Read just the trailer of {@code path} without decoding any record: validate the header and the
-     * trailing magic (fail-fast on a truncated/corrupt segment) via {@link PageRunSegmentIo#open},
-     * then seek straight to {@code trailerStart} to read the key bounds — O(1) regardless of how many
-     * records the segment holds (no per-record length-prefix walk).
-     */
-    static Trailer readTrailer(Path path) throws IOException {
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-            byte[] segMin = readLenPrefixedKey(io, io.trailerStart, fixedTailStart);
-            byte[] segMax = readLenPrefixedKey(io, io.trailerStart + 2 + segMin.length,
-                    fixedTailStart);
-            if (io.totalRecords == 0 && (segMin.length != 0 || segMax.length != 0)) {
-                throw io.fail("empty segment has non-empty trailer bounds");
-            }
-            return new Trailer(segMin, segMax, io.totalRecords, io.totalEntries, io.maxRecordLen);
-        }
-    }
-
-    private static byte[] readLenPrefixedKey(PageRunSegmentIo io, long pos, long limit)
-            throws IOException {
-        if (pos < io.trailerStart || pos > limit - 2) {
-            throw io.fail("trailer key prefix exceeds trailer bounds");
-        }
-        int len = io.readAt(pos, 2).getShort() & 0xFFFF;
-        if (len > limit - pos - 2) {
-            throw io.fail("trailer key exceeds trailer bounds");
-        }
-        return io.readAt(pos + 2, len).array();
-    }
 }

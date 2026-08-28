@@ -16,6 +16,7 @@ import io.varve.swath.replay.server.ServingMode;
 import io.varve.swath.replay.testkit.ObjectEntries;
 import io.varve.swath.replay.testkit.ParquetFixtures;
 import io.varve.swath.sort.CaptureSorter;
+import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.SortConfig;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -50,7 +51,9 @@ class ResIdxCrashFallbackTest {
         Path outputDir = Files.createDirectories(dir.resolve("out"));
 
         assertThatThrownBy(() -> new CaptureSorter(config()).sort(duplicateCapture, outputDir))
-                .isInstanceOf(CaptureSorter.DuplicateKeyException.class);
+                .isInstanceOf(DuplicateKeyException.class)
+                .hasMessage("sort-fixture found a duplicate key "
+                        + "(adjacent-equal under the sort order): 'b'");
 
         // No final file appeared before completeness — the whole point of the tmp-then-rename publish.
         assertThat(finalSortedFiles(outputDir)).isEmpty();

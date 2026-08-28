@@ -19,7 +19,7 @@ final class PageRunCursor implements EntryStream {
 
     private final List<PageBlock> run;
     private int blockIndex;
-    private PageBlock.Cursor current;
+    private PageBlockCursor current;
     private ListEntry head;
 
     PageRunCursor(List<PageBlock> run) {

@@ -19,8 +19,9 @@ import java.util.PriorityQueue;
  * Page-aware k-way merge of N page-run segments into one sorted {@link SortedCursor} —
  * selected for ANY merge group, whether an intermediate cascade pass or the final pass, whenever
  * every input exposes a {@link PageFrontierStream} (page-run staging / cascade intermediates); a
- * mixed or Parquet input keeps the entry-typed {@link StreamingMerger}. Output is byte-identical, entry-for-entry, to the {@link StreamingMerger}
- * on the same input (same sorted order, same {@link DuplicateHook} firing on adjacent equals).
+ * mixed or Parquet input keeps the entry-typed {@link StreamingMerger}. Output is byte-identical,
+ * entry-for-entry, to the {@link StreamingMerger} on the same input. Adjacent duplicate reporting is
+ * applied once around either merger by {@link DuplicateReporting}.
  *
  * <p><b>Decode-free frontier.</b> Each segment is a {@link PageFrontierStream} positioned at its
  * current page, whose {@code [minKey, maxKey]} is known without decoding any row (only the record
@@ -34,7 +35,9 @@ import java.util.PriorityQueue;
  * m}'s own next page</b>. If the smallest {@code minKey} remaining in that heap is strictly greater
  * (unsigned) than {@code m}'s current-page {@code maxKey}, then no page IN THE FRONTIER — cross-segment
  * or {@code m}'s own successor — starts within the current page's range, so the whole page is globally
- * next: it is decoded once and streamed in order, firing {@code SORT.page_whole_emitted}.
+ * next: it is decoded once and streamed in order. {@link MergeScope#CROSS_SEGMENT} emits {@code
+ * SORT.page_whole_emitted}; the intra-segment reader uses the same path and emits
+ * {@code SORT.page_run_entry_whole_page} instead.
  *
  * <p><b>What the strict check does and does not prove.</b> It establishes disjointness only
  * <em>relative to the frontier</em>: it compares {@code pageMax} against each segment's CURRENT page —
@@ -57,7 +60,9 @@ import java.util.PriorityQueue;
  * {@code m}'s own next page) begins at/inside {@code m}'s current-page range — the pages interleave
  * and emitting {@code m}'s page whole could misorder. The merger instead decodes the involved pages
  * and merges their entries by comparator (an entry heap), pulling any frontier page whose range
- * overlaps the active region into the merge as needed, and fires {@code SORT.page_overlap_keymerge}.
+ * overlaps the active region into the merge as needed. {@link MergeScope#CROSS_SEGMENT} emits
+ * {@code SORT.page_overlap_keymerge}; {@link MergeScope#INTRA_SEGMENT} emits {@code
+ * SORT.page_run_entry_overlap_keymerge}.
  * On a well-formed OBJECTS run every page is range-disjoint, so this counter is 0 — a nonzero value is
  * a loud invariant alarm (mis-ordered/overlapping pages), never a silent misorder. Correctness beats
  * the optimization: a page is emitted whole only when strictly {@code maxKey <} every other {@code
@@ -65,32 +70,8 @@ import java.util.PriorityQueue;
  */
 final class PageAwareMerger implements SortedCursor {
 
-    /**
-     * The CANONICAL values of this merger's two engagement counters ({@code SORT} category).
-     *
-     * <p>{@link #plan()} does NOT emit these constants — it passes the same values as inline string
-     * literals, because {@code scripts/ci/check-instrumentation-drift.sh} statically reconciles every
-     * {@code recordStealReason} call site against the §5 registry table and can only resolve literals.
-     * So the literal is the emitter and this is the name others match against; the two are duplicated
-     * BY NECESSITY.
-     *
-     * <p>They exist because {@link PageRunSegmentReader} runs this same merger over a SINGLE segment to
-     * make its entry stream a genuinely sorted run and re-labels these two reasons to its own
-     * route's counters — the cross-segment merge signal and the intra-segment read signal must stay
-     * distinguishable post-hoc (a nonzero {@code page_overlap_keymerge} means the MERGE hit interleaved
-     * pages across its inputs, which is an invariant alarm; expected 0 in production).
-     *
-     * <p>That re-labelling is an {@code equals} match against these constants, so if a literal in
-     * {@code plan()} ever drifts from the constant beside it, the re-label would SILENTLY stop matching
-     * and the counter would break with nothing failing. {@code PageAwareMergerCounterNamesTest} pins the
-     * two together behaviourally — it asserts the reasons this merger actually emits equal these
-     * constants. Change one, change both, or that test goes red.
-     */
-    static final String WHOLE_PAGE_EMITTED = "page_whole_emitted";
-    static final String OVERLAP_KEYMERGE = "page_overlap_keymerge";
-
     private final Comparator<ListEntry> comparator;
-    private final DuplicateHook hook;
+    private final MergeScope scope;
     private final SortMetrics metrics;
     private final List<PageFrontierStream> allStreams;
 
@@ -102,16 +83,15 @@ final class PageAwareMerger implements SortedCursor {
     private byte[] ceiling;
 
     /** A single decoded page being streamed whole (fast path); null otherwise. */
-    private PageBlock.Cursor wholeCursor;
+    private PageBlockCursor wholeCursor;
 
-    private ListEntry previousEmitted;
     private ListEntry pending;
     private boolean closed;
 
     PageAwareMerger(List<PageFrontierStream> streams, Comparator<ListEntry> comparator,
-                    DuplicateHook hook, SortMetrics metrics) {
+                    MergeScope scope, SortMetrics metrics) {
         this.comparator = comparator;
-        this.hook = hook;
+        this.scope = scope;
         this.metrics = metrics;
         this.allStreams = streams;
         this.frontier = new PriorityQueue<>((a, b) -> Arrays.compareUnsigned(a.minKey(), b.minKey()));
@@ -154,7 +134,7 @@ final class PageAwareMerger implements SortedCursor {
                 // (1) Streaming a whole page (fast path)?
                 if (wholeCursor != null) {
                     if (wholeCursor.hasNext()) {
-                        return emit(wholeCursor.next());
+                        return wholeCursor.next();
                     }
                     wholeCursor = null;
                 }
@@ -170,7 +150,7 @@ final class PageAwareMerger implements SortedCursor {
                     if (active.isEmpty()) {
                         ceiling = null;   // event resolved; the next plan() starts a fresh one
                     }
-                    return emit(e);
+                    return e;
                 }
                 // (3) Plan the next page group.
                 if (frontier.isEmpty()) {
@@ -203,10 +183,10 @@ final class PageAwareMerger implements SortedCursor {
                 || Arrays.compareUnsigned(frontier.peek().minKey(), pageMax) > 0;
 
         if (whole) {
-            metrics.recordStealReason("SORT", "page_whole_emitted");   // literal: the CI drift guard resolves only literals
+            recordEngagement(true);
             wholeCursor = page.cursor();
         } else {
-            metrics.recordStealReason("SORT", "page_overlap_keymerge");   // literal: the CI drift guard resolves only literals
+            recordEngagement(false);
             active.add(new DecodedPage(page.cursor()));
             ceiling = pageMax;
         }
@@ -236,12 +216,24 @@ final class PageAwareMerger implements SortedCursor {
         }
     }
 
-    private ListEntry emit(ListEntry e) {
-        if (previousEmitted != null && comparator.compare(previousEmitted, e) == 0) {
-            hook.onDuplicate(previousEmitted, e);
+    /** Emit the scope-specific literal at the point that chooses the page algorithm path. */
+    private void recordEngagement(boolean whole) {
+        switch (scope) {
+            case CROSS_SEGMENT -> {
+                if (whole) {
+                    metrics.recordStealReason("SORT", "page_whole_emitted");
+                } else {
+                    metrics.recordStealReason("SORT", "page_overlap_keymerge");
+                }
+            }
+            case INTRA_SEGMENT -> {
+                if (whole) {
+                    metrics.recordStealReason("SORT", "page_run_entry_whole_page");
+                } else {
+                    metrics.recordStealReason("SORT", "page_run_entry_overlap_keymerge");
+                }
+            }
         }
-        previousEmitted = e;
-        return e;
     }
 
     @Override
@@ -295,10 +287,10 @@ final class PageAwareMerger implements SortedCursor {
 
     /** A decoded page mid-emission in the key-merge fallback: its cursor plus the peeked head entry. */
     private static final class DecodedPage {
-        private final PageBlock.Cursor cursor;
+        private final PageBlockCursor cursor;
         private ListEntry head;
 
-        DecodedPage(PageBlock.Cursor cursor) {
+        DecodedPage(PageBlockCursor cursor) {
             this.cursor = cursor;
             this.head = cursor.hasNext() ? cursor.next() : null;   // a page always has >= 1 entry
         }

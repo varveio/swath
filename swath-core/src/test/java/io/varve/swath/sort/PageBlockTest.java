@@ -35,7 +35,7 @@ class PageBlockTest {
     private static List<ListEntry> roundTrip(List<ListEntry> in) {
         PageBlock block = PageBlock.pack(in, CMP);
         List<ListEntry> out = new ArrayList<>();
-        PageBlock.Cursor c = block.cursor();
+        PageBlockCursor c = block.cursor();
         while (c.hasNext()) {
             out.add(c.next());
         }
@@ -146,9 +146,12 @@ class PageBlockTest {
     }
 
     @Test
-    void orderedUnderFullComparatorIsFalseForAnAdjacentExactDuplicate() {
-        List<ListEntry> in = List.of(object("a"), object("a"));
-        assertThat(PageBlock.pack(in, CMP).orderedUnderFullComparator()).isFalse();
+    void orderedUnderFullComparatorIsTrueForAnAdjacentComparatorTie() {
+        ObjectEntry first = objectWithSize("a", 2L);
+        ObjectEntry second = objectWithSize("a", 1L);
+
+        assertThat(CMP.compare(first, second)).as("precondition: payload is not an ordering field").isZero();
+        assertThat(PageBlock.pack(List.of(first, second), CMP).orderedUnderFullComparator()).isTrue();
     }
 
     // ------------------------------------------------------------------
@@ -324,6 +327,10 @@ class PageBlockTest {
 
     private static ObjectEntry object(String key) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, null, false, null, null, null, null);
+    }
+
+    private static ObjectEntry objectWithSize(String key, long size) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), size, 0L, null, null, null, false, null, null, null, null);
     }
 
     private static int[] toInts(byte[] b) {

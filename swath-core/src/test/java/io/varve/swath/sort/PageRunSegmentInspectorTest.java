@@ -46,8 +46,8 @@ class PageRunSegmentInspectorTest {
         assertThat(dump.magic()).isEqualTo(PageRunSegmentWriter.MAGIC);
         assertThat(dump.formatVersion()).isEqualTo(PageRunSegmentWriter.FORMAT_VERSION);
 
-        // The trailer view equals the canonical readTrailer, and the record count/entry totals agree.
-        PageRunSegmentReader.Trailer canonical = PageRunSegmentReader.readTrailer(path);
+        // The inspector exposes the shared trailer, and the record count/entry totals agree.
+        PageRunTrailer.Trailer canonical = PageRunTrailer.read(path);
         assertThat(dump.trailer().segMinKey()).containsExactly(canonical.segMinKey());
         assertThat(dump.trailer().segMaxKey()).containsExactly(canonical.segMaxKey());
         assertThat(dump.trailer().totalRecords()).isEqualTo(canonical.totalRecords());
@@ -99,7 +99,7 @@ class PageRunSegmentInspectorTest {
 
     private static List<PageFrontierView> frontierWalk(Path path) throws IOException {
         List<PageFrontierView> out = new ArrayList<>();
-        try (PageFrontierReader r = new PageFrontierReader(path)) {
+        try (PageFrontierReader r = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             while (r.hasPage()) {
                 out.add(new PageFrontierView(r.minKey().clone(), r.maxKey().clone(), r.count()));
                 r.advance();

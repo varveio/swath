@@ -60,7 +60,7 @@ class PageBlockSerdeTest {
 
     private static List<ListEntry> decodeAll(PageBlock block) {
         List<ListEntry> out = new ArrayList<>();
-        PageBlock.Cursor c = block.cursor();
+        PageBlockCursor c = block.cursor();
         while (c.hasNext()) {
             out.add(c.next());
         }
@@ -75,7 +75,7 @@ class PageBlockSerdeTest {
     @Test
     void persistedCursorOverreadRemainsAnIteratorProtocolError() {
         PageBlock original = PageBlock.pack(List.of(object("only")), CMP);
-        PageBlock.Cursor cursor = PageBlock.deserialize(original.serialize(), Path.of("only.pageseg"))
+        PageBlockCursor cursor = PageBlock.deserialize(original.serialize(), Path.of("only.pageseg"))
                 .cursor();
 
         assertThat(cursor.next()).isEqualTo(object("only"));
@@ -245,7 +245,7 @@ class PageBlockSerdeTest {
         Path path = dir.resolve("lz4.pgr");
         new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE).flush(sealed, path);
 
-        try (PageFrontierReader reader = new PageFrontierReader(path)) {
+        try (PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             // Header fields (min/max/count) are readable immediately after open()/advance() — before
             // decodeCurrentPage() is ever called, i.e. before any row is decompressed.
             assertThat(reader.hasPage()).isTrue();

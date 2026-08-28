@@ -84,7 +84,7 @@ class PageRunNoLostKeysContractTest {
             for (int s = 0; s < nSegs; s++) {
                 List<ListEntry> entries = new ArrayList<>(bySeg.get(s));
                 // Stable raw-key sort preserves randomized version/row-type order within each key:
-                // raw cursor safety holds, while comparator ties/disorder still force page repair.
+                // raw cursor safety holds, while comparator regressions still force page repair.
                 entries.sort((a, b) -> KeyBytes.compareUnsigned(
                         a.key().rawUnsafe(), b.key().rawUnsafe()));
                 files.add(stage(caseDir, "seg-" + s + ".pageseg", entries, rnd));
@@ -110,8 +110,8 @@ class PageRunNoLostKeysContractTest {
     @Test
     void everyEntryIdenticalUnderTheComparatorStillSurvivesEveryStage(@TempDir Path dir) throws IOException {
         // The degenerate extreme of §0.5: 25 rows that are ALL exactly equal. Every adjacent pair fires the
-        // DuplicateHook; a sorter must still emit 25 rows. (Pages here are adjacent-tie pages, so
-        // PageBlock#orderedUnderFullComparator is false and flush's re-pack path runs on every one.)
+        // DuplicateHook; a sorter must still emit 25 rows. Comparator-equal adjacency is already
+        // non-decreasing, so these pages remain on the no-repack path.
         List<ListEntry> generated = new ArrayList<>();
         for (int i = 0; i < 25; i++) {
             generated.add(object("dup", "v1"));
@@ -159,7 +159,8 @@ class PageRunNoLostKeysContractTest {
             frontiers.add(new PageFrontierReader(f, metrics));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, hook, metrics)) {
+        try (SortedCursor merger = new DuplicateReporting(
+                new PageAwareMerger(frontiers, cmp, MergeScope.CROSS_SEGMENT, metrics), cmp, hook)) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }

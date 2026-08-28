@@ -15,8 +15,9 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,114 +52,41 @@ public final class SortTransform {
 
     private static final Logger log = LoggerFactory.getLogger(SortTransform.class);
 
-    private static final String FINAL_PREFIX = "part-";
-    private static final String FINAL_SUFFIX = ".parquet";
-    private static final String TMP_SUFFIX = ".tmp";
-    /**
-     * The page-run staging/intermediate file extension — distinct from the FINAL output's
-     * {@code .parquet}. Every producer and cascade intermediate stamps this suffix; transform input
-     * is preflighted before any stale-output sweep so an unsupported staging format cannot trigger
-     * destructive re-entry cleanup.
-     */
-    static final String SEGMENT_SUFFIX = ".pageseg";
-
-    // The sort-run inputs, held whole so the quintet threads straight through to ParallelRangeMerge
-    // without re-listing loose positional params; the individual fields below are its hot-path aliases.
+    // The complete run policy threads whole through to ParallelRangeMerge; the individual fields
+    // below are its hot-path aliases.
     private final SortRun run;
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
     private final DuplicateHook hook;
+    private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
-    private final boolean identityVerifiedWideSweep;
-    private final boolean pageFrontierEnabled;
+    private final MergeInputProfile inputProfile;
     // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
-    private final IntSupplier softFdLimitSupplier;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
     private final MergeFanInPlanner fanInPlanner;
 
-    /**
-     * The safe default for every caller without an identity-verified ownership guard over {@code
-     * outputDir} (e.g. {@link CaptureSorter}'s sort-fixture path, and every direct test caller):
-     * {@code identityVerifiedWideSweep=false} — see {@link #cleanStaleFinals} for the sweep-scope
-     * safety proof — and no range-merge timer ({@link RangeMergeTimer#NO_OP}).
-     */
+    /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
-        this(run, false, RangeMergeTimer.NO_OP);
-    }
-
-    /**
-     * The full public constructor.
-     *
-     * <p>{@code identityVerifiedWideSweep}: pass {@code true} only when the caller has already
-     * identity-verified {@code outputDir} as belonging to THIS run before ever reaching this
-     * transform — see {@link #cleanStaleFinals} for the sweep-scope safety proof and which caller
-     * qualifies.
-     *
-     * <p>{@code rangeTimer}: the per-range merge-latency seam ({@code
-     * swath.sort.merge.range.latency}) for the parallel range-merge path. {@code
-     * ListRunner} wires the live {@code RunMetrics}; every other caller (and the serial path) leaves
-     * it {@link RangeMergeTimer#NO_OP}.
-     */
-    public SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer) {
-        this(run, identityVerifiedWideSweep, rangeTimer, MergeFdBudget::softOpenFileLimit, true);
-    }
-
-    /**
-     * As {@link #SortTransform(SortRun, boolean, RangeMergeTimer)}, plus {@code softFdLimitSupplier}:
-     * the process SOFT open-file limit source for the runtime merge-entry fd clamp. Package-private
-     * test seam — production always uses {@link MergeFdBudget#softOpenFileLimit()} (the three-arg
-     * constructor); tests inject a fixed value so the fd clamp engages (or is proven not to)
-     * deterministically, independent of the real ulimit.
-     */
-    SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
-                  IntSupplier softFdLimitSupplier) {
-        this(run, identityVerifiedWideSweep, rangeTimer, softFdLimitSupplier, true);
-    }
-
-    private SortTransform(SortRun run, boolean identityVerifiedWideSweep, RangeMergeTimer rangeTimer,
-                          IntSupplier softFdLimitSupplier, boolean pageFrontierEnabled) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
         this.hook = run.hook();
+        this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
-        this.identityVerifiedWideSweep = identityVerifiedWideSweep;
-        this.pageFrontierEnabled = pageFrontierEnabled;
-        this.rangeTimer = rangeTimer;
-        this.softFdLimitSupplier = softFdLimitSupplier;
-        this.fanInPlanner = new MergeFanInPlanner(config, metrics, softFdLimitSupplier);
-    }
-
-    /**
-     * Build the bounded entry-stream variant for arbitrary pre-existing captures. Their independently
-     * sorted chunks can overlap across many consecutive pages, unlike the mostly range-disjoint live
-     * listing runs the page-frontier fast path exploits. The storage format and cascade framework stay
-     * identical; only frontier/range routing is disabled.
-     */
-    static SortTransform forArbitraryRuns(SortRun run) {
-        return new SortTransform(run, false, RangeMergeTimer.NO_OP,
-                MergeFdBudget::softOpenFileLimit, false);
+        this.inputProfile = run.inputProfile();
+        this.rangeTimer = run.rangeMergeTimer();
+        this.fanInPlanner = new MergeFanInPlanner(config, metrics, run.softFdLimitSupplier());
     }
 
     /**
      * Merge {@code stagingSegments} into the final sorted output under {@code outputDir}, using
      * {@code stagingDir} for cascade intermediates. {@code publishListener} fires after the renames
-     * and before staging deletion (the manifest-last commit point). No merge-progress callback —
-     * see the overload below for the production (§3.2) path.
-     */
-    public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
-                                         PublishListener publishListener) throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, units -> { },
-                FinalPassListener.NO_OP);
-    }
-
-    /**
-     * Same as {@link #transform(List, Path, Path, PublishListener)}, plus {@code progressCallback}
-     * (§3.2): invoked with the row count of each completed batch — {@code swath.progress.units}'
+     * and before staging deletion (the manifest-last commit point). {@code progressCallback} is
+     * invoked with the row count of each completed batch — {@code swath.progress.units}'
      * merge-phase feed, wired by {@code ListRunner} to {@code RunMetrics.recordProgress}. Batched
      * ({@link KWayMerge#PROGRESS_BATCH_ROWS}), not per-row, and threaded through <em>every</em> merge
      * pass, not just the final one: {@link KWayMerge#merge(List, LongConsumer)} advances it as each
@@ -166,18 +94,7 @@ public final class SortTransform {
      * {@link RolledPartWriter#drain} advances it again as the final streaming pass writes rolled output. A
      * cascade's progress total is therefore rows-per-pass, not a single row-count total — intended:
      * progress is a monotonic units-of-work counter, not required to equal total rows for a
-     * multi-pass merge. No final-pass-starting hook — see the overload below.
-     */
-    public SortTransformResult transform(List<Path> stagingSegments, Path outputDir, Path stagingDir,
-                                         PublishListener publishListener, LongConsumer progressCallback)
-            throws IOException {
-        return transform(stagingSegments, outputDir, stagingDir, publishListener, progressCallback,
-                FinalPassListener.NO_OP);
-    }
-
-    /**
-     * Same as {@link #transform(List, Path, Path, PublishListener, LongConsumer)}, plus {@code
-     * onFinalPassStarting} (see {@link FinalPassListener}): run once, right before the merge starts
+     * multi-pass merge. {@code onFinalPassStarting} runs once, right before the merge starts
      * writing the output it will publish. On the serial path every cascade pass is complete by then,
      * so the remaining work is one pass over the staged rows; on the parallel range-merge path it is
      * only when no range has to cascade, which is what the listener's flag carries.
@@ -201,11 +118,21 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         requirePageRunSegments(stagingSegments);
+        boolean parallelKickoff = config.mergeParallelism() > 1
+                && inputProfile.parallelRangesAllowed();
+        ParallelRangeMerge.BoundaryCandidates boundaryCandidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        Optional<Consumer<byte[]>> boundaryKeySink = parallelKickoff
+                ? Optional.of(boundaryCandidates::add)
+                : Optional.empty();
         // Validate and retain every trailer before deleting any disposable working file. Fan-in and
-        // range planning consume these descriptors; an unreadable segment is not an optional memory
-        // refinement and must fail at kickoff while the prior output and working evidence are intact.
+        // range planning consume these descriptors; parallel candidates also stream their embedded
+        // sample keys into one globally bounded set during this same open. An unreadable segment is
+        // not an optional memory refinement and must fail at kickoff while the prior output and
+        // working evidence are intact. Explicit serial and arbitrary-run merges skip extensions.
         List<PageRunSegmentDescriptor> segmentDescriptors =
-                PageRunSegmentDescriptor.readAll(stagingSegments);
+                PageRunSegmentDescriptor.readAll(stagingSegments,
+                        path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), boundaryKeySink);
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
         // below for what each sweep removes and why. Disposable working files are cleared before
         // work; prior published finals remain until their complete replacements are ready.
@@ -223,9 +150,9 @@ public final class SortTransform {
         // Parallel ranges consume the same page-run frontier as the serial path. The default is
         // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
         // path, and the completeness stamp makes multi-file parallel output self-describing.
-        if (config.mergeParallelism() > 1 && pageFrontierEnabled) {
+        if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
-                    publishListener, progressCallback, onFinalPassStarting);
+                    publishListener, progressCallback, onFinalPassStarting, boundaryCandidates);
             if (parallel != null) {
                 return parallel;
             }
@@ -233,10 +160,10 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_frontier_disabled");
         }
 
-        List<Path> intermediates = new ArrayList<>();
         SortedFileWriterFactory outputSequence = finalWriterFactory.forOutputSequence();
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
-        KWayMerge.SegmentIo<Path> io = segmentIo(segmentWriter, stagingDir, intermediates);
+        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
+                "merge-", null, Map.of(), frontier -> { });
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = fanInPlanner.plan(segmentDescriptors);
@@ -257,7 +184,7 @@ public final class SortTransform {
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
                     () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
                             outputSequence),
-                    true, progressCallback, metrics);
+                    true, progressCallback, metrics, equalKeyPolicy, comparator);
         }
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.
@@ -282,7 +209,7 @@ public final class SortTransform {
         for (Path p : stagingSegments) {
             Files.deleteIfExists(p);
         }
-        for (Path p : intermediates) {
+        for (Path p : io.intermediates()) {
             Files.deleteIfExists(p);
         }
         // "Staging dir cleaned on successful publish": remove the now-empty staging dir
@@ -306,10 +233,11 @@ public final class SortTransform {
     private SortTransformResult tryTransformParallel(List<PageRunSegmentDescriptor> segmentDescriptors,
             Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
-            FinalPassListener onFinalPassStarting) throws IOException {
+            FinalPassListener onFinalPassStarting,
+            ParallelRangeMerge.BoundaryCandidates boundaryCandidates) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, rangeTimer, softFdLimitSupplier, segmentDescriptors);
+                new ParallelRangeMerge(run);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
@@ -317,7 +245,7 @@ public final class SortTransform {
         // ParallelRangeMerge#effectiveRanges.
         int requestedRanges = config.mergeParallelism();
         ParallelRangeMerge.EffectiveRanges rangePlan =
-                rangeMerge.effectiveRangesForDescriptors(requestedRanges, segmentDescriptors);
+                rangeMerge.effectiveRanges(requestedRanges, segmentDescriptors);
         int desiredRanges = rangePlan.ranges();
         if (rangePlan.reason() != ParallelRangeMerge.ClampReason.NONE) {
             // WARN, not debug: the operator asked for something the run could not give them. Keep
@@ -349,8 +277,8 @@ public final class SortTransform {
         // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
-        List<byte[]> boundaries = ParallelRangeMerge.boundariesForDescriptors(
-                segmentDescriptors, desiredRanges, metrics);
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                segmentDescriptors, boundaryCandidates, desiredRanges, metrics);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
@@ -372,9 +300,10 @@ public final class SortTransform {
         // cascade; otherwise the parallel merge reports work and no percentage, exactly as the serial
         // cascade does.
         onFinalPassStarting.onFinalPassStarting(
-                stagingSegments.size() <= rangeMerge.perRangeFanIn(boundaries.size() + 1, stagingSegments));
+                segmentDescriptors.size()
+                        <= rangeMerge.perRangeFanIn(boundaries.size() + 1, segmentDescriptors));
         List<ParallelRangeMerge.RangeResult> results =
-                rangeMerge.run(stagingSegments, stagingDir, boundaries, progressCallback);
+                rangeMerge.run(segmentDescriptors, stagingDir, boundaries, progressCallback);
 
         List<Path> tmpsInOrder = new ArrayList<>();
         List<SortedFileWriter> partsInOrder = new ArrayList<>();
@@ -441,7 +370,7 @@ public final class SortTransform {
             cleanStaleFinals(outputDir);
             int filenameIndex = 0;
             for (Path tmp : tmpsInOrder) {
-                String name = finalPartName(filenameIndex++);
+                String name = StagingNames.finalPart(filenameIndex++);
                 Path finalPath = outputDir.resolve(name);
                 atomicRename(tmp, finalPath);
                 finalFiles.add(finalPath);
@@ -485,12 +414,12 @@ public final class SortTransform {
                                           List<Path> tmpFiles, List<SortedFileWriter> finalWriters,
                                           SortedFileWriterFactory outputSequence) throws IOException {
         int filenameIndex = finalFiles.size();
-        String name = finalPartName(filenameIndex);
+        String name = StagingNames.finalPart(filenameIndex);
         Path finalPath = outputDir.resolve(name);
         // Write the tmp OUTSIDE data/ — into the sibling staging dir on the same
         // filesystem — and atomically rename it INTO data/ (see transform()). data/ (outputDir) thus
         // only ever holds finalized *.parquet; a crash never strands a *.tmp inside the pure-parquet dir.
-        Path tmpPath = stagingDir.resolve(name + TMP_SUFFIX);
+        Path tmpPath = stagingDir.resolve(StagingNames.finalTmp(filenameIndex));
         // The public filename follows Spark/Hadoop's zero-based part ordinal. The footer's
         // file_index remains a 1-based position so existing sorted fixtures retain their stamp
         // semantics and replay's completeness check remains backward-compatible.
@@ -499,11 +428,6 @@ public final class SortTransform {
         tmpFiles.add(tmpPath);
         finalWriters.add(writer);
         return writer;
-    }
-
-    /** Spark/Hadoop-style public part name with a dense, zero-based ordinal. */
-    private static String finalPartName(int filenameIndex) {
-        return String.format("%s%05d%s", FINAL_PREFIX, filenameIndex, FINAL_SUFFIX);
     }
 
     private static List<FinalPart> finalParts(List<Path> paths, List<SortedFileWriter> writers) {
@@ -520,50 +444,11 @@ public final class SortTransform {
         return List.copyOf(parts);
     }
 
-    private KWayMerge.SegmentIo<Path> segmentIo(PageRunSegmentWriter segmentWriter, Path stagingDir,
-                                                List<Path> intermediates) {
-        int[] seq = {0};
-        return new KWayMerge.SegmentIo<>() {
-            @Override
-            public EntryStream open(Path segment) throws IOException {
-                // Generic entry-stream fallback retained for KWayMerge's storage seam. Production
-                // page-run groups take the decode-free frontier below.
-                return new PageRunSegmentReader(segment, comparator, metrics);
-            }
-
-            @Override
-            public Path writeIntermediate(SortedCursor sorted) throws IOException {
-                Path dest = stagingDir.resolve("merge-" + (seq[0]++) + SEGMENT_SUFFIX);
-                segmentWriter.writeIntermediate(sorted, dest);
-                intermediates.add(dest);
-                return dest;
-            }
-
-            @Override
-            public void delete(Path segment) throws IOException {
-                Files.deleteIfExists(segment);
-            }
-
-            @Override
-            public boolean supportsPageFrontier(Path segment) {
-                return pageFrontierEnabled;
-            }
-
-            @Override
-            public PageFrontierStream openFrontier(Path segment) throws IOException {
-                // The reader carries the live metrics so an intra-segment minKey REGRESSION
-                // (the merger's one unverified precondition) is counted — SORT.page_run_min_regression —
-                // before it fails the run as segment corruption, instead of misordering silently.
-                return new PageFrontierReader(segment, metrics);
-            }
-        };
-    }
-
     /** Whether {@code segment} has the required page-run staging/intermediate suffix.
      *  Package-private: {@link MergeFanInPlanner} shares this instead of duplicating the
      *  suffix check. */
     static boolean isPageRunSegment(Path segment) {
-        return segment.getFileName().toString().endsWith(SEGMENT_SUFFIX);
+        return segment.getFileName().toString().endsWith(StagingNames.PAGE_RUN_SUFFIX);
     }
 
     /** Reject unsupported staging before cleanup can remove any prior working files. */
@@ -571,7 +456,8 @@ public final class SortTransform {
         for (Path segment : segments) {
             if (!isPageRunSegment(segment)) {
                 throw new IllegalArgumentException(
-                        "unsupported sort staging segment (expected " + SEGMENT_SUFFIX + "): " + segment);
+                        "unsupported sort staging segment (expected " + StagingNames.PAGE_RUN_SUFFIX
+                                + "): " + segment);
             }
         }
     }
@@ -591,7 +477,7 @@ public final class SortTransform {
      * into published {@code data/}.
      */
     private static void cleanStaleTmp(Path dir) throws IOException {
-        sweep(dir, FINAL_PREFIX + "*" + FINAL_SUFFIX + TMP_SUFFIX);
+        Sweeps.sweep(dir, stale -> { }, StagingNames.FINAL_TMP_GLOB);
     }
 
     /**
@@ -605,7 +491,7 @@ public final class SortTransform {
      * violating {@code docs/internals/contracts.md} §6 ("staging dir cleaned on successful publish").
      */
     private static void cleanStalePrangeTmp(Path stagingDir) throws IOException {
-        sweep(stagingDir, "prange-*" + FINAL_SUFFIX + TMP_SUFFIX);
+        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB);
     }
 
     /**
@@ -615,15 +501,15 @@ public final class SortTransform {
      * than the abandoned attempt (a changed roll knob, or a different segment mix after a partial
      * resume) would leave the extras lying around outside the new manifest.
      *
-     * <p><b>Sweep scope</b>, set by {@link #identityVerifiedWideSweep} per caller:
+     * <p><b>Sweep scope</b>, set by {@link SortRun#staleFinalSweep()} per caller:
      * <ul>
-     *   <li>{@code true} — sweeps ALL {@code data/*.parquet}. Safe only because the caller
+     *   <li>{@link StaleFinalSweep#ALL_PARQUET} sweeps all {@code data/*.parquet}. Safe only because the caller
      *       ({@code ListCommand#isPublishedByThisRun}, via {@link Manifest#readIdentity}) has
      *       already refused to treat a foreign dataset's manifest as this run's own before reaching
      *       the merge-pending branch that calls {@link #transform} — so by the time this sweep
      *       runs, {@code outputDir} can only hold this run's own abandoned prior attempt or
      *       nothing.</li>
-     *   <li>{@code false} (default) — sweeps ONLY this transform's own {@code part-*.parquet}
+     *   <li>{@link StaleFinalSweep#OWN_PARTS_ONLY} sweeps only this transform's own {@code part-*.parquet}
      *       naming. {@link CaptureSorter}'s sort-fixture path has no such ownership guard (a
      *       user-supplied {@code --output} dir may hold unrelated {@code *.parquet} this engine
      *       never created), so a wide sweep there would unrecoverably delete foreign content;
@@ -632,8 +518,13 @@ public final class SortTransform {
      * </ul>
      */
     private void cleanStaleFinals(Path outputDir) throws IOException {
-        String glob = identityVerifiedWideSweep ? "*" + FINAL_SUFFIX : FINAL_PREFIX + "*" + FINAL_SUFFIX;
-        sweep(outputDir, stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale), glob);
+        String glob = switch (run.staleFinalSweep()) {
+            case ALL_PARQUET -> StagingNames.ALL_PARQUET_GLOB;
+            case OWN_PARTS_ONLY -> StagingNames.OWN_FINAL_GLOB;
+        };
+        Sweeps.sweep(outputDir,
+                stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale),
+                glob);
     }
 
     /**
@@ -644,28 +535,7 @@ public final class SortTransform {
     private static void cleanStaleMergeIntermediates(Path stagingDir) throws IOException {
         // "merge-*" covers the serial path's own intermediates AND the parallel path's per-range
         // "merge-r<range>-<n>" ones, in both staging formats.
-        sweep(stagingDir, "merge-*" + SEGMENT_SUFFIX, "merge-*" + FINAL_SUFFIX);
-    }
-
-    /** Delete every file matching any of {@code globs} in {@code dir}; a no-op if {@code dir} doesn't
-     *  exist. Shared shape behind every {@code cleanStale*} sweep above. */
-    private static void sweep(Path dir, String... globs) throws IOException {
-        sweep(dir, stale -> { }, globs);
-    }
-
-    /** As {@link #sweep(Path, String...)}, plus a hook run just before each file is deleted (e.g.
-     *  {@link #cleanStaleFinals}'s per-file log line). */
-    private static void sweep(Path dir, Consumer<Path> beforeDelete, String... globs) throws IOException {
-        if (!Files.isDirectory(dir)) {
-            return;
-        }
-        for (String glob : globs) {
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, glob)) {
-                for (Path stale : stream) {
-                    beforeDelete.accept(stale);
-                    Files.deleteIfExists(stale);
-                }
-            }
-        }
+        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.CASCADE_PAGE_RUN_GLOB,
+                StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
     }
 }

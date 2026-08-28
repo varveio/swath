@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ class PageRunSegmentTest {
 
     private static List<ListEntry> readBack(Path path) throws IOException {
         List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = new PageRunSegmentReader(path)) {
+        try (PageRunSegmentReader reader = reader(path, SortMetrics.NO_OP)) {
             while (reader.hasNext()) {
                 out.add(reader.next());
             }
@@ -74,7 +75,7 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writer().flush(sealed, path);
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         // Exact unsigned extrema, not truncated stats (§9.1).
         assertThat(trailer.segMinKey()).containsExactly(bytes("alpha"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("zulu"));
@@ -92,13 +93,13 @@ class PageRunSegmentTest {
         Path path = dir.resolve("nested.pageseg");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.segMinKey()).containsExactly(bytes("a"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("z"));
 
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         List<ListEntry> out = new ArrayList<>();
-        try (PageRunSegmentReader reader = new PageRunSegmentReader(path, metrics)) {
+        try (PageRunSegmentReader reader = reader(path, metrics)) {
             while (reader.hasNext()) {
                 out.add(reader.next());
             }
@@ -106,7 +107,7 @@ class PageRunSegmentTest {
         assertThat(out).containsExactly(object("a"), object("b"), object("c"), object("z"));
         assertThat(metrics.count("SORT.page_run_entry_overlap_keymerge")).isGreaterThan(0);
 
-        PageRunSegmentInspector.TrailerInfo inspected =
+        PageRunTrailer.Trailer inspected =
                 PageRunSegmentInspector.inspect(path).trailer();
         assertThat(inspected.segMinKey()).containsExactly(bytes("a"));
         assertThat(inspected.segMaxKey()).containsExactly(bytes("z"));
@@ -138,7 +139,7 @@ class PageRunSegmentTest {
         byte[] raw = Files.readAllBytes(path);
         Files.write(path, Arrays.copyOf(raw, raw.length / 2));
 
-        assertThatThrownBy(() -> new PageRunSegmentReader(path)).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> reader(path, SortMetrics.NO_OP)).isInstanceOf(IOException.class);
     }
 
     @Test
@@ -182,13 +183,16 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void adjacentComparatorTieWithMonotonicRawKeysCanStillBeRepacked(@TempDir Path dir)
+    void adjacentComparatorTieIsNotRepackedAndRetainsInputOrder(@TempDir Path dir)
             throws IOException {
-        // Exact comparator ties make the ordered bit false, but raw cursor safety still holds.
+        ObjectEntry first = objectWithSize("a", 2L);
+        ObjectEntry second = objectWithSize("a", 1L);
+        assertThat(CMP.compare(first, second)).as("precondition: payload is not an ordering field").isZero();
+
         SortBuffer buffer = new SortBuffer(config, CMP);
-        buffer.admit(1L, List.of(object("a"), object("a"), object("c")));
+        buffer.admit(1L, List.of(first, second, object("c")));
         SealedBuffer sealed = buffer.seal(SealTrigger.DRAIN);
-        assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isFalse();   // precondition
+        assertThat(sealed.pages().get(0).orderedUnderFullComparator()).isTrue();
 
         Path path = dir.resolve("seg.pgr");
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -196,10 +200,8 @@ class PageRunSegmentTest {
                 .flush(sealed, path);
 
         List<ListEntry> out = readBack(path);
-        assertThat(out).containsExactly(object("a"), object("a"), object("c"));
-        assertThat(metrics.count("SORT.buffer_page_repacked"))
-                .as("the real seal-time reorder path is observable once per affected buffer")
-                .isEqualTo(1);
+        assertThat(out).containsExactly(first, second, object("c"));
+        assertThat(metrics.count("SORT.buffer_page_repacked")).isZero();
     }
 
     @Test
@@ -213,6 +215,47 @@ class PageRunSegmentTest {
                 .flush(sealed, dir.resolve("seg.pgr"));
 
         assertThat(metrics.count("SORT.buffer_byte_gated")).isEqualTo(1);
+    }
+
+    @Test
+    void segmentKindsOwnTheirCompletionCounterSemantics(@TempDir Path dir) throws IOException {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PageRunSegmentWriter writer =
+                new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, metrics, PageCodec.NONE);
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a")));
+
+        writer.flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("listing.pageseg"));
+        assertThat(metrics.count("SORT.segment_flushed")).isEqualTo(1);
+
+        try (SortedCursor cascade = new InMemoryCursor(
+                List.of(object("b")), CMP, DuplicateHook.NO_OP)) {
+            writer.writeIntermediate(cascade, dir.resolve("cascade.pageseg"));
+        }
+        assertThat(metrics.count("SORT.segment_flushed"))
+                .as("cascade intermediates retain their existing separate accounting")
+                .isEqualTo(1);
+
+        try (SortedCursor fixture = new InMemoryCursor(
+                List.of(object("c")), CMP, DuplicateHook.NO_OP)) {
+            writer.writeFixtureChunk(fixture, dir.resolve("fixture.pageseg"));
+        }
+        assertThat(metrics.count("SORT.segment_flushed")).isEqualTo(2);
+    }
+
+    @Test
+    void listingFlushStillReportsComparatorEqualPageBoundaryOnce(@TempDir Path dir)
+            throws IOException {
+        AtomicInteger duplicates = new AtomicInteger();
+        SortBuffer buffer = new SortBuffer(config, CMP);
+        buffer.admit(1L, List.of(object("a"), object("b")));
+        buffer.admit(2L, List.of(object("b"), object("c")));
+
+        new PageRunSegmentWriter(CMP, (previous, current) -> duplicates.incrementAndGet(),
+                SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), dir.resolve("boundary-duplicate.pageseg"));
+
+        assertThat(duplicates).hasValue(1);
     }
 
     @Test
@@ -330,11 +373,31 @@ class PageRunSegmentTest {
 
         assertThat(rows).isEqualTo(2500);
         assertThat(readBack(path)).containsExactlyElementsOf(sorted);
-        assertThat(PageRunSegmentReader.readTrailer(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
-        try (PageRunSegmentIo io = PageRunSegmentIo.open(path)) {
-            assertThat(PageRunBoundarySample.read(io).status())
+        assertThat(PageRunTrailer.read(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            assertThat(PageRunBoundarySample.read(
+                    io, PageRunTrailer.read(io), ignored -> { }).status())
                     .isEqualTo(PageRunBoundarySample.Status.ABSENT);
         }
+    }
+
+    @Test
+    void cascadeEncodingIsByteExactToTheIndependentRawFormatFixture(@TempDir Path dir)
+            throws IOException {
+        List<ListEntry> sorted = new ArrayList<>();
+        for (int i = 0; i < 1_001; i++) {
+            sorted.add(object(String.format("k%06d", i)));
+        }
+        Path expected = dir.resolve("expected.pageseg");
+        PageRunRawFixtures.writeRawPageRun(expected,
+                List.of(sorted.subList(0, 1_000), sorted.subList(1_000, 1_001)), CMP);
+
+        Path actual = dir.resolve("actual.pageseg");
+        try (SortedCursor cursor = new InMemoryCursor(sorted, CMP, DuplicateHook.NO_OP)) {
+            writer().writeIntermediate(cursor, actual);
+        }
+
+        assertThat(Files.readAllBytes(actual)).containsExactly(Files.readAllBytes(expected));
     }
 
     @Test
@@ -348,7 +411,7 @@ class PageRunSegmentTest {
 
         assertThat(result.rows()).isEqualTo(0);
         assertThat(readBack(path)).isEmpty();
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.totalRecords()).isEqualTo(0);
         assertThat(trailer.totalEntries()).isEqualTo(0);
     }
@@ -466,7 +529,7 @@ class PageRunSegmentTest {
         Path path = dir.resolve("seg.pgr");
         writer().flush(buffer.seal(SealTrigger.DRAIN), path);
 
-        PageRunSegmentReader.Trailer before = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer before = PageRunTrailer.read(path);
         assertThat(before.totalRecords()).isEqualTo(1);   // precondition: exactly one page / one record
         assertThat(before.totalEntries()).isEqualTo(2);
 
@@ -491,11 +554,15 @@ class PageRunSegmentTest {
     }
 
     private static void driveFrontierToEnd(Path path) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(path)) {
+        try (PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP)) {
             while (reader.hasPage()) {
                 reader.advance();
             }
         }
+    }
+
+    private static PageRunSegmentReader reader(Path path, SortMetrics metrics) throws IOException {
+        return new PageRunSegmentReader(new PageFrontierReader(path, metrics), CMP, metrics);
     }
 
     @Test
@@ -509,7 +576,7 @@ class PageRunSegmentTest {
             writer().writeIntermediate(cursor, path);
         }
 
-        PageRunSegmentReader.Trailer trailer = PageRunSegmentReader.readTrailer(path);
+        PageRunTrailer.Trailer trailer = PageRunTrailer.read(path);
         assertThat(trailer.segMinKey()).containsExactly(bytes("k000000"));
         assertThat(trailer.segMaxKey()).containsExactly(bytes("k002499"));
         assertThat(trailer.totalRecords()).isEqualTo(3);   // 1000 + 1000 + 500
@@ -588,6 +655,11 @@ class PageRunSegmentTest {
 
     private static ObjectEntry version(String key, String versionId) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L, null, null, versionId,
+                false, null, null, null, null);
+    }
+
+    private static ObjectEntry objectWithSize(String key, long size) {
+        return new ObjectEntry(KeyBytes.ofUtf8(key), size, 0L, null, null, null,
                 false, null, null, null, null);
     }
 }

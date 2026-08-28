@@ -43,6 +43,8 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     private final FileChannel channel;
     private final Path path;
+    private final int magic;
+    private final short formatVersion;
     /** Carries the {@code SORT.page_run_min_regression} engagement counter (NO_OP when unwired). */
     private final SortMetrics metrics;
 
@@ -62,24 +64,19 @@ final class PageRunSegmentIo implements AutoCloseable {
     /** Pages read via {@link #nextPage()} so far — the 1-based page number in a violation message. */
     private long pagesRead;
 
-    private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, long maxRecordLen,
-                            long totalRecords, long totalEntries, long trailerStart, long fileSize) {
+    private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
+                            short formatVersion, long maxRecordLen, long totalRecords,
+                            long totalEntries, long trailerStart, long fileSize) {
         this.channel = channel;
         this.path = path;
         this.metrics = metrics;
+        this.magic = magic;
+        this.formatVersion = formatVersion;
         this.maxRecordLen = maxRecordLen;
         this.totalRecords = totalRecords;
         this.totalEntries = totalEntries;
         this.trailerStart = trailerStart;
         this.fileSize = fileSize;
-    }
-
-    /**
-     * Open {@code path} with no metrics recorder (the trailer/inspection readers and tests): as
-     * {@link #open(Path, SortMetrics)} with {@link SortMetrics#NO_OP}.
-     */
-    static PageRunSegmentIo open(Path path) throws IOException {
-        return open(path, SortMetrics.NO_OP);
     }
 
     /**
@@ -141,8 +138,8 @@ final class PageRunSegmentIo implements AutoCloseable {
             }
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
-            return new PageRunSegmentIo(channel, path, metrics, maxRecordLen, totalRecords, totalEntries,
-                    trailerStart, size);
+            return new PageRunSegmentIo(channel, path, metrics, magic, version, maxRecordLen,
+                    totalRecords, totalEntries, trailerStart, size);
         } catch (IOException | RuntimeException e) {
             channel.close();
             throw e;
@@ -268,7 +265,7 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Structurally validate a body and return its frontier fields without decoding rows. */
     static FrontierFields parseFrontierFields(byte[] body) {
-        PageBlock.SerializedFields fields = PageBlock.parseSerializedFields(body);
+        PageBlockCodec.SerializedFields fields = PageBlockCodec.parseSerializedFields(body);
         if (Arrays.compareUnsigned(fields.minKey(), fields.maxKey()) > 0) {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
@@ -333,6 +330,14 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     Path path() {
         return path;
+    }
+
+    int magic() {
+        return magic;
+    }
+
+    short formatVersion() {
+        return formatVersion;
     }
 
     private static IOException failFor(Path path, String message) {

@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.function.LongConsumer;
 
@@ -53,7 +54,8 @@ final class RolledPartWriter {
      * the soft target.
      */
     static long drain(SortedCursor merged, long finalFileBytes, FileFactory fileFactory,
-                      boolean markFinalOnLast, LongConsumer progressCallback, SortMetrics metrics)
+                      boolean markFinalOnLast, LongConsumer progressCallback, SortMetrics metrics,
+                      EqualKeyPolicy equalKeyPolicy, Comparator<ListEntry> comparator)
             throws IOException {
         List<SortedFileWriter> open = new ArrayList<>();
         try {
@@ -61,7 +63,8 @@ final class RolledPartWriter {
             // the LAST writer has anything left to decide (markFinal). `open` therefore holds at most
             // one writer, exactly as before this loop was shared with the parallel path.
             long totalRows =
-                    drainOpen(merged, finalFileBytes, fileFactory, progressCallback, metrics, open, true);
+                    drainOpen(merged, finalFileBytes, fileFactory, progressCallback, metrics,
+                            equalKeyPolicy, comparator, open, true);
             if (markFinalOnLast) {
                 if (open.isEmpty()) {
                     // Empty listing: still publish one valid, self-describing empty sorted file.
@@ -108,13 +111,16 @@ final class RolledPartWriter {
      * waiting to learn its index.
      */
     static long drainOpen(SortedCursor merged, long finalFileBytes, FileFactory fileFactory,
-                          LongConsumer progressCallback, SortMetrics metrics, List<SortedFileWriter> out,
+                          LongConsumer progressCallback, SortMetrics metrics,
+                          EqualKeyPolicy equalKeyPolicy, Comparator<ListEntry> comparator,
+                          List<SortedFileWriter> out,
                           boolean closeRolledAway) throws IOException {
         long totalRows = 0;
         long batchRows = 0;
         try {
             SortedFileWriter writer = null;
             byte[] previousKey = null;
+            ListEntry previousEntry = null;
             boolean deferredForCurrentKey = false;
             while (merged.hasNext()) {
                 MergeCancellation.check();
@@ -122,9 +128,15 @@ final class RolledPartWriter {
                 byte[] entryKey = entry.key().rawUnsafe();
                 boolean rollReady = writer != null && shouldRoll(writer, finalFileBytes);
                 // The equality check can scan a 1 KiB key. Keep it off the ordinary unique-key hot
-                // path until the soft byte target has actually been reached.
-                boolean sameKey = rollReady && previousKey != null
+                // path for ALLOW runs until the soft byte target has actually been reached. REJECT
+                // is the fixture-only integrity policy and must inspect every adjacent pair.
+                boolean sameKey = (equalKeyPolicy == EqualKeyPolicy.REJECT || rollReady)
+                        && previousKey != null
                         && KeyBytes.compareUnsigned(previousKey, entryKey) == 0;
+                if (equalKeyPolicy == EqualKeyPolicy.REJECT && sameKey) {
+                    metrics.recordStealReason("SORT", "equal_key_rejected");
+                    throw DuplicateKeyException.forAdjacentEntries(previousEntry, entry, comparator);
+                }
                 if (rollReady && sameKey) {
                     // A key is the future VERSIONS path's unsplittable atom. Record once for the
                     // whole deferred group, not once per version: a pathological million-version
@@ -151,6 +163,7 @@ final class RolledPartWriter {
                 // KeyBytes treats this hot-path array as immutable. Retain one no-copy reference:
                 // final rolling uses O(1) extra state even for arbitrarily many versions of one key.
                 previousKey = entryKey;
+                previousEntry = entry;
                 totalRows++;
                 // §3.2: batched merge-progress feed (never per-row) — see KWayMerge.PROGRESS_BATCH_ROWS.
                 if (++batchRows >= KWayMerge.PROGRESS_BATCH_ROWS) {

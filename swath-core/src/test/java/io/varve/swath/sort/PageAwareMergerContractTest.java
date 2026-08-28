@@ -391,10 +391,11 @@ class PageAwareMergerContractTest {
     private List<ListEntry> drainPageAware(List<Path> files, SortMetrics metrics) throws IOException {
         List<PageFrontierStream> frontiers = new ArrayList<>();
         for (Path f : files) {
-            frontiers.add(new PageFrontierReader(f));
+            frontiers.add(new PageFrontierReader(f, SortMetrics.NO_OP));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (PageAwareMerger merger = new PageAwareMerger(frontiers, cmp, DuplicateHook.NO_OP, metrics)) {
+        try (PageAwareMerger merger = new PageAwareMerger(
+                frontiers, cmp, MergeScope.CROSS_SEGMENT, metrics)) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }
@@ -407,10 +408,10 @@ class PageAwareMergerContractTest {
     private List<ListEntry> streamingMerge(List<Path> files) throws IOException {
         List<EntryStream> streams = new ArrayList<>();
         for (Path f : files) {
-            streams.add(new PageRunSegmentReader(f));
+            streams.add(PageRunReads.open(f));
         }
         List<ListEntry> out = new ArrayList<>();
-        try (StreamingMerger merger = new StreamingMerger(streams, cmp, DuplicateHook.NO_OP, n -> { })) {
+        try (StreamingMerger merger = new StreamingMerger(streams, cmp, n -> { })) {
             while (merger.hasNext()) {
                 out.add(merger.next());
             }
@@ -423,7 +424,7 @@ class PageAwareMergerContractTest {
     private List<ListEntry> sortedOracle(List<Path> files) throws IOException {
         List<ListEntry> all = new ArrayList<>();
         for (Path f : files) {
-            try (PageRunSegmentReader reader = new PageRunSegmentReader(f)) {
+            try (PageRunSegmentReader reader = PageRunReads.open(f)) {
                 while (reader.hasNext()) {
                     all.add(reader.next());
                 }
@@ -436,7 +437,7 @@ class PageAwareMergerContractTest {
     private long totalRecords(List<Path> files) throws IOException {
         long total = 0;
         for (Path f : files) {
-            total += PageRunSegmentReader.readTrailer(f).totalRecords();
+            total += PageRunTrailer.read(f).totalRecords();
         }
         return total;
     }
@@ -452,7 +453,7 @@ class PageAwareMergerContractTest {
     /** True iff the physical segment holds two adjacent pages whose ranges overlap (minKeys still
      *  monotone, but maxKey(page[i]) >= minKey(page[i+1])) — proves the overlap hazard is actually present. */
     private boolean hasOverlappingAdjacentPages(Path file) throws IOException {
-        try (PageFrontierReader reader = new PageFrontierReader(file)) {
+        try (PageFrontierReader reader = new PageFrontierReader(file, SortMetrics.NO_OP)) {
             byte[] prevMax = null;
             while (reader.hasPage()) {
                 if (prevMax != null && Arrays.compareUnsigned(reader.minKey(), prevMax) <= 0) {
@@ -471,6 +472,14 @@ class PageAwareMergerContractTest {
         @Override
         public void recordStealReason(String outcome, String reason) {
             counts.merge(outcome + "." + reason, 1, Integer::sum);
+        }
+
+        @Override
+        public void markProgress() {
+        }
+
+        @Override
+        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
 
         int count(String key) {

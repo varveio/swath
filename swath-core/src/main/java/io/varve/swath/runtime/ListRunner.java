@@ -54,9 +54,11 @@ import io.varve.swath.output.text.TextWriterPool;
 import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.MergeInputProfile;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
@@ -74,6 +76,7 @@ import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.SortedParquetWriter;
 import io.varve.swath.sort.SortedParquetWriterFactory;
+import io.varve.swath.sort.StaleFinalSweep;
 import io.varve.swath.store.ListPage;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.PageRequest;
@@ -819,7 +822,8 @@ public final class ListRunner {
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
                     merged[0] = sortMergeAndPublish(ctx, outputDir, stagingDir,
                             sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
-                            spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(), false);
+                            spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                            StaleFinalSweep.OWN_PARTS_ONLY);
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
                 })
@@ -868,7 +872,8 @@ public final class ListRunner {
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
             SortTransformResult result = sortMergeAndPublish(ctx, outputDir, stagingDir,
                     segRows, sortConfig, mode, spec.bucket(),
-                    spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(), true);
+                    spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                    StaleFinalSweep.ALL_PARQUET);
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
 
@@ -921,9 +926,10 @@ public final class ListRunner {
      * land at the dataset root.
      */
     /**
-     * @param identityVerifiedWideSweep whether {@link SortTransform}'s WIDE {@code data/*.parquet}
-     *         stale-finals sweep may fire (vs. the NARROW {@code part-*.parquet} sweep). Must be
-     *         {@code true} ONLY from an identity-verified merge-reentry caller (today:
+     * @param staleFinalSweep whether {@link SortTransform}'s wide {@code data/*.parquet}
+     *         stale-finals sweep may fire (vs. the narrow {@code part-*.parquet} sweep).
+     *         {@link StaleFinalSweep#ALL_PARQUET} is valid only from an identity-verified
+     *         merge-reentry caller (today:
      *         {@link #runSortMergeOnly}, reached only after {@code ListCommand#isPublishedByThisRun}
      *         confirms this run owns the dataset) — safe there because a fresh run's {@code data/}
      *         was pre-wiped by {@code clearDatasetForFreshRun} and a resume is identity-gated before
@@ -932,7 +938,7 @@ public final class ListRunner {
      */
     private SortTransformResult sortMergeAndPublish(RunContext ctx, Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, long writebackBytes, boolean identityVerifiedWideSweep)
+            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
             throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the
@@ -955,7 +961,7 @@ public final class ListRunner {
         // just this transform's own naming) is safe ONLY on the identity-verified merge-reentry path
         // (ListCommand#isPublishedByThisRun gates whether runSortMergeOnly is ever reached) — see
         // SortTransform's class javadoc / cleanStaleFinals for the full argument, and the
-        // identityVerifiedWideSweep javadoc above for which caller passes which value. Every OTHER
+        // staleFinalSweep javadoc above for which caller passes which value. Every other
         // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
         // Not a method reference any more: the parallel path reports TWO wall times -- each range's own
@@ -972,8 +978,10 @@ public final class ListRunner {
             }
         };
         SortTransform transform = new SortTransform(
-                new SortRun(config, comparator, DuplicateHook.NO_OP, sortMetrics, writerFactory),
-                identityVerifiedWideSweep, rangeTimer);
+                new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                        sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
+                        rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
+                        staleFinalSweep));
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
         // window (the LISTING phase just quiesced; the watchdog must not count listing-idle time here).

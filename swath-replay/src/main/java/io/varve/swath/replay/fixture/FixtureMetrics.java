@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.varve.swath.sort.SortMetrics;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -21,13 +22,17 @@ import java.util.concurrent.ConcurrentMap;
  * depends on {@code .fixture} (the CLI wires {@link SortFixtureCommand} in), so this package must
  * not depend back on {@code .server} or the two packages would form a cycle.
  */
-public final class FixtureMetrics {
+public final class FixtureMetrics implements SortMetrics {
 
     private final MeterRegistry registry;
     private final Timer sortFixtureBuildLatency;
     private final DistributionSummary sortFixtureOutputBytes;
     private final Timer indexLoadLatency;
     private final DistributionSummary indexEntries;
+    private final Counter sortProgress;
+    private final Counter sortBoundaryEmbeddedEntries;
+    private final Counter sortBoundaryEmbeddedBytes;
+    private final Counter sortBoundaryScanBytes;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
 
     public FixtureMetrics() {
@@ -44,6 +49,13 @@ public final class FixtureMetrics {
         indexLoadLatency = Timer.builder("swath.replay.index.load.latency").tag("source", "derived")
                 .register(registry);
         indexEntries = DistributionSummary.builder("swath.replay.index.entries").register(registry);
+        sortProgress = Counter.builder("swath.replay.sort.progress").register(registry);
+        sortBoundaryEmbeddedEntries = Counter.builder("swath.replay.sort.merge.boundaries.embedded.entries")
+                .register(registry);
+        sortBoundaryEmbeddedBytes = Counter.builder("swath.replay.sort.merge.boundaries.embedded.bytes")
+                .baseUnit("bytes").register(registry);
+        sortBoundaryScanBytes = Counter.builder("swath.replay.sort.merge.boundaries.scan.bytes")
+                .baseUnit("bytes").register(registry);
     }
 
     public MeterRegistry registry() {
@@ -84,15 +96,11 @@ public final class FixtureMetrics {
     }
 
     /**
-     * Registry-backed {@link io.varve.swath.sort.SortMetrics} adapter: {@code sort-fixture} wires
-     * this in via a method reference ({@code metrics::recordStealReason})
-     * instead of {@code SortMetrics.NO_OP}, so the root sort library's fixture-reachable engagement
-     * counters are observable for a real {@code sort-fixture} run; under {@code SortMetrics.NO_OP}
-     * a run's cascade engagement
-     * is invisible to metrics. Mirrors
+     * Registry-backed {@link SortMetrics} adapter for {@code sort-fixture}. Mirrors
      * {@code io.varve.swath.observability.RunMetrics#recordStealReason}'s tagging scheme
      * ({@code swath.replay.sort.steal_reason\{outcome,reason\}}) without depending on that class.
      */
+    @Override
     public void recordStealReason(String outcome, String reason) {
         sortStealReasonCounters.computeIfAbsent(outcome + "." + reason,
                 ignored -> Counter.builder("swath.replay.sort.steal_reason")
@@ -100,6 +108,20 @@ public final class FixtureMetrics {
                         .tag("reason", reason)
                         .register(registry))
                 .increment();
+    }
+
+    /** Records one fixture-sort progress tick. */
+    @Override
+    public void markProgress() {
+        sortProgress.increment();
+    }
+
+    /** Records fixture-sort boundary-selection metadata and fallback scan volume. */
+    @Override
+    public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        sortBoundaryEmbeddedEntries.increment(embeddedEntries);
+        sortBoundaryEmbeddedBytes.increment(embeddedBytes);
+        sortBoundaryScanBytes.increment(scanBytes);
     }
 
     /**

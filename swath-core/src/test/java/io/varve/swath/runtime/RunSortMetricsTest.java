@@ -15,15 +15,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Every hook on {@code SortMetrics} must actually reach {@link RunMetrics}.
  *
- * <p>A regression test for a shipped outage, not a formality. {@code SortMetrics} is a
- * {@code @FunctionalInterface}, and the pipeline used to wire it as
- * {@code metrics::recordStealReason} — a method reference binds ONE method and silently inherits
- * the no-op default for every other. So when {@code markProgress()} arrived, the parallel range
- * merge's two pre-emission scan phases advanced nothing, and the 120 s liveness watchdog halted
- * healthy billion-object listings before the merge wrote its first row.
- *
- * <p>The point is not that a record forwards a call. It is that adding a hook and forgetting to
- * wire it here fails the build, instead of failing in production nineteen minutes into a listing.
+ * <p>The interface makes every hook abstract, and these tests pin the live adapter's forwarding
+ * contract to the actual run-scoped meters.
  */
 class RunSortMetricsTest {
 

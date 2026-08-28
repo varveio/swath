@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.IntSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -73,6 +74,8 @@ class SortTransformFanInClampTest {
 
         assertThat(r.result.cascadedPasses()).isGreaterThan(0);
         assertThat(metrics.count("SORT.merge_pass_cascaded")).isGreaterThan(0);
+        assertThat(metrics.count("SORT.merge_scoped_frontier_validated_trailer")).isZero();
+        assertThat(metrics.count("SORT.merge_scoped_frontier_trailer_reread")).isZero();
         assertThat(r.keys).isSorted();
         assertThat(r.keys).containsExactlyElementsOf(r.expected);
     }
@@ -105,7 +108,8 @@ class SortTransformFanInClampTest {
         bytes[bytes.length - 1] ^= 0x01;
         Files.write(segment, bytes);
 
-        assertThatThrownBy(() -> MergeFanInPlanner.maxPageRunRecordLen(List.of(segment)))
+        assertThatThrownBy(() -> PageRunSegmentDescriptor.readAll(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty()))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");
     }
@@ -134,7 +138,8 @@ class SortTransformFanInClampTest {
         // interferes with the roll behaviour under test.
         SortConfig rolling = SortConfigs.base().withFinalFileBytes(2048L);
         SortTransformResult result = newTransform(rolling, SortMetrics.NO_OP, () -> HEALTHY_FD)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP);
+                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
 
         List<Path> parts = result.finalFiles();
         assertThat(parts.size()).as("small final-file-bytes must roll into multiple parts").isGreaterThan(1);
@@ -181,12 +186,16 @@ class SortTransformFanInClampTest {
         Path staging = Files.createDirectories(root.resolve("prun/_staging"));
         Path output = Files.createDirectories(root.resolve("prun"));
         SortTransformResult result = newTransform(config, metrics, softFdLimit)
-                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP);
+                .transform(stagePageRun(staging, segs), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
         return new Result(result, keys(result.finalFiles()), expected);
     }
 
     private SortTransform newTransform(SortConfig config, SortMetrics metrics, IntSupplier softFdLimit) {
-        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics, SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, softFdLimit);
+        return new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                softFdLimit, StaleFinalSweep.OWN_PARTS_ONLY));
     }
 
     private List<Path> stagePageRun(Path dir, List<List<ListEntry>> segs) throws IOException {

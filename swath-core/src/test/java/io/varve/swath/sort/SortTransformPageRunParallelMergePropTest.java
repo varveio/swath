@@ -26,9 +26,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.IntSupplier;
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
@@ -136,7 +137,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).as("position-for-position equal to serial")
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -154,15 +155,18 @@ class SortTransformPageRunParallelMergePropTest {
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(ranges);
-        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,
-                SortedFileWriterFactory.DEFAULT);
-        ParallelRangeMerge merge = new ParallelRangeMerge(run, RangeMergeTimer.NO_OP);
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(segs, ranges, SortMetrics.NO_OP);
+        SortRun run = sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT);
+        ParallelRangeMerge merge = new ParallelRangeMerge(run);
+        ParallelKickoff kickoff = parallelKickoff(segs);
+        List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                descriptors, kickoff.candidates(), ranges, SortMetrics.NO_OP);
         if (boundaries == null) {
             return null;
         }
         List<ParallelRangeMerge.RangeResult> results =
-                merge.run(segs, staging, boundaries, units -> { });
+                merge.run(descriptors, staging, boundaries, units -> { });
 
         List<Path> parts = new ArrayList<>();
         List<SortedFileWriter> writers = new ArrayList<>();
@@ -182,6 +186,25 @@ class SortTransformPageRunParallelMergePropTest {
         }
         RolledPartWriter.closeInOrder(writers);
         return new CascadeRun(parts, rows, cascaded);
+    }
+
+    private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(candidates::add));
+        return new ParallelKickoff(descriptors, candidates);
+    }
+
+    private static List<PageRunSegmentDescriptor> descriptorTrailers(List<Path> paths)
+            throws IOException {
+        return PageRunSegmentDescriptor.readAll(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+    }
+
+    private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
+                                   ParallelRangeMerge.BoundaryCandidates candidates) {
     }
 
     private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
@@ -221,7 +244,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(rows).isSortedAccordingTo(cmp);
             assertThat(rows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -251,7 +274,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
             assertThat(parallelRows).containsExactlyElementsOf(serialRows);
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -306,7 +329,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).as("position-for-position equal to serial")
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -332,10 +355,8 @@ class SortTransformPageRunParallelMergePropTest {
             // Price an open page-run stream as the planner does: the larger of the configured
             // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
-            long perStream = 0;
-            for (Path seg : stage(probeDir, s.segments())) {
-                perStream = Math.max(perStream, PageRunSegmentReader.readTrailer(seg).maxRecordLen());
-            }
+            long perStream = PageRunSegmentDescriptor.maxRecordLen(
+                    descriptorTrailers(stage(probeDir, s.segments())));
             perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
             long budget = perStream * segmentCount * allowed;
 
@@ -363,7 +384,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
             detachTransformLog(appender);
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -393,7 +414,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(readAll(fellBack.finalFiles()))
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -412,9 +433,10 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig belowConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes + 1);
-            new SortTransform(new SortRun(belowConfig, cmp, DuplicateHook.NO_OP, belowMetrics,
-                    SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, () -> -1)
-                    .transform(belowSegments, belowOut, belowStaging, PublishListener.NO_OP);
+            new SortTransform(sortRun(belowConfig, DuplicateHook.NO_OP, belowMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> -1))
+                    .transform(belowSegments, belowOut, belowStaging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(belowMetrics.count("SORT.merge_range_below_staged_floor")).isEqualTo(1);
             assertThat(belowMetrics.count("SORT.merge_range_unsplittable")).isZero();
@@ -426,9 +448,10 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig exactConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes(exactSegments));
-            new SortTransform(new SortRun(exactConfig, cmp, DuplicateHook.NO_OP, exactMetrics,
-                    SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP, () -> -1)
-                    .transform(exactSegments, exactOut, exactStaging, PublishListener.NO_OP);
+            new SortTransform(sortRun(exactConfig, DuplicateHook.NO_OP, exactMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> -1))
+                    .transform(exactSegments, exactOut, exactStaging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(exactMetrics.count("SORT.merge_range_parallel"))
                     .as("staged bytes equal to the floor take the parallel route")
@@ -441,10 +464,10 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics fdMetrics = new CountingMetrics();
             SortConfig fdConfig = SortConfigs.base().withMergeParallelism(2);
             int exhaustedLimit = MergeFdBudget.FD_HEADROOM + 2;
-            new SortTransform(new SortRun(fdConfig, cmp, DuplicateHook.NO_OP, fdMetrics,
-                    SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
-                    () -> exhaustedLimit)
-                    .transform(fdSegments, fdOut, fdStaging, PublishListener.NO_OP);
+            new SortTransform(sortRun(fdConfig, DuplicateHook.NO_OP, fdMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> exhaustedLimit))
+                    .transform(fdSegments, fdOut, fdStaging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(fdMetrics.count("SORT.merge_range_fd_exhausted")).isEqualTo(1);
             assertThat(fdMetrics.count("SORT.merge_range_unsplittable")).isZero();
@@ -455,10 +478,10 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics limitedMetrics = new CountingMetrics();
             SortConfig limitedConfig = SortConfigs.base().withMergeParallelism(4);
             int limitedFdLimit = MergeFdBudget.FD_HEADROOM + 8;
-            new SortTransform(new SortRun(limitedConfig, cmp, DuplicateHook.NO_OP, limitedMetrics,
-                    SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
-                    () -> limitedFdLimit)
-                    .transform(limitedSegments, limitedOut, limitedStaging, PublishListener.NO_OP);
+            new SortTransform(sortRun(limitedConfig, DuplicateHook.NO_OP, limitedMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> limitedFdLimit))
+                    .transform(limitedSegments, limitedOut, limitedStaging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(limitedMetrics.count("SORT.merge_range_fd_limited")).isEqualTo(1);
             assertThat(limitedMetrics.count("SORT.merge_range_fd_exhausted")).isZero();
@@ -471,7 +494,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(messages).anyMatch(message -> message.contains("reason=fd_limited"));
         } finally {
             detachTransformLog(appender);
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -494,10 +517,10 @@ class SortTransformPageRunParallelMergePropTest {
             // however, and is therefore the constraint that ultimately declines parallel merge.
             int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM + 8;
 
-            new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP, metrics,
-                    SortedFileWriterFactory.DEFAULT), false, RangeMergeTimer.NO_OP,
-                    () -> partiallyLimitedFd)
-                    .transform(segments, output, staging, PublishListener.NO_OP);
+            new SortTransform(sortRun(config, DuplicateHook.NO_OP, metrics,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd))
+                    .transform(segments, output, staging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(metrics.count("SORT.merge_range_would_cascade")).isEqualTo(1);
             assertThat(metrics.count("SORT.merge_range_fd_exhausted")).isZero();
@@ -507,7 +530,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .anyMatch(message -> message.contains("reason=would_cascade"));
         } finally {
             detachTransformLog(appender);
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -528,11 +551,14 @@ class SortTransformPageRunParallelMergePropTest {
             // a third writer/descriptor is opened.
             int softLimit = MergeFdBudget.FD_HEADROOM + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
-                    RangeMergeTimer.NO_OP, () -> softLimit);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
+                            () -> softLimit));
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
-            assertThatThrownBy(() -> merge.run(segments, staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("output-part fd budget exhausted");
             assertThat(writers.opened.get()).isEqualTo(2);
@@ -541,7 +567,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -555,11 +581,12 @@ class SortTransformPageRunParallelMergePropTest {
             Path staging = Files.createDirectories(output.resolve("_staging"));
             List<Path> segments = stage(staging, scenario.segments());
             SortConfig config = SortConfigs.base().withMergeParallelism(1);
-            SortTransform transform = new SortTransform(new SortRun(config, cmp,
-                    DuplicateHook.NO_OP, SortMetrics.NO_OP, writers));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, SortRun.PROCESS_SOFT_FD_LIMIT));
 
             assertThatThrownBy(() -> transform.transform(
-                    segments, output, staging, PublishListener.NO_OP))
+                    segments, output, staging, PublishListener.NO_OP,
+                    units -> { }, FinalPassListener.NO_OP))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("sort merge interrupted")
                     .hasCauseInstanceOf(MergeCancellation.Cancelled.class);
@@ -567,7 +594,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(writers.openNow.get()).as("serial output channel closed on cancellation").isZero();
         } finally {
             Thread.interrupted();
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -583,12 +610,14 @@ class SortTransformPageRunParallelMergePropTest {
                     new TrackingWriterFactory(earlierRangeWriting, new CountDownLatch(1));
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
-                    RangeMergeTimer.NO_OP, () -> -1);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
-                    assertThatThrownBy(() -> merge.run(segments, staging, boundaries, units -> { }))
+                    assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
                             .isInstanceOf(IOException.class)
                             .hasMessageContaining("injected later range failure"));
             assertThat(writers.cooperativelyCancelled.get())
@@ -599,7 +628,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -614,14 +643,16 @@ class SortTransformPageRunParallelMergePropTest {
             TrackingWriterFactory writers = new TrackingWriterFactory(bothWriting);
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers),
-                    RangeMergeTimer.NO_OP, () -> -1);
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(segments, 2, SortMetrics.NO_OP);
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             AtomicBoolean interruptRestored = new AtomicBoolean();
             Thread caller = new Thread(() -> {
                 try {
-                    merge.run(segments, staging, boundaries, units -> { });
+                    merge.run(descriptors, staging, boundaries, units -> { });
                 } catch (Throwable t) {
                     failure.set(t);
                     interruptRestored.set(Thread.currentThread().isInterrupted());
@@ -640,7 +671,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -664,10 +695,12 @@ class SortTransformPageRunParallelMergePropTest {
             Path output = Files.createDirectories(root.resolve("out"));
             Path staging = Files.createDirectories(output.resolve("_staging"));
             List<Path> segs = stage(staging, s.segments());
-            SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS)));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS),
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
             SortTransformResult result =
-                    transform.transform(segs, output, staging, PublishListener.NO_OP);
+                    transform.transform(segs, output, staging, PublishListener.NO_OP,
+                            units -> { }, FinalPassListener.NO_OP);
 
             assertThat(result.finalFiles()).as("ranges rolled into more parts than ranges")
                     .hasSizeGreaterThan(ranges);
@@ -694,7 +727,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(readAll(result.finalFiles())).as("still the exact input, in order")
                     .containsExactlyElementsOf(s.allEntries().stream().sorted(cmp).toList());
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -750,9 +783,6 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelHits.get())
                     .as("parallel duplicate-hook count == serial (no double-count across boundaries)")
                     .isEqualTo(serialHits.get());
-            // Non-vacuity, conditioned on the input: equal counts are only meaningful when there was
-            // something to count. A tiny generated case can legitimately contain no equal-comparing
-            // pair at all, so require a positive baseline exactly when the input has one.
             List<ListEntry> sorted = new ArrayList<>(s.allEntries());
             sorted.sort(cmp);
             long expectedPairs = 0;
@@ -761,14 +791,11 @@ class SortTransformPageRunParallelMergePropTest {
                     expectedPairs++;
                 }
             }
-            if (expectedPairs > 0) {
-                assertThat(serialHits.get())
-                        .as("input holds %d equal-comparing pair(s), so the hook must have fired",
-                                expectedPairs)
-                        .isPositive();
-            }
+            assertThat(serialHits.get())
+                    .as("serial hook count equals every adjacent comparator-equal pair")
+                    .isEqualTo(expectedPairs);
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -799,13 +826,15 @@ class SortTransformPageRunParallelMergePropTest {
             corruptTotalEntries(segs.get(0));
 
             SortConfig config = SortConfigs.base().withMergeParallelism(4);
-            SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
             assertThatThrownBy(() -> transform.transform(segs, Files.createDirectories(
-                    root.resolve("parallel").resolve("data")), staging, PublishListener.NO_OP))
+                    root.resolve("parallel").resolve("data")), staging, PublishListener.NO_OP,
+                    units -> { }, FinalPassListener.NO_OP))
                     .isInstanceOf(IOException.class);
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -871,6 +900,14 @@ class SortTransformPageRunParallelMergePropTest {
         return new Scenario(segments, all);
     }
 
+    private static void deleteTreeBestEffort(Path root) {
+        try {
+            Sweeps.deleteTree(root);
+        } catch (IOException ignored) {
+            // A test failure is more useful than a best-effort temporary-tree cleanup failure.
+        }
+    }
+
     private void assertParallelMatchesSerial(Scenario s, int ranges, long finalFileBytes,
                                              long mergeBudgetBytes) throws IOException {
         Path root = Files.createTempDirectory("prange-pagerun-");
@@ -901,7 +938,7 @@ class SortTransformPageRunParallelMergePropTest {
                 assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i));
             }
         } finally {
-            deleteRecursively(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -921,9 +958,17 @@ class SortTransformPageRunParallelMergePropTest {
                 .withFinalFileBytes(finalFileBytes)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(parallelism);
-        SortTransform transform = new SortTransform(
-                new SortRun(config, cmp, hook, metrics, SortedFileWriterFactory.DEFAULT));
-        return transform.transform(segs, output, staging, PublishListener.NO_OP);
+        SortTransform transform = new SortTransform(sortRun(config, hook, metrics,
+                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT));
+        return transform.transform(segs, output, staging, PublishListener.NO_OP,
+                units -> { }, FinalPassListener.NO_OP);
+    }
+
+    private SortRun sortRun(SortConfig config, DuplicateHook hook, SortMetrics metrics,
+                            SortedFileWriterFactory writerFactory, IntSupplier softFdLimitSupplier) {
+        return new SortRun(config, cmp, hook, EqualKeyPolicy.ALLOW, metrics, writerFactory,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                softFdLimitSupplier, StaleFinalSweep.OWN_PARTS_ONLY);
     }
 
     /** Stage each pre-sorted segment as a page-run {@code .pageseg} file — the LIVE listing format. */
@@ -1012,6 +1057,14 @@ class SortTransformPageRunParallelMergePropTest {
             counts.computeIfAbsent(outcome + "." + reason, k -> new LongAdder()).increment();
         }
 
+        @Override
+        public void markProgress() {
+        }
+
+        @Override
+        public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();
@@ -1040,7 +1093,9 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     private static void assertNoOwnedDebris(Path staging) throws IOException {
-        for (String glob : List.of("prange-*.parquet.tmp", "merge-r*-*.parquet", "merge-r*-*.pageseg")) {
+        for (String glob : List.of(StagingNames.RANGE_TMP_GLOB,
+                StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB,
+                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB)) {
             try (var files = Files.newDirectoryStream(staging, glob)) {
                 assertThat(files.iterator().hasNext()).as("no debris matching %s", glob).isFalse();
             }
@@ -1196,18 +1251,4 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
-    private static void deleteRecursively(Path root) throws IOException {
-        if (!Files.exists(root)) {
-            return;
-        }
-        try (var walk = Files.walk(root)) {
-            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try {
-                    Files.deleteIfExists(p);
-                } catch (IOException ignored) {
-                    // best-effort cleanup of a test temp tree
-                }
-            });
-        }
-    }
 }

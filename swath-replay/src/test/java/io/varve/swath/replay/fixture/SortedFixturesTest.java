@@ -67,6 +67,49 @@ class SortedFixturesTest {
     }
 
     @Test
+    void resolveFilesPreservesAnEmptyDirectoryAsAnEmptyResult(@TempDir Path dir) throws IOException {
+        assertThat(SortedFixtures.resolveFiles(dir)).isEmpty();
+    }
+
+    @Test
+    void sortMetricsHooksRecordReplayPrefixedProgressAndBoundaryMeters() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        FixtureMetrics metrics = new FixtureMetrics(registry);
+
+        metrics.markProgress();
+        metrics.recordBoundaryIo(7, 123, 456);
+
+        assertThat(registry.find("swath.replay.sort.progress").counter().count()).isEqualTo(1.0);
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.entries").counter().count())
+                .isEqualTo(7.0);
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.bytes").counter().count())
+                .isEqualTo(123.0);
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count())
+                .isEqualTo(456.0);
+    }
+
+    @Test
+    void fixtureRunKeepsBoundaryIoMetersAtZeroWhenFrontiersAreDisabled(@TempDir Path dir)
+            throws IOException {
+        Path capture = Files.createDirectories(dir.resolve("capture"));
+        writeUnsortedPart(capture.resolve("part-0.parquet"), "c", "a", "b");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        FixtureMetrics metrics = new FixtureMetrics(registry);
+
+        new CaptureSorter(config().withMergeParallelism(2), metrics)
+                .sort(capture, Files.createDirectories(dir.resolve("out")));
+
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.entries").counter().count())
+                .isZero();
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.bytes").counter().count())
+                .isZero();
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count()).isZero();
+        assertThat(registry.find("swath.replay.sort.steal_reason")
+                .tags("outcome", "SORT", "reason", "merge_range_frontier_disabled")
+                .counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
     void loadIndexAcrossASingleFileIsAscendingAndRecordsMetrics(@TempDir Path dir) throws IOException {
         Path capture = Files.createDirectories(dir.resolve("capture"));
         writeUnsortedPart(capture.resolve("part-0.parquet"), "e", "b", "d", "a", "c");

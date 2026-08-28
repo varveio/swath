@@ -7,16 +7,12 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.zip.CRC32C;
 
 /**
  * Persists a sealed buffer as ONE <b>page-run</b> staging segment: a stream of
@@ -84,8 +80,6 @@ final class PageRunSegmentWriter {
      *  magic (truncation check) — all without scanning records. */
     static final int TRAILER_FIXED_TAIL_BYTES = 8 + 4 + 8 + 4 + 4;
 
-    private static final byte[] EMPTY_KEY = new byte[0];
-
     /** Rows per page when batching an already-sorted {@link SortedCursor} in {@link #writeIntermediate}
      *  (the CASCADE backstop — the multi-pass merge path taken when the runtime-clamped fan-in falls
      *  below the staging-segment count). Matches the S3-pagination page grain. */
@@ -113,19 +107,14 @@ final class PageRunSegmentWriter {
     SegmentResult flush(SealedBuffer buffer, Path path) throws IOException {
         List<PageBlock> pages = buffer.pages();   // already a fresh, mutable, sortable list
 
-        // Re-pack any page that isn't internally ordered under the full comparator. pack() does
-        // NOT reorder — it packs in the given order and sets the ordered-bit — so we must sort first.
-        // Note: a page whose entries are correctly ordered but contain an adjacent TIE (equal under
-        // the comparator) re-packs with orderedUnderFullComparator() still FALSE (pack() treats any
-        // adjacent tie as non-ordered) even though the read-back byte order is fine — so the ordered
-        // bit is not a reliable post-seal "is this page sorted" proxy; the reader's min-monotonicity
-        // guard must derive from actual key comparisons, not this bit.
+        // Re-pack any page with a full-comparator regression. pack() preserves input order and sets
+        // the ordered bit; comparator-equal adjacent entries are already ordered and remain stable.
         boolean repacked = false;
         for (int i = 0; i < pages.size(); i++) {
             PageBlock page = pages.get(i);
             if (!page.orderedUnderFullComparator()) {
                 List<ListEntry> entries = new ArrayList<>(page.count());
-                PageBlock.Cursor c = page.cursor();
+                PageBlockCursor c = page.cursor();
                 byte[] previousRawKey = null;
                 while (c.hasNext()) {
                     ListEntry entry = c.next();
@@ -152,11 +141,22 @@ final class PageRunSegmentWriter {
         }
 
         // Concatenation order: minKey (unsigned) across all node runs.
-        pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKey(), b.firstKey()));
+        pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKeyUnsafe(), b.firstKeyUnsafe()));
 
-        long totalEntries = writePageRun(path, pages);
+        long totalEntries;
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics)) {
+            PageBlock previous = null;
+            for (PageBlock page : pages) {
+                if (previous != null
+                        && comparator.compare(previous.lastEntry(), page.firstEntry()) == 0) {
+                    hook.onDuplicate(previous.lastEntry(), page.firstEntry());
+                }
+                encoder.append(page);
+                previous = page;
+            }
+            totalEntries = encoder.finish(PageRunBoundarySample.select(pages), SegmentKind.LISTING);
+        }
 
-        metrics.recordStealReason("SORT", "segment_flushed");
         if (buffer.trigger() == SealTrigger.BYTE_GATE) {
             metrics.recordStealReason("SORT", "buffer_byte_gated");
         }
@@ -171,141 +171,28 @@ final class PageRunSegmentWriter {
      * selection has already completed, this path omits the unused sample extension. Returns total rows.
      */
     long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
-        return writeSorted(sorted, path);
+        return writeSorted(sorted, path, SegmentKind.CASCADE_INTERMEDIATE);
     }
 
-    private long writeSorted(SortedCursor sorted, Path path) throws IOException {
-        long totalEntries = 0;
-        int totalRecords = 0;
-        int maxRecordLen = 0;
-        byte[] segMin = EMPTY_KEY;
-        byte[] segMax = EMPTY_KEY;
+    /** Write one locally sorted fixture chunk without retaining an unused boundary sample. */
+    long writeFixtureChunk(SortedCursor sorted, Path path) throws IOException {
+        return writeSorted(sorted, path, SegmentKind.FIXTURE_CHUNK);
+    }
 
-        try (FileChannel ch = FileChannel.open(path,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING)) {
-            writeHeader(ch);
+    private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind) throws IOException {
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics)) {
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
                 batch.add(sorted.next());
                 if (batch.size() == INTERMEDIATE_PAGE_ENTRIES) {
-                    PageBlock page = PageBlock.pack(batch, comparator, codec);
-                    if (totalRecords == 0) {
-                        segMin = page.firstKey();
-                    }
-                    segMax = page.lastKey();
-                    maxRecordLen = Math.max(maxRecordLen, writeFrame(ch, page.serialize()));
-                    totalEntries += page.count();
-                    totalRecords++;
+                    encoder.append(PageBlock.pack(batch, comparator, codec));
                     batch.clear();
                 }
             }
             if (!batch.isEmpty()) {
-                PageBlock page = PageBlock.pack(batch, comparator, codec);
-                if (totalRecords == 0) {
-                    segMin = page.firstKey();
-                }
-                segMax = page.lastKey();
-                maxRecordLen = Math.max(maxRecordLen, writeFrame(ch, page.serialize()));
-                totalEntries += page.count();
-                totalRecords++;
+                encoder.append(PageBlock.pack(batch, comparator, codec));
             }
-            long trailerStart = ch.position();
-            writeTrailer(ch, segMin, segMax, null, trailerStart, totalRecords, totalEntries,
-                    maxRecordLen);
-            ch.force(true);
-        }
-        Durability.directory(path.getParent());
-        return totalEntries;
-    }
-
-    /**
-     * Write {@code pages} (already per-page re-sorted, already in minKey concatenation order) as a page-run
-     * segment: header, framed records, trailer, then fsync file + parent dir. Returns total entries.
-     * Applies the {@link DuplicateHook} at page boundaries (adjacent equal {@code prev.lastEntry} /
-     * {@code next.firstEntry}) — see the class-level note on why intra-page dups are not scanned.
-     */
-    private long writePageRun(Path path, List<PageBlock> pages) throws IOException {
-        long totalEntries = 0;
-        int maxRecordLen = 0;
-        PageBlock prev = null;
-        byte[] segMin = EMPTY_KEY;
-        byte[] segMax = EMPTY_KEY;
-        boolean haveBounds = false;
-
-        try (FileChannel ch = FileChannel.open(path,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            writeHeader(ch);
-            for (PageBlock page : pages) {
-                byte[] pageMin = page.firstKey();
-                byte[] pageMax = page.lastKey();
-                if (!haveBounds || Arrays.compareUnsigned(pageMin, segMin) < 0) {
-                    segMin = pageMin;
-                }
-                if (!haveBounds || Arrays.compareUnsigned(pageMax, segMax) > 0) {
-                    segMax = pageMax;
-                }
-                haveBounds = true;
-                if (prev != null && comparator.compare(prev.lastEntry(), page.firstEntry()) == 0) {
-                    hook.onDuplicate(prev.lastEntry(), page.firstEntry());
-                }
-                maxRecordLen = Math.max(maxRecordLen, writeFrame(ch, page.serialize()));
-                totalEntries += page.count();
-                prev = page;
-            }
-            long trailerStart = ch.position();
-            writeTrailer(ch, segMin, segMax, PageRunBoundarySample.select(pages), trailerStart,
-                    pages.size(), totalEntries, maxRecordLen);
-            ch.force(true);
-        }
-        Durability.directory(path.getParent());
-        return totalEntries;
-    }
-
-    private static void writeHeader(FileChannel ch) throws IOException {
-        ByteBuffer h = ByteBuffer.allocate(HEADER_BYTES);
-        h.putInt(MAGIC);
-        h.putShort(FORMAT_VERSION);
-        writeFully(ch, h.flip());
-    }
-
-    /** Frame one record: {@code [len u32][crc32c u32][body]}. Returns the body length. */
-    private static int writeFrame(FileChannel ch, byte[] body) throws IOException {
-        CRC32C crc = new CRC32C();
-        crc.update(body, 0, body.length);
-        ByteBuffer header = ByteBuffer.allocate(8);
-        header.putInt(body.length);
-        header.putInt((int) crc.getValue());
-        writeFully(ch, header.flip());
-        // PageBlock.serialize() already returned the exact body array. Write it directly instead of
-        // allocating and copying a second page-sized [header + body] buffer on every staged page.
-        writeFully(ch, ByteBuffer.wrap(body));
-        return body.length;
-    }
-
-    /** {@code sample == null} emits the legacy extension-free trailer used by cascade intermediates. */
-    private static void writeTrailer(FileChannel ch, byte[] segMin, byte[] segMax, List<byte[]> sample,
-                                     long trailerStart, int totalRecords, long totalEntries,
-                                     int maxRecordLen) throws IOException {
-        ByteBuffer bounds = ByteBuffer.allocate(2 + segMin.length + 2 + segMax.length);
-        bounds.putShort((short) segMin.length).put(segMin);
-        bounds.putShort((short) segMax.length).put(segMax);
-        writeFully(ch, bounds.flip());
-        if (sample != null) {
-            PageRunBoundarySample.write(ch, sample);
-        }
-        ByteBuffer t = ByteBuffer.allocate(TRAILER_FIXED_TAIL_BYTES);
-        t.putLong(trailerStart);
-        t.putInt(totalRecords);
-        t.putLong(totalEntries);
-        t.putInt(maxRecordLen);
-        t.putInt(MAGIC);
-        writeFully(ch, t.flip());
-    }
-
-    private static void writeFully(FileChannel ch, ByteBuffer buf) throws IOException {
-        while (buf.hasRemaining()) {
-            ch.write(buf);
+            return encoder.finish(null, kind);
         }
     }
 }

@@ -28,7 +28,11 @@ import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.EqualKeyPolicy;
+import io.varve.swath.sort.FinalPassListener;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.MergeInputProfile;
+import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentResult;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
@@ -44,6 +48,7 @@ import io.varve.swath.sort.SortTransformResult;
 import io.varve.swath.sort.SortedFileWriter;
 import io.varve.swath.sort.SortedFileWriterFactory;
 import io.varve.swath.sort.SortedParquetWriter;
+import io.varve.swath.sort.StaleFinalSweep;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.ParquetReads;
 import java.io.IOException;
@@ -132,20 +137,29 @@ final class SortMergeReentryContractTest {
         List<Path> segments = buildStagingSegments(keyspace, stagingDir);
         assertThat(segments).as("multiple durable staging segments").hasSizeGreaterThan(1);
 
-        SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS)));
+        SortTransform transform = new SortTransform(new SortRun(singlePass(), cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new SortedParquetWriterFactoryLocal(singlePass(), SortMode.OBJECTS),
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
         // First attempt crashes partway through writing the final file (a real mid-merge kill).
         AtomicBoolean crashArmed = new AtomicBoolean(true);
-        SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100)));
+        SortTransform crashingTransform = new SortTransform(new SortRun(singlePass(), cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new CrashingFactory(singlePass(), SortMode.OBJECTS, crashArmed, 100),
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         assertThatThrownBy(() -> crashingTransform.transform(segments, outputDir, stagingDir,
-                (files, rows) -> { }))
+                (files, rows) -> { }, units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class);
         assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).as("nothing published on crash").isFalse();
 
         // Re-run over the SAME still-durable segments: idempotent, cleans stale tmp, republishes.
         SortTransformResult result = transform.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
-                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
+                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()),
+                units -> { }, FinalPassListener.NO_OP);
 
         Path finalFile = outputDir.resolve("part-00000.parquet");
         assertThat(ParquetReads.keys(finalFile)).containsExactlyElementsOf(sortedStrings(keyspace));
@@ -287,16 +301,26 @@ final class SortMergeReentryContractTest {
         assertThat(segments).as("more than fan-in segments ⇒ a multi-pass cascade").hasSizeGreaterThan(2);
 
         AtomicBoolean armed = new AtomicBoolean(true);
-        SortTransform crashing = new SortTransform(new SortRun(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100)));
-        assertThatThrownBy(() -> crashing.transform(segments, outputDir, stagingDir, (f, r) -> { }))
+        SortTransform crashing = new SortTransform(new SortRun(cascade, cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new CrashingFactory(cascade, SortMode.OBJECTS, armed, 100),
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+        assertThatThrownBy(() -> crashing.transform(segments, outputDir, stagingDir,
+                (f, r) -> { }, units -> { }, FinalPassListener.NO_OP))
                 .isInstanceOf(IOException.class);
 
         // Contract: re-running the merge from the checkpoint's (original) segment list must republish
         // the exact sorted whole — the originals are still on disk (KWayMerge's deletion-policy fix).
-        SortTransform redo = new SortTransform(new SortRun(cascade, cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS)));
+        SortTransform redo = new SortTransform(new SortRun(cascade, cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                new SortedParquetWriterFactoryLocal(cascade, SortMode.OBJECTS),
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
         SortTransformResult result = redo.transform(segments, outputDir, stagingDir,
                 (files, rows) -> writeManifest(outputDir,
-                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()));
+                        files.stream().map(io.varve.swath.sort.FinalPart::path).toList()),
+                units -> { }, FinalPassListener.NO_OP);
         assertThat(ParquetReads.keys(outputDir.resolve("part-00000.parquet")))
                 .containsExactlyElementsOf(sortedStrings(keyspace));
         assertThat(result.totalRows()).isEqualTo(keyspace.size());
