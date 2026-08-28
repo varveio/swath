@@ -77,7 +77,7 @@ import org.junit.jupiter.api.io.TempDir;
 final class RunMetricsOtlpSeriesIdentityTest {
 
     /** Micrometer-side meter count under an OTLP registry — no {@code *.percentile} gauges. */
-    static final int EXPECTED_OTLP_METER_COUNT = 140;
+    static final int EXPECTED_OTLP_METER_COUNT = 143;
 
     /**
      * {@code swath.process.cpu.time} is the ONLY platform-conditional meter: it is a {@code
@@ -136,6 +136,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "COUNTER|swath.sort.merge.boundaries.embedded.bytes|{}",
             "COUNTER|swath.sort.merge.boundaries.embedded.entries|{}",
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
+            "COUNTER|swath.sort.merge.overlap.clusters|{}",
             "COUNTER|swath.sort.merge.passes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
@@ -189,6 +190,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "GAUGE|swath.s3.pool.pending_acquisition|{}",
             "GAUGE|swath.sort.finalize.parallelism|{}",
             "GAUGE|swath.sort.handoff.queue.depth.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.pages.peak|{}",
+            "GAUGE|swath.sort.merge.overlap.rows.peak|{}",
             "GAUGE|swath.sort.off_thread.buffers.peak|{}",
             "GAUGE|swath.sort.staging.bytes.peak|{}",
             "GAUGE|swath.tail_occupancy.avg_in_flight|{pct=10}",

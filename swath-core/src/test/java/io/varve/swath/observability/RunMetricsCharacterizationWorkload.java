@@ -126,6 +126,8 @@ final class RunMetricsCharacterizationWorkload {
         m.recordResumeNodesReopened(2);
         m.recordResumeDurableCursorLag(1);
         m.recordResumeArgsHashRefused();
+        m.recordSortMergeOverlapCluster();
+        m.recordSortMergeOverlapState(3, 12);
         m.recordPivotByteRegion("a5".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));
         m.recordPivotByteRegion("aZ".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));
         m.recordPivotByteRegion("ab".getBytes(StandardCharsets.UTF_8), "a1".getBytes(StandardCharsets.UTF_8));

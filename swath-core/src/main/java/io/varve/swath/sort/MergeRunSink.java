@@ -5,7 +5,13 @@
  */
 package io.varve.swath.sort;
 
-/** Receives one raw merger's source-run classification when it closes. */
+/**
+ * Receives one raw merger's source-run classification when it closes.
+ *
+ * <p>This reports actual emitted source runs, not a proof of disjoint key ranges. Comparator-equal
+ * rows may remain contiguous from one source under either merger's existing heap tie behavior; the
+ * sink never changes that ordering merely to make classifications match.
+ */
 @FunctionalInterface
 interface MergeRunSink {
 

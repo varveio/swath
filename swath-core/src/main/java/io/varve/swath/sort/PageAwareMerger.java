@@ -267,7 +267,9 @@ final class PageAwareMerger implements SortedCursor {
     /** Track source runs with an int comparison only; no row key comparison or allocation is added. */
     private void recordSource(int source) {
         if (source != previousSource) {
-            sourceRunCounts[source]++;
+            if (sourceRunCounts[source] < 2) {
+                sourceRunCounts[source]++;
+            }
             previousSource = source;
         }
     }

@@ -145,7 +145,10 @@ final class StreamingMerger implements SortedCursor {
             if (src != currentStream) {
                 // A new run starts for src (the sorted-merge invariant makes this exact — see the
                 // class javadoc's disjoint-copyable classification).
-                runCounts[streamIndex.get(src)]++;
+                int source = streamIndex.get(src);
+                if (runCounts[source] < 2) {
+                    runCounts[source]++;
+                }
             }
             currentStream = src;
             return src.next();
