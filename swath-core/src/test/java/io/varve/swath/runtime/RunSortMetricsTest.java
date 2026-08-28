@@ -10,6 +10,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.varve.swath.observability.RunMetrics;
+import io.varve.swath.sort.SortMetrics;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -18,6 +21,16 @@ import org.junit.jupiter.api.Test;
  * <p>These tests pin the live adapter's forwarding contract to the actual run-scoped meters.
  */
 class RunSortMetricsTest {
+
+    @Test
+    void rangeAndProofIoHooksRemainRequiredAdapterMethods() throws NoSuchMethodException {
+        Method rangeFramed = SortMetrics.class.getMethod("recordRangeFramedBytes", long.class);
+        Method proofSpool = SortMetrics.class.getMethod("recordProofSpool",
+                long.class, long.class, long.class, long.class, long.class, long.class);
+
+        assertTrue(Modifier.isAbstract(rangeFramed.getModifiers()));
+        assertTrue(Modifier.isAbstract(proofSpool.getModifiers()));
+    }
 
     @Test
     void markProgressReachesTheLivenessSignalTheWatchdogReads() {

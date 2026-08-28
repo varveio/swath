@@ -744,6 +744,16 @@ class PageRunBoundarySampleTest {
         }
 
         @Override
+        public void recordRangeFramedBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes, long preallocationOperations,
+                long preallocationAttemptedBytes, long mappedOperations, long mappedBytes,
+                long serviceNanos) {
+        }
+
+        @Override
         public void markProgress() {
             progress.increment();
         }

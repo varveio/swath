@@ -217,6 +217,16 @@ class MergeBoundaryPolicyTest {
             public void recordRangeIndexBytes(long bytes) {
                 clock.addAndGet(17);
             }
+
+            @Override
+            public void recordRangeFramedBytes(long bytes) {
+            }
+
+            @Override
+            public void recordProofSpool(long logicalExtentBytes, long preallocationOperations,
+                    long preallocationAttemptedBytes, long mappedOperations, long mappedBytes,
+                    long serviceNanos) {
+            }
         };
         CapturingRangeTimer timer = new CapturingRangeTimer();
         SortConfig config = SortConfigs.base()

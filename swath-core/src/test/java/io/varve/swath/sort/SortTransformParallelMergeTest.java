@@ -286,6 +286,10 @@ class SortTransformParallelMergeTest {
         }
 
         @Override
+        public void recordRangeFramedBytes(long bytes) {
+        }
+
+        @Override
         public void recordProofSpool(long logicalExtentBytes,
                                      long preallocationOperations,
                                      long preallocationAttemptedBytes,

@@ -1398,6 +1398,12 @@ class SortTransformPageRunParallelMergePropTest {
             rangeFramedBytes.add(bytes);
         }
 
+        @Override
+        public void recordProofSpool(long logicalExtentBytes, long preallocationOperations,
+                long preallocationAttemptedBytes, long mappedOperations, long mappedBytes,
+                long serviceNanos) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();

@@ -44,6 +44,19 @@ public interface SortMetrics {
         @Override
         public void recordRangeIndexBytes(long bytes) {
         }
+
+        @Override
+        public void recordRangeFramedBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes,
+                                     long preallocationOperations,
+                                     long preallocationAttemptedBytes,
+                                     long mappedOperations,
+                                     long mappedBytes,
+                                     long serviceNanos) {
+        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -78,7 +91,7 @@ public interface SortMetrics {
     void recordRangeIndexBytes(long bytes);
 
     /** Record logical page-frame bytes read by parallel range workers, including cascades. */
-    default void recordRangeFramedBytes(long bytes) { }
+    void recordRangeFramedBytes(long bytes);
 
     /**
      * Record one aggregate delta of bounded proof-spool work.
@@ -91,14 +104,11 @@ public interface SortMetrics {
      * @param mappedOperations exact mapped field/key reads and updates
      * @param mappedBytes exact bytes covered by those mapped reads and updates
      * @param serviceNanos sum of operation service times; concurrent worker times intentionally add
-     *
-     * <p>The default keeps existing embedders source-compatible; the live and fixture adapters
-     * override it so production paths never silently discard this I/O.
      */
-    default void recordProofSpool(long logicalExtentBytes,
-                                  long preallocationOperations,
-                                  long preallocationAttemptedBytes,
-                                  long mappedOperations,
-                                  long mappedBytes,
-                                  long serviceNanos) { }
+    void recordProofSpool(long logicalExtentBytes,
+                          long preallocationOperations,
+                          long preallocationAttemptedBytes,
+                          long mappedOperations,
+                          long mappedBytes,
+                          long serviceNanos);
 }
