@@ -122,8 +122,11 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "COUNTER|swath.sort.merge.boundaries.scan.bytes|{}",
             "COUNTER|swath.sort.merge.overlap.clusters|{}",
             "COUNTER|swath.sort.merge.passes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.bytes|{}",
-            "COUNTER|swath.sort.merge.proof_spool.operations|{}",
+            "COUNTER|swath.sort.merge.proof_spool.logical_extent.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.mapped.operations|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.attempted.bytes|{}",
+            "COUNTER|swath.sort.merge.proof_spool.preallocation.operations|{}",
             "COUNTER|swath.sort.merge.range.index.bytes|{}",
             "COUNTER|swath.sort.segment.bytes|{}",
             "COUNTER|swath.sort.segments.written|{}",
@@ -375,9 +378,12 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.sort.merge.latency{}=1",
             "swath.sort.merge.overlap.clusters{}=1",
             "swath.sort.merge.passes{}=3",
-            "swath.sort.merge.proof_spool.bytes{}=992",
             "swath.sort.merge.proof_spool.latency{}=1",
-            "swath.sort.merge.proof_spool.operations{}=13",
+            "swath.sort.merge.proof_spool.logical_extent.bytes{}=6212",
+            "swath.sort.merge.proof_spool.mapped.bytes{}=992",
+            "swath.sort.merge.proof_spool.mapped.operations{}=13",
+            "swath.sort.merge.proof_spool.preallocation.attempted.bytes{}=6212",
+            "swath.sort.merge.proof_spool.preallocation.operations{}=2",
             "swath.sort.merge.range.index.bytes{}=0",
             "swath.sort.merge.range.latency{}=1",
             "swath.sort.page_runs_per_buffer{}=1",
@@ -414,7 +420,7 @@ final class RunMetricsSimpleRegistrySeriesIdentityTest {
             "swath.throttle.events{type=slowdown}=1");
 
     /** Size of {@link #EXPECTED_METER_IDS} — see the class javadoc for why it differs under OTLP. */
-    private static final int EXPECTED_SIMPLE_METER_COUNT = 216;
+    private static final int EXPECTED_SIMPLE_METER_COUNT = 219;
 
     /**
      * A valid production run emits exactly ONE {@code swath.api.calls} series, because {@code

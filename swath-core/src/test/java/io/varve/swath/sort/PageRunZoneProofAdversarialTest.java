@@ -274,7 +274,8 @@ class PageRunZoneProofAdversarialTest {
     }
 
     @Test
-    void proofSpoolFixedSlotOperationsScaleWithSegmentsAndRangesNotPages(@TempDir Path root)
+    void proofSpoolSeparatesFixedExtentAndPreallocationFromPageScaledMappedAccess(
+            @TempDir Path root)
             throws IOException {
         int segments = 2;
         int ranges = 4;
@@ -283,14 +284,19 @@ class PageRunZoneProofAdversarialTest {
         SortTestSupport.CountingMetrics large = proofWorkload(
                 root.resolve("large"), segments, ranges, 256);
         long slots = (long) segments * ranges;
-        long expectedOperations = 2 * slots + 5; // writer/reader lifecycle + one delete
-        long expectedBytes = 3 * slots * PageRunProofSpool.slotBytes();
+        long expectedExtent = slots * PageRunProofSpool.slotBytes();
 
-        assertThat(small.proofSpoolOperations.sum()).isEqualTo(expectedOperations);
-        assertThat(large.proofSpoolOperations.sum()).isEqualTo(expectedOperations);
-        assertThat(small.proofSpoolBytes.sum()).isEqualTo(expectedBytes);
-        assertThat(large.proofSpoolBytes.sum()).isEqualTo(expectedBytes);
-        assertThat(large.proofSpoolNanos.sum()).isPositive();
+        assertThat(small.proofSpoolLogicalExtentBytes.sum()).isEqualTo(expectedExtent);
+        assertThat(large.proofSpoolLogicalExtentBytes.sum()).isEqualTo(expectedExtent);
+        assertThat(small.proofSpoolPreallocationOperations.sum()).isEqualTo(2);
+        assertThat(large.proofSpoolPreallocationOperations.sum()).isEqualTo(2);
+        assertThat(small.proofSpoolPreallocationAttemptedBytes.sum()).isEqualTo(expectedExtent);
+        assertThat(large.proofSpoolPreallocationAttemptedBytes.sum()).isEqualTo(expectedExtent);
+        assertThat(small.proofSpoolMappedOperations.sum()).isEqualTo(172);
+        assertThat(small.proofSpoolMappedBytes.sum()).isEqualTo(2_556);
+        assertThat(large.proofSpoolMappedOperations.sum()).isEqualTo(3_148);
+        assertThat(large.proofSpoolMappedBytes.sum()).isEqualTo(35_292);
+        assertThat(large.proofSpoolServiceNanos.sum()).isPositive();
     }
 
     @Test

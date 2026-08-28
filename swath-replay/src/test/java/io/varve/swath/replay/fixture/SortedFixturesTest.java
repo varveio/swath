@@ -79,7 +79,7 @@ class SortedFixturesTest {
         metrics.markProgress();
         metrics.recordBoundaryIo(7, 123, 456);
         metrics.recordRangeIndexBytes(789);
-        metrics.recordProofSpool(5, 6_212, 3_000_000);
+        metrics.recordProofSpool(6_212, 2, 6_212, 5, 321, 3_000_000);
 
         assertThat(registry.find("swath.replay.sort.progress").counter().count()).isEqualTo(1.0);
         assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.entries").counter().count())
@@ -90,10 +90,17 @@ class SortedFixturesTest {
                 .isEqualTo(456.0);
         assertThat(registry.find("swath.replay.sort.merge.range.index.bytes").counter().count())
                 .isEqualTo(789.0);
-        assertThat(registry.find("swath.replay.sort.merge.proof_spool.operations").counter().count())
-                .isEqualTo(5.0);
-        assertThat(registry.find("swath.replay.sort.merge.proof_spool.bytes").counter().count())
+        assertThat(registry.find("swath.replay.sort.merge.proof_spool.logical_extent.bytes")
+                .counter().count())
                 .isEqualTo(6_212.0);
+        assertThat(registry.find("swath.replay.sort.merge.proof_spool.preallocation.operations")
+                .counter().count()).isEqualTo(2.0);
+        assertThat(registry.find("swath.replay.sort.merge.proof_spool.preallocation.attempted.bytes")
+                .counter().count()).isEqualTo(6_212.0);
+        assertThat(registry.find("swath.replay.sort.merge.proof_spool.mapped.operations")
+                .counter().count()).isEqualTo(5.0);
+        assertThat(registry.find("swath.replay.sort.merge.proof_spool.mapped.bytes")
+                .counter().count()).isEqualTo(321.0);
         assertThat(registry.find("swath.replay.sort.merge.proof_spool.latency").timer()
                 .totalTime(java.util.concurrent.TimeUnit.MILLISECONDS)).isEqualTo(3.0);
     }

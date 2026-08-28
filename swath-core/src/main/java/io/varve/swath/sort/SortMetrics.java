@@ -78,13 +78,24 @@ public interface SortMetrics {
     void recordRangeIndexBytes(long bytes);
 
     /**
-     * Record bounded proof-spool work. {@code operations} counts complete fixed-slot lifecycle or
-     * transfer operations, {@code bytes} counts backing-space materialization and fixed-slot bytes
-     * transferred, and {@code nanos} is the service time of the same work (including
-     * write-combining into the mapped slot).
+     * Record one aggregate delta of bounded proof-spool work.
+     *
+     * @param logicalExtentBytes fixed-slot address space requested, not bytes transferred
+     * @param preallocationOperations physical write/force attempts made while materializing backing
+     *        space
+     * @param preallocationAttemptedBytes bytes submitted to physical preallocation writes, including
+     *        a failed attempt
+     * @param mappedOperations exact mapped field/key reads and updates
+     * @param mappedBytes exact bytes covered by those mapped reads and updates
+     * @param serviceNanos sum of operation service times; concurrent worker times intentionally add
      *
      * <p>The default keeps existing embedders source-compatible; the live and fixture adapters
      * override it so production paths never silently discard this I/O.
      */
-    default void recordProofSpool(long operations, long bytes, long nanos) { }
+    default void recordProofSpool(long logicalExtentBytes,
+                                  long preallocationOperations,
+                                  long preallocationAttemptedBytes,
+                                  long mappedOperations,
+                                  long mappedBytes,
+                                  long serviceNanos) { }
 }

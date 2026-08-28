@@ -806,10 +806,17 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
         sortNode.put("merge_range_index_bytes",
                 (long) counterCount("swath.sort.merge.range.index.bytes"));
-        sortNode.put("merge_proof_spool_operations",
-                (long) counterCount("swath.sort.merge.proof_spool.operations"));
-        sortNode.put("merge_proof_spool_bytes",
-                (long) counterCount("swath.sort.merge.proof_spool.bytes"));
+        sortNode.put("merge_proof_spool_logical_extent_bytes",
+                (long) counterCount("swath.sort.merge.proof_spool.logical_extent.bytes"));
+        sortNode.put("merge_proof_spool_preallocation_operations",
+                (long) counterCount("swath.sort.merge.proof_spool.preallocation.operations"));
+        sortNode.put("merge_proof_spool_preallocation_attempted_bytes",
+                (long) counterCount(
+                        "swath.sort.merge.proof_spool.preallocation.attempted.bytes"));
+        sortNode.put("merge_proof_spool_mapped_operations",
+                (long) counterCount("swath.sort.merge.proof_spool.mapped.operations"));
+        sortNode.put("merge_proof_spool_mapped_bytes",
+                (long) counterCount("swath.sort.merge.proof_spool.mapped.bytes"));
         sortNode.put("merge_proof_spool_ms",
                 timerTotalMs("swath.sort.merge.proof_spool.latency"));
         // Concurrent range timers overlap; their maximum, not their sum, is the parallel range

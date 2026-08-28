@@ -244,9 +244,13 @@ final class SortTestSupport {
     static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
         final LongAdder rangeIndexBytes = new LongAdder();
-        final LongAdder proofSpoolOperations = new LongAdder();
-        final LongAdder proofSpoolBytes = new LongAdder();
-        final LongAdder proofSpoolNanos = new LongAdder();
+        final LongAdder progress = new LongAdder();
+        final LongAdder proofSpoolLogicalExtentBytes = new LongAdder();
+        final LongAdder proofSpoolPreallocationOperations = new LongAdder();
+        final LongAdder proofSpoolPreallocationAttemptedBytes = new LongAdder();
+        final LongAdder proofSpoolMappedOperations = new LongAdder();
+        final LongAdder proofSpoolMappedBytes = new LongAdder();
+        final LongAdder proofSpoolServiceNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -255,6 +259,7 @@ final class SortTestSupport {
 
         @Override
         public void markProgress() {
+            progress.increment();
         }
 
         @Override
@@ -275,10 +280,18 @@ final class SortTestSupport {
         }
 
         @Override
-        public void recordProofSpool(long operations, long bytes, long nanos) {
-            proofSpoolOperations.add(operations);
-            proofSpoolBytes.add(bytes);
-            proofSpoolNanos.add(nanos);
+        public void recordProofSpool(long logicalExtentBytes,
+                                     long preallocationOperations,
+                                     long preallocationAttemptedBytes,
+                                     long mappedOperations,
+                                     long mappedBytes,
+                                     long serviceNanos) {
+            proofSpoolLogicalExtentBytes.add(logicalExtentBytes);
+            proofSpoolPreallocationOperations.add(preallocationOperations);
+            proofSpoolPreallocationAttemptedBytes.add(preallocationAttemptedBytes);
+            proofSpoolMappedOperations.add(mappedOperations);
+            proofSpoolMappedBytes.add(mappedBytes);
+            proofSpoolServiceNanos.add(serviceNanos);
         }
 
         int count(String key) {

@@ -108,17 +108,27 @@ already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` whe
 index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
 its worker-local `index_bytes_read` (planning is coordinator-local and therefore not charged to a
 range).
-Proof-spool work is no longer an unmetered exclusion:
-`merge_proof_spool_operations` / `swath.sort.merge.proof_spool.operations` counts the create/map,
-one fixed-slot commit per segment/range, close/unmap, read map, one fixed-slot read per
-segment/range, close/unmap, and delete (a successful `S`-segment, `R`-range proof is therefore
-`2*S*R + 5`). `merge_proof_spool_bytes` counts the sequential backing-space materialization plus
-the complete fixed-slot bytes covered by commit/read operations (`3*S*R*slotBytes`), and
-`merge_proof_spool_ms` is their complete service time, including the write-combined mapped-memory
-updates folded into the writer close sample. The
-fleet-level `sort_merge_range_parallel` log and merge benchmark report the same three totals plus
-`proof_spool_fds=1`, matching the descriptor reserved explicitly by the FD clamp and output-writer
-guard. They are all zero on serial paths that never create a spool.
+Proof-spool work is no longer an unmetered exclusion. The live meter prefix is
+`swath.sort.merge.proof_spool` and the JSON/log/benchmark fields use the matching
+`merge_proof_spool_` / `proof_spool_` prefix:
+
+- `logical_extent.bytes` is requested fixed-slot address space (`S*R*slotBytes`), not transferred
+  bytes, resident memory, or a memory-neutral claim.
+- `preallocation.operations` counts every physical write attempt plus the final force;
+  `preallocation.attempted.bytes` counts bytes submitted, including a failed attempt. Cancellation
+  is polled and progress marked at each at-most-64-KiB chunk.
+- `mapped.operations` / `mapped.bytes` count every fixed-field/key mapped update and read, including
+  RangeBuilder source-switch flush/reload. These correctly scale with pages/source switches, not
+  merely topology. The `S=2,R=4` characterization records 172 operations / 2,556 bytes at 8 pages
+  per segment and 3,148 / 35,292 at 256 pages, while extent and preallocation stay fixed.
+- `latency` / `merge_proof_spool_ms` sums service time across all the above work plus lifecycle
+  open/map/unmap/close/delete. Concurrent range-worker service times intentionally add; this is not
+  a wall-clock span and can exceed elapsed merge time.
+
+Counters are accumulated locally and published as deltas after worker quiescence/close, avoiding a
+Micrometer call per mapped access. Failed allocation publishes attempted work before unwinding and
+emits `SORT.proof_spool_allocation_failed`. The fleet log also reports `proof_spool_fds=1`, matching
+the descriptor reserved by the FD guard. All fields are zero on serial paths that create no spool.
 
 **`seed`** (optional): `SeedStep`'s already-computed shape for a fresh run that actually
 seeded (`mode` is `none`/`shallow`/`hints`; `probes`/`cut_points`/`synthesized_cuts`/`ranges` are
@@ -1036,6 +1046,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_range_index_absent` | one range/segment frontier had no valid type-2 seek index (absent, type 1, unknown, or structurally invalid) and retained the header start | |
 | `SORT` | `page_run_index_mismatch` | a CRC-valid type-2 seek/sample claim disagreed with the physical page-run body or zone chain. The merge fails with `error_class=page_run_index_mismatch`; no output is published | |
 | `SORT` | `merge_zone_proof_complete` | emitted once after the coordinator receives exactly one summary per range and proves every original segment's physical zones tile header-to-trailer, all type-2 samples match, totals/bounds match the trailer, and minima do not regress. Absent on serial/arbitrary merges | |
+| `SORT` | `proof_spool_allocation_failed` | proof-spool backing allocation or writable mapping failed after the requested extent and any attempted physical work were recorded. Fires once before cleanup; the checked failure reaches the terminal summary as `error_class=proof_spool_allocation_failed`. A cooperative cancellation during preallocation stays cancellation and does not fire it | |
 | `SORT` | `merge_range_below_staged_floor` | the staged input was smaller than `swath.sort.min-parallel-staged-bytes` (256 MiB by default), so the fixed boundary-sampling and output-part cost was not worth paying and the run stayed on the untouched serial merge. Fires once per declined run, before boundary sampling; the companion WARN carries `reason=below_staged_floor` | |
 | `SORT` | `merge_range_fd_limited` | after applying all constraints, the FD-derived bound was binding and the final effective count remained above 1, so the run still proceeds through the parallel range merge. FD wins an exact partial heap/FD tie (`byFd <= byBudget`). Fires once per such FD-clamped run; the companion WARN carries `reason=fd_limited` plus requested/effective counts. This is the partial-FD-clamp signal, not descriptor exhaustion | |
 | `SORT` | `merge_range_fd_exhausted` | after applying all constraints, the FD bound alone forced the final effective range count to 1, so the parallel path was not viable and the run stayed serial. Fires once per such declined run; the companion WARN carries `reason=fd_exhausted` plus requested/effective counts. The remedy is a higher fd limit or lower requested `R`, not more heap | |
@@ -1268,7 +1279,7 @@ legacy-transform path and the sorted-serving index derive/sanity-check path:
 | `swath.replay.sort.progress` | counter | Fixture-sort forward-progress ticks, including work that does not emit a final row. |
 | `swath.replay.sort.merge.boundaries.embedded.entries` / `.embedded.bytes` / `.scan.bytes` | counter | Complete `SortMetrics` adapter counters for boundary-selection embedded sample entries/bytes and fallback page-scan bytes. They are structurally zero for the current `sort-fixture` path because `ARBITRARY_SORTED_RUNS` disables range boundaries; the counters remain registered so the adapter stays complete and future-safe. |
 | `swath.replay.sort.merge.range.index.bytes` | counter | Exact type-2 page-index metadata bytes read after boundary selection for seek planning and physical proof. It is structurally zero for the current `sort-fixture` path because arbitrary fixture runs do not enter indexed range planning, but remains registered as part of the complete `SortMetrics` adapter. |
-| `swath.replay.sort.merge.proof_spool.operations` / `.bytes` / `.latency` | counters / timer | Fixture-prefixed mirror of the live proof-spool scope. The `sort_fixture` result line publishes the same totals as `proof_spool_operations`, `proof_spool_bytes`, and `proof_spool_ms`; all are structurally zero while arbitrary fixture runs remain on the serial frontier. |
+| `swath.replay.sort.merge.proof_spool.logical_extent.bytes` / `.preallocation.operations` / `.preallocation.attempted.bytes` / `.mapped.operations` / `.mapped.bytes` / `.latency` | counters / timer | Fixture-prefixed mirror of the live proof-spool scopes. The `sort_fixture` result line publishes matching fields; all are structurally zero while arbitrary fixture runs remain on the serial frontier. |
 | `swath.replay.sort.merge.overlap.clusters` / `.overlap.pages.peak` / `.overlap.rows.peak` | counter / gauges | Complete replay `SortMetrics` overlap registry: the cluster count and bounded active decoded-page/row peaks observed by the shared page-aware merger. |
 | `swath.replay.index.load.latency{source=derived}` | timer | Time to derive the in-memory row-group routing index (the `source` tag anticipates a future `footer` value once an embedded routing blob lets the server skip deriving). |
 | `swath.replay.index.entries` | distribution | Row-group index entries produced by one derive pass. |

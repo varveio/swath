@@ -34,8 +34,11 @@ public final class FixtureMetrics implements SortMetrics {
     private final Counter sortBoundaryEmbeddedBytes;
     private final Counter sortBoundaryScanBytes;
     private final Counter sortRangeIndexBytes;
-    private final Counter sortProofSpoolOperations;
-    private final Counter sortProofSpoolBytes;
+    private final Counter sortProofSpoolLogicalExtentBytes;
+    private final Counter sortProofSpoolPreallocationOperations;
+    private final Counter sortProofSpoolPreallocationAttemptedBytes;
+    private final Counter sortProofSpoolMappedOperations;
+    private final Counter sortProofSpoolMappedBytes;
     private final Timer sortProofSpoolLatency;
     private final Counter sortOverlapClusters;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
@@ -67,10 +70,21 @@ public final class FixtureMetrics implements SortMetrics {
                 .baseUnit("bytes").register(registry);
         sortRangeIndexBytes = Counter.builder("swath.replay.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
-        sortProofSpoolOperations =
-                Counter.builder("swath.replay.sort.merge.proof_spool.operations").register(registry);
-        sortProofSpoolBytes = Counter.builder("swath.replay.sort.merge.proof_spool.bytes")
+        sortProofSpoolLogicalExtentBytes =
+                Counter.builder("swath.replay.sort.merge.proof_spool.logical_extent.bytes")
                 .baseUnit("bytes").register(registry);
+        sortProofSpoolPreallocationOperations =
+                Counter.builder("swath.replay.sort.merge.proof_spool.preallocation.operations")
+                        .register(registry);
+        sortProofSpoolPreallocationAttemptedBytes =
+                Counter.builder("swath.replay.sort.merge.proof_spool.preallocation.attempted.bytes")
+                        .baseUnit("bytes").register(registry);
+        sortProofSpoolMappedOperations =
+                Counter.builder("swath.replay.sort.merge.proof_spool.mapped.operations")
+                        .register(registry);
+        sortProofSpoolMappedBytes =
+                Counter.builder("swath.replay.sort.merge.proof_spool.mapped.bytes")
+                        .baseUnit("bytes").register(registry);
         sortProofSpoolLatency =
                 Timer.builder("swath.replay.sort.merge.proof_spool.latency").register(registry);
         sortOverlapClusters = Counter.builder("swath.replay.sort.merge.overlap.clusters").register(registry);
@@ -163,10 +177,20 @@ public final class FixtureMetrics implements SortMetrics {
     }
 
     @Override
-    public void recordProofSpool(long operations, long bytes, long nanos) {
-        sortProofSpoolOperations.increment(Math.max(0L, operations));
-        sortProofSpoolBytes.increment(Math.max(0L, bytes));
-        sortProofSpoolLatency.record(Math.max(0L, nanos), java.util.concurrent.TimeUnit.NANOSECONDS);
+    public void recordProofSpool(long logicalExtentBytes,
+                                 long preallocationOperations,
+                                 long preallocationAttemptedBytes,
+                                 long mappedOperations,
+                                 long mappedBytes,
+                                 long serviceNanos) {
+        sortProofSpoolLogicalExtentBytes.increment(Math.max(0L, logicalExtentBytes));
+        sortProofSpoolPreallocationOperations.increment(Math.max(0L, preallocationOperations));
+        sortProofSpoolPreallocationAttemptedBytes.increment(
+                Math.max(0L, preallocationAttemptedBytes));
+        sortProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
+        sortProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
+        sortProofSpoolLatency.record(
+                Math.max(0L, serviceNanos), java.util.concurrent.TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -181,12 +205,24 @@ public final class FixtureMetrics implements SortMetrics {
         return counter == null ? 0 : (long) counter.count();
     }
 
-    public long proofSpoolOperations() {
-        return (long) sortProofSpoolOperations.count();
+    public long proofSpoolLogicalExtentBytes() {
+        return (long) sortProofSpoolLogicalExtentBytes.count();
     }
 
-    public long proofSpoolBytes() {
-        return (long) sortProofSpoolBytes.count();
+    public long proofSpoolPreallocationOperations() {
+        return (long) sortProofSpoolPreallocationOperations.count();
+    }
+
+    public long proofSpoolPreallocationAttemptedBytes() {
+        return (long) sortProofSpoolPreallocationAttemptedBytes.count();
+    }
+
+    public long proofSpoolMappedOperations() {
+        return (long) sortProofSpoolMappedOperations.count();
+    }
+
+    public long proofSpoolMappedBytes() {
+        return (long) sortProofSpoolMappedBytes.count();
     }
 
     public long proofSpoolMillis() {

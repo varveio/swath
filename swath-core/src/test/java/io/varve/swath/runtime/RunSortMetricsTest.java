@@ -82,12 +82,20 @@ class RunSortMetricsTest {
     void proofSpoolOperationsBytesAndTimeReach() {
         var registry = new SimpleMeterRegistry();
 
-        new RunSortMetrics(new RunMetrics(registry)).recordProofSpool(7, 1_234, 5_000_000);
+        new RunSortMetrics(new RunMetrics(registry)).recordProofSpool(
+                6_212, 2, 6_212, 7, 1_234, 5_000_000);
 
-        assertEquals(7.0,
-                registry.get("swath.sort.merge.proof_spool.operations").counter().count());
-        assertEquals(1_234.0,
-                registry.get("swath.sort.merge.proof_spool.bytes").counter().count());
+        assertEquals(6_212.0, registry.get("swath.sort.merge.proof_spool.logical_extent.bytes")
+                .counter().count());
+        assertEquals(2.0, registry.get("swath.sort.merge.proof_spool.preallocation.operations")
+                .counter().count());
+        assertEquals(6_212.0,
+                registry.get("swath.sort.merge.proof_spool.preallocation.attempted.bytes")
+                        .counter().count());
+        assertEquals(7.0, registry.get("swath.sort.merge.proof_spool.mapped.operations")
+                .counter().count());
+        assertEquals(1_234.0, registry.get("swath.sort.merge.proof_spool.mapped.bytes")
+                .counter().count());
         assertEquals(5.0, registry.get("swath.sort.merge.proof_spool.latency")
                 .timer().totalTime(java.util.concurrent.TimeUnit.MILLISECONDS));
     }

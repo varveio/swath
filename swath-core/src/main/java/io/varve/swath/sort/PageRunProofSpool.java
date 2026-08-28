@@ -50,32 +50,94 @@ final class PageRunProofSpool {
                    byte[] firstSamplePrefix, byte[] firstSamplePageMax) {
     }
 
-    record Snapshot(long operations, long bytes, long nanos) {
+    record Snapshot(long logicalExtentBytes,
+                    long preallocationOperations,
+                    long preallocationAttemptedBytes,
+                    long mappedOperations,
+                    long mappedBytes,
+                    long serviceNanos) {
     }
 
     /** One merge-local aggregate shared by the writer, verifier reader, and delete step. */
     static final class Stats {
         private final SortMetrics metrics;
-        private final LongAdder operations = new LongAdder();
-        private final LongAdder bytes = new LongAdder();
-        private final LongAdder nanos = new LongAdder();
+        private final LongAdder logicalExtentBytes = new LongAdder();
+        private final LongAdder preallocationOperations = new LongAdder();
+        private final LongAdder preallocationAttemptedBytes = new LongAdder();
+        private final LongAdder mappedOperations = new LongAdder();
+        private final LongAdder mappedBytes = new LongAdder();
+        private final LongAdder serviceNanos = new LongAdder();
+        private final AtomicBoolean allocationFailureRecorded = new AtomicBoolean();
+        private long publishedLogicalExtentBytes;
+        private long publishedPreallocationOperations;
+        private long publishedPreallocationAttemptedBytes;
+        private long publishedMappedOperations;
+        private long publishedMappedBytes;
+        private long publishedServiceNanos;
 
         Stats(SortMetrics metrics) {
             this.metrics = metrics;
         }
 
-        void record(long operationCount, long transferredBytes, long serviceNanos) {
-            long safeOperations = Math.max(0L, operationCount);
-            long safeBytes = Math.max(0L, transferredBytes);
-            long safeNanos = Math.max(0L, serviceNanos);
-            operations.add(safeOperations);
-            bytes.add(safeBytes);
-            nanos.add(safeNanos);
-            metrics.recordProofSpool(safeOperations, safeBytes, safeNanos);
+        void recordLogicalExtent(long bytes) {
+            logicalExtentBytes.add(Math.max(0L, bytes));
+        }
+
+        void recordPreallocation(long operations, long attemptedBytes, long nanos) {
+            preallocationOperations.add(Math.max(0L, operations));
+            preallocationAttemptedBytes.add(Math.max(0L, attemptedBytes));
+            serviceNanos.add(Math.max(0L, nanos));
+        }
+
+        void recordMapped(long operations, long bytes, long nanos) {
+            mappedOperations.add(Math.max(0L, operations));
+            mappedBytes.add(Math.max(0L, bytes));
+            serviceNanos.add(Math.max(0L, nanos));
+        }
+
+        void recordService(long nanos) {
+            serviceNanos.add(Math.max(0L, nanos));
+        }
+
+        void markProgress() {
+            metrics.markProgress();
+        }
+
+        void recordAllocationFailure() {
+            if (allocationFailureRecorded.compareAndSet(false, true)) {
+                metrics.recordStealReason("SORT", "proof_spool_allocation_failed");
+            }
+        }
+
+        synchronized void publish() {
+            Snapshot current = snapshot();
+            long extentDelta = current.logicalExtentBytes() - publishedLogicalExtentBytes;
+            long preallocationOperationsDelta = current.preallocationOperations()
+                    - publishedPreallocationOperations;
+            long preallocationBytesDelta = current.preallocationAttemptedBytes()
+                    - publishedPreallocationAttemptedBytes;
+            long mappedOperationsDelta = current.mappedOperations() - publishedMappedOperations;
+            long mappedBytesDelta = current.mappedBytes() - publishedMappedBytes;
+            long serviceNanosDelta = current.serviceNanos() - publishedServiceNanos;
+            if (extentDelta != 0 || preallocationOperationsDelta != 0
+                    || preallocationBytesDelta != 0 || mappedOperationsDelta != 0
+                    || mappedBytesDelta != 0 || serviceNanosDelta != 0) {
+                metrics.recordProofSpool(extentDelta, preallocationOperationsDelta,
+                        preallocationBytesDelta, mappedOperationsDelta, mappedBytesDelta,
+                        serviceNanosDelta);
+                publishedLogicalExtentBytes = current.logicalExtentBytes();
+                publishedPreallocationOperations = current.preallocationOperations();
+                publishedPreallocationAttemptedBytes = current.preallocationAttemptedBytes();
+                publishedMappedOperations = current.mappedOperations();
+                publishedMappedBytes = current.mappedBytes();
+                publishedServiceNanos = current.serviceNanos();
+            }
         }
 
         Snapshot snapshot() {
-            return new Snapshot(operations.sum(), bytes.sum(), nanos.sum());
+            return new Snapshot(logicalExtentBytes.sum(), preallocationOperations.sum(),
+                    preallocationAttemptedBytes.sum(), mappedOperations.sum(), mappedBytes.sum(),
+                    serviceNanos.sum());
         }
     }
 
@@ -90,6 +152,23 @@ final class PageRunProofSpool {
         return SLOT_BYTES;
     }
 
+    @FunctionalInterface
+    interface Preallocator {
+        void preallocate(FileChannel channel, long bytes, Stats stats) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface Mapper {
+        MemorySegment map(FileChannel channel, FileChannel.MapMode mode,
+                          long bytes, Arena arena) throws IOException;
+    }
+
+    interface AllocationIo {
+        int write(ByteBuffer source, long position) throws IOException;
+
+        void force() throws IOException;
+    }
+
     /**
      * Concurrent fixed-slot writer. The file mapping is the bounded backing store for inactive
      * segment/range keys: range workers update disjoint absolute slots without a positional
@@ -102,48 +181,72 @@ final class PageRunProofSpool {
         private final Arena arena;
         private final MemorySegment storage;
         private final Stats stats;
-        private final LongAdder writeCombineNanos = new LongAdder();
         private final AtomicBoolean closed = new AtomicBoolean();
 
         Writer(Path path, int slots, Stats stats) throws IOException {
+            this(path, slots, stats, PageRunProofSpool::preallocate,
+                    (channel, mode, bytes, arena) -> channel.map(mode, 0, bytes, arena));
+        }
+
+        Writer(Path path, int slots, Stats stats, Preallocator preallocator, Mapper mapper)
+                throws IOException {
             if (slots < 0) {
                 throw new IllegalArgumentException("proof spool slots must not be negative");
             }
             this.path = path;
             this.stats = stats;
-            long started = System.nanoTime();
-            FileChannel opened = FileChannel.open(path, StandardOpenOption.CREATE_NEW,
-                    StandardOpenOption.READ, StandardOpenOption.WRITE);
-            Arena mappingArena = Arena.ofShared();
             long bytes = logicalBytes(slots);
+            stats.recordLogicalExtent(bytes);
+            FileChannel opened = null;
+            Arena mappingArena = null;
+            MemorySegment mapped = null;
             try {
-                preallocate(opened, bytes);
-                this.storage = bytes == 0
-                        ? MemorySegment.ofArray(new byte[0])
-                        : opened.map(FileChannel.MapMode.READ_WRITE, 0, bytes, mappingArena);
-            } catch (IOException | RuntimeException e) {
-                mappingArena.close();
+                long openStarted = System.nanoTime();
                 try {
-                    opened.close();
-                } catch (IOException closeFailure) {
-                    e.addSuppressed(closeFailure);
+                    opened = FileChannel.open(path, StandardOpenOption.CREATE_NEW,
+                            StandardOpenOption.READ, StandardOpenOption.WRITE);
+                } finally {
+                    stats.recordService(System.nanoTime() - openStarted);
                 }
+                long arenaStarted = System.nanoTime();
                 try {
-                    Files.deleteIfExists(path);
-                } catch (IOException deleteFailure) {
-                    e.addSuppressed(deleteFailure);
+                    mappingArena = Arena.ofShared();
+                } finally {
+                    stats.recordService(System.nanoTime() - arenaStarted);
                 }
-                throw e;
+                preallocator.preallocate(opened, bytes, stats);
+                long mapStarted = System.nanoTime();
+                try {
+                    mapped = bytes == 0
+                            ? MemorySegment.ofArray(new byte[0])
+                            : mapper.map(opened, FileChannel.MapMode.READ_WRITE, bytes, mappingArena);
+                } finally {
+                    stats.recordService(System.nanoTime() - mapStarted);
+                }
+            } catch (MergeCancellation.Cancelled cancelled) {
+                stats.publish();
+                cleanFailedAllocation(path, opened, mappingArena, stats, cancelled);
+                stats.publish();
+                throw cancelled;
+            } catch (IOException | RuntimeException failure) {
+                stats.recordAllocationFailure();
+                stats.publish();
+                cleanFailedAllocation(path, opened, mappingArena, stats, failure);
+                stats.publish();
+                if (failure instanceof ProofSpoolAllocationException classified) {
+                    throw classified;
+                }
+                throw new ProofSpoolAllocationException(path, failure);
             }
             this.channel = opened;
             this.arena = mappingArena;
-            stats.record(1, bytes, System.nanoTime() - started);
+            this.storage = mapped;
         }
 
         void markOpen(int segment) {
             long started = System.nanoTime();
             storage.set(INT, slotOffset(segment), OPEN);
-            writeCombineNanos.add(System.nanoTime() - started);
+            stats.recordMapped(1, Integer.BYTES, System.nanoTime() - started);
         }
 
         void writeKey(int segment, KeyField field, byte[] key) throws IOException {
@@ -159,7 +262,7 @@ final class PageRunProofSpool {
             storage.set(SHORT, offset, (short) length);
             MemorySegment.copy(key, 0, storage, ValueLayout.JAVA_BYTE,
                     offset + Short.BYTES, length);
-            writeCombineNanos.add(System.nanoTime() - started);
+            stats.recordMapped(1, Short.BYTES + length, System.nanoTime() - started);
         }
 
         int readKey(int segment, KeyField field, byte[] target) throws IOException {
@@ -171,7 +274,7 @@ final class PageRunProofSpool {
             }
             MemorySegment.copy(storage, ValueLayout.JAVA_BYTE, offset + Short.BYTES,
                     target, 0, length);
-            writeCombineNanos.add(System.nanoTime() - started);
+            stats.recordMapped(1, Short.BYTES + length, System.nanoTime() - started);
             return length;
         }
 
@@ -191,8 +294,7 @@ final class PageRunProofSpool {
             // Commit state last. Future completion supplies the happens-before edge before the
             // coordinator maps the same file read-only.
             storage.set(INT, offset, FINISHED);
-            writeCombineNanos.add(System.nanoTime() - started);
-            stats.record(1, SLOT_BYTES, 0);
+            stats.recordMapped(1, FIXED_BYTES, System.nanoTime() - started);
         }
 
         @Override
@@ -201,10 +303,16 @@ final class PageRunProofSpool {
                 return;
             }
             long started = System.nanoTime();
-            arena.close();
-            channel.close();
-            stats.record(1, 0,
-                    writeCombineNanos.sum() + System.nanoTime() - started);
+            try {
+                arena.close();
+            } finally {
+                try {
+                    channel.close();
+                } finally {
+                    stats.recordService(System.nanoTime() - started);
+                    stats.publish();
+                }
+            }
         }
     }
 
@@ -225,27 +333,46 @@ final class PageRunProofSpool {
             // turn an already-latched interrupt into ClosedByInterruptException before that typed
             // poll can run.
             boolean interrupted = Thread.interrupted();
-            long started = System.nanoTime();
             try {
-                FileChannel opened = FileChannel.open(path, StandardOpenOption.READ);
-                Arena mappingArena = Arena.ofConfined();
+                FileChannel opened;
+                long openStarted = System.nanoTime();
+                try {
+                    opened = FileChannel.open(path, StandardOpenOption.READ);
+                } finally {
+                    stats.recordService(System.nanoTime() - openStarted);
+                }
+                Arena mappingArena;
+                long arenaStarted = System.nanoTime();
+                try {
+                    mappingArena = Arena.ofConfined();
+                } finally {
+                    stats.recordService(System.nanoTime() - arenaStarted);
+                }
                 try {
                     long bytes = opened.size();
-                    this.storage = bytes == 0
-                            ? MemorySegment.ofArray(new byte[0])
-                            : opened.map(FileChannel.MapMode.READ_ONLY, 0, bytes, mappingArena);
+                    long mapStarted = System.nanoTime();
+                    try {
+                        this.storage = bytes == 0
+                                ? MemorySegment.ofArray(new byte[0])
+                                : opened.map(FileChannel.MapMode.READ_ONLY, 0, bytes, mappingArena);
+                    } finally {
+                        stats.recordService(System.nanoTime() - mapStarted);
+                    }
                 } catch (IOException | RuntimeException e) {
+                    long cleanupStarted = System.nanoTime();
                     mappingArena.close();
                     try {
                         opened.close();
                     } catch (IOException closeFailure) {
                         e.addSuppressed(closeFailure);
+                    } finally {
+                        stats.recordService(System.nanoTime() - cleanupStarted);
+                        stats.publish();
                     }
                     throw e;
                 }
                 this.channel = opened;
                 this.arena = mappingArena;
-                stats.record(1, 0, System.nanoTime() - started);
             } finally {
                 if (interrupted) {
                     Thread.currentThread().interrupt();
@@ -262,6 +389,7 @@ final class PageRunProofSpool {
             long offset = slotOffset(segment);
             int state = storage.get(INT, offset);
             if (state != FINISHED) {
+                stats.recordMapped(1, Integer.BYTES, System.nanoTime() - started);
                 throw new IOException("page-run proof spool has incomplete segment summary "
                         + segment + " in " + path);
             }
@@ -272,6 +400,7 @@ final class PageRunProofSpool {
             long firstFrameOffset = storage.get(LONG, offset + 32);
             long endFrameOffset = storage.get(LONG, offset + 40);
             int verifiedSamples = storage.get(INT, offset + 48);
+            stats.recordMapped(1, FIXED_BYTES, System.nanoTime() - started);
             byte[] firstMin = hasPages ? readKey(segment, KeyField.FIRST_MIN) : null;
             byte[] lastMin = hasPages ? readKey(segment, KeyField.LAST_MIN) : null;
             byte[] zoneMax = hasPages ? readKey(segment, KeyField.ZONE_MAX) : null;
@@ -279,21 +408,23 @@ final class PageRunProofSpool {
                     ? readKey(segment, KeyField.FIRST_SAMPLE_PREFIX) : null;
             byte[] firstSamplePageMax = hasSamples
                     ? readKey(segment, KeyField.FIRST_SAMPLE_PAGE_MAX) : null;
-            stats.record(1, SLOT_BYTES, System.nanoTime() - started);
             return new Summary(pages, entries, framedBytes, firstFrameOffset, endFrameOffset,
                     verifiedSamples, mismatch, firstMin, lastMin, zoneMax,
                     firstSamplePrefix, firstSamplePageMax);
         }
 
         private byte[] readKey(int segment, KeyField field) throws IOException {
+            long started = System.nanoTime();
             long offset = keyOffset(segment, field);
             int size = storage.get(SHORT, offset) & 0xffff;
             if (size > ByteMidpoint.MAX_KEY_LEN) {
+                stats.recordMapped(1, Short.BYTES, System.nanoTime() - started);
                 throw new IOException("page-run proof spool key length out of bounds in " + path);
             }
             byte[] key = new byte[size];
             MemorySegment.copy(storage, ValueLayout.JAVA_BYTE, offset + Short.BYTES,
                     key, 0, size);
+            stats.recordMapped(1, Short.BYTES + size, System.nanoTime() - started);
             return key;
         }
 
@@ -303,16 +434,27 @@ final class PageRunProofSpool {
                 return;
             }
             long started = System.nanoTime();
-            arena.close();
-            channel.close();
-            stats.record(1, 0, System.nanoTime() - started);
+            try {
+                arena.close();
+            } finally {
+                try {
+                    channel.close();
+                } finally {
+                    stats.recordService(System.nanoTime() - started);
+                    stats.publish();
+                }
+            }
         }
     }
 
     static void delete(Path path, Stats stats) throws IOException {
         long started = System.nanoTime();
-        Files.deleteIfExists(path);
-        stats.record(1, 0, System.nanoTime() - started);
+        try {
+            Files.deleteIfExists(path);
+        } finally {
+            stats.recordService(System.nanoTime() - started);
+            stats.publish();
+        }
     }
 
     /**
@@ -321,21 +463,88 @@ final class PageRunProofSpool {
      * {@link IOException}; a first-touch mapped write must never discover missing backing space as
      * a process-level SIGBUS.
      */
-    private static void preallocate(FileChannel channel, long bytes) throws IOException {
+    static void preallocate(FileChannel channel, long bytes, Stats stats) throws IOException {
+        preallocate(new AllocationIo() {
+            @Override
+            public int write(ByteBuffer source, long position) throws IOException {
+                return channel.write(source, position);
+            }
+
+            @Override
+            public void force() throws IOException {
+                channel.force(false);
+            }
+        }, bytes, stats);
+    }
+
+    static void preallocate(AllocationIo io, long bytes, Stats stats) throws IOException {
         if (bytes == 0) {
             return;
         }
+        long bufferStarted = System.nanoTime();
         ByteBuffer zeros = ByteBuffer.allocateDirect(
                 Math.toIntExact(Math.min(PREALLOCATE_BUFFER_BYTES, bytes)));
+        stats.recordService(System.nanoTime() - bufferStarted);
         long position = 0;
         while (position < bytes) {
             zeros.clear();
             zeros.limit(Math.toIntExact(Math.min(zeros.capacity(), bytes - position)));
             while (zeros.hasRemaining()) {
-                position += channel.write(zeros, position);
+                MergeCancellation.check();
+                int attemptedBytes = zeros.remaining();
+                long writeStarted = System.nanoTime();
+                int written;
+                try {
+                    written = io.write(zeros, position);
+                } catch (IOException | RuntimeException failure) {
+                    stats.recordPreallocation(
+                            1, attemptedBytes, System.nanoTime() - writeStarted);
+                    throw failure;
+                }
+                stats.recordPreallocation(1, attemptedBytes, System.nanoTime() - writeStarted);
+                if (written <= 0) {
+                    throw new IOException("proof spool preallocation made no forward progress");
+                }
+                position += written;
+            }
+            stats.markProgress();
+        }
+        MergeCancellation.check();
+        long forceStarted = System.nanoTime();
+        try {
+            io.force();
+        } catch (IOException | RuntimeException failure) {
+            stats.recordPreallocation(1, 0, System.nanoTime() - forceStarted);
+            throw failure;
+        }
+        stats.recordPreallocation(1, 0, System.nanoTime() - forceStarted);
+        stats.markProgress();
+    }
+
+    private static void cleanFailedAllocation(Path path, FileChannel channel, Arena arena,
+                                              Stats stats, Throwable primary) {
+        long started = System.nanoTime();
+        if (arena != null) {
+            try {
+                arena.close();
+            } catch (RuntimeException closeFailure) {
+                primary.addSuppressed(closeFailure);
             }
         }
-        channel.force(false);
+        if (channel != null) {
+            try {
+                channel.close();
+            } catch (IOException closeFailure) {
+                primary.addSuppressed(closeFailure);
+            }
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException deleteFailure) {
+            primary.addSuppressed(deleteFailure);
+        } finally {
+            stats.recordService(System.nanoTime() - started);
+        }
     }
 
     private static long slotOffset(int segment) {

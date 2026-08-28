@@ -1028,13 +1028,18 @@ coordinator consumes one spooled segment/range summary at a time. Additional pro
 its allocation, so insufficient disk is an ordinary constructor failure rather than a mapped-write
 SIGBUS. The file is then mapped through a shared foreign-memory arena while
 workers update disjoint absolute slots; source switches copy through the reusable range buffers
-without positional channel calls or per-key buffer allocation. A segment/range commits one logical
-fixed-slot write at finish, and the coordinator performs one logical fixed-slot read. The arena is
+without positional channel calls or per-key buffer allocation. Every mapped field/key update and
+read remains counted; this work can scale with page/source-switch count even though positional
+syscalls do not. The arena is
 closed deterministically before the read mapping and again before delete; offsets and mapping size
-remain `long`, including a logical spool above 2 GiB. Mapped pages are file-backed but can contribute
-to process RSS while resident, so the ordinary peak-RSS meter and merge benchmark remain the memory
-evidence rather than treating logical spool bytes as resident heap. Spools use one shared open
-descriptor for the whole range fleet. That descriptor is an explicit
+remain `long`; an actual sparse mapping above 2 GiB is touched at both ends, unmapped, and deleted in
+the compatibility test. Mapped pages are file-backed but contribute to process RSS while resident:
+the opt-in touched-mapping characterization and ordinary peak-RSS meter are the memory evidence, and
+no memory-neutral claim follows from the `O(R)` heap-key bound. Preallocation polls cancellation and
+marks progress per at-most-64-KiB chunk. Allocation/map failure records attempted work, emits the
+stable `proof_spool_allocation_failed` classification, cleans the path, and stays a checked
+`IOException`; cancellation retains its interrupt/cancellation disposition. Spools use one shared
+open descriptor for the whole range fleet. That descriptor is an explicit
 one-FD reservation in both the effective-range clamp and the dynamic output-writer allowance, not
 generic process headroom. The spool is deleted before successful writer return and joins
 range/cascade temporaries in every failure/re-entry sweep.

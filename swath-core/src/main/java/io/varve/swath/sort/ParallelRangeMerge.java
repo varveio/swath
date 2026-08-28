@@ -237,11 +237,17 @@ final class ParallelRangeMerge {
                     seekPlan, proof, metrics, proofReaderFactory, proofSpoolStats);
             PageRunProofSpool.Snapshot proofSpoolSnapshot = proofSpoolStats.snapshot();
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
-                            + "proof_spool_fds={} proof_spool_operations={} "
-                            + "proof_spool_bytes={} proof_spool_ms={}",
+                            + "proof_spool_fds={} proof_spool_logical_extent_bytes={} "
+                            + "proof_spool_preallocation_operations={} "
+                            + "proof_spool_preallocation_attempted_bytes={} "
+                            + "proof_spool_mapped_operations={} proof_spool_mapped_bytes={} "
+                            + "proof_spool_ms={}",
                     ranges, threads, perRangeFanIn, MergePlanner.PROOF_SPOOL_FDS,
-                    proofSpoolSnapshot.operations(), proofSpoolSnapshot.bytes(),
-                    proofSpoolSnapshot.nanos() / 1_000_000L);
+                    proofSpoolSnapshot.logicalExtentBytes(),
+                    proofSpoolSnapshot.preallocationOperations(),
+                    proofSpoolSnapshot.preallocationAttemptedBytes(),
+                    proofSpoolSnapshot.mappedOperations(), proofSpoolSnapshot.mappedBytes(),
+                    proofSpoolSnapshot.serviceNanos() / 1_000_000L);
             return results;
         } catch (InterruptedException e) {
             abortAndCleanUp(pool, futures, stagingDir, proofSpool);

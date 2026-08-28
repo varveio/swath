@@ -47,7 +47,13 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     }
 
     @Override
-    public void recordProofSpool(long operations, long bytes, long nanos) {
-        metrics.recordSortMergeProofSpool(operations, bytes, nanos);
+    public void recordProofSpool(long logicalExtentBytes,
+                                 long preallocationOperations,
+                                 long preallocationAttemptedBytes,
+                                 long mappedOperations,
+                                 long mappedBytes,
+                                 long serviceNanos) {
+        metrics.recordSortMergeProofSpool(logicalExtentBytes, preallocationOperations,
+                preallocationAttemptedBytes, mappedOperations, mappedBytes, serviceNanos);
     }
 }

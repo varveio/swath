@@ -247,8 +247,11 @@ public final class RunMetrics {
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
     private final Counter sortMergeRangeIndexBytes;
-    private final Counter sortMergeProofSpoolOperations;
-    private final Counter sortMergeProofSpoolBytes;
+    private final Counter sortMergeProofSpoolLogicalExtentBytes;
+    private final Counter sortMergeProofSpoolPreallocationOperations;
+    private final Counter sortMergeProofSpoolPreallocationAttemptedBytes;
+    private final Counter sortMergeProofSpoolMappedOperations;
+    private final Counter sortMergeProofSpoolMappedBytes;
     private final Timer sortMergeProofSpoolLatency;
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
@@ -594,10 +597,20 @@ public final class RunMetrics {
                 .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
         sortMergeRangeIndexBytes = Counter.builder("swath.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
-        sortMergeProofSpoolOperations =
-                Counter.builder("swath.sort.merge.proof_spool.operations").register(registry);
-        sortMergeProofSpoolBytes = Counter.builder("swath.sort.merge.proof_spool.bytes")
+        sortMergeProofSpoolLogicalExtentBytes =
+                Counter.builder("swath.sort.merge.proof_spool.logical_extent.bytes")
                 .baseUnit("bytes").register(registry);
+        sortMergeProofSpoolPreallocationOperations =
+                Counter.builder("swath.sort.merge.proof_spool.preallocation.operations")
+                        .register(registry);
+        sortMergeProofSpoolPreallocationAttemptedBytes =
+                Counter.builder("swath.sort.merge.proof_spool.preallocation.attempted.bytes")
+                        .baseUnit("bytes").register(registry);
+        sortMergeProofSpoolMappedOperations =
+                Counter.builder("swath.sort.merge.proof_spool.mapped.operations").register(registry);
+        sortMergeProofSpoolMappedBytes =
+                Counter.builder("swath.sort.merge.proof_spool.mapped.bytes")
+                        .baseUnit("bytes").register(registry);
         sortMergeProofSpoolLatency =
                 runScopedTimer("swath.sort.merge.proof_spool.latency").register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
@@ -1167,11 +1180,21 @@ public final class RunMetrics {
         sortMergeRangeIndexBytes.increment(Math.max(0L, bytes));
     }
 
-    /** Bounded fixed-slot proof-spool operations, transferred bytes, and service time. */
-    public void recordSortMergeProofSpool(long operations, long bytes, long nanos) {
-        sortMergeProofSpoolOperations.increment(Math.max(0L, operations));
-        sortMergeProofSpoolBytes.increment(Math.max(0L, bytes));
-        sortMergeProofSpoolLatency.record(Math.max(0L, nanos), TimeUnit.NANOSECONDS);
+    /** Complete proof-spool logical extent, physical allocation, mapped access, and service time. */
+    public void recordSortMergeProofSpool(long logicalExtentBytes,
+                                          long preallocationOperations,
+                                          long preallocationAttemptedBytes,
+                                          long mappedOperations,
+                                          long mappedBytes,
+                                          long serviceNanos) {
+        sortMergeProofSpoolLogicalExtentBytes.increment(Math.max(0L, logicalExtentBytes));
+        sortMergeProofSpoolPreallocationOperations.increment(
+                Math.max(0L, preallocationOperations));
+        sortMergeProofSpoolPreallocationAttemptedBytes.increment(
+                Math.max(0L, preallocationAttemptedBytes));
+        sortMergeProofSpoolMappedOperations.increment(Math.max(0L, mappedOperations));
+        sortMergeProofSpoolMappedBytes.increment(Math.max(0L, mappedBytes));
+        sortMergeProofSpoolLatency.record(Math.max(0L, serviceNanos), TimeUnit.NANOSECONDS);
     }
 
     /** One final part's footer-write + fsync durability span. */

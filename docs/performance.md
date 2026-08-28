@@ -317,8 +317,10 @@ change.
 
 For merge-only measurements, `boundary_ms` includes both structured catalog/index preflight and
 the selected final boundary policy (`rows` therefore includes its additional full index pass).
-`proof_spool_operations`, `proof_spool_bytes`, and `proof_spool_ms` use the same fixed-slot scope as
-the live run log and JSON report. Serial `R=1` records none of these proof-spool values.
+The proof-spool fields separately report logical extent, physical preallocation attempts, mapped
+field/key access, and summed service time with the same scope as the live run log and JSON report.
+Mapped operations intentionally expose page/source-switch scaling, and mapped pages are visible in
+process RSS while resident. Serial `R=1` records none of these proof-spool values.
 
 ### Diagnostic zero-LIST merge replay
 

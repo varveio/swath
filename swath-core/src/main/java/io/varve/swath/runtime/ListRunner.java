@@ -63,6 +63,7 @@ import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.MergeInputProfile;
 import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.PublicationStepHook;
+import io.varve.swath.sort.ProofSpoolAllocationException;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
@@ -1078,8 +1079,8 @@ public final class ListRunner {
             throw new PublicationPendingException(
                     "sorted dataset publication committed; cleanup pending", e);
         } catch (IOException | UncheckedIOException e) {
-            // A CLASSIFIED merge failure (today: a staged page-run segment whose
-            // page minKeys regress — SegmentCorruptionException, error_class=page_run_min_regression) must
+            // A CLASSIFIED merge failure (a staged page-run invariant or proof-spool allocation)
+            // must
             // be greppable in summary.json, not just in stderr. The run unwinds without complete(), so the
             // sidecar's terminal write comes from JsonRunSummaryWriter#close via terminalStatus() below,
             // which reads this class off RunMetrics; an unclassified merge failure records nothing and
@@ -1092,8 +1093,8 @@ public final class ListRunner {
             // FIRST page can never regress) therefore arrives as an UncheckedIOException, not an
             // IOException. With only the checked catch this whole classification was INERT on the very
             // path it was written for: recordFatalErrorClass never ran and summary.json said
-            // error_class:null. segmentErrorClass walks the cause chain, so the wrapper is transparent.
-            ctx.metrics().recordFatalErrorClass(segmentErrorClass(e));
+            // error_class:null. sortErrorClass walks the cause chain, so the wrapper is transparent.
+            ctx.metrics().recordFatalErrorClass(sortErrorClass(e));
             throw new OutputException("sort merge/publish failed", e);
         }
     }
@@ -1101,13 +1102,17 @@ public final class ListRunner {
     /**
      * The classified {@code error_class} fingerprint of a sort merge/publish failure — walks the
      * cause chain (mirroring {@code ListCommand#seedErrorClass} / {@code ExitCodes#forThrowable}) for the
-     * first {@link SegmentCorruptionException}. {@code null} for a generic merge failure (disk, Parquet,
-     * an unclassified {@link IOException}), which keeps its {@code error_class:null} shape.
+     * first {@link SegmentCorruptionException} or {@link ProofSpoolAllocationException}. {@code null}
+     * for a generic merge failure (Parquet or an unclassified {@link IOException}), which keeps its
+     * {@code error_class:null} shape.
      */
-    private static String segmentErrorClass(Throwable t) {
+    static String sortErrorClass(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof SegmentCorruptionException sce) {
                 return sce.errorClass();
+            }
+            if (c instanceof ProofSpoolAllocationException allocation) {
+                return allocation.errorClass();
             }
         }
         return null;
@@ -1394,7 +1399,7 @@ public final class ListRunner {
         } catch (SwathException | InterruptedException e) {
             throw e;
         } catch (Exception e) {
-            metrics.recordFatalErrorClass(segmentErrorClass(e));
+            metrics.recordFatalErrorClass(sortErrorClass(e));
             throw new OutputException("sort segment encode failed", e);
         }
     }
