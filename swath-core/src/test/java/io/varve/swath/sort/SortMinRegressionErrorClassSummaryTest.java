@@ -159,7 +159,9 @@ final class SortMinRegressionErrorClassSummaryTest {
     private static void recordSegment(SqliteCheckpointStore store, long runId, long nodeId, Path segment,
                                       long rows) throws Exception {
         store.partFinalized(new PartFinalize(runId, 0, segment.getFileName().toString(),
-                ListRunner.SORT_SEGMENT_FORMAT, rows, Files.size(segment),
+                new PageRunFormat(PageRunSegmentWriter.FORMAT_VERSION,
+                        PageRunFormat.ABSENT_EXTENSION),
+                rows, Files.size(segment),
                 List.of(new PartFinalize.DurableAdvance(nodeId, KeyBytes.ofUtf8("z").raw()))));
     }
 

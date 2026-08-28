@@ -173,7 +173,7 @@ final class SortResumeRelocatedWorkdirTest {
         long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
 
         SegmentSink sink = result -> store.partFinalized(new PartFinalize(run.id(), 0,
-                result.path().getFileName().toString(), ListRunner.SORT_SEGMENT_FORMAT,
+                result.path().getFileName().toString(), result.pageRunFormat(),
                 result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
                 .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList()));
         SortLane lane = new SortLane(cascade(), cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP,

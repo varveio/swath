@@ -782,10 +782,8 @@ public final class ListRunner {
         SegmentSink sink = result -> {
             List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
-            PageRunFormat format = result.pageRunFormat();
             store.partFinalized(new PartFinalize(runId, 0, result.path().getFileName().toString(),
-                    SORT_SEGMENT_FORMAT, format.formatVersion(), format.extensionType(),
-                    result.rows(), result.bytes(), advances));
+                    result.pageRunFormat(), result.rows(), result.bytes(), advances));
         };
         String segmentPrefix = "seg-" + runId + "-" + Long.toHexString(System.nanoTime());
         SortLane lane = new SortLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,

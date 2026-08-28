@@ -161,10 +161,8 @@ final class SortPipelineTest {
             SegmentSink sink = result -> {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
-                PageRunFormat format = result.pageRunFormat();
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
-                        ListRunner.SORT_SEGMENT_FORMAT, format.formatVersion(), format.extensionType(),
-                        result.rows(), result.bytes(), advances));
+                        result.pageRunFormat(), result.rows(), result.bytes(), advances));
             };
             SortLane lane = new SortLane(smallSegments(), new ListEntryComparator(), DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);

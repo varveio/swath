@@ -19,8 +19,10 @@ import java.util.List;
  * so resume discards it and re-lists its tail (no finalized row is ever lost or
  * duplicated).
  *
- * <p>{@code formatVersion}/{@code extensionType} are both nullable. New page-run staging records
- * both actual values; ordinary output formats and legacy pre-column rows leave both absent.
+ * <p>{@code formatVersion}/{@code extensionType} are both nullable for ordinary output formats.
+ * New page-run staging events must instead carry an explicit, supported {@link PageRunFormat};
+ * legacy pre-column {@code NULL}/{@code NULL} metadata exists only when reading old SQLite rows and
+ * is never produced by this write-side value.
  */
 public record PartFinalize(
         long runId,
@@ -39,6 +41,13 @@ public record PartFinalize(
         this(runId, writerId, path, format, null, null, rows, bytes, advances);
     }
 
+    /** A page-run staging part, carrying the actual header/extension identity its encoder emitted. */
+    public PartFinalize(long runId, int writerId, String path, PageRunFormat pageRunFormat,
+                        long rows, long bytes, List<DurableAdvance> advances) {
+        this(runId, writerId, path, PageRunFormat.NAME, pageRunFormat.formatVersion(),
+                pageRunFormat.extensionType(), rows, bytes, advances);
+    }
+
     public PartFinalize {
         if ((formatVersion == null) != (extensionType == null)) {
             throw new IllegalArgumentException(
@@ -48,10 +57,19 @@ public record PartFinalize(
                 || (extensionType != null && extensionType < 0)) {
             throw new IllegalArgumentException("part format metadata must be non-negative");
         }
-        if (!PageRunFormat.NAME.equals(format)
-                && (formatVersion != null || extensionType != null)) {
+        boolean pageRun = PageRunFormat.NAME.equals(format);
+        if (!pageRun && (formatVersion != null || extensionType != null)) {
             throw new IllegalArgumentException(
                     "only page-run staging parts may carry format_version and extension_type");
+        }
+        if (pageRun) {
+            PageRunFormat.Compatibility compatibility =
+                    PageRunFormat.compatibility(formatVersion, extensionType);
+            if (compatibility != PageRunFormat.Compatibility.SUPPORTED) {
+                throw new IllegalArgumentException("page-run staging parts require complete supported "
+                        + "format metadata, got format_version=" + formatVersion
+                        + ", extension_type=" + extensionType + " (" + compatibility + ")");
+            }
         }
     }
 

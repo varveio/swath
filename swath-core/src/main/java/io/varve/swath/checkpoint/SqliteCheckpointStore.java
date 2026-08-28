@@ -668,7 +668,8 @@ public final class SqliteCheckpointStore implements CheckpointStore {
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         parts.add(new PartRef(rs.getLong(1), rs.getInt(2), rs.getString(3),
-                                rs.getString(4), nullableInt(rs, 5), nullableInt(rs, 6),
+                                rs.getString(4), nullableMetadataInt(rs, 5, "format_version"),
+                                nullableMetadataInt(rs, 6, "extension_type"),
                                 rs.getInt(7) != 0, rs.getLong(8), rs.getLong(9)));
                     }
                 }
@@ -677,9 +678,18 @@ public final class SqliteCheckpointStore implements CheckpointStore {
         });
     }
 
-    private static Integer nullableInt(ResultSet rs, int column) throws SQLException {
-        int value = rs.getInt(column);
-        return rs.wasNull() ? null : value;
+    /** Read SQLite's 64-bit INTEGER without allowing narrowing wraparound into a supported value. */
+    private static Integer nullableMetadataInt(ResultSet rs, int column, String name)
+            throws SQLException, CheckpointException {
+        long value = rs.getLong(column);
+        if (rs.wasNull()) {
+            return null;
+        }
+        if (value < 0 || value > Integer.MAX_VALUE) {
+            throw new CheckpointException("invalid part_file." + name + " value " + value
+                    + ": expected a non-negative 32-bit integer");
+        }
+        return (int) value;
     }
 
     @Override

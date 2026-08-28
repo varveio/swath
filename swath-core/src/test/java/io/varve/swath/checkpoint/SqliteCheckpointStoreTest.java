@@ -47,8 +47,8 @@ final class SqliteCheckpointStoreTest {
         try (SqliteCheckpointStore store = open(dir)) {
             RunMeta run = store.openRun(key("format-metadata"), false, false);
             PageRunFormat pageRun = PageRunFormat.currentListing();
-            store.partFinalized(new PartFinalize(run.id(), 0, "seg-0.pageseg", PageRunFormat.NAME,
-                    pageRun.formatVersion(), pageRun.extensionType(), 3, 100, List.of()));
+            store.partFinalized(new PartFinalize(run.id(), 0, "seg-0.pageseg", pageRun,
+                    3, 100, List.of()));
             store.partFinalized(new PartFinalize(run.id(), 1, "data/part-0.parquet", "parquet",
                     5, 200, List.of()));
 
@@ -75,6 +75,21 @@ final class SqliteCheckpointStoreTest {
     }
 
     @Test
+    void newPageRunFinalizationRequiresExplicitSupportedMetadata() {
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "seg-0.pageseg", PageRunFormat.NAME,
+                1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("complete supported format metadata")
+                .hasMessageContaining("LEGACY_UNRECORDED");
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "seg-0.pageseg", PageRunFormat.NAME,
+                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.PAGE_INDEX_EXTENSION + 1,
+                1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("complete supported format metadata")
+                .hasMessageContaining("UNKNOWN_EXTENSION_TYPE");
+    }
+
+    @Test
     void pageRunCompatibilityAcceptsAbsentLegacyMinimaAndCurrentIndex() {
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
                 PageRunFormat.ABSENT_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
@@ -92,7 +107,7 @@ final class SqliteCheckpointStoreTest {
             RunMeta run = store.openRun(key("legacy-format-metadata"), false, false);
             runId = run.id();
             store.partFinalized(new PartFinalize(runId, 0, "seg-legacy.pageseg",
-                    PageRunFormat.NAME, 2, 128, List.of()));
+                    PageRunFormat.currentListing(), 2, 128, List.of()));
         }
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
              var st = c.createStatement()) {
