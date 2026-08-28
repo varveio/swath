@@ -71,6 +71,9 @@ class PageRunZoneProofAdversarialTest {
             assertThat(writers.opened.get())
                     .as("post-worker proof failure closes already-returned range writers")
                     .isPositive();
+            assertThat(metrics.proofSpoolMetricUpdates.sum())
+                    .as("proof verifier owns close/read/delete without failure-cleanup double count")
+                    .isEqualTo(3);
         }
         assertNoLiveWorkers();
         assertNoOwnedDebris(staging);
@@ -296,6 +299,8 @@ class PageRunZoneProofAdversarialTest {
         assertThat(small.proofSpoolMappedBytes.sum()).isEqualTo(2_556);
         assertThat(large.proofSpoolMappedOperations.sum()).isEqualTo(3_148);
         assertThat(large.proofSpoolMappedBytes.sum()).isEqualTo(35_292);
+        assertThat(small.proofSpoolMetricUpdates.sum()).isEqualTo(3);
+        assertThat(large.proofSpoolMetricUpdates.sum()).isEqualTo(3);
         assertThat(large.proofSpoolServiceNanos.sum()).isPositive();
     }
 
@@ -343,10 +348,11 @@ class PageRunZoneProofAdversarialTest {
                 staging.resolve("segment.pageseg"), 32, 0);
         CountDownLatch writing = new CountDownLatch(1);
         TrackingFileWriterFactory writers = new TrackingFileWriterFactory(writing);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread transformThread = Thread.ofPlatform().name("wp2-proof-cancel").start(() -> {
             try {
-                transform(4, SortMetrics.NO_OP, writers)
+                transform(4, metrics, writers)
                         .transform(List.of(segment), output, staging, PublishListener.NO_OP,
                                 units -> { }, FinalPassListener.NO_OP);
             } catch (Throwable thrown) {
@@ -366,6 +372,8 @@ class PageRunZoneProofAdversarialTest {
         assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
         assertNoLiveWorkers();
         assertNoOwnedDebris(staging);
+        assertThat(metrics.proofSpoolMetricUpdates.sum()).isEqualTo(2);
+        assertThat(metrics.proofSpoolServiceNanos.sum()).isPositive();
         assertThat(output.resolve("part-00000.parquet")).doesNotExist();
     }
 

@@ -139,8 +139,9 @@ class SortTransformParallelMergeTest {
             }
             return SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
         };
+        ThreadSafeMetrics metrics = new ThreadSafeMetrics();
         SortTransform transform = new SortTransform(new SortRun(config(3), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, boom,
+                EqualKeyPolicy.ALLOW, metrics, boom,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
 
@@ -151,6 +152,9 @@ class SortTransformParallelMergeTest {
         try (var s = Files.newDirectoryStream(d.output, "part-*.parquet")) {
             assertThat(s.iterator().hasNext()).isFalse();
         }
+        assertThat(d.staging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
+        assertThat(metrics.proofSpoolMetricUpdates.sum()).isEqualTo(2);
+        assertThat(metrics.proofSpoolServiceNanos.sum()).isPositive();
     }
 
     @Test
@@ -253,6 +257,8 @@ class SortTransformParallelMergeTest {
     /** Thread-safe {@link SortMetrics} — the parallel path records from several range threads at once. */
     private static final class ThreadSafeMetrics implements SortMetrics {
         private final Map<String, LongAdder> counts = new ConcurrentHashMap<>();
+        private final LongAdder proofSpoolMetricUpdates = new LongAdder();
+        private final LongAdder proofSpoolServiceNanos = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -277,6 +283,17 @@ class SortTransformParallelMergeTest {
 
         @Override
         public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
+        public void recordProofSpool(long logicalExtentBytes,
+                                     long preallocationOperations,
+                                     long preallocationAttemptedBytes,
+                                     long mappedOperations,
+                                     long mappedBytes,
+                                     long serviceNanos) {
+            proofSpoolMetricUpdates.increment();
+            proofSpoolServiceNanos.add(serviceNanos);
         }
 
         long count(String key) {

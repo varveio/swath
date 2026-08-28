@@ -251,6 +251,7 @@ final class SortTestSupport {
         final LongAdder proofSpoolMappedOperations = new LongAdder();
         final LongAdder proofSpoolMappedBytes = new LongAdder();
         final LongAdder proofSpoolServiceNanos = new LongAdder();
+        final LongAdder proofSpoolMetricUpdates = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -286,6 +287,7 @@ final class SortTestSupport {
                                      long mappedOperations,
                                      long mappedBytes,
                                      long serviceNanos) {
+            proofSpoolMetricUpdates.increment();
             proofSpoolLogicalExtentBytes.add(logicalExtentBytes);
             proofSpoolPreallocationOperations.add(preallocationOperations);
             proofSpoolPreallocationAttemptedBytes.add(preallocationAttemptedBytes);

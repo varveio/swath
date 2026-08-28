@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -250,11 +251,13 @@ final class ParallelRangeMerge {
                     proofSpoolSnapshot.serviceNanos() / 1_000_000L);
             return results;
         } catch (InterruptedException e) {
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
+                    proofSpoolPath, proofSpoolStats);
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
+                    proofSpoolPath, proofSpoolStats);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -271,13 +274,15 @@ final class ParallelRangeMerge {
         } catch (IOException e) {
             // Coordinator-side zone proof failures happen after every worker returned its writers.
             // They are still pre-publication failures: close all writers and sweep owned debris.
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
+                    proofSpoolPath, proofSpoolStats);
             throw e;
         } catch (RuntimeException e) {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
+                    proofSpoolPath, proofSpoolStats);
             throw e;
         } finally {
             pool.shutdownNow();
@@ -349,7 +354,8 @@ final class ParallelRangeMerge {
 
     /** Cancel, prove worker quiescence, release writers, then sweep owned files. */
     private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir,
-                                 PageRunProofSpool.Writer proofSpool) {
+                                 PageRunProofSpool.Writer proofSpool, Path proofSpoolPath,
+                                 PageRunProofSpool.Stats proofSpoolStats) {
         futures.forEach(future -> future.cancel(true));
         boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
         try {
@@ -358,6 +364,14 @@ final class ParallelRangeMerge {
             // The initiating merge/proof failure remains authoritative.
         }
         releaseOpenParts();
+        if (Files.exists(proofSpoolPath)) {
+            try {
+                PageRunProofSpool.delete(proofSpoolPath, proofSpoolStats);
+            } catch (IOException ignored) {
+                // The initiating merge/proof failure remains authoritative; the generic sweep below
+                // gets one best-effort chance at any proof spool that deletion could not remove.
+            }
+        }
         sweepOwnFiles(stagingDir);
         if (interruptedWhileJoining) {
             Thread.currentThread().interrupt();
