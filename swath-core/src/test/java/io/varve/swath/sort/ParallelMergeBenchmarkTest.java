@@ -175,6 +175,45 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void retainedType2ObjectsUseTheCanonicalParquetRowOracle(@TempDir Path root) throws Exception {
+        ObjectEntry liveObject = new ObjectEntry(
+                KeyBytes.ofUtf8("a"),
+                42L,
+                "2026-08-28T12:34:56.123456789Z",
+                "0123456789abcdef0123456789abcdef",
+                "STANDARD",
+                null,
+                true,
+                "owner-id",
+                "owner-display",
+                "SHA256",
+                "FULL_OBJECT");
+        Retained retained = completedRetained(
+                root.resolve("canonical-row"), "hash", "seg", List.of(liveObject));
+        ParallelMergeBenchmark.CorpusCatalog catalog = external(retained.staging());
+        Path scratch = Files.createDirectory(root.resolve("scratch-canonical-row"));
+        try {
+            ParallelMergeBenchmark.ArmResult result = ParallelMergeBenchmark.runArm(
+                    scratch, catalog, 1, "canonical-row",
+                    config -> new SortedParquetWriterFactory(config, SortMode.OBJECTS));
+
+            assertThat(result.totalRows).isEqualTo(1);
+            assertThat(result.multisetDigest).isEqualTo(catalog.oracle().multisetDigest());
+            try (SegmentReader reader = new SegmentReader(result.finalFiles.getFirst())) {
+                assertThat(reader.next()).isEqualTo(new ObjectEntry(
+                        liveObject.key(), liveObject.size(), liveObject.lastModifiedEpochMicros(),
+                        liveObject.etag(), liveObject.storageClass(), null, false,
+                        liveObject.ownerId(), liveObject.ownerDisplayName(),
+                        liveObject.checksumAlgorithm(), liveObject.checksumType()));
+                assertThat(reader.hasNext()).isFalse();
+            }
+        } finally {
+            SortBenchCorpus.deleteTree(scratch);
+        }
+    }
+
+    @Test
     void rowOracleRejectsOrderAndMultiplicityAndKeepsStableOrderedFingerprint() throws Exception {
         ListEntry first = object("a", 1);
         ListEntry second = object("a", 2);
@@ -195,6 +234,27 @@ class ParallelMergeBenchmarkTest {
                 List.of(first, second), oracle, CMP)).hasMessageContaining("input oracle");
         assertThatThrownBy(() -> BenchmarkRowOracle.validateEntriesForTesting(
                 List.of(first, second, third, third), oracle, CMP)).hasMessageContaining("input oracle");
+    }
+
+    @Test
+    void rowOracleNormalizesOnlyTheCanonicalParquetRepresentation() throws Exception {
+        ObjectEntry source = new ObjectEntry(
+                KeyBytes.ofUtf8("a"), 42L, "2026-08-28T14:34:56.123456+02:00",
+                "etag", "STANDARD", null, true, "owner", "display", "SHA256", "FULL_OBJECT");
+        ObjectEntry canonical = new ObjectEntry(
+                source.key(), source.size(), source.lastModifiedEpochMicros(),
+                source.etag(), source.storageClass(), null, false, source.ownerId(),
+                source.ownerDisplayName(), source.checksumAlgorithm(), source.checksumType());
+        BenchmarkRowOracle.InputOracle oracle = BenchmarkRowOracle.inputForTesting(List.of(source));
+
+        assertThat(BenchmarkRowOracle.validateEntriesForTesting(List.of(canonical), oracle, CMP).rows())
+                .isEqualTo(1);
+        ObjectEntry changedSize = new ObjectEntry(
+                canonical.key(), canonical.size() + 1, canonical.lastModifiedEpochMicros(),
+                canonical.etag(), canonical.storageClass(), null, false, canonical.ownerId(),
+                canonical.ownerDisplayName(), canonical.checksumAlgorithm(), canonical.checksumType());
+        assertThatThrownBy(() -> BenchmarkRowOracle.validateEntriesForTesting(
+                List.of(changedSize), oracle, CMP)).hasMessageContaining("input oracle");
     }
 
     @Test
@@ -305,8 +365,20 @@ class ParallelMergeBenchmarkTest {
         return retained(root, argsHash, kind, true, true);
     }
 
+    private static Retained completedRetained(
+            Path root, String argsHash, String kind, List<ListEntry> entries) throws Exception {
+        return retained(root, argsHash, kind, true, true, entries);
+    }
+
     private static Retained retained(Path root, String argsHash, String kind,
                                      boolean completeRun, boolean success) throws Exception {
+        return retained(root, argsHash, kind, completeRun, success,
+                List.of(object("a", 1), object("b", 2)));
+    }
+
+    private static Retained retained(Path root, String argsHash, String kind,
+                                     boolean completeRun, boolean success,
+                                     List<ListEntry> entries) throws Exception {
         Path output = Files.createDirectories(root.resolve("out"));
         Path staging = Files.createDirectories(output.resolve("_staging"));
         Path checkpoint = Files.createDirectories(output.resolve(".swath")).resolve("checkpoint.sqlite");
@@ -320,11 +392,11 @@ class ParallelMergeBenchmarkTest {
             String name = kind.equals("seg")
                     ? "seg-" + runId + "-test-0.pageseg"
                     : "merge-1.pageseg";
-            segment = writeSegment(staging, name);
+            segment = writeSegment(staging, name, entries);
             store.partFinalized(new PartFinalize(runId, 0, name,
                     new PageRunFormat(PageRunFormat.CURRENT_FORMAT_VERSION,
                             PageRunFormat.ABSENT_EXTENSION),
-                    2, Files.size(segment), List.of()));
+                    entries.size(), Files.size(segment), List.of()));
             if (completeRun) {
                 store.setSortPhase(runId, SortPhase.PUBLISHED);
                 store.markRunFinished(runId, RunStatus.COMPLETED);
@@ -339,8 +411,11 @@ class ParallelMergeBenchmarkTest {
     }
 
     private static Path writeSegment(Path staging, String name) throws Exception {
-        return SortTestSupport.writePageRun(staging.resolve(name),
-                List.of(object("a", 1), object("b", 2)), CMP);
+        return writeSegment(staging, name, List.of(object("a", 1), object("b", 2)));
+    }
+
+    private static Path writeSegment(Path staging, String name, List<ListEntry> entries) throws Exception {
+        return SortTestSupport.writePageRun(staging.resolve(name), entries, CMP);
     }
 
     private static ObjectEntry object(String key, long size) {

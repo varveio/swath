@@ -148,6 +148,10 @@ The harness snapshots and validates the catalog once, then materializes every ar
 same-filesystem hard links; it refuses physical-copy fallback so a cold-storage result cannot
 measure copying instead of merging. Before timing, it fully reads and CRC-validates the source into
 a constant-memory row-count/multiset oracle, then opens every input for the per-stream heap probe.
+The source oracle hashes the canonical Parquet row representation: timestamps are epoch
+microseconds, and a versionless object's schema-omitted `is_latest` decodes as false. It still
+includes every representable field and exact multiplicity; this normalization prevents the live
+OBJECTS mapper's in-memory `isLatest=true` convenience value from being misreported as output loss.
 Every arm is therefore explicitly `cache_state=warm_primed`; this harness cannot produce a cold
 result. A true cold bracket needs a separate fresh-process protocol that prepares first, drops
 caches under external control, and launches exactly one measured arm without the oracle/heap probe

@@ -130,17 +130,24 @@ final class BenchmarkRowOracle {
         return new InputOracle(entries.size(), entries.size(), entries.size(), digest.hex());
     }
 
+    /**
+     * Hash the canonical Parquet row, not incidental {@link ListEntry} source representation.
+     * Sorted spill and Parquet both store last-modified as epoch microseconds. Parquet also omits
+     * {@code is_latest} for a versionless object, so its decoded value is false even though the S3
+     * OBJECTS mapper marks the live entry latest. Those are writer-schema normalizations, not row
+     * loss; every representable field remains in the digest.
+     */
     private static void updateEntry(MessageDigest digest, ListEntry entry) {
         switch (entry) {
             case ObjectEntry object -> {
                 digest.update((byte) 1);
                 updateBytes(digest, object.key().rawUnsafe());
                 updateLong(digest, object.size());
-                updateString(digest, object.lastModifiedText());
+                updateLong(digest, object.lastModifiedEpochMicros());
                 updateString(digest, object.etag());
                 updateString(digest, object.storageClass());
                 updateString(digest, object.versionId());
-                digest.update((byte) (object.isLatest() ? 1 : 0));
+                digest.update((byte) (object.versionId() != null && object.isLatest() ? 1 : 0));
                 updateString(digest, object.ownerId());
                 updateString(digest, object.ownerDisplayName());
                 updateString(digest, object.checksumAlgorithm());
@@ -155,7 +162,7 @@ final class BenchmarkRowOracle {
                 updateBytes(digest, marker.key().rawUnsafe());
                 updateString(digest, marker.versionId());
                 digest.update((byte) (marker.isLatest() ? 1 : 0));
-                updateString(digest, marker.lastModifiedText());
+                updateLong(digest, marker.lastModifiedEpochMicros());
                 updateString(digest, marker.ownerId());
             }
         }
