@@ -257,5 +257,13 @@ final class DatasetPublisher {
         List<Path> finalFiles() {
             return List.copyOf(finalFiles);
         }
+
+        long outputBytes() throws IOException {
+            long bytes = 0L;
+            for (Path tmpFile : tmpFiles) {
+                bytes = Math.addExact(bytes, Files.size(tmpFile));
+            }
+            return bytes;
+        }
     }
 }

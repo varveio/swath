@@ -641,7 +641,11 @@ its checkpoint/publication state.
     listener returns: `manifest.json`, `.swath-state.json`, `symlink.txt`, and last-written
     `_SUCCESS` already describe the valid dataset, so a subsequent sorter-local hook or staging
     cleanup failure latches `sort_phase=PUBLISHED`, throws `PublicationPendingException`, and leaves
-    the run non-fatal for cleanup-only resume. A failure before the listener returns remains a plain
+    the run non-fatal for cleanup-only resume. The cleanup-only re-entry verifies that exact
+    identity + `_SUCCESS` before creating or mutating staging, latches PUBLISHED before cleanup,
+    and applies the same classification to every cleanup/reconciliation/sweep failure; any number
+    of failed cleanup invocations therefore remain `RUNNING`/`PUBLISHED` with `fatal_error=0` until
+    one succeeds and marks `COMPLETED`. A failure before the listener returns remains a plain
     `OutputException` and follows the fatal-error rule; it must re-enter neither PUBLISHED cleanup
     nor claim that publication committed.
   - A **protocol violation** (a response no conforming store may produce, e.g.
@@ -828,12 +832,15 @@ which owns the at-most-once-text durability questions it would reopen):
   or final hook is classified as post-publish cleanup pending, records
   `SORT.post_publish_cleanup_pending` plus the stable
   `sort_post_publish_cleanup_pending publication_committed=true cleanup_pending=true stage=...` log,
-  and leaves/marks the managed checkpoint `PUBLISHED` rather than fatal. The next resume validates
-  this run's identity + `_SUCCESS`, performs cleanup only with zero LIST requests, then marks the run
-  `COMPLETED`; `sort.keep-staging=on` reconciles back to the checkpoint originals while the default
-  removes them. Pre-listener failures retain their existing merge/publish failure behavior. If the
-  durable originals themselves are no longer available before publication, the separately tested
-  `--restart` route discards that run and lists fresh.
+  and leaves/marks the managed checkpoint `PUBLISHED` rather than fatal. The completed transform
+  facts travel with that typed failure, so the failed invocation still reports the exact committed
+  file/byte counts, merge passes, finalization parallelism, and merge latency rather than zeros.
+  Each resume first validates this run's identity + `_SUCCESS`, then performs cleanup only with zero
+  LIST requests. Another cleanup failure repeats the same non-fatal PUBLISHED disposition; the
+  first successful attempt marks the run `COMPLETED`. `sort.keep-staging=on` reconciles back to the
+  checkpoint originals while the default removes them. Pre-listener failures retain their existing
+  merge/publish failure behavior. If the durable originals themselves are no longer available
+  before publication, the separately tested `--restart` route discards that run and lists fresh.
 - By default the staging dir is cleaned on successful publish and a co-located
   checkpoint is deleted; **a crash mid-sort redoes only the sort (the LIST work
   is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the

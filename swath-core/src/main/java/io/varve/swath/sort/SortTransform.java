@@ -199,10 +199,16 @@ public final class SortTransform {
         long cascadedPasses = merge.cascadedPasses();
         long fastPathEmissions = merge.fastPathEmissions();
 
-        datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
-                retainedOriginals, io.intermediates());
-        return new SortTransformResult(pending.finalFiles(), totalRows,
+        SortTransformResult result = new SortTransformResult(
+                pending.finalFiles(), pending.outputBytes(), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
+        try {
+            datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
+                    retainedOriginals, io.intermediates());
+        } catch (CommittedPublicationCleanupException e) {
+            throw e.withPublishedResult(result);
+        }
+        return result;
     }
 
     /**
@@ -312,10 +318,16 @@ public final class SortTransform {
 
         DatasetPublisher.PendingParts pending = datasetPublisher.parallelParts(
                 outputDir, stagingDir, tmpsInOrder, partsInOrder);
-        datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
-                retainedOriginals, List.of());
-        return new SortTransformResult(pending.finalFiles(), totalRows,
+        SortTransformResult result = new SortTransformResult(
+                pending.finalFiles(), pending.outputBytes(), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, results.size());
+        try {
+            datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
+                    retainedOriginals, List.of());
+        } catch (CommittedPublicationCleanupException e) {
+            throw e.withPublishedResult(result);
+        }
+        return result;
     }
 
 }

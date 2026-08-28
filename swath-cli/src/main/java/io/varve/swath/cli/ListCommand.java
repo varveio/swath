@@ -60,6 +60,7 @@ import io.varve.swath.runtime.LivenessWatchdog;
 import io.varve.swath.runtime.OutputPublisher;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.runtime.SignalHandlers;
+import io.varve.swath.sort.CommittedPublicationCleanupException;
 import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
@@ -202,6 +203,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
 
     /** Test-only deterministic sorted-publication runner seam. */
     ListRunner listRunnerOverride;
+
+    /** Test-only deterministic PUBLISHED cleanup/retry seam. */
+    PublishedSortCleanup publishedSortCleanupOverride;
 
     /** Test-only deterministic maximum-heap seam for writer-admission ordering checks. */
     Long maxHeapBytesOverride;
@@ -1308,6 +1312,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         boolean isDirectory(Path path) throws Exception;
     }
 
+    @FunctionalInterface
+    interface PublishedSortCleanup {
+        StagingReconciliation.Result clean(Path outputDir, Path stagingDir,
+                SortConfig sortConfig, List<String> finalizedSegments)
+                throws IOException, InvalidArgsException;
+    }
+
     /**
      * Seed the worklist for a fresh run: one bounded {@code delimiter=/} structure probe
      * tiles {@code (⊥, null]} on the top-level common prefixes (default {@code --tune seed.mode=shallow}),
@@ -1537,7 +1548,6 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // this is deliberately fresh-only, so resume retains checkpoint-finalized segments.
             clearSortStagingContents(outputDir, stagingDir);
         }
-        Files.createDirectories(stagingDir);
         SortMode sortMode = run.mode() == ListingMode.VERSIONS
                 ? SortMode.VERSIONS : SortMode.OBJECTS;
 
@@ -1553,14 +1563,31 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // crash strictly between manifest-write and the terminal-status commit) must still
                 // close out run_meta, or it stays RUNNING forever. Idempotent: re-marking an already
                 // COMPLETED run is a harmless no-op UPDATE.
+                // Identity + last-written _SUCCESS were verified before any cleanup mutation. Latch
+                // PUBLISHED before entering the retryable suffix so every cleanup failure remains a
+                // PUBLISHED/RUNNING checkpoint rather than falling back into MERGING or the fatal guard.
+                store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 List<String> retainedSegments = sortConfig.stagingRetention().retainsOriginals()
                         ? store.finalizedParts(run.id()).stream()
                                 .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
                                 .map(PartRef::path)
                                 .toList()
                         : List.of();
-                StagingReconciliation.Result retentionResult = cleanSortStagingAndStaleTmp(
-                        outputDir, stagingDir, sortConfig, retainedSegments);
+                StagingReconciliation.Result retentionResult;
+                try {
+                    retentionResult = cleanPublishedSort(
+                            outputDir, stagingDir, sortConfig, retainedSegments);
+                } catch (IOException | InvalidArgsException | RuntimeException cleanupFailure) {
+                    ctx.metrics().recordStealReason("SORT", "post_publish_cleanup_pending");
+                    log.warn("sort_post_publish_cleanup_pending source=published_reentry "
+                                    + "publication_committed=true cleanup_pending=true stage={} "
+                                    + "output_dir={} staging_dir={} message={}",
+                            CommittedPublicationCleanupException.Stage.PUBLISHED_REENTRY_CLEANUP.logValue(),
+                            outputDir, stagingDir, cleanupFailure.getMessage());
+                    throw new PublicationPendingException(
+                            "sorted dataset publication committed; PUBLISHED cleanup pending",
+                            CommittedPublicationCleanupException.publishedReentry(cleanupFailure));
+                }
                 if (retentionResult != null) {
                     ctx.metrics().recordStealReason("SORT", "staging_retained");
                     log.info("sort_staging_retained source=published_reentry path={} "
@@ -1568,7 +1595,6 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             stagingDir, retentionResult.retainedEntries(),
                             retentionResult.removedEntries());
                 }
-                store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
                 writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
                         true, StopReason.COMPLETED, STRATEGY_WORK_STEALING, SortArm.PUBLISHED_REENTRY);
@@ -1579,6 +1605,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // merge-budget fix; widened to ALL data/*.parquet) sweeps any stale finals before
             // this run writes its own, so a foreign manifest's finals never survive into this run's
             // published output.
+            Files.createDirectories(stagingDir);
             listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
                     sortConfig, sortMode, parquetSpec);
             return ExitCodes.SUCCESS;
@@ -1587,6 +1614,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         // counter against usable free space while the (possibly multi-hour) listing runs, so a
         // brand-new giant bucket's true disk trajectory trips this well before the merge, not after
         // it. See SortDiskGuard's class javadoc for why it halts directly rather than throwing.
+        Files.createDirectories(stagingDir);
         try (SortDiskGuard diskGuard = SortDiskGuard.arm(
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
             listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
@@ -1688,7 +1716,18 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
         StagingReconciliation.sweepFinalTemporaries(DatasetLayout.of(outputDir).dataDir());
     }
 
-    private static StagingReconciliation.Result cleanSortStagingAndStaleTmp(
+    private StagingReconciliation.Result cleanPublishedSort(
+            Path outputDir, Path stagingDir, SortConfig sortConfig,
+            List<String> finalizedSegments) throws IOException, InvalidArgsException {
+        if (publishedSortCleanupOverride != null) {
+            return publishedSortCleanupOverride.clean(
+                    outputDir, stagingDir, sortConfig, finalizedSegments);
+        }
+        return cleanSortStagingAndStaleTmp(
+                outputDir, stagingDir, sortConfig, finalizedSegments);
+    }
+
+    static StagingReconciliation.Result cleanSortStagingAndStaleTmp(
             Path outputDir, Path stagingDir, SortConfig sortConfig,
             List<String> finalizedSegments)
             throws IOException, InvalidArgsException {

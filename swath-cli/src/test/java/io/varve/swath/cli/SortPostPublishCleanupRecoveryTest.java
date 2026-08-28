@@ -37,12 +37,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -165,17 +168,50 @@ final class SortPostPublishCleanupRecoveryTest {
         assertThat(reasonCount(outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME),
                 "post_publish_cleanup_pending")).isEqualTo(1);
 
-        MockPageFetcher forbidden = MockPageFetcher.builder()
-                .keys(List.of())
-                .interceptor((request, call, page) -> {
-                    throw new ListingException("unexpected LIST during PUBLISHED cleanup re-entry");
-                })
-                .build();
+        AtomicInteger cleanupAttempts = new AtomicInteger();
+        ListCommand.PublishedSortCleanup flakyCleanup =
+                (out, staging, sortConfig, segments) -> {
+                    assertThat(Manifest.readIdentity(out)).contains(identity);
+                    assertThat(DatasetLayout.of(out).success()).exists();
+                    int attempt = cleanupAttempts.incrementAndGet();
+                    if (attempt == 1) {
+                        throw new java.io.IOException("injected repeatable PUBLISHED cleanup failure");
+                    }
+                    if (attempt == 2) {
+                        throw new IllegalStateException(
+                                "injected runtime PUBLISHED reconciliation failure");
+                    }
+                    return ListCommand.cleanSortStagingAndStaleTmp(
+                            out, staging, sortConfig, segments);
+                };
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            MockPageFetcher forbidden = failOnAnyList();
+            ListCommand resume = command(outputDir, checkpoint, forbidden, retainStaging);
+            resume.checkpoint.resume = true;
+            resume.publishedSortCleanupOverride = flakyCleanup;
+
+            assertThat(catchThrowable(resume::call))
+                    .as("PUBLISHED cleanup attempt %s", attempt)
+                    .isInstanceOf(PublicationPendingException.class)
+                    .hasMessageContaining("PUBLISHED cleanup pending")
+                    .hasCauseInstanceOf(CommittedPublicationCleanupException.class);
+            assertThat(forbidden.apiCalls()).isZero();
+            assertThat(snapshot(layout)).isEqualTo(published);
+            assertThat(CheckpointDbProbe.runStatusEnum(checkpoint, runId)).isEqualTo(RunStatus.RUNNING);
+            assertThat(CheckpointDbProbe.fatalError(checkpoint)).isFalse();
+            try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
+                assertThat(store.sortPhase(runId)).isEqualTo(SortPhase.PUBLISHED);
+            }
+        }
+
+        MockPageFetcher forbidden = failOnAnyList();
         ListCommand resume = command(outputDir, checkpoint, forbidden, retainStaging);
         resume.checkpoint.resume = true;
-
+        resume.publishedSortCleanupOverride = flakyCleanup;
         assertThat(resume.call()).isEqualTo(ExitCodes.SUCCESS);
 
+        assertThat(cleanupAttempts).hasValue(3);
         assertThat(forbidden.apiCalls()).isZero();
         assertThat(snapshot(layout)).isEqualTo(published);
         assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expectedKeys);
@@ -197,6 +233,76 @@ final class SortPostPublishCleanupRecoveryTest {
         assertThat(completed.path("sort").path("arm").asText()).isEqualTo("PUBLISHED_REENTRY");
     }
 
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void parallelCommittedFailureSummaryRetainsExactPublishedFacts(@TempDir Path root)
+            throws Exception {
+        String property = "swath.sort.min-parallel-staged-bytes";
+        String previous = System.getProperty(property);
+        try {
+            System.setProperty(property, "0");
+            Path outputDir = root.resolve("out");
+            Path checkpoint = root.resolve("checkpoint.sqlite");
+            List<String> expectedKeys = Stream.iterate(0, n -> n + 1).limit(3_000)
+                    .map(n -> String.format("data/key-%05d", n)).toList();
+            ListCommand initial = command(outputDir, checkpoint, fetcher(expectedKeys), false);
+            initial.tune.entries = List.of(
+                    SortConfig.KEEP_STAGING_TUNE_KEY + "=off",
+                    "sort.merge-parallelism=3");
+            initial.listRunnerOverride = new ListRunner((step, ordinal) -> {
+                if (step == PublicationStep.AFTER_PUBLISH_LISTENER) {
+                    throw new java.io.IOException("injected parallel post-publish cleanup failure");
+                }
+            });
+
+            Throwable failure = catchThrowable(initial::call);
+
+            assertThat(failure).isInstanceOf(PublicationPendingException.class)
+                    .hasCauseInstanceOf(CommittedPublicationCleanupException.class);
+            CommittedPublicationCleanupException committed =
+                    (CommittedPublicationCleanupException) failure.getCause();
+            var result = committed.publishedResult();
+            assertThat(result.finalizationParallelism()).isEqualTo(3);
+            assertThat(result.mergePasses()).isPositive();
+            assertThat(result.finalFiles()).hasSize(3);
+            long publishedBytes = result.finalFiles().stream().mapToLong(path -> {
+                try {
+                    return Files.size(path);
+                } catch (java.io.IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            }).sum();
+            assertThat(result.outputBytes()).isEqualTo(publishedBytes);
+
+            Path summaryPath = outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME);
+            JsonNode summary = MAPPER.readTree(summaryPath.toFile());
+            assertThat(summary.path("completed").asBoolean()).isFalse();
+            assertThat(summary.path("output").path("files").asLong())
+                    .isEqualTo(result.finalFiles().size());
+            assertThat(summary.path("output").path("compressed_size_bytes").asLong())
+                    .isEqualTo(publishedBytes);
+            assertThat(summary.path("sort").path("passes").asLong())
+                    .isEqualTo(result.mergePasses());
+            assertThat(summary.path("sort").path("finalize_parallelism").asLong())
+                    .isEqualTo(result.finalizationParallelism());
+            assertThat(summary.path("sort").path("merge_ms").asLong()).isPositive();
+            assertThat(meterValue(summaryPath, "swath.output.files",
+                    Map.of("format", "parquet", "outcome", "written")))
+                    .isEqualTo(result.finalFiles().size());
+            assertThat(meterValue(summaryPath, "swath.output.bytes",
+                    Map.of("format", "parquet"))).isEqualTo(publishedBytes);
+            assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expectedKeys);
+            assertThat(CheckpointDbProbe.runStatus(checkpoint)).isEqualTo("RUNNING");
+            assertThat(CheckpointDbProbe.fatalError(checkpoint)).isFalse();
+        } finally {
+            if (previous == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, previous);
+            }
+        }
+    }
+
     private static ListCommand command(Path outputDir, Path checkpoint, MockPageFetcher fetcher,
             boolean retainStaging) {
         ListCommand command = new ListCommand();
@@ -216,6 +322,15 @@ final class SortPostPublishCleanupRecoveryTest {
     private static MockPageFetcher fetcher(List<String> keys) {
         return MockPageFetcher.builder().keys(keys.stream()
                 .map(key -> key.getBytes(StandardCharsets.UTF_8)).toList()).build();
+    }
+
+    private static MockPageFetcher failOnAnyList() {
+        return MockPageFetcher.builder()
+                .keys(List.of())
+                .interceptor((request, call, page) -> {
+                    throw new ListingException("unexpected LIST during PUBLISHED cleanup re-entry");
+                })
+                .build();
     }
 
     private static List<String> outputKeys(Path outputDir) throws Exception {
@@ -258,6 +373,21 @@ final class SortPostPublishCleanupRecoveryTest {
             }
         }
         return count;
+    }
+
+    private static long meterValue(Path summary, String name, Map<String, String> tags)
+            throws Exception {
+        for (JsonNode meter : MAPPER.readTree(summary.toFile()).path("meters")) {
+            if (!name.equals(meter.path("name").asText())) {
+                continue;
+            }
+            boolean matches = tags.entrySet().stream().allMatch(entry -> entry.getValue().equals(
+                    meter.path("tags").path(entry.getKey()).asText()));
+            if (matches) {
+                return meter.path("value").asLong();
+            }
+        }
+        throw new AssertionError("missing meter " + name + " tags=" + tags);
     }
 
     private record DatasetSnapshot(List<String> parts, String manifest, String state,

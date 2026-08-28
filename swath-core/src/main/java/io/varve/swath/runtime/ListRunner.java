@@ -820,11 +820,12 @@ public final class ListRunner {
                         "WORK_STEALING", true, runId, "PARQUET", workerCount, true))
                 .producer(producer).consumerStage(stage)
                 .jsonSummaryConfig(spec.jsonSummary())
-                // During listing the merge has not run, so the periodic snapshot reports zero final files;
-                // the terminal summary reads the true published-file count off the completed merge result.
-                .snapshotSummary(el -> ctx.metrics().summary(el, "WORK_STEALING", 0L, 0L))
+                // During listing the merge has not run, so periodic snapshots report zero final
+                // files. If publication commits and only cleanup fails, the exception path fills
+                // this same holder before the unwound snapshot is taken.
+                .snapshotSummary(el -> sortedSummary(ctx, el, merged[0]))
                 .terminalSummary(el -> ctx.metrics().summary(el, "WORK_STEALING",
-                        merged[0].finalFiles().size(), sortedOutputBytes(merged[0].finalFiles())))
+                        merged[0].finalFiles().size(), merged[0].outputBytes()))
                 .statistics(stage::statistics)
                 .drain(laneDrain(lane, ctx.metrics()))
                 .complete(() -> {
@@ -835,10 +836,15 @@ public final class ListRunner {
                     ctx.metrics().setPhase(Phase.MERGING);
                     // Normal listing-completion publish: no identity-verified merge-reentry guarantee here,
                     // so the NARROW part-*.parquet stale-finals sweep only (see sortMergeAndPublish javadoc).
-                    merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
-                            sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
-                            spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                            StaleFinalSweep.OWN_PARTS_ONLY);
+                    try {
+                        merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
+                                sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
+                                spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                                StaleFinalSweep.OWN_PARTS_ONLY);
+                    } catch (PublicationPendingException e) {
+                        merged[0] = committedSortResult(e);
+                        throw e;
+                    }
                     store.setSortPhase(runId, SortPhase.PUBLISHED);
                     store.markRunFinished(runId, RunStatus.COMPLETED);
                 })
@@ -847,7 +853,7 @@ public final class ListRunner {
                 // swath.output.{files,bytes}{format=parquet} series as the non-sort Parquet sinks (the
                 // sort-specific swath.sort.* meters already distinguish the code path that produced it).
                 .epilogue(() -> ctx.metrics().recordOutput("parquet", "written",
-                        merged[0].finalFiles().size(), sortedOutputBytes(merged[0].finalFiles())))
+                        merged[0].finalFiles().size(), merged[0].outputBytes()))
                 .build());
     }
 
@@ -868,8 +874,17 @@ public final class ListRunner {
         ctx.metrics().setPrefix(spec.prefix());
         ctx.metrics().setPhase(Phase.LISTING);
         ctx.metrics().recordStealReason("SORT", "merge_redone");
-        Supplier<RunSummary> snapshot =
-                () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
+        SortTransformResult[] published = new SortTransformResult[1];
+        Supplier<RunSummary> snapshot = () -> {
+            SortTransformResult result = published[0];
+            if (result == null) {
+                return ctx.metrics().summary(
+                        elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
+            }
+            return ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING",
+                    result.finalFiles().size(), result.outputBytes(),
+                    result.totalRows());
+        };
         JsonRunSummaryWriter.Config mergeOnlySummary = spec.jsonSummary() == null ? null
                 : spec.jsonSummary().withRunConfig(
                         spec.jsonSummary().runConfig().withSortArm(SortArm.MERGE_ONLY_PAGE_RUN));
@@ -888,10 +903,20 @@ public final class ListRunner {
             List<PartRef> segRows = sortedSegmentRows(store, runId);
             // Merge-only resume: identity-verified merge-reentry (ListCommand#isPublishedByThisRun
             // gated this call), so the WIDE data/*.parquet stale-finals sweep is safe here.
-            SortTransformResult result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
-                    segRows, sortConfig, mode, spec.bucket(),
-                    spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                    StaleFinalSweep.ALL_PARQUET);
+            SortTransformResult result;
+            try {
+                result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
+                        segRows, sortConfig, mode, spec.bucket(),
+                        spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
+                        StaleFinalSweep.ALL_PARQUET);
+                published[0] = result;
+            } catch (PublicationPendingException e) {
+                result = committedSortResult(e);
+                published[0] = result;
+                ctx.metrics().recordRecoveredSortSegments(segRows.size());
+                ctx.metrics().recordRecoveredSortRows(result.totalRows());
+                throw e;
+            }
             store.setSortPhase(runId, SortPhase.PUBLISHED);
             store.markRunFinished(runId, RunStatus.COMPLETED);
 
@@ -911,11 +936,11 @@ public final class ListRunner {
             ctx.metrics().finishProgress();
             Duration elapsed = elapsedSince(startedNs);
             RunSummary summary = ctx.metrics().summary(elapsed, "WORK_STEALING",
-                    result.finalFiles().size(), sortedOutputBytes(result.finalFiles()), result.totalRows());
+                    result.finalFiles().size(), result.outputBytes(), result.totalRows());
             ctx.metrics().setPhase(Phase.COMPLETE);
             ctx.metrics().recordRunCompletion(elapsed, summary.keysPerSecond());
             ctx.metrics().recordOutput("parquet", "written",
-                    result.finalFiles().size(), sortedOutputBytes(result.finalFiles()));
+                    result.finalFiles().size(), result.outputBytes());
             logSummary(summary);
             summaryEmitted = true;
             emitQuietly(() -> ctx.metrics().emitSummary(summary, ctx.metrics().diagnostics(elapsed),
@@ -1037,6 +1062,11 @@ public final class ListRunner {
             // next resume choose PUBLISHED cleanup; retain the latch error only as a suppressed
             // diagnostic rather than poisoning an otherwise valid dataset.
             ctx.metrics().recordSortMerge(mergeSample);
+            SortTransformResult result = e.publishedResult();
+            ctx.metrics().recordSortMergePasses(result.mergePasses());
+            ctx.metrics().recordSortFinalizeParallelism(result.finalizationParallelism());
+            ctx.metrics().recordOutput("parquet", "written",
+                    result.finalFiles().size(), result.outputBytes());
             try {
                 store.setSortPhase(runId, SortPhase.PUBLISHED);
             } catch (CheckpointException phaseFailure) {
@@ -1081,6 +1111,23 @@ public final class ListRunner {
             }
         }
         return null;
+    }
+
+    private static SortTransformResult committedSortResult(PublicationPendingException pending) {
+        if (pending.getCause() instanceof CommittedPublicationCleanupException committed) {
+            return committed.publishedResult();
+        }
+        throw new IllegalStateException(
+                "sorted publication-pending error has no committed transform result", pending);
+    }
+
+    private static RunSummary sortedSummary(
+            RunContext ctx, Duration elapsed, SortTransformResult result) {
+        if (result == null) {
+            return ctx.metrics().summary(elapsed, "WORK_STEALING", 0L, 0L);
+        }
+        return ctx.metrics().summary(elapsed, "WORK_STEALING",
+                result.finalFiles().size(), result.outputBytes());
     }
 
     /**
@@ -1189,18 +1236,6 @@ public final class ListRunner {
             }
         }
         return Hex.encodeHexString(md.digest());
-    }
-
-    private static long sortedOutputBytes(List<Path> finalFiles) {
-        long bytes = 0;
-        for (Path f : finalFiles) {
-            try {
-                bytes += Files.size(f);
-            } catch (IOException ignored) {
-                // best effort for the summary's compressed-size line
-            }
-        }
-        return bytes;
     }
 
     private static List<PartRef> sortedSegmentRows(CheckpointStore store, long runId) throws CheckpointException {

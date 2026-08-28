@@ -12,7 +12,9 @@ import java.io.IOException;
  *
  * <p>The final files and listener-owned manifest/state/symlink/{@code _SUCCESS} must not be rolled
  * back or republished in response to this exception. The managed runtime maps it to its resumable
- * publication-pending error and re-enters only the PUBLISHED cleanup path.
+ * publication-pending error and re-enters only the PUBLISHED cleanup path. When it escapes a
+ * {@link SortTransform}, {@link #publishedResult()} carries the exact committed output and merge
+ * facts even though cleanup prevented the ordinary return.
  */
 public final class CommittedPublicationCleanupException extends IOException {
 
@@ -21,7 +23,8 @@ public final class CommittedPublicationCleanupException extends IOException {
         AFTER_PUBLISH_LISTENER_HOOK("after_publish_listener_hook"),
         DISPOSABLE_INTERMEDIATE_CLEANUP("disposable_intermediate_cleanup"),
         ORIGINAL_STAGING_COMPLETION("original_staging_completion"),
-        AFTER_STAGING_COMPLETION_HOOK("after_staging_completion_hook");
+        AFTER_STAGING_COMPLETION_HOOK("after_staging_completion_hook"),
+        PUBLISHED_REENTRY_CLEANUP("published_reentry_cleanup");
 
         private final String logValue;
 
@@ -36,14 +39,36 @@ public final class CommittedPublicationCleanupException extends IOException {
     }
 
     private final Stage stage;
+    private SortTransformResult publishedResult;
 
     CommittedPublicationCleanupException(Stage stage, Throwable cause) {
         super("sorted dataset publication committed; cleanup pending at " + stage.logValue(), cause);
         this.stage = stage;
     }
 
+    /** Build the typed committed-cleanup cause for a PUBLISHED cleanup-only re-entry. */
+    public static CommittedPublicationCleanupException publishedReentry(Throwable cause) {
+        return new CommittedPublicationCleanupException(Stage.PUBLISHED_REENTRY_CLEANUP, cause);
+    }
+
+    CommittedPublicationCleanupException withPublishedResult(SortTransformResult result) {
+        if (publishedResult != null) {
+            throw new IllegalStateException("published sort result already attached");
+        }
+        publishedResult = result;
+        return this;
+    }
+
     /** The post-commit operation that failed. */
     public Stage stage() {
         return stage;
+    }
+
+    /** Exact committed result, attached by {@link SortTransform} before this exception escapes it. */
+    public SortTransformResult publishedResult() {
+        if (publishedResult == null) {
+            throw new IllegalStateException("committed cleanup failure has no published sort result");
+        }
+        return publishedResult;
     }
 }
