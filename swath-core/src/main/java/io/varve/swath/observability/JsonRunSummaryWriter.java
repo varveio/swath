@@ -804,6 +804,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
         sortNode.put("merge_overlap_rows_peak",
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
+        sortNode.put("merge_range_framed_bytes",
+                (long) counterCount("swath.sort.merge.range.framed.bytes"));
         sortNode.put("merge_range_index_bytes",
                 (long) counterCount("swath.sort.merge.range.index.bytes"));
         sortNode.put("merge_proof_spool_logical_extent_bytes",

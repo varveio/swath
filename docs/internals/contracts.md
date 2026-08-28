@@ -1073,7 +1073,8 @@ worker quiescence and sweeps range/cascade temporaries; no manifest, state, or s
 published. Successful parallel merges emit `SORT.merge_zone_proof_complete` once; per-range logs
 carry `pages_seeked_over`, logical framed `bytes_read` (every page frame read by that range,
 including cascade intermediates), and exact worker `index_bytes_read` alongside the existing page
-counts.
+counts. `summary.json.sort.merge_range_framed_bytes` is the cumulative run total of those frame
+bytes; it is zero on serial merges.
 
 ---
 

@@ -124,6 +124,8 @@ class SortedFixturesTest {
         assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.bytes").counter().count())
                 .isZero();
         assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count()).isZero();
+        assertThat(registry.find("swath.replay.sort.merge.range.framed.bytes").counter().count())
+                .isZero();
         assertThat(registry.find("swath.replay.sort.steal_reason")
                 .tags("outcome", "SORT", "reason", "merge_range_frontier_disabled")
                 .counter().count()).isEqualTo(1.0);

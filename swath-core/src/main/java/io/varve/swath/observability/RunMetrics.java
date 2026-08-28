@@ -1178,7 +1178,7 @@ public final class RunMetrics {
         sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
     }
 
-    /** Type-2 seek-planning and exact worker-proof metadata reads after boundary selection. */
+    /** Cumulative logical page-frame bytes read by parallel range workers, including cascades. */
     public void recordSortMergeRangeFramedBytes(long bytes) {
         sortMergeRangeFramedBytes.increment(Math.max(0L, bytes));
     }

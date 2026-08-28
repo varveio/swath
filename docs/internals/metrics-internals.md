@@ -87,8 +87,9 @@ frontiers read no extension and record no sample. Because the JSON field stores 
 a recorded sub-millisecond sample can still render as `0`.
 The parallel path is otherwise default-on with configured maximum
 `max(1, min(8, availableProcessors / 2))`, subject to the gates registered in §5 below.
-The sibling JSON fields `merge_boundary_embedded_entries`, `merge_boundary_embedded_bytes`, and
-`merge_boundary_scan_bytes` expose page-run sample volume and logical boundary I/O.
+The sibling JSON fields `merge_boundary_embedded_entries`, `merge_boundary_embedded_bytes`,
+`merge_boundary_scan_bytes`, and `merge_range_framed_bytes` expose cumulative page-run sample,
+boundary, and parallel-worker logical frame I/O.
 `merge_boundary_embedded_bytes` counts extension bytes actually read (so an unknown header counts
 only its 16-byte header, while a later rejection can include bytes prefetched in the current 64 KiB
 chunk); `merge_boundary_scan_bytes` counts the exact
@@ -99,8 +100,8 @@ are disjoint: attempted extension bytes land only in `embedded_bytes`, framed pa
 `scan_bytes`. `merge_boundary_bytes` is their sum. The source is
 classified once per boundary phase by `SORT.merge_boundary_source_{embedded,scan,mixed}`; each
 page-run fallback also emits its exact `SORT.merge_boundary_fallback_*` reason.
-`merge_range_framed_bytes` is the exact sum of page frames read by parallel range workers, including
-frames read from cascade intermediates. `merge_range_index_bytes` is separate type-2 metadata overhead after descriptor preflight: the full
+`merge_range_framed_bytes` is the exact cumulative sum, in bytes, of page frames read by parallel
+range workers, including frames read from cascade intermediates. `merge_range_index_bytes` is separate type-2 metadata overhead after descriptor preflight: the full
 entry region streamed once during seek planning, each exact positional target/sample entry read by
 workers, and—only under `sort.merge-boundary-policy=rows`—one additional full entry-region stream
 used to build the bounded row-mass histogram.
