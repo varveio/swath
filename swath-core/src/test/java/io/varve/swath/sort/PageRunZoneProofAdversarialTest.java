@@ -21,8 +21,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -42,7 +45,9 @@ class PageRunZoneProofAdversarialTest {
         Path staging = Files.createDirectories(output.resolve("_staging"));
         Path segment = SortTestSupport.writeIndexedPages(
                 staging.resolve("segment.pageseg"), indexedPages());
-        lie.mutate(segment);
+        EntrySelection selection = entrySelection(segment, 4);
+        assertThat(selection.selected()).isNotEqualTo(selection.unselected());
+        lie.mutate(segment, selection);
 
         // The mutation deliberately passes the extension's structural/CRC admission. The physical
         // proof, not fallback scanning, must be what rejects it.
@@ -91,6 +96,23 @@ class PageRunZoneProofAdversarialTest {
                 SortTestSupport.object("k00102"), SortTestSupport.object("k00103"));
         Path legacy = SortTestSupport.writePageRun(
                 staging.resolve("legacy.pageseg"), legacyRows, CMP);
+        Path type1Source = SortTestSupport.writeIndexedPages(
+                staging.resolve("type1-source.pageseg"), 4, 200);
+        Path type1 = NonIndexKind.TYPE1.convert(
+                type1Source, staging.resolve("type1.pageseg"));
+        Files.delete(type1Source);
+        List<List<ListEntry>> equalMinPages = new ArrayList<>();
+        for (int page = 0; page < 6; page++) {
+            equalMinPages.add(List.of(SortTestSupport.object("equal-min")));
+        }
+        Path equalMin = SortTestSupport.writeIndexedPages(
+                staging.resolve("equal-min.pageseg"), equalMinPages);
+        PageRunSeekPlan equalMinPlan = PageRunSeekPlan.plan(descriptors(equalMin),
+                List.of(bytes("g"), bytes("h"), bytes("i")), SortMetrics.NO_OP);
+        assertThat(equalMinPlan.segments().getFirst().zone(1).empty()).isTrue();
+        assertThat(equalMinPlan.segments().getFirst().zone(2).empty())
+                .as("repeated type-2 starts remain two explicit consecutive empty zones")
+                .isTrue();
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         Logger logger = (Logger) LoggerFactory.getLogger(ParallelRangeMerge.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -98,28 +120,26 @@ class PageRunZoneProofAdversarialTest {
         logger.addAppender(appender);
         SortTransformResult result;
         try {
-            result = transform(3, metrics, SortedFileWriterFactory.DEFAULT)
-                    .transform(List.of(indexed, legacy), output, staging, PublishListener.NO_OP,
+            result = transform(4, metrics, SortedFileWriterFactory.DEFAULT)
+                    .transform(List.of(indexed, legacy, type1, equalMin), output, staging,
+                            PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
         } finally {
             logger.detachAppender(appender);
             appender.stop();
         }
 
-        assertThat(result.totalRows()).isEqualTo(16);
-        assertThat(readKeys(result.finalFiles())).containsExactly(
-                "k00000", "k00001", "k00002", "k00003", "k00004", "k00005",
-                "k00006", "k00007", "k00008", "k00009", "k00010", "k00011",
-                "k00100", "k00101", "k00102", "k00103");
+        assertThat(result.totalRows()).isEqualTo(26);
+        assertThat(readKeys(result.finalFiles())).hasSize(26).isSorted();
         assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_range_index_seek")).isPositive();
         assertThat(metrics.count("SORT.merge_range_index_absent")).isPositive();
         assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
-        assertThat(metrics.rangeIndexBytes.sum()).isEqualTo(1_296);
+        assertThat(metrics.rangeIndexBytes.sum()).isEqualTo(2_208);
         assertThat(appender.list.stream()
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(message -> message.startsWith("sort_merge_range range=")))
-                .hasSize(3)
+                .hasSize(4)
                 .allSatisfy(message -> assertThat(message)
                         .contains("pages_seeked_over=")
                         .contains("bytes_read="));
@@ -127,7 +147,7 @@ class PageRunZoneProofAdversarialTest {
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(message -> message.startsWith("sort_merge_range range="))
                 .mapToLong(message -> longField(message, "index_bytes_read"))
-                .sum()).isEqualTo(720);
+                .sum()).isEqualTo(1_308);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -138,7 +158,7 @@ class PageRunZoneProofAdversarialTest {
         Path staging = Files.createDirectories(output.resolve("_staging"));
         Path segment = SortTestSupport.writeIndexedPages(
                 staging.resolve("segment.pageseg"), indexedPages());
-        lie.mutate(segment);
+        lie.mutate(segment, entrySelection(segment, 3));
         List<PageRunSegmentDescriptor> descriptors = descriptors(segment);
         assertThat(descriptors.getFirst().extension().status()).isEqualTo(lie.status);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
@@ -154,6 +174,34 @@ class PageRunZoneProofAdversarialTest {
         assertThat(metrics.rangeIndexBytes.sum()).isZero();
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(NonIndexKind.class)
+    void downwardTrailerTotalWithoutUsableType2RemainsBodyCorruption(
+            NonIndexKind kind, @TempDir Path root) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path source = SortTestSupport.writeIndexedPages(
+                staging.resolve("source.pageseg"), indexedPages());
+        Path segment = kind.convert(source, staging.resolve("input.pageseg"));
+        byte[] bytes = Files.readAllBytes(segment);
+        int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        ByteBuffer tail = ByteBuffer.wrap(bytes);
+        tail.putLong(fixedTailStart + 12, tail.getLong(fixedTailStart + 12) - 1);
+        Files.write(segment, bytes);
+        Files.deleteIfExists(source);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> transform(4, metrics, SortedFileWriterFactory.DEFAULT)
+                .transform(List.of(segment), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .extracting(error -> ((SegmentCorruptionException) error).errorClass())
+                .isEqualTo(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION);
+        assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
+        assertThat(output.resolve("part-00000.parquet")).doesNotExist();
+        assertNoOwnedDebris(staging);
+    }
+
     @Test
     void plannedRangeCountRejectsMissingExtraAndDuplicateTopologyEvenWithoutSegments(
             @TempDir Path root) throws IOException {
@@ -165,22 +213,20 @@ class PageRunZoneProofAdversarialTest {
         PageRunZoneVerifier.RangeSummary only = emptySummaries(missingDir, 1).getFirst();
         assertThatThrownBy(() -> PageRunZoneVerifier.verify(plan, List.of(only), SortMetrics.NO_OP))
                 .isInstanceOf(IOException.class).hasMessageContaining("2 planned ranges");
-        Files.deleteIfExists(only.spool());
+        assertThat(only.spool()).doesNotExist();
 
         Path duplicateDir = Files.createDirectories(root.resolve("duplicate"));
         PageRunZoneVerifier.RangeSummary duplicate = emptySummaries(duplicateDir, 1).getFirst();
         assertThatThrownBy(() -> PageRunZoneVerifier.verify(
                 plan, List.of(duplicate, duplicate), SortMetrics.NO_OP))
                 .isInstanceOf(IOException.class).hasMessageContaining("duplicate");
-        Files.deleteIfExists(duplicate.spool());
+        assertThat(duplicate.spool()).doesNotExist();
 
         Path extraDir = Files.createDirectories(root.resolve("extra"));
         List<PageRunZoneVerifier.RangeSummary> extra = emptySummaries(extraDir, 3);
         assertThatThrownBy(() -> PageRunZoneVerifier.verify(plan, extra, SortMetrics.NO_OP))
                 .isInstanceOf(IOException.class).hasMessageContaining("2 planned ranges");
-        for (PageRunZoneVerifier.RangeSummary summary : extra) {
-            Files.deleteIfExists(summary.spool());
-        }
+        assertThat(extra).allSatisfy(summary -> assertThat(summary.spool()).doesNotExist());
 
         Path exactDir = Files.createDirectories(root.resolve("exact"));
         List<PageRunZoneVerifier.RangeSummary> exact = emptySummaries(exactDir, 2);
@@ -225,6 +271,107 @@ class PageRunZoneProofAdversarialTest {
         }
     }
 
+    @Test
+    void cancellationAfterWorkersSpoolAndWritersAreActiveQuiescesAndCleans(@TempDir Path root)
+            throws Exception {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path segment = SortTestSupport.writeIndexedPages(
+                staging.resolve("segment.pageseg"), 32, 0);
+        CountDownLatch writing = new CountDownLatch(1);
+        TrackingFileWriterFactory writers = new TrackingFileWriterFactory(writing);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread transformThread = Thread.ofPlatform().name("wp2-proof-cancel").start(() -> {
+            try {
+                transform(4, SortMetrics.NO_OP, writers)
+                        .transform(List.of(segment), output, staging, PublishListener.NO_OP,
+                                units -> { }, FinalPassListener.NO_OP);
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            }
+        });
+
+        assertThat(writing.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(writers.openNow.get()).isPositive();
+        assertThat(staging.resolve(StagingNames.rangeProofTmp())).exists();
+        transformThread.interrupt();
+        transformThread.join(TimeUnit.SECONDS.toMillis(10));
+
+        assertThat(transformThread.isAlive()).isFalse();
+        assertThat(failure.get()).isInstanceOf(IOException.class);
+        assertThat(writers.openNow.get()).isZero();
+        assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+        assertNoLiveWorkers();
+        assertNoOwnedDebris(staging);
+        assertThat(output.resolve("part-00000.parquet")).doesNotExist();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(MiddleZoneMutation.class)
+    void malformedBodyAndMinRegressionInsideAMiddleOwnedZoneFailTypedAndClean(
+            MiddleZoneMutation mutation, @TempDir Path root) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path segment = SortTestSupport.writeIndexedPages(
+                staging.resolve("segment.pageseg"), 32, 0);
+        long middleOrdinal = middleOwnedOrdinal(segment, 4);
+        assertThat(middleOrdinal).isBetween(1L, 30L);
+        mutation.mutate(segment, middleOrdinal);
+        assertThat(descriptors(segment).getFirst().extension().status())
+                .isEqualTo(PageRunPageIndex.Status.EMBEDDED);
+        TrackingFileWriterFactory writers = new TrackingFileWriterFactory();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> transform(4, metrics, writers)
+                .transform(List.of(segment), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .extracting(error -> ((SegmentCorruptionException) error).errorClass())
+                .isEqualTo(mutation.errorClass);
+        assertThat(writers.openNow.get()).isZero();
+        assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+        assertNoLiveWorkers();
+        assertNoOwnedDebris(staging);
+        assertThat(output.resolve("part-00000.parquet")).doesNotExist();
+    }
+
+    @Test
+    void serialR1IsByteExactAcrossType2AndExtensionlessInputsAndDoesZeroProofIo(
+            @TempDir Path root) throws IOException {
+        Path indexedOutput = Files.createDirectories(root.resolve("indexed-out"));
+        Path indexedStaging = Files.createDirectories(indexedOutput.resolve("_staging"));
+        Path indexed = SortTestSupport.writeIndexedPages(
+                indexedStaging.resolve("indexed.pageseg"), indexedPages());
+        SortTestSupport.CountingMetrics indexedMetrics = new SortTestSupport.CountingMetrics();
+        SortTransformResult indexedResult = transform(1, indexedMetrics, SortedFileWriterFactory.DEFAULT)
+                .transform(List.of(indexed), indexedOutput, indexedStaging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+
+        Path legacyOutput = Files.createDirectories(root.resolve("legacy-out"));
+        Path legacyStaging = Files.createDirectories(legacyOutput.resolve("_staging"));
+        Path source = SortTestSupport.writeIndexedPages(
+                legacyStaging.resolve("source.pageseg"), indexedPages());
+        Path legacy = NonIndexKind.EXTENSIONLESS.convert(
+                source, legacyStaging.resolve("legacy.pageseg"));
+        Files.delete(source);
+        SortTestSupport.CountingMetrics legacyMetrics = new SortTestSupport.CountingMetrics();
+        SortTransformResult legacyResult = transform(1, legacyMetrics, SortedFileWriterFactory.DEFAULT)
+                .transform(List.of(legacy), legacyOutput, legacyStaging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(Files.readAllBytes(indexedResult.finalFiles().getFirst()))
+                .containsExactly(Files.readAllBytes(legacyResult.finalFiles().getFirst()));
+        for (SortTestSupport.CountingMetrics metrics : List.of(indexedMetrics, legacyMetrics)) {
+            assertThat(metrics.rangeIndexBytes.sum()).isZero();
+            assertThat(metrics.count("SORT.merge_range_index_seek")).isZero();
+            assertThat(metrics.count("SORT.merge_range_index_absent")).isZero();
+            assertThat(metrics.count("SORT.merge_zone_proof_complete")).isZero();
+            assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
+        }
+        assertThat(indexedStaging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
+        assertThat(legacyStaging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
+    }
+
     private static SortTransform transform(int ranges, SortMetrics metrics,
                                            SortedFileWriterFactory writers) {
         SortConfig config = SortConfigs.base()
@@ -254,6 +401,54 @@ class PageRunZoneProofAdversarialTest {
         return PageRunSegmentDescriptor.readAll(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
                 Optional.of(candidates::add));
+    }
+
+    private static EntrySelection entrySelection(Path path, int ranges) throws IOException {
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+                List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
+                Optional.of(candidates::add));
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                descriptors, candidates, ranges, SortMetrics.NO_OP);
+        assertThat(boundaries).isNotNull();
+        PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(
+                descriptors, boundaries, SortMetrics.NO_OP).segments().getFirst();
+        List<Integer> selected = new ArrayList<>();
+        for (int range = 1; range < segment.ranges(); range++) {
+            int sample = segment.start(range).sampleIndex();
+            if (sample > 0 && !selected.contains(sample)) {
+                selected.add(sample);
+            }
+        }
+        int selectedEntry = selected.getFirst();
+        int entryCount = descriptors.getFirst().extension().entryCount();
+        int unselectedEntry = -1;
+        for (int entry = 1; entry < entryCount; entry++) {
+            if (!selected.contains(entry)) {
+                unselectedEntry = entry;
+                break;
+            }
+        }
+        assertThat(unselectedEntry).isNotNegative();
+        return new EntrySelection(selectedEntry, unselectedEntry);
+    }
+
+    private static long middleOwnedOrdinal(Path path, int ranges) throws IOException {
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+                List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
+                Optional.of(candidates::add));
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+                descriptors, candidates, ranges, SortMetrics.NO_OP);
+        PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(
+                descriptors, boundaries, SortMetrics.NO_OP).segments().getFirst();
+        PageRunSeekPlan.Zone middle = segment.zone(1);
+        assertThat(middle.end().pageOrdinal() - middle.start().pageOrdinal())
+                .as("range 1 owns at least two pages, so the mutation is not a seam")
+                .isGreaterThan(1);
+        return middle.start().pageOrdinal() + 1;
     }
 
     private static List<String> readKeys(List<Path> files) throws IOException {
@@ -314,47 +509,52 @@ class PageRunZoneProofAdversarialTest {
     }
 
     private enum LogicalLie {
-        OFFSET_AND_FRAMED_BYTES(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, false) {
+        OFFSET_AND_FRAMED_BYTES(
+                SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, false, EntryTarget.SELECTED) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                int entry = layout.entries().get(2);
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                int entry = layout.entries().get(entryIndex);
                 ByteBuffer data = ByteBuffer.wrap(bytes);
                 data.putLong(entry + 8, data.getLong(entry + 8) + 1);
                 data.putLong(entry + 24, data.getLong(entry + 24) + 1);
             }
         },
-        CUMULATIVE_ENTRIES(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, true) {
+        CUMULATIVE_ENTRIES(
+                SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, true, EntryTarget.SELECTED) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                int position = layout.entries().get(2) + 16;
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                int position = layout.entries().get(entryIndex) + 16;
                 ByteBuffer data = ByteBuffer.wrap(bytes);
                 data.putLong(position, data.getLong(position) + 1);
             }
         },
-        MINIMUM(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, false) {
+        MINIMUM(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, false, EntryTarget.SELECTED) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                KeyPositions keys = entryKeys(bytes, layout.entries().get(2));
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                KeyPositions keys = entryKeys(bytes, layout.entries().get(entryIndex));
                 bytes[keys.minKey() + keys.minLength() - 1]++;
             }
         },
-        PREFIX_MAX(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, true) {
+        PREFIX_MAX(
+                SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, true, EntryTarget.UNSELECTED) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                KeyPositions keys = entryKeys(bytes, layout.entries().get(2));
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                KeyPositions keys = entryKeys(bytes, layout.entries().get(entryIndex));
                 bytes[keys.prefixKey() + keys.prefixLength() - 1]--;
             }
         },
-        FINAL_PREFIX_AND_TRAILER_MAX(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION, true) {
+        FINAL_PREFIX_AND_TRAILER_MAX(
+                SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION, true, EntryTarget.NONE) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
+            void apply(byte[] bytes, Layout layout, int ignored) {
                 bytes[layout.finalPrefixKey() + layout.finalPrefixLength() - 1]++;
                 bytes[layout.trailerMaxKey() + layout.trailerMaxLength() - 1]++;
             }
         },
-        TRAILER_TOTAL_ENTRIES(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION, true) {
+        TRAILER_TOTAL_ENTRIES(
+                SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION, true, EntryTarget.NONE) {
             @Override
-            void apply(byte[] bytes, Layout layout) {
+            void apply(byte[] bytes, Layout layout, int ignored) {
                 ByteBuffer data = ByteBuffer.wrap(bytes);
                 data.putLong(layout.fixedTailStart() + 12,
                         data.getLong(layout.fixedTailStart() + 12) + 1);
@@ -363,37 +563,39 @@ class PageRunZoneProofAdversarialTest {
 
         private final String errorClass;
         private final boolean postWorker;
+        private final EntryTarget target;
 
-        LogicalLie(String errorClass, boolean postWorker) {
+        LogicalLie(String errorClass, boolean postWorker, EntryTarget target) {
             this.errorClass = errorClass;
             this.postWorker = postWorker;
+            this.target = target;
         }
 
-        void mutate(Path path) throws IOException {
+        void mutate(Path path, EntrySelection selection) throws IOException {
             byte[] bytes = Files.readAllBytes(path);
             Layout layout = layout(bytes);
-            apply(bytes, layout);
+            apply(bytes, layout, target.index(selection));
             rewriteExtensionCrc(bytes, layout);
             Files.write(path, bytes);
         }
 
-        abstract void apply(byte[] bytes, Layout layout);
+        abstract void apply(byte[] bytes, Layout layout, int entryIndex);
     }
 
     private enum StructuralLie {
         ORDINAL(PageRunPageIndex.Status.INVALID_COUNT,
                 "SORT.merge_boundary_fallback_invalid_count") {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                int entry = layout.entries().get(2);
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                int entry = layout.entries().get(entryIndex);
                 ByteBuffer.wrap(bytes).putLong(entry, 3);
             }
         },
         CUMULATIVE_FRAMED_BYTES(PageRunPageIndex.Status.INVALID_CUMULATIVE,
                 "SORT.merge_boundary_fallback_invalid_cumulative") {
             @Override
-            void apply(byte[] bytes, Layout layout) {
-                int position = layout.entries().get(2) + 24;
+            void apply(byte[] bytes, Layout layout, int entryIndex) {
+                int position = layout.entries().get(entryIndex) + 24;
                 ByteBuffer data = ByteBuffer.wrap(bytes);
                 data.putLong(position, data.getLong(position) + 1);
             }
@@ -407,15 +609,113 @@ class PageRunZoneProofAdversarialTest {
             this.reason = reason;
         }
 
-        void mutate(Path path) throws IOException {
+        void mutate(Path path, EntrySelection selection) throws IOException {
             byte[] bytes = Files.readAllBytes(path);
             Layout layout = layout(bytes);
-            apply(bytes, layout);
+            apply(bytes, layout, selection.selected());
             rewriteExtensionCrc(bytes, layout);
             Files.write(path, bytes);
         }
 
-        abstract void apply(byte[] bytes, Layout layout);
+        abstract void apply(byte[] bytes, Layout layout, int entryIndex);
+    }
+
+    private enum NonIndexKind {
+        EXTENSIONLESS {
+            @Override
+            Path convert(Path source, Path destination) throws IOException {
+                byte[] bytes = Files.readAllBytes(source);
+                Layout layout = layout(bytes);
+                try (FileChannel out = FileChannel.open(destination, StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.WRITE)) {
+                    SortTestSupport.writeFully(out,
+                            ByteBuffer.wrap(bytes, 0, layout.extensionStart()));
+                    SortTestSupport.writeFully(out, ByteBuffer.wrap(bytes, layout.fixedTailStart(),
+                            PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES));
+                }
+                return destination;
+            }
+        },
+        TYPE1 {
+            @Override
+            Path convert(Path source, Path destination) throws IOException {
+                List<byte[]> minima = new ArrayList<>();
+                try (PageFrontierReader frontier =
+                             new PageFrontierReader(source, SortMetrics.NO_OP)) {
+                    while (frontier.hasPage()) {
+                        minima.add(frontier.minKey().clone());
+                        frontier.advance();
+                    }
+                }
+                byte[] bytes = Files.readAllBytes(source);
+                Layout layout = layout(bytes);
+                try (FileChannel out = FileChannel.open(destination, StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.WRITE)) {
+                    SortTestSupport.writeFully(out,
+                            ByteBuffer.wrap(bytes, 0, layout.extensionStart()));
+                    PageRunBoundarySample.write(out, minima);
+                    SortTestSupport.writeFully(out, ByteBuffer.wrap(bytes, layout.fixedTailStart(),
+                            PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES));
+                }
+                return destination;
+            }
+        },
+        INVALID_TYPE2 {
+            @Override
+            Path convert(Path source, Path destination) throws IOException {
+                byte[] bytes = Files.readAllBytes(source);
+                Layout layout = layout(bytes);
+                bytes[layout.fixedTailStart() - 1] ^= 0x5a;
+                Files.write(destination, bytes);
+                return destination;
+            }
+        };
+
+        abstract Path convert(Path source, Path destination) throws IOException;
+    }
+
+    private enum MiddleZoneMutation {
+        MALFORMED_BODY(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION) {
+            @Override
+            void apply(byte[] bytes, int bodyStart, int bodyLength) {
+                int minLength = unsignedShort(bytes, bodyStart);
+                int maxLengthPosition = bodyStart + 2 + minLength;
+                int maxLength = unsignedShort(bytes, maxLengthPosition);
+                int orderedPosition = maxLengthPosition + 2 + maxLength + Integer.BYTES;
+                bytes[orderedPosition] = 2;
+            }
+        },
+        MIN_REGRESSION(SegmentCorruptionException.PAGE_RUN_MIN_REGRESSION) {
+            @Override
+            void apply(byte[] bytes, int bodyStart, int bodyLength) {
+                int minLength = unsignedShort(bytes, bodyStart);
+                java.util.Arrays.fill(bytes, bodyStart + 2, bodyStart + 2 + minLength, (byte) 0);
+            }
+        };
+
+        private final String errorClass;
+
+        MiddleZoneMutation(String errorClass) {
+            this.errorClass = errorClass;
+        }
+
+        void mutate(Path path, long pageOrdinal) throws IOException {
+            byte[] bytes = Files.readAllBytes(path);
+            int frameStart = PageRunSegmentWriter.HEADER_BYTES;
+            for (long page = 0; page < pageOrdinal; page++) {
+                int length = ByteBuffer.wrap(bytes).getInt(frameStart);
+                frameStart = Math.addExact(frameStart, 8 + length);
+            }
+            int bodyLength = ByteBuffer.wrap(bytes).getInt(frameStart);
+            int bodyStart = frameStart + 8;
+            apply(bytes, bodyStart, bodyLength);
+            CRC32C crc = new CRC32C();
+            crc.update(bytes, bodyStart, bodyLength);
+            ByteBuffer.wrap(bytes).putInt(frameStart + Integer.BYTES, (int) crc.getValue());
+            Files.write(path, bytes);
+        }
+
+        abstract void apply(byte[] bytes, int bodyStart, int bodyLength);
     }
 
     private static Layout layout(byte[] bytes) {
@@ -439,7 +739,7 @@ class PageRunZoneProofAdversarialTest {
         }
         int finalPrefixLength = unsignedShort(bytes, position);
         int finalPrefixKey = position + 2;
-        return new Layout(extensionStart, fixedTailStart, entries,
+        return new Layout(trailerStart, extensionStart, fixedTailStart, entries,
                 finalPrefixKey, finalPrefixLength, trailerMinKey, trailerMinLength,
                 trailerMaxKey, trailerMaxLength);
     }
@@ -464,10 +764,37 @@ class PageRunZoneProofAdversarialTest {
         ByteBuffer.wrap(bytes).putInt(crcPosition, (int) crc.getValue());
     }
 
+    private enum EntryTarget {
+        SELECTED {
+            @Override
+            int index(EntrySelection selection) {
+                return selection.selected();
+            }
+        },
+        UNSELECTED {
+            @Override
+            int index(EntrySelection selection) {
+                return selection.unselected();
+            }
+        },
+        NONE {
+            @Override
+            int index(EntrySelection ignored) {
+                return -1;
+            }
+        };
+
+        abstract int index(EntrySelection selection);
+    }
+
+    private record EntrySelection(int selected, int unselected) {
+    }
+
     private record KeyPositions(int minKey, int minLength, int prefixKey, int prefixLength) {
     }
 
-    private record Layout(int extensionStart, int fixedTailStart, List<Integer> entries,
+    private record Layout(int trailerStart, int extensionStart, int fixedTailStart,
+                          List<Integer> entries,
                           int finalPrefixKey, int finalPrefixLength,
                           int trailerMinKey, int trailerMinLength,
                           int trailerMaxKey, int trailerMaxLength) {
@@ -478,6 +805,15 @@ class PageRunZoneProofAdversarialTest {
         private final AtomicInteger opened = new AtomicInteger();
         private final AtomicInteger closed = new AtomicInteger();
         private final AtomicInteger openNow = new AtomicInteger();
+        private final CountDownLatch blockAtWrite;
+
+        TrackingFileWriterFactory() {
+            this(null);
+        }
+
+        TrackingFileWriterFactory(CountDownLatch blockAtWrite) {
+            this.blockAtWrite = blockAtWrite;
+        }
 
         @Override
         public SortedFileWriter create(Path path, int fileIndex) throws IOException {
@@ -490,7 +826,16 @@ class PageRunZoneProofAdversarialTest {
                 private long rows;
 
                 @Override
-                public void write(ListEntry entry) {
+                public void write(ListEntry entry) throws IOException {
+                    if (blockAtWrite != null) {
+                        blockAtWrite.countDown();
+                        try {
+                            new CountDownLatch(1).await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("proof cancellation writer interrupted", e);
+                        }
+                    }
                     rows++;
                 }
 

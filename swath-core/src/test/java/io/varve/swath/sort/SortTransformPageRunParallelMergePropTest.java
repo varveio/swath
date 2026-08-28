@@ -567,7 +567,7 @@ class SortTransformPageRunParallelMergePropTest {
             // usable=6: four input readers (2 ranges x 2 segments) leave exactly two output
             // writers. Each range can open its first part; the first attempted roll must fail before
             // a third writer/descriptor is opened.
-            int softLimit = MergeFdBudget.FD_HEADROOM + 6;
+            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
                             () -> softLimit));
@@ -604,7 +604,8 @@ class SortTransformPageRunParallelMergePropTest {
             int ranges = 8;
             int perRangeFanIn = 8;
             int outputAllowance = 40;
-            int softLimit = MergeFdBudget.FD_HEADROOM + ranges * perRangeFanIn + outputAllowance;
+            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS
+                    + ranges * perRangeFanIn + outputAllowance;
             ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, writers, () -> softLimit));
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
@@ -618,7 +619,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(rangeRows(scenario.allEntries(), boundaries))
                     .as("page-minimum boundaries leave one row in each early range")
                     .containsExactly(1, 1, 1, 1, 1, 1, 1, 313);
-            assertThat(softLimit - MergeFdBudget.FD_HEADROOM
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - ParallelRangeMerge.PROOF_SPOOL_FDS
                     - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);
@@ -649,7 +650,8 @@ class SortTransformPageRunParallelMergePropTest {
             int ranges = 8;
             int perRangeFanIn = 8;
             int outputAllowance = 40;
-            int softLimit = MergeFdBudget.FD_HEADROOM + ranges * perRangeFanIn + outputAllowance;
+            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS
+                    + ranges * perRangeFanIn + outputAllowance;
             WideStressStaging wide = stageWideWriterStress(staging, ranges);
             CountingWriterFactory writers = new CountingWriterFactory(
                     new SortedParquetWriterFactory(config, SortMode.OBJECTS));
@@ -662,7 +664,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .isEqualTo(ranges);
             assertThat(merge.perRangeFanIn(ranges, wide.kickoff().descriptors()))
                     .isEqualTo(perRangeFanIn);
-            assertThat(softLimit - MergeFdBudget.FD_HEADROOM
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - ParallelRangeMerge.PROOF_SPOOL_FDS
                     - ranges * Math.min(perRangeFanIn, wide.kickoff().descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);

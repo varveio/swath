@@ -383,7 +383,7 @@ final class PageRunZoneVerifier {
                     || zone.start().cumulativeFramedBytes() != framedBytes
                     || summary.framedBytes()
                             != zone.end().frameOffset() - zone.start().frameOffset()) {
-                throw indexMismatch(plan.path(), "range " + range
+                throw physicalZoneMismatch(plan.path(), zone, "range " + range
                         + " does not tile its planned physical zone", metrics);
             }
             if (zonePages > 0) {
@@ -449,6 +449,15 @@ final class PageRunZoneVerifier {
         metrics.recordStealReason("SORT", "page_run_index_mismatch");
         return new SegmentCorruptionException(path,
                 SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, message);
+    }
+
+    private static SegmentCorruptionException physicalZoneMismatch(
+            Path path, PageRunSeekPlan.Zone zone, String message, SortMetrics metrics) {
+        if (zone.start().indexed() || zone.end().indexed()) {
+            return indexMismatch(path, message, metrics);
+        }
+        return new SegmentCorruptionException(path,
+                SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION, message);
     }
 
     private static IOException append(IOException first, IOException next) {

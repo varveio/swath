@@ -110,6 +110,8 @@ final class ParallelRangeMerge {
     private static final AtomicLong MERGE_SEQUENCE = new AtomicLong();
     /** At the supported 16-range maximum this retains 1,024 candidates per range. */
     static final int MAX_BOUNDARY_CANDIDATES = 16_384;
+    /** One shared temporary proof spool descriptor, independent of the range count. */
+    static final int PROOF_SPOOL_FDS = 1;
 
     private final SortRun run;
     private final SortConfig config;
@@ -462,8 +464,9 @@ final class ParallelRangeMerge {
                     .map(RangeResult::zoneSummary)
                     .toList();
             PageRunZoneVerifier.verify(seekPlan, proof, metrics);
-            log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={}",
-                    ranges, threads, perRangeFanIn);
+            log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
+                            + "proof_spool_fds={}",
+                    ranges, threads, perRangeFanIn, PROOF_SPOOL_FDS);
             return results;
         } catch (InterruptedException e) {
             abortAndCleanUp(pool, futures, stagingDir, proofSpool);
@@ -695,7 +698,8 @@ final class ParallelRangeMerge {
      */
     private long streamFdBudget(long openPartBudget) {
         long usable = usableFdBudget();
-        return usable == Long.MAX_VALUE ? Long.MAX_VALUE : Math.max(0L, usable - openPartBudget);
+        return usable == Long.MAX_VALUE ? Long.MAX_VALUE
+                : Math.max(0L, usable - openPartBudget - PROOF_SPOOL_FDS);
     }
 
     /**
@@ -708,7 +712,7 @@ final class ParallelRangeMerge {
         if (usable == Long.MAX_VALUE) {
             return Integer.MAX_VALUE;
         }
-        long inputReservation = (long) ranges * perRangeFanIn;
+        long inputReservation = (long) ranges * perRangeFanIn + PROOF_SPOOL_FDS;
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, usable - inputReservation));
     }
 
@@ -776,7 +780,8 @@ final class ParallelRangeMerge {
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE
-                : usableFds / (segments + 1L);   // R*segments inputs + R initial output writers
+                : Math.max(0L, usableFds - PROOF_SPOOL_FDS)
+                        / (segments + 1L);   // proof spool + R*(segments inputs + initial output)
         int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
         // Floor division in several places means the closed form can land one step high; step down
         // until the predicate SortTransform reports on is actually true, so the clamp cannot be off by

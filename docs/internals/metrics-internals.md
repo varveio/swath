@@ -102,6 +102,8 @@ already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` whe
 index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
 its worker-local `index_bytes_read` (planning is coordinator-local and therefore not charged to a
 range).
+The fleet-level `sort_merge_range_parallel` log also reports `proof_spool_fds=1`, matching the
+descriptor reserved explicitly by the FD clamp and output-writer guard.
 
 **`seed`** (optional): `SeedStep`'s already-computed shape for a fresh run that actually
 seeded (`mode` is `none`/`shallow`/`hints`; `probes`/`cut_points`/`synthesized_cuts`/`ranges` are
