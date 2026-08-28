@@ -917,32 +917,54 @@ with `cumulativeEntries >= pageOrdinal`,
 `cumulativeFramedBytes == fileOffset - HEADER_BYTES`, an
 exact first offset of `HEADER_BYTES`, a first minimum equal to `segMinKey`, and a final prefix maximum
 equal to `segMaxKey`. These checks establish a bounded, self-consistent index representation; direct
-positioning additionally requires comparison with the referenced page frames before it can be used
-to omit input bytes. Type 1 continues to receive its existing length/count/order/bounds/CRC checks.
+positioning treats that representation only as an untrusted hint. The first frame after every seek
+must match the selected offset/accounting/minimum, and the complete physical-zone proof below must
+succeed before any range writer can be returned. Type 1 continues to receive its existing
+length/count/order/bounds/CRC checks.
 An absent, unknown, or structurally invalid extension falls back for that segment to the legacy
 full-page boundary scan. Mixed absent/type-1/type-2 input therefore retains the same boundary rule.
 
 Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
 issuing per-key writes; the reader first streams CRC validation without allocating keys, then parses
-the CRC-valid bounded payload transactionally. At a structured parallel kickoff, each segment's trailer and extension are read
-during the descriptor's single open. The reader validates one segment's sample transactionally,
-then feeds its keys into the merge-wide capped candidate set before closing that descriptor;
-descriptors retain only status, counts, primitive offsets, and a type-2 payload locator — never a
-sample-key collection. Explicit `R=1` and arbitrary-sorted-run
-merges do not read the extension. Reader peak boundary state is the global candidate cap plus at
-most one segment's 4,096-key validation sample and one 64 KiB scratch buffer, never
-O(segments × samples).
+the CRC-valid bounded payload transactionally. At a structured parallel kickoff, each segment's
+trailer and extension are read during the descriptor's single preflight open. The reader validates
+one segment's sample transactionally, then feeds its keys into the merge-wide capped candidate set
+before closing that descriptor; descriptors retain only status, counts, primitive offsets, and a
+type-2 payload locator — never a sample-key collection. After boundaries are fixed and before any
+worker starts, the planner streams each valid type-2 locator once into `O(segments × R)` primitive
+seek seams. There is no worker positioning barrier and no retained per-descriptor sample list.
+Explicit `R=1` and arbitrary-sorted-run merges perform zero extension/index I/O. Reader peak boundary
+state is the global candidate cap plus at most one segment's 4,096-key validation sample, one 64 KiB
+scratch buffer, and the primitive seek seams, never `O(segments × samples)`.
 
 Across all segments, boundary selection deduplicates candidates and retains the deterministic
 bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
 retained boundary state independent of segment
 count and input order; it can change range balance only, never key inclusion or global ordering.
 
-The embedded sample replaces only the boundary prologue's integrity pass. The last unbounded
-parallel range still drains every page of every original segment and performs the authoritative
-page CRC, min-monotonicity, and trailer-count checks before publication can succeed. A late failure
-cancels sibling ranges and sweeps partial range output; no manifest, state, or success marker is
-published.
+For segment `S`, let `start_r(S)` be range `r`'s planned page ordinal. Type-2 starts are sampled
+ordinals selected by monotone `prefixMax`; absent/type-1/invalid indexes use ordinal 0 for every
+range. The physical proof zones are `[start_r,start_(r+1))`, with the last ending at
+`totalRecords`. Starts are non-decreasing; repeated starts are explicit empty zones. Before a range
+stops at its exclusive high key it necessarily reads through the next range's start, so the owner of
+each non-empty zone CRC-validates and structurally parses all of its pages without a separate pass.
+
+Each range returns exactly one summary containing every segment's actual start/end frame positions,
+page/entry/framed-byte counts, minima, maxima, and the verification result for every type-2 sample
+inside its zone. The coordinator chains zones from `HEADER_BYTES` to `trailerStart`, checks claimed
+cumulative seams against prior physical totals, checks cross-zone min monotonicity, verifies every
+sampled ordinal/offset/cumulative/minimum/prefix maximum, and anchors total pages/entries/framed bytes
+plus first minimum/global maximum to the fixed trailer. Because a structurally valid type-2 block
+already requires `finalPrefixMax == segMaxKey`, that last body/trailer comparison also anchors the
+final prefix maximum. A sample/seek disagreement is `page_run_index_mismatch`; a body/trailer total
+or bound disagreement is `page_run_body_corruption`; an actual min regression remains
+`page_run_min_regression`.
+
+The coordinator performs this proof before returning the ranges' still-open writers. Cancellation
+is polled during planning and proof. Any worker or post-worker proof failure closes writers after
+worker quiescence and sweeps range/cascade temporaries; no manifest, state, or success marker is
+published. Successful parallel merges emit `SORT.merge_zone_proof_complete` once; per-range logs
+carry `pages_seeked_over` and logical framed `bytes_read` alongside the existing page counts.
 
 ---
 

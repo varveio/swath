@@ -87,11 +87,44 @@ class PageRunSeekPlanTest {
         assertThat(metrics.count("SORT.page_run_index_mismatch")).isEqualTo(2);
     }
 
+    @Test
+    void repeatedStartsAreExplicitEmptyZonesAndLegacyStartsStayAtTheHeader(@TempDir Path dir)
+            throws IOException {
+        Path indexed = SortTestSupport.writeIndexedPages(dir.resolve("indexed.pageseg"), 4, 0);
+        Path legacy = SortTestSupport.writePageRun(dir.resolve("legacy.pageseg"), List.of(
+                SortTestSupport.object("k00100"), SortTestSupport.object("k00101")),
+                new ListEntryComparator());
+        Prepared prepared = prepared(List.of(indexed, legacy));
+
+        PageRunSeekPlan plan = PageRunSeekPlan.plan(prepared.descriptors(),
+                List.of(bytes("k00000"), bytes("k00001")), SortMetrics.NO_OP);
+        PageRunSeekPlan.SegmentPlan indexedPlan = plan.segment(indexed);
+        PageRunSeekPlan.SegmentPlan legacyPlan = plan.segment(legacy);
+
+        assertThat(indexedPlan.zone(0).empty()).isTrue();
+        assertThat(indexedPlan.zone(1).empty()).isTrue();
+        assertThat(indexedPlan.zone(2).start().pageOrdinal()).isZero();
+        assertThat(indexedPlan.zone(2).end().pageOrdinal()).isEqualTo(4);
+        for (int range = 0; range < 3; range++) {
+            assertThat(legacyPlan.start(range).indexed()).isFalse();
+            assertThat(legacyPlan.start(range).pageOrdinal()).isZero();
+            assertThat(legacyPlan.start(range).frameOffset())
+                    .isEqualTo(PageRunSegmentWriter.HEADER_BYTES);
+        }
+        assertThat(legacyPlan.zone(0).empty()).isTrue();
+        assertThat(legacyPlan.zone(1).empty()).isTrue();
+        assertThat(legacyPlan.zone(2).end().pageOrdinal()).isEqualTo(1);
+    }
+
     private static Prepared prepared(Path path) throws IOException {
+        return prepared(List.of(path));
+    }
+
+    private static Prepared prepared(List<Path> paths) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
-                List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
+                paths, candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
                 Optional.of(candidates::add));
         return new Prepared(descriptors, candidates);
     }

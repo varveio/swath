@@ -335,6 +335,8 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(metrics.count("SORT.merge_range_page_skipped"))
                     .as("at least one range stepped over or left unread >=1 page")
                     .isGreaterThan(0);
+            assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+            assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
             assertThat(parallel.finalFiles())
                     .as("one part per range").hasSize(ranges);
 

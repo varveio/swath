@@ -222,7 +222,13 @@ final class PageRunZoneVerifier {
 
     static void verify(PageRunSeekPlan plan, List<RangeSummary> ranges,
                        SortMetrics metrics) throws IOException {
-        int expectedRanges = ranges.isEmpty() ? 0 : ranges.size();
+        MergeCancellation.check();
+        int expectedRanges = plan.segments().isEmpty()
+                ? ranges.size() : plan.segments().getFirst().ranges();
+        if (ranges.size() != expectedRanges) {
+            throw new IOException("parallel range merge returned " + ranges.size()
+                    + " zone summaries for " + expectedRanges + " planned ranges");
+        }
         for (int range = 0; range < expectedRanges; range++) {
             RangeSummary summary = ranges.get(range);
             if (summary == null || summary.range() != range

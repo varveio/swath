@@ -448,6 +448,9 @@ class PageRunBoundarySampleTest {
         assertThat(metrics.scanBytes.sum()).isZero();
         assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isZero();
         assertThat(metrics.count("SORT.merge_boundary_source_scan")).isZero();
+        assertThat(metrics.count("SORT.merge_range_index_seek")).isZero();
+        assertThat(metrics.count("SORT.merge_range_index_absent")).isZero();
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isZero();
     }
 
     private static Path writePages(Path path, int count) throws IOException {

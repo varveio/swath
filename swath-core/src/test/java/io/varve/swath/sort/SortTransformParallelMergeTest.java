@@ -120,6 +120,8 @@ class SortTransformParallelMergeTest {
         assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(3);
         assertThat(metrics.count("SORT.merge_scoped_frontier_validated_trailer")).isPositive();
         assertThat(metrics.count("SORT.merge_scoped_frontier_trailer_reread")).isZero();
+        assertThat(metrics.count("SORT.merge_range_index_absent")).isEqualTo(9);
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
     }
 
     @Test

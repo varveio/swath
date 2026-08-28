@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
@@ -47,6 +48,18 @@ final class SortTestSupport {
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
         for (int page = 0; page < pages; page++) {
             buffer.admit(page, List.of(object(String.format("k%05d", keyOffset + page))));
+        }
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
+        return path;
+    }
+
+    /** Write caller-supplied sorted listing pages, including the production type-2 index. */
+    static Path writeIndexedPages(Path path, List<List<ListEntry>> pages) throws IOException {
+        ListEntryComparator comparator = new ListEntryComparator();
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
+        for (int page = 0; page < pages.size(); page++) {
+            buffer.admit(page, pages.get(page));
         }
         new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);
@@ -228,7 +241,7 @@ final class SortTestSupport {
 
     /** Counts recordStealReason calls per {@code outcome.reason}. */
     static final class CountingMetrics implements SortMetrics {
-        final Map<String, Integer> counts = new HashMap<>();
+        final Map<String, Integer> counts = new ConcurrentHashMap<>();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
