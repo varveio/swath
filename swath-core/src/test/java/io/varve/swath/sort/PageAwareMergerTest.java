@@ -124,7 +124,13 @@ class PageAwareMergerTest {
     @Test
     void comparatorEqualMultiPageSourcesKeepTheirActualRunClassification(@TempDir Path dir)
             throws IOException {
-        List<Path> files = stage(dir, List.of(sorted("dup", "dup"), sorted("dup", "dup")));
+        List<ListEntry> left = new ArrayList<>();
+        List<ListEntry> right = new ArrayList<>();
+        for (int i = 0; i < 1_001; i++) {
+            left.add(object("dup"));
+            right.add(object("dup"));
+        }
+        List<Path> files = stage(dir, List.of(left, right));
         long[] pageRuns = new long[2];
         long[] streamingRuns = new long[2];
         List<ListEntry> page;
@@ -141,7 +147,7 @@ class PageAwareMergerTest {
             streaming = drainEntries(cursor);
         }
         assertThat(page).containsExactlyElementsOf(streaming);
-        assertThat(page).hasSize(4);
+        assertThat(page).hasSize(2_002);
         assertThat(pageRuns).containsExactly(0L, 2L);
         assertThat(streamingRuns).containsExactly(2L, 0L);
     }

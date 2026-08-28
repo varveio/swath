@@ -90,8 +90,7 @@ final class PageAwareMerger implements SortedCursor {
     private int wholeSource = -1;
 
     private ListEntry pending;
-    private final int[] sourceRunCounts;
-    private int previousSource = -1;
+    private final MergeRunTracker sourceRuns;
     private boolean closed;
 
     PageAwareMerger(List<PageFrontierStream> streams, Comparator<ListEntry> comparator,
@@ -108,7 +107,7 @@ final class PageAwareMerger implements SortedCursor {
         this.allStreams = streams;
         this.frontier = new PriorityQueue<>((a, b) -> Arrays.compareUnsigned(a.minKey(), b.minKey()));
         this.active = new PriorityQueue<>((a, b) -> comparator.compare(a.head, b.head));
-        this.sourceRunCounts = new int[streams.size()];
+        this.sourceRuns = new MergeRunTracker(streams.size());
         for (int i = 0; i < streams.size(); i++) {
             PageFrontierStream s = streams.get(i);
             if (s.hasPage()) {
@@ -266,12 +265,7 @@ final class PageAwareMerger implements SortedCursor {
 
     /** Track source runs with an int comparison only; no row key comparison or allocation is added. */
     private void recordSource(int source) {
-        if (source != previousSource) {
-            if (sourceRunCounts[source] < 2) {
-                sourceRunCounts[source]++;
-            }
-            previousSource = source;
-        }
+        sourceRuns.emittedFrom(source);
     }
 
     @Override
@@ -282,7 +276,8 @@ final class PageAwareMerger implements SortedCursor {
         closed = true;
         long copyable = 0;
         long interleaved = 0;
-        for (int runs : sourceRunCounts) {
+        for (int source = 0; source < allStreams.size(); source++) {
+            int runs = sourceRuns.count(source);
             if (runs == 1) {
                 copyable++;
             } else if (runs > 1) {

@@ -64,7 +64,7 @@ final class StreamingMerger implements SortedCursor {
     private final List<EntryStream> allStreams;
     private final PriorityQueue<EntryStream> heap;
     private final IdentityHashMap<EntryStream, Integer> streamIndex;
-    private final int[] runCounts;   // per-input-stream count of runs it contributed to the output
+    private final MergeRunTracker runTracker;
 
     private EntryStream currentStream;   // stream held out of the heap (fast-path candidate)
     private ListEntry pending;           // next entry to return; null once fully drained
@@ -84,7 +84,7 @@ final class StreamingMerger implements SortedCursor {
         this.allStreams = streams;
         this.heap = new PriorityQueue<>((a, b) -> comparator.compare(a.peek(), b.peek()));
         this.streamIndex = new IdentityHashMap<>(streams.size());
-        this.runCounts = new int[streams.size()];
+        this.runTracker = new MergeRunTracker(streams.size());
         for (int i = 0; i < streams.size(); i++) {
             streamIndex.put(streams.get(i), i);
         }
@@ -145,10 +145,7 @@ final class StreamingMerger implements SortedCursor {
             if (src != currentStream) {
                 // A new run starts for src (the sorted-merge invariant makes this exact — see the
                 // class javadoc's disjoint-copyable classification).
-                int source = streamIndex.get(src);
-                if (runCounts[source] < 2) {
-                    runCounts[source]++;
-                }
+                runTracker.emittedFrom(streamIndex.get(src));
             }
             currentStream = src;
             return src.next();
@@ -166,7 +163,8 @@ final class StreamingMerger implements SortedCursor {
         fastPathSink.accept(fastPathCount);   // once per merge/pass, not once per row
         long copyableSegments = 0;
         long interleavedSegments = 0;
-        for (int runCount : runCounts) {
+        for (int source = 0; source < allStreams.size(); source++) {
+            int runCount = runTracker.count(source);
             if (runCount == 1) {
                 copyableSegments++;
             } else if (runCount > 1) {
