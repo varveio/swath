@@ -946,7 +946,9 @@ Planning uses one shared 64 KiB cursor per segment because it consumes that segm
 entry region. Worker target/sample verification uses exact positional entry reads instead: fixed
 fields plus the two actual keys, with no adjacent-entry prefetch or 64 KiB per-seam buffer. Those
 post-boundary metadata bytes are counted separately as `sort.merge_range_index_bytes` /
-`swath.sort.merge.range.index.bytes`; the per-range log carries `index_bytes_read`. The serial reader
+`swath.sort.merge.range.index.bytes`; under the explicit row-weighted boundary policy this total also
+includes its one extra streamed entry-region read per type-2 segment. The per-range log carries
+worker-local `index_bytes_read`. The serial reader
 uses a tracked primitive frame offset: after its one open-time channel positioning it performs no
 per-page `FileChannel.position()` query, allocates no physical-position record/observer, and updates
 no proof or index-byte accounting.
@@ -955,6 +957,21 @@ Across all segments, boundary selection deduplicates candidates and retains the 
 bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
 retained boundary state independent of segment
 count and input order; it can change range balance only, never key inclusion or global ordering.
+
+The parallel boundary policy is a resume-free run setting. `distinct` is the default and preserves
+the existing evenly spaced split indices over that capped candidate set. The default-off `rows` arm
+streams each validated type-2 entry region one segment at a time, assigns each interval's positive
+`cumulativeEntries` delta to its retained predecessor candidate, and holds only one
+`long[candidateCount]` histogram plus the cursor's current entry. It chooses strictly increasing
+candidate indices whose prefix masses are nearest the global row quantiles, constraining later
+indices so every requested boundary remains distinct. Thus peak policy state is `O(candidateCap)`,
+not `O(segments × candidateCap)`, and bottom-hash candidates remain the sole retained key set.
+These are approximate mass boundaries: a stride groups several physical pages at its sampled
+minimum, and page ranges may overlap. Exact per-row range filtering still owns correctness and keeps
+all rows with one raw key in one range. If any original is extensionless, type 1, invalid/unknown,
+or mixed with another input kind, the whole `rows` arm falls back to the unchanged `distinct`
+selector and emits one exact fallback classification; it never combines weighted and unweighted
+denominators. No evidence in this change promotes `rows` to the default.
 
 For segment `S`, let `start_r(S)` be range `r`'s planned page ordinal. Type-2 starts are sampled
 ordinals selected by monotone `prefixMax`; absent/type-1/invalid indexes use ordinal 0 for every
@@ -1030,6 +1047,7 @@ the existing page counts.
 | `swath.sort.final-page-rows` | 1024 | the served file's seek granularity WITHIN a row group: the cap on a data page's rows. A page is Parquet's smallest addressable unit — the page index prunes pages, never rows, and every encoding decodes strictly forward — so this is the floor on what a bounded key-range read decodes per column, however few rows it wanted. Parquet's own default caps a page at 20,000 rows and 1 MB, and the byte cap only binds on columns wide enough to reach it, so every narrow column sat at 20,000. Governs FINAL Parquet only; custom page-run staging has no Parquet pages or row groups. Not to be confused with the 1 MB data-page BYTE cap, which two independent gates (2026-07-04 P1/P4) measured dead in both directions |
 | `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | capacity budget used to cap `effectiveFanIn` as `budget / per-stream planning price`; it bounds the priced stream slots, not every allocation made while decoding or resolving page overlap. **The `effectiveFanIn` floor of 2 streams is documented, not rejected**: a merge needs at least 2 streams to merge anything, so a smaller budget still admits the minimum two-stream merge. Page-aware overlap remains bounded by staged segment geometry (and therefore the configured segment gate), while arbitrary capture chunks use the bounded entry-stream policy rather than this frontier optimization |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | the configured maximum number of contiguous key ranges in the final sorted merge; `1` is the explicit serial opt-out. `--tune sort.merge-parallelism=N` exposes the supported operator override (`1..16`) and wins over the JVM property without changing this default. The tune is resume-free because range finals remain disposable staging files until the complete manifest barrier; a pre-publication resume reruns the merge from durable PageRuns. For an admitted run, the effective range count is clamped to the minimum of this configured/core-derived maximum, configured-`fan-in` viability (`fan-in >= segments`, else 1), the heap/per-stream/segment bound, and the fd bound that reserves the shared proof-spool descriptor plus one initial output part per candidate range (`(usableFds - 1) / (segments + 1)`); additional rolled output writers are hard-bounded during execution after reserving the range fleet's input streams and that same spool FD. A result below 2 takes the untouched serial path. Reason attribution follows the binding constraint with an explicit tie rule: FD wins an exact partial heap/FD tie (`byFd <= byBudget`), recording `SORT.merge_range_fd_limited` for final `R>1`; heap or configured fan-in records `SORT.merge_range_would_cascade` when it alone tightens the result further, including to `R=1`; an FD final bound of `R=1` records `SORT.merge_range_fd_exhausted`. `SORT.merge_range_unsplittable` remains reserved for boundary sampling that finds fewer than two distinct keys |
+| `swath.sort.merge-boundary-policy` | `distinct` | resume-free/default-off range-split policy. `distinct` is the shipped bounded distinct-key selection. `rows` is an experimental explicit arm using validated type-2 cumulative-entry mass; it changes only parallel part split points, never row order/content, and falls back whole-run to `distinct` for extensionless/type-1/invalid/mixed inputs. Prefer the typed `--tune sort.merge-boundary-policy=distinct\|rows`, which wins over this JVM property. No result in this change promotes `rows` to the default |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
 | `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`), alongside the actual page-run header version and trailer-extension type; a resume refuses another format or explicit unknown page-run metadata while preserving pre-column `NULL` metadata (§6) — informational, not user-tunable |
 | `ulimit -n` (OS, not a swath knob) | raise to ~65536 for single-pass | with fan-in 10000, a single merge pass opens up to ~`min(segments, fan-in)` page-run readers at once; a low `ulimit -n` forces the fd clamp to shrink `effectiveFanIn` and **degrade to a multi-pass cascade**. Raise the soft limit (`ulimit -n 65536`, or the launcher does it) for single-pass merges on large buckets |

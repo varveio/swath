@@ -201,6 +201,29 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
+    void rowsPolicyFallsBackExactlyForLegacyInvalidAndMixedInputs(@TempDir Path dir)
+            throws IOException {
+        Path type1 = writeLegacyPages(dir.resolve("type1-fallback.pageseg"), 7);
+        assertRowsFallback(List.of(type1),
+                "SORT.merge_boundary_rows_fallback_type1");
+
+        Path extensionlessSource = writePages(dir.resolve("extensionless-source.pageseg"), 7);
+        Path extensionless = stripExtension(
+                extensionlessSource, dir.resolve("extensionless-fallback.pageseg"));
+        assertRowsFallback(List.of(extensionless),
+                "SORT.merge_boundary_rows_fallback_extensionless");
+
+        Path invalid = writePages(dir.resolve("invalid-fallback.pageseg"), 7);
+        mutateExtension(invalid, Mutation.CRC);
+        assertRowsFallback(List.of(invalid),
+                "SORT.merge_boundary_rows_fallback_invalid");
+
+        Path type2 = writePages(dir.resolve("type2-mixed.pageseg"), 7, 100);
+        assertRowsFallback(List.of(type2, type1),
+                "SORT.merge_boundary_rows_fallback_mixed");
+    }
+
+    @Test
     void malformedExtensionsFallBackTransactionallyWithExactReasons(@TempDir Path dir)
             throws IOException {
         for (Mutation mutation : Mutation.values()) {
@@ -533,6 +556,22 @@ class PageRunBoundarySampleTest {
                                            SortMetrics metrics) throws IOException {
         return ParallelRangeMerge.boundaries(prepared.descriptors(), prepared.candidates(),
                 desiredRanges, metrics);
+    }
+
+    private static void assertRowsFallback(List<Path> paths, String reason) throws IOException {
+        PreparedDescriptors expected = descriptors(paths);
+        List<byte[]> distinct = ParallelRangeMerge.boundaries(
+                expected.descriptors(), expected.candidates(), 4,
+                MergeBoundaryPolicy.DISTINCT, SortMetrics.NO_OP);
+        PreparedDescriptors actual = descriptors(paths);
+        CountingMetrics metrics = new CountingMetrics();
+        List<byte[]> rows = ParallelRangeMerge.boundaries(
+                actual.descriptors(), actual.candidates(), 4,
+                MergeBoundaryPolicy.ROWS, metrics);
+
+        assertByteExact(rows, distinct);
+        assertThat(metrics.count(reason)).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_boundary_rows_on")).isZero();
     }
 
     private record PreparedDescriptors(List<PageRunSegmentDescriptor> descriptors,

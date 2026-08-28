@@ -277,12 +277,13 @@ public final class SortTransform {
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                segmentDescriptors, boundaryCandidates, desiredRanges, metrics);
+                segmentDescriptors, boundaryCandidates, desiredRanges,
+                config.mergeBoundaryPolicy(), metrics);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
-        log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",
+        log.info("sort_merge_boundaries segments={} ranges={} boundary_policy_requested={} duration_ms={}",
                 stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
-                boundariesNanos / 1_000_000L);
+                config.mergeBoundaryPolicy().configValue(), boundariesNanos / 1_000_000L);
         if (boundaries == null) {
             // Instrumentation (AGENTS.md "instrument every new algo path"): without this, a run that
             // ASKED for a parallel merge and silently got the serial one is indistinguishable in the

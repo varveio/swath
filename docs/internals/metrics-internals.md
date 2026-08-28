@@ -95,8 +95,10 @@ are disjoint: attempted extension bytes land only in `embedded_bytes`, framed pa
 `scan_bytes`. `merge_boundary_bytes` is their sum. The source is
 classified once per boundary phase by `SORT.merge_boundary_source_{embedded,scan,mixed}`; each
 page-run fallback also emits its exact `SORT.merge_boundary_fallback_*` reason.
-`merge_range_index_bytes` is separate post-boundary type-2 metadata overhead: the full entry region
-streamed once during seek planning plus each exact positional target/sample entry read by workers.
+`merge_range_index_bytes` is separate type-2 metadata overhead after descriptor preflight: the full
+entry region streamed once during seek planning, each exact positional target/sample entry read by
+workers, and—only under `sort.merge-boundary-policy=rows`—one additional full entry-region stream
+used to build the bounded row-mass histogram.
 It excludes page bodies, header/trailer reads, proof-spool I/O, and the descriptor preflight bytes
 already in `merge_boundary_embedded_bytes`. Add it to `merge_boundary_bytes` when comparing total
 index/planning overhead against the per-range log's logical framed `bytes_read`; that log also carries
@@ -1033,6 +1035,12 @@ retired — its emitter was deleted in the same change that added the annotation
 | `SORT` | `merge_boundary_source_embedded` | every sampled page-run segment supplied a valid embedded bounded page-minimum sample; boundary selection read no page bodies | |
 | `SORT` | `merge_boundary_source_scan` | every boundary input used a fallback page scan; no valid embedded page-run sample contributed | |
 | `SORT` | `merge_boundary_source_mixed` | the boundary candidate set combined at least one valid embedded page-run sample with at least one fallback page scan | |
+| `SORT` | `merge_boundary_rows_on` | the explicit `sort.merge-boundary-policy=rows` arm consumed validated type-2 cumulative-entry mass and chose strictly increasing boundaries nearest global row quantiles over the existing bounded distinct candidate set. Fires once per engaged boundary phase; the default `distinct` arm stays silent | |
+| `SORT` | `merge_boundary_rows_fallback_extensionless` | the requested rows policy found only extensionless page-run inputs, so the whole boundary phase used the unchanged distinct-key selector | |
+| `SORT` | `merge_boundary_rows_fallback_type1` | the requested rows policy found only legacy type-1 minima extensions, which carry no cumulative entry mass, so the whole boundary phase used the unchanged distinct-key selector | |
+| `SORT` | `merge_boundary_rows_fallback_invalid` | the requested rows policy found only rejected/unknown index extensions, so the whole boundary phase used the unchanged distinct-key selector after the ordinary authoritative boundary scan | |
+| `SORT` | `merge_boundary_rows_fallback_mixed` | the requested rows policy found a mixture of type-2 and unsupported input kinds (or multiple unsupported kinds); it refused to combine weighted and unweighted denominators and used the unchanged distinct-key selector for the whole merge | |
+| `SORT` | `merge_boundary_rows_fallback_zero_mass` | every input was valid type 2 but the bounded histogram carried no positive mass, so the rows arm failed safe to the unchanged distinct-key selector. Defensive corruption/empty-shape classification; ordinary non-empty indexes cannot produce it | |
 | `SORT` | `merge_boundary_fallback_absent` | one page-run segment had no trailer extension (legacy v1), so that segment was authoritatively scanned | |
 | `SORT` | `merge_boundary_fallback_unknown` | one page-run extension had an unknown magic/type/version, so that segment was authoritatively scanned | |
 | `SORT` | `merge_boundary_fallback_invalid_length` | one page-run extension failed region/payload/key-length validation before any unbounded allocation, so that segment was authoritatively scanned | |

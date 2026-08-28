@@ -307,6 +307,14 @@ an explicit `--tune` value wins. See
 [configuration](configuration.md#sorted-output-jvm-properties) and
 [using sorted output](usage.md#sorted-output).
 
+Range split points continue to use the bounded distinct-key policy by default. The explicit
+`--tune sort.merge-boundary-policy=rows` arm uses validated type-2 cumulative entry mass to target
+row quantiles and can change the number of rows in each final part without changing global order or
+multiplicity. Treat it as an experimental A/B arm: compare max/median per-range rows and wall time,
+and expect a whole-run fallback to `distinct` for legacy, invalid, or mixed staging. The focused
+skew fixture establishes mechanism, not production evidence, so it does not justify a default
+change.
+
 ### Diagnostic zero-LIST merge replay
 
 This procedure isolates the sorted merge from listing by deliberately re-entering a completed

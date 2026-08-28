@@ -44,9 +44,9 @@ import org.slf4j.LoggerFactory;
  * compare ({@link RangeFilteredCursor}), so a key's versions/cross-type rows stay grouped in one
  * range and no row is dropped or duplicated regardless of how the boundary keys are chosen. Boundary
  * choice therefore only affects <em>balance</em>, never correctness — a badly chosen boundary just
- * yields uneven (or empty) ranges, still a total, gap-free partition. Boundaries are sampled from the
- * observed key distribution, evenly spaced through the sorted distinct sample (see {@link
- * #sampleKeys}: page min-keys from page-run staging).
+ * yields uneven (or empty) ranges, still a total, gap-free partition. Boundaries always come from
+ * the bounded distinct page-minimum candidate set. The default spaces them by candidate position;
+ * the explicit rows policy weights those same candidates with validated type-2 entry mass.
  *
  * <p><b>Page-run staging.</b> Every input is a {@code .pageseg} segment. Its range-scoped page
  * frontier skips irrelevant pages while retaining {@link PageAwareMerger}'s
@@ -215,6 +215,13 @@ final class ParallelRangeMerge {
                                    BoundaryCandidates distinct, int desiredRanges,
                                    SortMetrics metrics)
             throws IOException {
+        return boundaries(segments, distinct, desiredRanges, MergeBoundaryPolicy.DISTINCT, metrics);
+    }
+
+    static List<byte[]> boundaries(List<PageRunSegmentDescriptor> segments,
+                                   BoundaryCandidates distinct, int desiredRanges,
+                                   MergeBoundaryPolicy policy, SortMetrics metrics)
+            throws IOException {
         boolean embedded = false;
         boolean scanned = false;
         for (PageRunSegmentDescriptor segment : segments) {
@@ -236,6 +243,17 @@ final class ParallelRangeMerge {
             return null;   // cannot split — degenerate, fall back to serial
         }
         List<byte[]> candidates = distinct.sortedKeys();
+        if (policy == MergeBoundaryPolicy.ROWS) {
+            List<byte[]> weighted = RowWeightedBoundaries.select(
+                    segments, candidates, desiredRanges, metrics);
+            if (weighted != null) {
+                return weighted;
+            }
+        }
+        return distinctBoundaries(candidates, desiredRanges);
+    }
+
+    private static List<byte[]> distinctBoundaries(List<byte[]> candidates, int desiredRanges) {
         int ranges = Math.min(desiredRanges, candidates.size());
         // Pick R-1 interior split points, evenly spaced through the sorted distinct sample. Range 0
         // starts at -inf (index 0 is never a boundary); dedup keeps boundaries strictly increasing.

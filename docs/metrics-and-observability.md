@@ -106,8 +106,9 @@ on field order. Dedicated `*_ms` fields use milliseconds. Generic percentile gau
 For page-run staging, the `sort` block reports `merge_boundary_embedded_entries`,
 `merge_boundary_embedded_bytes`, and `merge_boundary_scan_bytes` to distinguish validated
 trailer samples from compatibility fallback scans. `merge_boundary_bytes` is the sum of
-the two byte fields. `merge_range_index_bytes` separately counts the type-2 entry bytes read after
-boundary selection for seek planning and physical proof.
+the two byte fields. `merge_range_index_bytes` separately counts type-2 entry bytes read after
+descriptor preflight for optional row-weighted boundary selection, seek planning, and physical
+proof.
 
 Page-aware merge reports `merge_overlap_clusters`, `merge_overlap_pages_peak`, and
 `merge_overlap_rows_peak`. They describe decoded overlap clusters only: zero is the ordinary
