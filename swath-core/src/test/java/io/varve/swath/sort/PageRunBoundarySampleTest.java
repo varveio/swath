@@ -701,6 +701,10 @@ class PageRunBoundarySampleTest {
         }
 
         @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
+        @Override
         public void markProgress() {
             progress.increment();
         }

@@ -40,4 +40,9 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         metrics.recordSortMergeOverlapState(activePages, retainedRows);
     }
+
+    @Override
+    public void recordRangeIndexBytes(long bytes) {
+        metrics.recordSortMergeRangeIndexBytes(bytes);
+    }
 }

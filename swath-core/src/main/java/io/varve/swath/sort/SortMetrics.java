@@ -40,6 +40,10 @@ public interface SortMetrics {
         @Override
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -69,4 +73,7 @@ public interface SortMetrics {
 
     /** Observe one active overlap-cluster size for peak gauges. */
     void recordPageAwareOverlapState(long activePages, long retainedRows);
+
+    /** Record type-2 metadata bytes read by seek planning and exact worker proof reads. */
+    void recordRangeIndexBytes(long bytes);
 }

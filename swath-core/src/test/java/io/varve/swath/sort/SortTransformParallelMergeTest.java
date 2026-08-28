@@ -168,7 +168,9 @@ class SortTransformParallelMergeTest {
         // Local index 99 so this run's own (single-part-per-range) output never legitimately reuses
         // this exact path — a true orphan, not a file the live run overwrites in place.
         Path staleTmp = Files.createFile(d.staging.resolve("prange-0-99.parquet.tmp"));
+        Path staleProof = Files.createFile(d.staging.resolve(StagingNames.rangeProofTmp()));
         assertThat(Files.exists(staleTmp)).isTrue();
+        assertThat(staleProof).exists();
 
         SortTransformResult r = transform(config(3))
                 .transform(staging, d.output, d.staging, PublishListener.NO_OP,
@@ -271,6 +273,10 @@ class SortTransformParallelMergeTest {
 
         @Override
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
         }
 
         long count(String key) {

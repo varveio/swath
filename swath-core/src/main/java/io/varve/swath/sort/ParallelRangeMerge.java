@@ -412,6 +412,8 @@ final class ParallelRangeMerge {
         // never sampled-key lists; type-2 values remain hints until the post-worker physical-zone
         // proof below chains them from the fixed header to the trailer.
         PageRunSeekPlan seekPlan = PageRunSeekPlan.plan(segmentDescriptors, boundaries, metrics);
+        Path proofSpoolPath = stagingDir.resolve(StagingNames.rangeProofTmp());
+        PageRunProofSpool.Writer proofSpool = new PageRunProofSpool.Writer(proofSpoolPath);
         Object progressLock = new Object();
         LongConsumer safeProgress = units -> {
             synchronized (progressLock) {
@@ -444,7 +446,7 @@ final class ParallelRangeMerge {
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
                 Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
                         perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit,
-                        descriptorsByPath, seekPlan);
+                        descriptorsByPath, seekPlan, proofSpool, proofSpoolPath);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
             List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
@@ -455,6 +457,7 @@ final class ParallelRangeMerge {
             if (shutdownAndAwait(pool, false)) {
                 Thread.currentThread().interrupt();
             }
+            proofSpool.close();
             List<PageRunZoneVerifier.RangeSummary> proof = results.stream()
                     .map(RangeResult::zoneSummary)
                     .toList();
@@ -463,11 +466,11 @@ final class ParallelRangeMerge {
                     ranges, threads, perRangeFanIn);
             return results;
         } catch (InterruptedException e) {
-            abortAndCleanUp(pool, futures, stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
-            abortAndCleanUp(pool, futures, stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -484,16 +487,21 @@ final class ParallelRangeMerge {
         } catch (IOException e) {
             // Coordinator-side zone proof failures happen after every worker returned its writers.
             // They are still pre-publication failures: close all writers and sweep owned debris.
-            abortAndCleanUp(pool, futures, stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
             throw e;
         } catch (RuntimeException e) {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
-            abortAndCleanUp(pool, futures, stagingDir);
+            abortAndCleanUp(pool, futures, stagingDir, proofSpool);
             throw e;
         } finally {
             pool.shutdownNow();
+            try {
+                proofSpool.close();
+            } catch (IOException ignored) {
+                // Success closed it before verification; failure cleanup already preserves the cause.
+            }
         }
     }
 
@@ -502,16 +510,19 @@ final class ParallelRangeMerge {
                                              DuplicateHook safeHook, AtomicInteger openPartCount,
                                              int openPartLimit,
                                              Map<Path, PageRunSegmentDescriptor> descriptorsByPath,
-                                             PageRunSeekPlan seekPlan) {
+                                             PageRunSeekPlan seekPlan,
+                                             PageRunProofSpool.Writer proofSpool,
+                                             Path proofSpoolPath) {
         return () -> {
+            try (PageRunZoneVerifier.RangeBuilder proofBuilder =
+                         new PageRunZoneVerifier.RangeBuilder(
+                                 proofSpool, proofSpoolPath, range, seekPlan.segments().size())) {
             SortedFileWriterFactory rangeWriterFactory =
                     finalWriterFactory.forOutputSequence();
             long startNanos = System.nanoTime();
             // Page-skip counters live on the frontier wrappers this range opened (one per page-run
             // input); collected after the merge drains, for the same read-vs-skipped signal.
             List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
-            PageRunZoneVerifier.RangeBuilder proofBuilder =
-                    new PageRunZoneVerifier.RangeBuilder(range, seekPlan.segments().size());
             // Page-run ranges see whole straddling boundary pages, so a duplicate pair lying OUTSIDE
             // this range would be reported by both adjacent ranges. Scope the hook to [lo, hi) so the
             // run's duplicate counts match the serial merge's exactly.
@@ -567,12 +578,14 @@ final class ParallelRangeMerge {
             long pagesUnread = 0;
             long pagesSeekedOver = 0;
             long bytesRead = 0;
+            long indexBytesRead = 0;
             for (RangeScopedPageFrontier f : pageFrontiers) {
                 pagesKept += f.pagesKept();
                 pagesSkipped += f.pagesSkipped();
                 pagesUnread += f.pagesUnread();
                 pagesSeekedOver += f.pagesSeekedOver();
                 bytesRead += f.bytesRead();
+                indexBytesRead += f.indexBytesRead();
             }
             // Page skip signal (§5a): fire once per range that avoided decoding at least one page,
             // whether by an indexed seek, a frontier step, or the bounded tail stop.
@@ -582,12 +595,15 @@ final class ParallelRangeMerge {
             long rangeNanos = System.nanoTime() - startNanos;
             rangeTimer.recordRangeMerge(rangeNanos);
             log.info("sort_merge_range range={} rows={} pages_kept={} pages_skipped={} "
-                            + "pages_unread={} pages_seeked_over={} bytes_read={} duration_ms={}",
+                            + "pages_unread={} pages_seeked_over={} bytes_read={} "
+                            + "index_bytes_read={} duration_ms={}",
                     range, rows, pagesKept, pagesSkipped, pagesUnread, pagesSeekedOver, bytesRead,
+                    indexBytesRead,
                     rangeNanos / 1_000_000L);
             PageRunZoneVerifier.RangeSummary zoneSummary = proofBuilder.finish();
             return new RangeResult(tmpParts, parts, rows, merge.mergePasses(), merge.cascadedPasses(),
                     merge.fastPathEmissions(), zoneSummary);
+            }
         };
     }
 
@@ -823,9 +839,15 @@ final class ParallelRangeMerge {
     }
 
     /** Cancel, prove worker quiescence, release writers, then sweep owned files. */
-    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir) {
+    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir,
+                                 PageRunProofSpool.Writer proofSpool) {
         futures.forEach(future -> future.cancel(true));
         boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
+        try {
+            proofSpool.close();
+        } catch (IOException ignored) {
+            // The initiating merge/proof failure remains authoritative.
+        }
         releaseOpenParts();
         sweepOwnFiles(stagingDir);
         if (interruptedWhileJoining) {
@@ -858,6 +880,7 @@ final class ParallelRangeMerge {
         sweep(stagingDir, StagingNames.RANGE_TMP_GLOB);
         sweep(stagingDir, StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB);
         sweep(stagingDir, StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB);
+        sweep(stagingDir, StagingNames.RANGE_PROOF_TMP_GLOB);
     }
 
     private static void sweep(Path stagingDir, String glob) {

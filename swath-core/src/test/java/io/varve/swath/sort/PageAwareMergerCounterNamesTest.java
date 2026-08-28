@@ -69,6 +69,9 @@ class PageAwareMergerCounterNamesTest {
             @Override
             public void recordPageAwareOverlapState(long activePages, long retainedRows) {
             }
+
+            public void recordRangeIndexBytes(long bytes) {
+            }
         };
 
         List<String> merged = new ArrayList<>();

@@ -803,6 +803,8 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 (long) gaugeValue("swath.sort.merge.overlap.pages.peak"));
         sortNode.put("merge_overlap_rows_peak",
                 (long) gaugeValue("swath.sort.merge.overlap.rows.peak"));
+        sortNode.put("merge_range_index_bytes",
+                (long) counterCount("swath.sort.merge.range.index.bytes"));
         // Concurrent range timers overlap; their maximum, not their sum, is the parallel range
         // wall. The serial path has no range samples, so its range term is the whole merge less the
         // separately measured boundary/finalize tail (clamped for millisecond truncation).

@@ -37,10 +37,10 @@ import java.io.IOException;
  * there, so the optimization removes duplicate range reads without adding a separate integrity pass.
  *
  * <p><b>Whole-input proof.</b> Pre-worker planning supplies every zone bound, including repeated
- * starts as explicit empty zones. This frontier reports the actual pages, entries, framed bytes,
- * minima, maxima, and index samples in its owned interval. The coordinator checks all ranges tile
- * each segment exactly and match its trailer before returning their still-open writers; a mismatch
- * closes writers and sweeps temporary output through the ordinary failure path.
+ * starts as explicit empty zones. This frontier reports actual primitive accounting and spools exact
+ * minima/maxima/index evidence for its owned interval. The coordinator checks all ranges tile each
+ * segment exactly and match its trailer before returning their still-open writers; a mismatch closes
+ * writers and sweeps temporary output through the ordinary failure path.
  */
 final class RangeScopedPageFrontier implements PageFrontierStream {
 
@@ -140,7 +140,9 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
             return;
         }
         if (inner.hasPage()) {
-            zoneTracker.observe(inner.currentPosition(), inner.minKey(), inner.maxKey(), inner.count());
+            zoneTracker.observe(inner.currentPageOrdinal(), inner.currentFrameOffset(),
+                    inner.currentCumulativeEntries(), inner.currentCumulativeFramedBytes(),
+                    inner.currentFramedBytes(), inner.minKey(), inner.maxKey(), inner.count());
         } else {
             zoneTracker.exhausted(inner.nextFrameOffset());
         }
@@ -198,9 +200,16 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
             inner.close();
         } catch (IOException e) {
             failure = e;
-        } finally {
-            if (zoneTracker != null) {
+        }
+        if (zoneTracker != null) {
+            try {
                 zoneTracker.finish();
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
             }
         }
         if (failure != null) {
@@ -234,5 +243,9 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
 
     long bytesRead() {
         return inner.framedBytesRead();
+    }
+
+    long indexBytesRead() {
+        return inner.indexBytesRead();
     }
 }

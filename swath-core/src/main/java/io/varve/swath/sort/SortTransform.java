@@ -516,7 +516,8 @@ public final class SortTransform {
      * violating {@code docs/internals/contracts.md} §6 ("staging dir cleaned on successful publish").
      */
     private static void cleanStalePrangeTmp(Path stagingDir) throws IOException {
-        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB);
+        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB,
+                StagingNames.RANGE_PROOF_TMP_GLOB);
     }
 
     /**

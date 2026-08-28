@@ -1132,6 +1132,10 @@ class ParallelMergeBenchmark {
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         }
 
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();

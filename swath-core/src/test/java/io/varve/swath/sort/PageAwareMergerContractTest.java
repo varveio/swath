@@ -490,6 +490,9 @@ class PageAwareMergerContractTest {
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         }
 
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
         int count(String key) {
             return counts.getOrDefault(key, 0);
         }

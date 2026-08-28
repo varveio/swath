@@ -69,4 +69,13 @@ class RunSortMetricsTest {
         assertEquals(3.0, registry.get("swath.sort.merge.overlap.pages.peak").gauge().value());
         assertEquals(10.0, registry.get("swath.sort.merge.overlap.rows.peak").gauge().value());
     }
+
+    @Test
+    void rangeIndexBytesStillReach() {
+        var registry = new SimpleMeterRegistry();
+
+        new RunSortMetrics(new RunMetrics(registry)).recordRangeIndexBytes(789);
+
+        assertEquals(789.0, registry.get("swath.sort.merge.range.index.bytes").counter().count());
+    }
 }

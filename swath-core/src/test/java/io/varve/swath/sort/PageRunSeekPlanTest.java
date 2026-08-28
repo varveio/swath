@@ -25,8 +25,9 @@ class PageRunSeekPlanTest {
         Path path = SortTestSupport.writeIndexedPages(dir.resolve("indexed.pageseg"), 8, 0);
         Prepared prepared = prepared(path);
 
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         PageRunSeekPlan plan = PageRunSeekPlan.plan(prepared.descriptors(),
-                List.of(bytes("k00004")), SortMetrics.NO_OP);
+                List.of(bytes("k00004")), metrics);
         PageRunSeekPlan.SegmentPlan segment = plan.segment(path);
 
         assertThat(segment.start(0).pageOrdinal()).isZero();
@@ -37,14 +38,52 @@ class PageRunSeekPlanTest {
                 .map(java.lang.reflect.Field::getType))
                 .allMatch(type -> type.isPrimitive() || type.isArray()
                         || type == PageRunSegmentDescriptor.class);
+        assertThat(metrics.rangeIndexBytes.sum()).isEqualTo(8L * 48L);
 
         try (PageFrontierReader frontier = new PageFrontierReader(
                 path, SortMetrics.NO_OP, segment, 1)) {
-            assertThat(frontier.currentPosition().pageOrdinal()).isEqualTo(3);
-            assertThat(frontier.currentPosition().frameOffset())
+            assertThat(frontier.currentPageOrdinal()).isEqualTo(3);
+            assertThat(frontier.currentFrameOffset())
                     .isEqualTo(segment.start(1).frameOffset());
             assertThat(frontier.minKey()).containsExactly(bytes("k00003"));
         }
+    }
+
+    @Test
+    void serialFrontierAllocatesNoPagePositionAndTracksNoProofOrIndexBytes(@TempDir Path dir)
+            throws IOException {
+        Path path = SortTestSupport.writeIndexedPages(dir.resolve("serial.pageseg"), 8, 0);
+        long trailerStart;
+        try (PageRunSegmentIo metadata = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            trailerStart = metadata.trailerStart;
+        }
+
+        assertThat(java.util.Arrays.stream(PageRunSegmentIo.class.getDeclaredClasses())
+                .map(Class::getSimpleName))
+                .doesNotContain("PagePosition");
+        try (PageFrontierReader frontier = new PageFrontierReader(path, SortMetrics.NO_OP)) {
+            while (frontier.hasPage()) {
+                frontier.advance();
+            }
+            assertThat(frontier.proofTracking()).isFalse();
+            assertThat(frontier.framedBytesRead()).isZero();
+            assertThat(frontier.indexBytesRead()).isZero();
+            assertThat(frontier.nextFrameOffset()).isEqualTo(trailerStart);
+        }
+    }
+
+    @Test
+    void proofTopologyRetainsPrimitiveTablesAndOnlyOneExactKeyCachePerRange() {
+        assertThat(java.util.Arrays.stream(PageRunZoneVerifier.Tracker.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getType))
+                .noneMatch(type -> type == byte[].class);
+        assertThat(java.util.Arrays.stream(PageRunZoneVerifier.RangeSummary.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getType))
+                .doesNotContain(byte[].class, Object[].class);
+        assertThat(java.util.Arrays.stream(PageRunZoneVerifier.RangeBuilder.class.getDeclaredFields())
+                .filter(field -> field.getType() == byte[].class))
+                .hasSize(2);
+        assertThat(PageRunProofSpool.logicalBytes(10_000 * 16)).isEqualTo(993_920_000L);
     }
 
     @Test

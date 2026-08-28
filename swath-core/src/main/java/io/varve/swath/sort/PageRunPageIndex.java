@@ -60,6 +60,10 @@ final class PageRunPageIndex {
     record LocatedEntry(long payloadOffset, IndexEntry entry) {
     }
 
+    /** One exact positional entry read and its metadata-byte cost. */
+    record EntryRead(LocatedEntry located, int bytesRead) {
+    }
+
     /** Bounded in-memory index assembled while listing pages are framed. */
     record Snapshot(List<IndexEntry> entries, byte[] finalPrefixMax) {
     }
@@ -128,18 +132,31 @@ final class PageRunPageIndex {
         return new Cursor(io, result.locator());
     }
 
-    /** Open a bounded cursor over a contiguous slice of an already validated type-2 block. */
-    static Cursor cursor(PageRunSegmentIo io, ReadResult result, long payloadOffset,
-                         int entryCount) {
+    /** Read exactly one planned entry without a 64 KiB cursor buffer or adjacent-entry prefetch. */
+    static EntryRead readEntryAt(PageRunSegmentIo io, ReadResult result, long payloadOffset)
+            throws IOException {
         if (!result.valid() || result.locator() == null) {
             throw new IllegalArgumentException("page-run page index is not valid type 2");
         }
         Locator locator = result.locator();
-        if (payloadOffset < locator.payloadStart() || payloadOffset > locator.entriesEnd()
-                || entryCount < 0 || entryCount > locator.entryCount()) {
-            throw new IllegalArgumentException("page-run page index cursor slice is out of bounds");
+        if (payloadOffset < locator.payloadStart()
+                || payloadOffset > locator.entriesEnd() - ENTRY_FIXED_BYTES - 4L) {
+            throw new IOException("page-run page index target entry is out of bounds");
         }
-        return new Cursor(io, payloadOffset, locator.entriesEnd(), entryCount);
+        ByteBuffer fixed = io.readAt(payloadOffset, ENTRY_FIXED_BYTES);
+        long ordinal = fixed.getLong();
+        long offset = fixed.getLong();
+        long cumulativeEntries = fixed.getLong();
+        long cumulativeFramedBytes = fixed.getLong();
+        long position = payloadOffset + ENTRY_FIXED_BYTES;
+        PositionalKey min = readKeyAt(io, position, locator.entriesEnd());
+        position += min.encodedBytes();
+        PositionalKey prefix = readKeyAt(io, position, locator.entriesEnd());
+        position += prefix.encodedBytes();
+        int bytesRead = Math.toIntExact(position - payloadOffset);
+        IndexEntry entry = new IndexEntry(ordinal, offset, cumulativeEntries,
+                cumulativeFramedBytes, min.key(), prefix.key());
+        return new EntryRead(new LocatedEntry(payloadOffset, entry), bytesRead);
     }
 
     static void write(WritableByteChannel channel, Snapshot snapshot) throws IOException {
@@ -323,6 +340,19 @@ final class PageRunPageIndex {
         return new KeyRead(key, Short.BYTES + (long) length);
     }
 
+    private static PositionalKey readKeyAt(PageRunSegmentIo io, long position, long limit)
+            throws IOException {
+        if (position > limit - Short.BYTES) {
+            throw new IOException("page-run page index target key prefix exceeds entry bounds");
+        }
+        int length = io.readAt(position, Short.BYTES).getShort() & 0xffff;
+        if (length > MAX_INDEX_KEY_BYTES || length > limit - position - Short.BYTES) {
+            throw new IOException("page-run page index target key exceeds entry bounds");
+        }
+        return new PositionalKey(io.readAt(position + Short.BYTES, length).array(),
+                Short.BYTES + length);
+    }
+
     private static ReadResult invalid(Status status, PageRunTrailer.Trailer trailer, long bytesRead) {
         return result(status, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1, null);
     }
@@ -412,6 +442,9 @@ final class PageRunPageIndex {
     private record KeyRead(byte[] key, long encodedBytes) {
     }
 
+    private record PositionalKey(byte[] key, int encodedBytes) {
+    }
+
     /** Streaming entry cursor used by later range planning without descriptor-level sample retention. */
     static final class Cursor {
         private final PageRunBoundarySample.ChunkedReader in;
@@ -420,14 +453,10 @@ final class PageRunPageIndex {
         private int remaining;
 
         private Cursor(PageRunSegmentIo io, Locator locator) {
-            this(io, locator.payloadStart(), locator.entriesEnd(), locator.entryCount());
-        }
-
-        private Cursor(PageRunSegmentIo io, long payloadStart, long entriesEnd, int entryCount) {
-            this.in = new PageRunBoundarySample.ChunkedReader(io, payloadStart,
-                    entriesEnd - payloadStart);
-            this.payloadStart = payloadStart;
-            this.remaining = entryCount;
+            this.in = new PageRunBoundarySample.ChunkedReader(io, locator.payloadStart(),
+                    locator.entriesEnd() - locator.payloadStart());
+            this.payloadStart = locator.payloadStart();
+            this.remaining = locator.entryCount();
         }
 
         boolean hasNext() {
@@ -449,6 +478,10 @@ final class PageRunPageIndex {
             IndexEntry entry = new IndexEntry(ordinal, offset, cumulativeEntries,
                     cumulativeFramedBytes, min.key(), prefix.key());
             return new LocatedEntry(payloadOffset, entry);
+        }
+
+        long bytesRead() {
+            return in.bytesRead();
         }
     }
 }

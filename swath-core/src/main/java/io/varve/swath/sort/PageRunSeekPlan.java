@@ -100,14 +100,14 @@ final class PageRunSeekPlan {
             return new Zone(start, end, start.entryPayloadOffset(), sampleCount);
         }
 
-        PageRunPageIndex.IndexEntry readTarget(PageRunSegmentIo io, int range) throws IOException {
+        PageRunPageIndex.EntryRead readTarget(PageRunSegmentIo io, int range) throws IOException {
             SeekSeam seam = start(range);
             if (!seam.indexed()) {
                 return null;
             }
-            PageRunPageIndex.Cursor cursor = PageRunPageIndex.cursor(io,
-                    descriptor.extension(), seam.entryPayloadOffset(), 1);
-            PageRunPageIndex.LocatedEntry located = cursor.next();
+            PageRunPageIndex.EntryRead read = PageRunPageIndex.readEntryAt(
+                    io, descriptor.extension(), seam.entryPayloadOffset());
+            PageRunPageIndex.LocatedEntry located = read.located();
             PageRunPageIndex.IndexEntry entry = located.entry();
             if (located.payloadOffset() != seam.entryPayloadOffset()
                     || entry.pageOrdinal() != seam.pageOrdinal()
@@ -116,7 +116,7 @@ final class PageRunSeekPlan {
                     || entry.cumulativeFramedBytes() != seam.cumulativeFramedBytes()) {
                 throw io.indexMismatch("page-index seek entry changed after planning", null);
             }
-            return entry;
+            return read;
         }
 
         private void set(int range, int sampleIndex, PageRunPageIndex.LocatedEntry located) {
@@ -132,11 +132,13 @@ final class PageRunSeekPlan {
 
     private final List<SegmentPlan> segments;
     private final Map<Path, SegmentPlan> byPath;
+    private final int ranges;
 
-    private PageRunSeekPlan(List<SegmentPlan> segments) {
+    private PageRunSeekPlan(List<SegmentPlan> segments, int ranges) {
         this.segments = List.copyOf(segments);
         this.byPath = this.segments.stream().collect(Collectors.toUnmodifiableMap(
                 SegmentPlan::path, segment -> segment, (first, duplicate) -> first));
+        this.ranges = ranges;
     }
 
     static PageRunSeekPlan plan(List<PageRunSegmentDescriptor> descriptors,
@@ -152,7 +154,7 @@ final class PageRunSeekPlan {
             }
             planned.add(segment);
         }
-        return new PageRunSeekPlan(planned);
+        return new PageRunSeekPlan(planned, ranges);
     }
 
     private static void scanType2(SegmentPlan segment, List<byte[]> boundaries,
@@ -184,6 +186,7 @@ final class PageRunSeekPlan {
                 sampleIndex++;
                 metrics.markProgress();
             }
+            metrics.recordRangeIndexBytes(cursor.bytesRead());
         }
     }
 
@@ -193,5 +196,9 @@ final class PageRunSeekPlan {
 
     SegmentPlan segment(Path path) {
         return byPath.get(path);
+    }
+
+    int ranges() {
+        return ranges;
     }
 }

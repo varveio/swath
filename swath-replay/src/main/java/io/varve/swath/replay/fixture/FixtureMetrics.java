@@ -33,6 +33,7 @@ public final class FixtureMetrics implements SortMetrics {
     private final Counter sortBoundaryEmbeddedEntries;
     private final Counter sortBoundaryEmbeddedBytes;
     private final Counter sortBoundaryScanBytes;
+    private final Counter sortRangeIndexBytes;
     private final Counter sortOverlapClusters;
     private final ConcurrentMap<String, Counter> sortStealReasonCounters = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong sortOverlapPagesPeak =
@@ -60,6 +61,8 @@ public final class FixtureMetrics implements SortMetrics {
         sortBoundaryEmbeddedBytes = Counter.builder("swath.replay.sort.merge.boundaries.embedded.bytes")
                 .baseUnit("bytes").register(registry);
         sortBoundaryScanBytes = Counter.builder("swath.replay.sort.merge.boundaries.scan.bytes")
+                .baseUnit("bytes").register(registry);
+        sortRangeIndexBytes = Counter.builder("swath.replay.sort.merge.range.index.bytes")
                 .baseUnit("bytes").register(registry);
         sortOverlapClusters = Counter.builder("swath.replay.sort.merge.overlap.clusters").register(registry);
         registry.gauge("swath.replay.sort.merge.overlap.pages.peak", sortOverlapPagesPeak,
@@ -143,6 +146,11 @@ public final class FixtureMetrics implements SortMetrics {
     public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         sortOverlapPagesPeak.accumulateAndGet(activePages, Math::max);
         sortOverlapRowsPeak.accumulateAndGet(retainedRows, Math::max);
+    }
+
+    @Override
+    public void recordRangeIndexBytes(long bytes) {
+        sortRangeIndexBytes.increment(bytes);
     }
 
     /**

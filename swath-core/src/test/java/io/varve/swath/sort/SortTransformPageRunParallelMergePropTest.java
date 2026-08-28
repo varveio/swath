@@ -1325,6 +1325,10 @@ class SortTransformPageRunParallelMergePropTest {
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         }
 
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();
@@ -1355,7 +1359,8 @@ class SortTransformPageRunParallelMergePropTest {
     private static void assertNoOwnedDebris(Path staging) throws IOException {
         for (String glob : List.of(StagingNames.RANGE_TMP_GLOB,
                 StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB,
-                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB)) {
+                StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB,
+                StagingNames.RANGE_PROOF_TMP_GLOB)) {
             try (var files = Files.newDirectoryStream(staging, glob)) {
                 assertThat(files.iterator().hasNext()).as("no debris matching %s", glob).isFalse();
             }

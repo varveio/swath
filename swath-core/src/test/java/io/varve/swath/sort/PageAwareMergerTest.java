@@ -353,6 +353,9 @@ class PageAwareMergerTest {
             overlapRowsPeak = Math.max(overlapRowsPeak, retainedRows);
         }
 
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
         int get(String key) {
             return counts.getOrDefault(key, 0);
         }

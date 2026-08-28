@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 /** Shared fixtures for the {@code io.varve.swath.sort} unit tests (all in-package, so package-private types are reachable). */
 final class SortTestSupport {
@@ -242,6 +243,7 @@ final class SortTestSupport {
     /** Counts recordStealReason calls per {@code outcome.reason}. */
     static final class CountingMetrics implements SortMetrics {
         final Map<String, Integer> counts = new ConcurrentHashMap<>();
+        final LongAdder rangeIndexBytes = new LongAdder();
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -262,6 +264,11 @@ final class SortTestSupport {
 
         @Override
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+            rangeIndexBytes.add(bytes);
         }
 
         int count(String key) {

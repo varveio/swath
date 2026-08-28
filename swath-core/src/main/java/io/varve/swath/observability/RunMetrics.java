@@ -246,6 +246,7 @@ public final class RunMetrics {
     private final Counter sortMergeOverlapClusters;
     private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
     private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
+    private final Counter sortMergeRangeIndexBytes;
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -588,6 +589,8 @@ public final class RunMetrics {
                 .register(registry);
         sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency")
                 .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
+        sortMergeRangeIndexBytes = Counter.builder("swath.sort.merge.range.index.bytes")
+                .baseUnit("bytes").register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
         sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")
@@ -1147,6 +1150,11 @@ public final class RunMetrics {
     public void recordSortMergeOverlapState(long activePages, long retainedRows) {
         sortMergeOverlapPagesPeak.getAndAccumulate(activePages, Math::max);
         sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
+    }
+
+    /** Type-2 seek-planning and exact worker-proof metadata reads after boundary selection. */
+    public void recordSortMergeRangeIndexBytes(long bytes) {
+        sortMergeRangeIndexBytes.increment(Math.max(0L, bytes));
     }
 
     /** One final part's footer-write + fsync durability span. */

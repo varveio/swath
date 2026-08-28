@@ -41,6 +41,7 @@ import java.nio.file.Path;
 final class PageFrontierReader implements PageFrontierStream {
 
     private final PageRunSegmentIo io;
+    private final SortMetrics metrics;
     private final boolean deferCompletenessToZoneProof;
     private long recordsLeft;
     private long seenEntries;
@@ -49,7 +50,7 @@ final class PageFrontierReader implements PageFrontierStream {
     private byte[] currentMin;
     private byte[] currentMax;
     private int currentCount;
-    private PageRunSegmentIo.PagePosition currentPosition;
+    private long indexBytesRead;
 
     /**
      * Open {@code path}, validate the header magic/version and the trailing magic (truncation check),
@@ -65,13 +66,19 @@ final class PageFrontierReader implements PageFrontierStream {
     PageFrontierReader(Path path, SortMetrics metrics, PageRunSeekPlan.SegmentPlan plan,
                        int range) throws IOException {
         this.io = PageRunSegmentIo.open(path, metrics);
+        this.metrics = metrics;
         this.deferCompletenessToZoneProof = plan != null;
         try {
-            PageRunPageIndex.IndexEntry target = plan == null ? null : plan.readTarget(io, range);
+            if (plan != null) {
+                io.enableProofTracking();
+            }
+            PageRunPageIndex.EntryRead target = plan == null ? null : plan.readTarget(io, range);
             if (target != null) {
-                io.seekToPage(target);
-                this.recordsLeft = io.totalRecords - target.pageOrdinal();
-                this.seenEntries = target.cumulativeEntries();
+                recordIndexBytes(target.bytesRead());
+                PageRunPageIndex.IndexEntry entry = target.located().entry();
+                io.seekToPage(entry);
+                this.recordsLeft = io.totalRecords - entry.pageOrdinal();
+                this.seenEntries = entry.cumulativeEntries();
             } else {
                 this.recordsLeft = io.totalRecords;
             }
@@ -127,7 +134,6 @@ final class PageFrontierReader implements PageFrontierStream {
             currentMin = null;
             currentMax = null;
             currentCount = 0;
-            currentPosition = null;
             return;
         }
         recordsLeft--;
@@ -140,12 +146,27 @@ final class PageFrontierReader implements PageFrontierStream {
         this.currentMin = fields.minKey();
         this.currentMax = fields.maxKey();
         this.currentCount = fields.count();
-        this.currentPosition = page.position();
         this.seenEntries += fields.count();
     }
 
-    PageRunSegmentIo.PagePosition currentPosition() {
-        return currentPosition;
+    long currentPageOrdinal() {
+        return io.lastPageOrdinal();
+    }
+
+    long currentFrameOffset() {
+        return io.lastFrameOffset();
+    }
+
+    long currentCumulativeEntries() {
+        return io.lastCumulativeEntries();
+    }
+
+    long currentCumulativeFramedBytes() {
+        return io.lastCumulativeFramedBytes();
+    }
+
+    int currentFramedBytes() {
+        return io.lastFramedBytes();
     }
 
     long framedBytesRead() {
@@ -156,13 +177,28 @@ final class PageFrontierReader implements PageFrontierStream {
         return io.totalRecords;
     }
 
-    long nextFrameOffset() throws IOException {
+    long nextFrameOffset() {
         return io.nextFrameOffset();
     }
 
-    PageRunPageIndex.Cursor indexCursor(PageRunPageIndex.ReadResult extension,
-                                        long payloadOffset, int entryCount) {
-        return PageRunPageIndex.cursor(io, extension, payloadOffset, entryCount);
+    PageRunPageIndex.EntryRead readIndexEntry(PageRunPageIndex.ReadResult extension,
+                                              long payloadOffset) throws IOException {
+        PageRunPageIndex.EntryRead read = PageRunPageIndex.readEntryAt(io, extension, payloadOffset);
+        recordIndexBytes(read.bytesRead());
+        return read;
+    }
+
+    long indexBytesRead() {
+        return indexBytesRead;
+    }
+
+    boolean proofTracking() {
+        return io.proofTracking();
+    }
+
+    private void recordIndexBytes(long bytes) {
+        indexBytesRead += bytes;
+        metrics.recordRangeIndexBytes(bytes);
     }
 
     @Override

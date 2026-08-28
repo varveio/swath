@@ -67,6 +67,15 @@ final class PageRunSegmentIo implements AutoCloseable {
     private long cumulativeEntries;
     /** Framed page bytes physically read by this IO instance. */
     private long framedBytesRead;
+    /** Tracked sequential frame offset; avoids a native FileChannel.position() query per page. */
+    private long nextFrameOffset = PageRunSegmentWriter.HEADER_BYTES;
+    /** Physical proof accounting is enabled only for original indexed-parallel frontiers. */
+    private boolean proofTracking;
+    private long lastPageOrdinal;
+    private long lastFrameOffset;
+    private long lastCumulativeEntries;
+    private long lastCumulativeFramedBytes;
+    private int lastFramedBytes;
     /** One-shot verification owed by the first page after an indexed seek. */
     private SeekExpectation seekExpectation;
     /** True after a type-2 target positioned this reader away from the ordinary header path. */
@@ -162,13 +171,8 @@ final class PageRunSegmentIo implements AutoCloseable {
     record FrontierFields(byte[] minKey, byte[] maxKey, int count) {
     }
 
-    /** Physical position and accounting immediately before one page frame. */
-    record PagePosition(long pageOrdinal, long frameOffset, long cumulativeEntries,
-                        long cumulativeFramedBytes, int framedBytes) {
-    }
-
-    /** One validated page record plus its physical position. */
-    record Page(byte[] body, FrontierFields fields, PagePosition position) {
+    /** One validated page record. Physical proof state stays primitive and opt-in. */
+    record Page(byte[] body, FrontierFields fields) {
     }
 
     private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
@@ -188,12 +192,7 @@ final class PageRunSegmentIo implements AutoCloseable {
      */
     Page nextPage() throws IOException {
         long ordinal = pagesRead;
-        long frameOffset;
-        try {
-            frameOffset = channel.position();
-        } catch (IOException e) {
-            throw seekFailureOr(e, "cannot read the positioned frame offset");
-        }
+        long frameOffset = nextFrameOffset;
         if (indexedPosition && frameOffset >= trailerStart && ordinal < totalRecords) {
             throw indexMismatch("indexed page offset reached the trailer before page ordinal "
                     + ordinal + " of " + totalRecords, null);
@@ -215,18 +214,26 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
-        long cumulativeFramedBytes = frameOffset - PageRunSegmentWriter.HEADER_BYTES;
-        verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
-                cumulativeFramedBytes, fields.minKey());
+        long cumulativeFramedBytes = proofTracking
+                ? frameOffset - PageRunSegmentWriter.HEADER_BYTES : 0;
+        if (seekExpectation != null) {
+            verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
+                    cumulativeFramedBytes, fields.minKey());
+        }
         pagesRead++;
         checkMinMonotonic(fields.minKey());
         previousMin = fields.minKey();
-        int framedBytes = Math.addExact(8, record.framedLen());
-        PagePosition position = new PagePosition(ordinal, frameOffset, cumulativeEntries,
-                cumulativeFramedBytes, framedBytes);
-        cumulativeEntries += fields.count();
-        framedBytesRead += framedBytes;
-        return new Page(body, fields, position);
+        if (proofTracking) {
+            int framedBytes = Math.addExact(8, record.framedLen());
+            lastPageOrdinal = ordinal;
+            lastFrameOffset = frameOffset;
+            lastCumulativeEntries = cumulativeEntries;
+            lastCumulativeFramedBytes = cumulativeFramedBytes;
+            lastFramedBytes = framedBytes;
+            framedBytesRead += framedBytes;
+            cumulativeEntries += fields.count();
+        }
+        return new Page(body, fields);
     }
 
     /**
@@ -235,6 +242,7 @@ final class PageRunSegmentIo implements AutoCloseable {
      * cumulative entry claim to a header-to-trailer physical chain.
      */
     void seekToPage(PageRunPageIndex.IndexEntry target) throws IOException {
+        proofTracking = true;
         long physicalCumulativeBytes = target.fileOffset() - PageRunSegmentWriter.HEADER_BYTES;
         if (target.pageOrdinal() < 0 || target.pageOrdinal() >= totalRecords
                 || target.fileOffset() < PageRunSegmentWriter.HEADER_BYTES
@@ -244,6 +252,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw indexMismatch("indexed seek target is outside the physical page region", null);
         }
         channel.position(target.fileOffset());
+        nextFrameOffset = target.fileOffset();
         pagesRead = target.pageOrdinal();
         cumulativeEntries = target.cumulativeEntries();
         previousMin = null;
@@ -323,6 +332,7 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw fail("record length " + len + " out of bounds (maxRecordLen=" + maxRecordLen + ")");
         }
         byte[] body = readFully(len).array();
+        nextFrameOffset = Math.addExact(nextFrameOffset, 8L + len);
         CRC32C crc = new CRC32C();
         crc.update(body, 0, len);
         boolean crcOk = (int) crc.getValue() == expectedCrc;
@@ -421,8 +431,36 @@ final class PageRunSegmentIo implements AutoCloseable {
         return framedBytesRead;
     }
 
-    long nextFrameOffset() throws IOException {
-        return channel.position();
+    long nextFrameOffset() {
+        return nextFrameOffset;
+    }
+
+    void enableProofTracking() {
+        proofTracking = true;
+    }
+
+    boolean proofTracking() {
+        return proofTracking;
+    }
+
+    long lastPageOrdinal() {
+        return lastPageOrdinal;
+    }
+
+    long lastFrameOffset() {
+        return lastFrameOffset;
+    }
+
+    long lastCumulativeEntries() {
+        return lastCumulativeEntries;
+    }
+
+    long lastCumulativeFramedBytes() {
+        return lastCumulativeFramedBytes;
+    }
+
+    int lastFramedBytes() {
+        return lastFramedBytes;
     }
 
     int magic() {

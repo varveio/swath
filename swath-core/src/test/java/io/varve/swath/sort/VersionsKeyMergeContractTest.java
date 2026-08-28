@@ -491,6 +491,10 @@ class VersionsKeyMergeContractTest {
         public void recordPageAwareOverlapState(long activePages, long retainedRows) {
         }
 
+        @Override
+        public void recordRangeIndexBytes(long bytes) {
+        }
+
         int count(String key) {
             return counts.getOrDefault(key, 0);
         }
