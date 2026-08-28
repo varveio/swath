@@ -5,7 +5,6 @@
  */
 package io.varve.swath.sort;
 
-import java.util.List;
 import java.util.function.IntSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,7 +17,7 @@ import org.slf4j.LoggerFactory;
  * record observed in segment trailers — and owns cascade-predicted / fan-in-clamped observability
  * (log warnings +
  * {@code SORT.merge_fanin_clamped}/{@code _fd_clamped}/{@code _mem_clamped}/{@code
- * merge_cascade_predicted} counters), so a caller only ever needs {@link #plan(List)}.
+ * merge_cascade_predicted} counters), so a caller only ever needs {@link #plan(PageRunCatalog)}.
  *
  * <p>The arithmetic itself (the pure, injectable fd/memory composition) stays in
  * {@link MergeFdBudget}; this class composes it against a real {@link SortConfig} + segment list,
@@ -48,9 +47,9 @@ final class MergeFanInPlanner {
      * by staging format — reusing retained descriptor trailers for the page-run case. It calls
      * {@link #warnIfCascadePredicted} directly for the warning alone.
      */
-    int plan(List<PageRunSegmentDescriptor> segments) {
-        int clamped = clampedMergeFanIn(segments);
-        warnIfCascadePredicted(segments.size(), clamped);
+    int plan(PageRunCatalog catalog) {
+        int clamped = clampedMergeFanIn(catalog);
+        warnIfCascadePredicted(catalog.descriptors().size(), clamped);
         return clamped;
     }
 
@@ -86,10 +85,10 @@ final class MergeFanInPlanner {
      * #warnIfCascadePredicted} note the cascade if the clamp forces the fan-in below the segment
      * count.
      */
-    private int clampedMergeFanIn(List<PageRunSegmentDescriptor> segments) {
+    private int clampedMergeFanIn(PageRunCatalog catalog) {
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
-        int recordSizedFanIn = recordSizedFanIn(segments);
+        int recordSizedFanIn = recordSizedFanIn(catalog);
         int clamped = MergeFdBudget.clampedFanIn(staticFanIn, softFdLimit, MergeFdBudget.FD_HEADROOM,
                 recordSizedFanIn);
         if (clamped < staticFanIn) {
@@ -103,7 +102,8 @@ final class MergeFanInPlanner {
             }
             log.debug("sort_merge_fanin_clamped static_fan_in={} fd_bound={} record_sized_fan_in={} "
                     + "clamped_fan_in={} soft_fd_limit={} segments={}",
-                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit, segments.size());
+                    staticFanIn, fdBound, recordSizedFanIn, clamped, softFdLimit,
+                    catalog.descriptors().size());
         }
         return clamped;
     }
@@ -116,8 +116,8 @@ final class MergeFanInPlanner {
      * relax the configured estimate. Returns {@link Integer#MAX_VALUE} when no trailer size is
      * available, leaving the static estimate in force.
      */
-    private int recordSizedFanIn(List<PageRunSegmentDescriptor> segments) {
-        long maxRecordLen = PageRunSegmentDescriptor.maxRecordLen(segments);
+    private int recordSizedFanIn(PageRunCatalog catalog) {
+        long maxRecordLen = catalog.maxRecordLen();
         if (maxRecordLen <= 0) {
             return Integer.MAX_VALUE;
         }

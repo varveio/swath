@@ -289,9 +289,9 @@ class PageRunPageIndexTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(segment), path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
 
         ParallelRangeMerge.boundaries(descriptors, candidates, 2, metrics);
 

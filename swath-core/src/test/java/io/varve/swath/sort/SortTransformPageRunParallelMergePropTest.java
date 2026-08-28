@@ -203,16 +203,17 @@ class SortTransformPageRunParallelMergePropTest {
     private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(paths,
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(paths,
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         return new ParallelKickoff(descriptors, candidates);
     }
 
     private static List<PageRunSegmentDescriptor> descriptorTrailers(List<Path> paths)
             throws IOException {
-        return PageRunSegmentDescriptor.readAll(paths,
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+        return PageRunCatalog.preflight(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty())
+                .descriptors();
     }
 
     private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
@@ -373,8 +374,8 @@ class SortTransformPageRunParallelMergePropTest {
             // Price an open page-run stream as the planner does: the larger of the configured
             // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
-            long perStream = PageRunSegmentDescriptor.maxRecordLen(
-                    descriptorTrailers(stage(probeDir, s.segments())));
+            long perStream = PageRunCatalog.fromDescriptors(
+                    descriptorTrailers(stage(probeDir, s.segments()))).maxRecordLen();
             perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
             long budget = perStream * segmentCount * allowed;
 

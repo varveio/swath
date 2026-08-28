@@ -133,7 +133,7 @@ public final class SortTransform {
     private SortTransformResult transformInterruptibly(List<Path> stagingSegments, Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
-        requirePageRunSegments(stagingSegments);
+        PageRunCatalog.requirePageRunNames(stagingSegments);
         StagingReconciliation retainedOriginals = retainedOriginals(stagingSegments, stagingDir);
         boolean parallelKickoff = config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
@@ -147,8 +147,8 @@ public final class SortTransform {
         // sample keys into one globally bounded set during this same open. An unreadable segment is
         // not an optional memory refinement and must fail at kickoff while the prior output and
         // working evidence are intact. Explicit serial and arbitrary-run merges skip extensions.
-        List<PageRunSegmentDescriptor> segmentDescriptors =
-                PageRunSegmentDescriptor.readAll(stagingSegments,
+        PageRunCatalog catalog =
+                PageRunCatalog.preflight(stagingSegments,
                         path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), boundaryKeySink);
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
         // below for what each sweep removes and why. Disposable working files are cleared before
@@ -169,7 +169,7 @@ public final class SortTransform {
         // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
         // path, and the completeness stamp makes multi-file parallel output self-describing.
         if (parallelKickoff) {
-            SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
+            SortTransformResult parallel = tryTransformParallel(catalog, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting, boundaryCandidates,
                     retainedOriginals);
             if (parallel != null) {
@@ -185,7 +185,7 @@ public final class SortTransform {
                 "merge-", null, Map.of(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
-        int runtimeFanIn = fanInPlanner.plan(segmentDescriptors);
+        int runtimeFanIn = fanInPlanner.plan(catalog);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);
 
         List<Path> finalFiles = new ArrayList<>();
@@ -251,13 +251,14 @@ public final class SortTransform {
      * rename it writes the multi-file completeness stamp ({@code file_index} 1..N, one
      * {@code file_final} on N), which is the point at which the global part order is first known.
      */
-    private SortTransformResult tryTransformParallel(List<PageRunSegmentDescriptor> segmentDescriptors,
+    private SortTransformResult tryTransformParallel(PageRunCatalog catalog,
             Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting,
             ParallelRangeMerge.BoundaryCandidates boundaryCandidates,
             StagingReconciliation retainedOriginals) throws IOException {
-        List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
+        List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
+        List<Path> stagingSegments = catalog.paths();
         ParallelRangeMerge rangeMerge =
                 new ParallelRangeMerge(run, proofReaderFactory);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
@@ -326,7 +327,7 @@ public final class SortTransform {
                 segmentDescriptors.size()
                         <= rangeMerge.perRangeFanIn(boundaries.size() + 1, segmentDescriptors));
         List<ParallelRangeMerge.RangeResult> results =
-                rangeMerge.run(segmentDescriptors, stagingDir, boundaries, progressCallback);
+                rangeMerge.run(catalog, stagingDir, boundaries, progressCallback);
 
         List<Path> tmpsInOrder = new ArrayList<>();
         List<SortedFileWriter> partsInOrder = new ArrayList<>();
@@ -505,24 +506,6 @@ public final class SortTransform {
             parts.add(new FinalPart(paths.get(i), writers.get(i).finalMetadata()));
         }
         return List.copyOf(parts);
-    }
-
-    /** Whether {@code segment} has the required page-run staging/intermediate suffix.
-     *  Package-private: {@link MergeFanInPlanner} shares this instead of duplicating the
-     *  suffix check. */
-    static boolean isPageRunSegment(Path segment) {
-        return segment.getFileName().toString().endsWith(StagingNames.PAGE_RUN_SUFFIX);
-    }
-
-    /** Reject unsupported staging before cleanup can remove any prior working files. */
-    private static void requirePageRunSegments(List<Path> segments) throws IOException {
-        for (Path segment : segments) {
-            if (!isPageRunSegment(segment)) {
-                throw new IllegalArgumentException(
-                        "unsupported sort staging segment (expected " + StagingNames.PAGE_RUN_SUFFIX
-                                + "): " + segment);
-            }
-        }
     }
 
     private static void atomicRename(Path from, Path to) throws IOException {

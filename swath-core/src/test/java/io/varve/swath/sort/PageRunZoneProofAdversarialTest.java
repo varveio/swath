@@ -484,17 +484,17 @@ class PageRunZoneProofAdversarialTest {
     private static List<PageRunSegmentDescriptor> descriptors(Path path) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        return PageRunSegmentDescriptor.readAll(
+        return PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
     }
 
     private static EntrySelection entrySelection(Path path, int ranges) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(
                 descriptors, candidates, ranges, SortMetrics.NO_OP);
         assertThat(boundaries).isNotNull();
@@ -523,9 +523,9 @@ class PageRunZoneProofAdversarialTest {
     private static long middleOwnedOrdinal(Path path, int ranges) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(
                 descriptors, candidates, ranges, SortMetrics.NO_OP);
         PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(

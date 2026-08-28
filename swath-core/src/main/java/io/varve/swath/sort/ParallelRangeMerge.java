@@ -429,9 +429,16 @@ final class ParallelRangeMerge {
     List<RangeResult> run(List<PageRunSegmentDescriptor> segmentDescriptors, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
-        List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
-        Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
-                PageRunSegmentDescriptor.byPath(segmentDescriptors);
+        return run(PageRunCatalog.fromDescriptors(segmentDescriptors), stagingDir, boundaries,
+                progressCallback);
+    }
+
+    List<RangeResult> run(PageRunCatalog catalog, Path stagingDir,
+                          List<byte[]> boundaries,
+                          LongConsumer progressCallback) throws IOException {
+        List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
+        List<Path> stagingSegments = catalog.paths();
+        Map<Path, PageRunSegmentDescriptor> descriptorsByPath = catalog.byPath();
         int ranges = boundaries.size() + 1;
         int perRangeFanIn = perRangeFanIn(ranges, segmentDescriptors);
         // Position every range before worker launch. The plan retains O(segments*R) primitives,
@@ -831,7 +838,7 @@ final class ParallelRangeMerge {
     }
 
     private long perStreamBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
-        long pageRun = PageRunSegmentDescriptor.maxRecordLen(segmentDescriptors);
+        long pageRun = PageRunCatalog.fromDescriptors(segmentDescriptors).maxRecordLen();
         return pageRun > 0
                 ? Math.max(config.mergePerStreamBytes(), pageRun)
                 : config.mergePerStreamBytes();

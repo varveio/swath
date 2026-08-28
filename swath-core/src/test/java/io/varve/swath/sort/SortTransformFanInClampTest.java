@@ -108,7 +108,7 @@ class SortTransformFanInClampTest {
         bytes[bytes.length - 1] ^= 0x01;
         Files.write(segment, bytes);
 
-        assertThatThrownBy(() -> PageRunSegmentDescriptor.readAll(List.of(segment),
+        assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty()))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");

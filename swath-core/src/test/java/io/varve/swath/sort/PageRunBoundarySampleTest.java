@@ -68,11 +68,11 @@ class PageRunBoundarySampleTest {
         Map<Path, AtomicInteger> opens = new ConcurrentHashMap<>();
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 segments, path -> {
                     opens.computeIfAbsent(path, ignored -> new AtomicInteger()).incrementAndGet();
                     return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                }, Optional.of(candidates::add));
+                }, Optional.of(candidates::add)).descriptors();
         PageRunSegmentDescriptor descriptor = descriptors.getFirst();
         assertThat(opens).hasSize(segments.size());
         assertThat(opens.values()).allMatch(count -> count.get() == 1);
@@ -99,9 +99,9 @@ class PageRunBoundarySampleTest {
     void trailerOnlyKickoffSkipsEmbeddedExtensionAndDescriptorsRetainNoKeyCollections(
             @TempDir Path dir) throws IOException {
         Path segment = writePages(dir.resolve("serial.pageseg"), 4);
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(segment), path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
-                Optional.empty());
+                Optional.empty()).descriptors();
 
         PageRunBoundarySample.ReadResult sample = descriptors.getFirst().sample();
         assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.SKIPPED);
@@ -546,9 +546,9 @@ class PageRunBoundarySampleTest {
     private static PreparedDescriptors descriptors(List<Path> paths) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(paths,
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(paths,
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         return new PreparedDescriptors(descriptors, candidates);
     }
 

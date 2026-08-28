@@ -162,9 +162,9 @@ class PageRunSeekPlanTest {
     private static Prepared prepared(List<Path> paths) throws IOException {
         ParallelRangeMerge.BoundaryCandidates candidates =
                 new ParallelRangeMerge.BoundaryCandidates();
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+        List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 paths, candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
-                Optional.of(candidates::add));
+                Optional.of(candidates::add)).descriptors();
         return new Prepared(descriptors, candidates);
     }
 
