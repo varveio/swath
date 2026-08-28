@@ -202,6 +202,43 @@ class PageRunZoneProofAdversarialTest {
         assertNoOwnedDebris(staging);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(NonIndexKind.class)
+    void coherentDownwardTrailerCountsReachNonIndexPhysicalZoneTilingMismatch(
+            NonIndexKind kind, @TempDir Path root) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path source = SortTestSupport.writeIndexedPages(
+                staging.resolve("source.pageseg"), indexedPages());
+        lowerTrailerByLastPage(source);
+        Path segment = kind.convert(source, staging.resolve("input.pageseg"));
+        Files.deleteIfExists(source);
+        PageRunPageIndex.Status expectedStatus = switch (kind) {
+            case EXTENSIONLESS -> PageRunPageIndex.Status.ABSENT;
+            case TYPE1 -> PageRunPageIndex.Status.EMBEDDED_MINIMA_ONLY;
+            case INVALID_TYPE2 -> PageRunPageIndex.Status.INVALID_COUNT;
+        };
+        assertThat(descriptors(segment).getFirst().extension().status()).isEqualTo(expectedStatus);
+        TrackingFileWriterFactory writers = new TrackingFileWriterFactory();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        assertThatThrownBy(() -> transform(4, metrics, writers)
+                .transform(List.of(segment), output, staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("does not tile its planned physical zone")
+                .extracting(error -> ((SegmentCorruptionException) error).errorClass())
+                .isEqualTo(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION);
+        assertThat(writers.opened.get()).isPositive();
+        assertThat(writers.openNow.get()).isZero();
+        assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+        assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isZero();
+        assertNoLiveWorkers();
+        assertNoOwnedDebris(staging);
+        assertThat(output.resolve("part-00000.parquet")).doesNotExist();
+    }
+
     @Test
     void plannedRangeCountRejectsMissingExtraAndDuplicateTopologyEvenWithoutSegments(
             @TempDir Path root) throws IOException {
@@ -304,6 +341,55 @@ class PageRunZoneProofAdversarialTest {
         assertNoLiveWorkers();
         assertNoOwnedDebris(staging);
         assertThat(output.resolve("part-00000.parquet")).doesNotExist();
+    }
+
+    @Test
+    void cancellationDuringCoordinatorProofAfterWorkersCompletedClosesAndCleans(
+            @TempDir Path root) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path segment = SortTestSupport.writeIndexedPages(
+                staging.resolve("segment.pageseg"), 32, 0);
+        List<PageRunSegmentDescriptor> descriptors = descriptors(segment);
+        List<byte[]> boundaries = List.of(bytes("k00008"), bytes("k00016"), bytes("k00024"));
+        TrackingFileWriterFactory writers = new TrackingFileWriterFactory();
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        SortConfig config = SortConfigs.base()
+                .withMergeParallelism(4)
+                .withMergeBudgetBytes(64L << 20);
+        SortRun run = new SortRun(config, CMP, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                metrics, writers, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
+                RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
+                StaleFinalSweep.OWN_PARTS_ONLY);
+        AtomicBoolean proofEntered = new AtomicBoolean();
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, spool -> {
+            assertThat(spool).exists();
+            assertThat(writers.opened.get()).isEqualTo(4);
+            assertThat(writers.openNow.get()).isEqualTo(4);
+            assertThat(metrics.count("SORT.merge_range_parallel")).isEqualTo(4);
+            assertNoLiveWorkers();
+            proofEntered.set(true);
+            Thread.currentThread().interrupt();
+            return new PageRunProofSpool.Reader(spool);
+        });
+
+        try {
+            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+                    .isInstanceOf(MergeCancellation.Cancelled.class);
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertThat(proofEntered).isTrue();
+        assertThat(writers.openNow.get()).isZero();
+        assertThat(writers.closed.get()).isEqualTo(writers.opened.get()).isEqualTo(4);
+        assertThat(metrics.count("SORT.merge_zone_proof_complete")).isZero();
+        assertNoLiveWorkers();
+        assertNoOwnedDebris(staging);
+        assertThat(staging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
+        try (var finals = Files.newDirectoryStream(output, "part-*.parquet")) {
+            assertThat(finals.iterator().hasNext()).isFalse();
+        }
     }
 
     @ParameterizedTest(name = "{0}")
@@ -484,6 +570,17 @@ class PageRunZoneProofAdversarialTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static void lowerTrailerByLastPage(Path path) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        ByteBuffer tail = ByteBuffer.wrap(bytes);
+        assertThat(tail.getInt(fixedTailStart + Long.BYTES)).isEqualTo(8);
+        assertThat(tail.getLong(fixedTailStart + Long.BYTES + Integer.BYTES)).isEqualTo(24);
+        tail.putInt(fixedTailStart + Long.BYTES, 7);
+        tail.putLong(fixedTailStart + Long.BYTES + Integer.BYTES, 21);
+        Files.write(path, bytes);
     }
 
     private static long longField(String message, String field) {

@@ -13,6 +13,11 @@ import java.util.List;
 /** Header-to-trailer physical-zone proof for one parallel page-run merge. */
 final class PageRunZoneVerifier {
 
+    @FunctionalInterface
+    interface ProofReaderFactory {
+        PageRunProofSpool.Reader open(Path path) throws IOException;
+    }
+
     private PageRunZoneVerifier() {
     }
 
@@ -283,12 +288,17 @@ final class PageRunZoneVerifier {
 
     static void verify(PageRunSeekPlan plan, List<RangeSummary> supplied,
                        SortMetrics metrics) throws IOException {
+        verify(plan, supplied, metrics, PageRunProofSpool.Reader::new);
+    }
+
+    static void verify(PageRunSeekPlan plan, List<RangeSummary> supplied,
+                       SortMetrics metrics, ProofReaderFactory readerFactory) throws IOException {
         MergeCancellation.check();
         PageRunProofSpool.Reader reader = null;
         Throwable primary = null;
         try {
             RangeSummary[] ranges = topology(plan, supplied);
-            reader = new PageRunProofSpool.Reader(ranges[0].spool());
+            reader = readerFactory.open(ranges[0].spool());
             for (PageRunSeekPlan.SegmentPlan segment : plan.segments()) {
                 MergeCancellation.check();
                 verifySegment(segment, plan.ranges(), plan.segments().size(), reader, metrics);

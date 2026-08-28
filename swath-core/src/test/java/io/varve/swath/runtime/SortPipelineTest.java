@@ -256,11 +256,16 @@ final class SortPipelineTest {
             assertThat(DatasetLayout.of(outputDir).dataFile("part-00000.parquet")).doesNotExist();
             try (var files = Files.list(stagingDir)) {
                 assertThat(files.map(path -> path.getFileName().toString()))
-                        .noneMatch(name -> name.startsWith("range-")
-                                || name.contains("range-proof"));
+                        .noneMatch(name -> name.startsWith("prange-")
+                                || name.startsWith("merge-r"));
             }
             assertThat(counter(ctx, "swath.steal_reason", "SORT", "page_run_index_mismatch"))
-                    .isPositive();
+                    .isEqualTo(1.0);
+            assertThat(counter(ctx, "swath.steal_reason", "SORT", "merge_zone_proof_complete"))
+                    .isZero();
+            assertThat(counter(ctx, "swath.api.calls"))
+                    .as("merge-only re-entry has no PageFetcher and issues zero LIST/API calls")
+                    .isZero();
         }
     }
 

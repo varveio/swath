@@ -123,6 +123,7 @@ final class ParallelRangeMerge {
     private final RangeMergeTimer rangeTimer;
     private final IntSupplier softFdLimitSupplier;
     private final String workerThreadPrefix;
+    private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
 
     private enum SampleSource {
         EMBEDDED,
@@ -137,6 +138,10 @@ final class ParallelRangeMerge {
     private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
 
     ParallelRangeMerge(SortRun run) {
+        this(run, PageRunProofSpool.Reader::new);
+    }
+
+    ParallelRangeMerge(SortRun run, PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -147,6 +152,7 @@ final class ParallelRangeMerge {
         this.rangeTimer = run.rangeMergeTimer();
         this.softFdLimitSupplier = run.softFdLimitSupplier();
         this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
+        this.proofReaderFactory = proofReaderFactory;
     }
 
     String workerThreadPrefix() {
@@ -463,7 +469,7 @@ final class ParallelRangeMerge {
             List<PageRunZoneVerifier.RangeSummary> proof = results.stream()
                     .map(RangeResult::zoneSummary)
                     .toList();
-            PageRunZoneVerifier.verify(seekPlan, proof, metrics);
+            PageRunZoneVerifier.verify(seekPlan, proof, metrics, proofReaderFactory);
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
                             + "proof_spool_fds={}",
                     ranges, threads, perRangeFanIn, PROOF_SPOOL_FDS);
