@@ -18,7 +18,8 @@ final class PageRunZoneVerifier {
 
     @FunctionalInterface
     interface ProofReaderFactory {
-        PageRunProofSpool.Reader open(Path path, PageRunProofSpool.Stats stats) throws IOException;
+        PageRunProofSpool.Reader open(Path path, int expectedSlots,
+                                      PageRunProofSpool.Stats stats) throws IOException;
     }
 
     private PageRunZoneVerifier() {
@@ -373,14 +374,17 @@ final class PageRunZoneVerifier {
         MergeCancellation.check();
         PageRunProofSpool.Reader reader = null;
         Throwable primary = null;
+        boolean verified = false;
         try {
             RangeSummary[] ranges = topology(plan, supplied);
-            reader = readerFactory.open(ranges[0].spool(), stats);
+            int expectedSlots = Math.multiplyExact(plan.ranges(), plan.segments().size());
+            reader = readerFactory.open(ranges[0].spool(), expectedSlots, stats);
             for (PageRunSeekPlan.SegmentPlan segment : plan.segments()) {
                 MergeCancellation.check();
                 verifySegment(segment, plan.ranges(), plan.segments().size(), reader, metrics);
             }
             metrics.recordStealReason("SORT", "merge_zone_proof_complete");
+            verified = true;
         } catch (IOException | RuntimeException e) {
             primary = e;
             throw e;
@@ -393,17 +397,23 @@ final class PageRunZoneVerifier {
                     failure = append(failure, e);
                 }
             }
-            Set<Path> spools = new LinkedHashSet<>();
-            for (RangeSummary summary : supplied) {
-                if (summary != null && summary.spool() != null) {
-                    spools.add(summary.spool());
+            // A fully verified spool becomes a publisher-owned disposable intermediate. Deleting it
+            // here would turn a harmless unlink failure into a pre-publication merge failure and
+            // force an expensive replay. Proof or reader-close failures remain pre-publication and
+            // clean their spools immediately.
+            if (!verified || failure != null) {
+                Set<Path> spools = new LinkedHashSet<>();
+                for (RangeSummary summary : supplied) {
+                    if (summary != null && summary.spool() != null) {
+                        spools.add(summary.spool());
+                    }
                 }
-            }
-            for (Path spool : spools) {
-                try {
-                    PageRunProofSpool.delete(spool, stats);
-                } catch (IOException e) {
-                    failure = append(failure, e);
+                for (Path spool : spools) {
+                    try {
+                        PageRunProofSpool.delete(spool, stats);
+                    } catch (IOException e) {
+                        failure = append(failure, e);
+                    }
                 }
             }
             if (failure != null && primary != null) {

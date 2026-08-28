@@ -19,6 +19,7 @@ import io.varve.swath.engine.TransientRetryFetcher;
 import io.varve.swath.engine.WorkStealingScan;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.error.SwathException;
@@ -60,7 +61,10 @@ import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.MergeDiskExhaustedException;
+import io.varve.swath.sort.MergeDiskPolicy;
 import io.varve.swath.sort.MergeInputProfile;
+import io.varve.swath.sort.MergeMemoryExhaustedException;
 import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.ProofSpoolAllocationException;
 import io.varve.swath.sort.PublicationStepHook;
@@ -729,7 +733,8 @@ public final class ListRunner {
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach) throws SwathException, InterruptedException {
         return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
-                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT);
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, RetryConfig.DEFAULT,
+                false);
     }
 
     /**
@@ -742,6 +747,17 @@ public final class ListRunner {
             CheckpointStore store, long runId, int workerCount, List<Node> seeds,
             SortConfig sortConfig, SortMode mode, EngineToggles toggles,
             TraceSink trace, boolean reattach, RetryConfig retryConfig)
+            throws SwathException, InterruptedException {
+        return runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, spec, store, runId,
+                workerCount, seeds, sortConfig, mode, toggles, trace, reattach, retryConfig, false);
+    }
+
+    /** Full overload including the explicit CLI {@code sort.ignore-disk-check} core policy. */
+    public ListingStatistics runToSortedParquetWorkStealing(
+            RunContext ctx, PageFetcher fetcher, Path outputDir, Path stagingDir, ParquetSpec spec,
+            CheckpointStore store, long runId, int workerCount, List<Node> seeds,
+            SortConfig sortConfig, SortMode mode, EngineToggles toggles,
+            TraceSink trace, boolean reattach, RetryConfig retryConfig, boolean ignoreDiskCheck)
             throws SwathException, InterruptedException {
 
         WorkStealingScan producer = new WorkStealingScan(
@@ -841,7 +857,7 @@ public final class ListRunner {
                         merged[0] = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                                 sortedSegmentRows(store, runId), sortConfig, mode, spec.bucket(),
                                 spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                                StaleFinalSweep.OWN_PARTS_ONLY);
+                                StaleFinalSweep.OWN_PARTS_ONLY, ignoreDiskCheck);
                     } catch (PublicationPendingException e) {
                         merged[0] = committedSortResult(e);
                         throw e;
@@ -865,6 +881,15 @@ public final class ListRunner {
      */
     public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
             CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec)
+            throws SwathException, InterruptedException {
+        return runSortMergeOnly(ctx, outputDir, stagingDir, store, runId, sortConfig, mode, spec,
+                false);
+    }
+
+    /** Merge-only resume with the explicit CLI {@code sort.ignore-disk-check} core policy. */
+    public ListingStatistics runSortMergeOnly(RunContext ctx, Path outputDir, Path stagingDir,
+            CheckpointStore store, long runId, SortConfig sortConfig, SortMode mode, ParquetSpec spec,
+            boolean ignoreDiskCheck)
             throws SwathException, InterruptedException {
 
         long startedNs = System.nanoTime();
@@ -909,7 +934,7 @@ public final class ListRunner {
                 result = sortMergeAndPublish(ctx, store, outputDir, stagingDir,
                         segRows, sortConfig, mode, spec.bucket(),
                         spec.argsHash(), runId, spec.progressInterval(), spec.writebackBytes(),
-                        StaleFinalSweep.ALL_PARQUET);
+                        StaleFinalSweep.ALL_PARQUET, ignoreDiskCheck);
                 published[0] = result;
             } catch (PublicationPendingException e) {
                 result = committedSortResult(e);
@@ -984,7 +1009,8 @@ public final class ListRunner {
     private SortTransformResult sortMergeAndPublish(RunContext ctx, CheckpointStore store,
             Path outputDir, Path stagingDir,
             List<PartRef> stagedParts, SortConfig config, SortMode mode, String bucket, String argsHash, long runId,
-            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep)
+            Duration progressInterval, long writebackBytes, StaleFinalSweep staleFinalSweep,
+            boolean ignoreDiskCheck)
             throws SwathException {
         // The exact merge denominator, recorded HERE because this is the one point both merge
         // callers pass through with the staged parts in hand: rows merged is measured against the
@@ -1027,7 +1053,8 @@ public final class ListRunner {
                 new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
                         sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
-                        staleFinalSweep),
+                        staleFinalSweep, ignoreDiskCheck
+                                ? MergeDiskPolicy.bypassed() : MergeDiskPolicy.enforced()),
                 publicationStepHook);
         Path dataDir = DatasetLayout.of(outputDir).dataDir();
         // Mark a phase-boundary progress tick so the merge/finalize tail starts with a fresh stall
@@ -1079,6 +1106,14 @@ public final class ListRunner {
             }
             throw new PublicationPendingException(
                     "sorted dataset publication committed; cleanup pending", e);
+        } catch (MergeDiskExhaustedException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new MergePendingException("sort merge deferred for insufficient disk; "
+                    + "free space and resume, or use sort.ignore-disk-check=on", e);
+        } catch (MergeMemoryExhaustedException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new MergePendingException("sort merge deferred because decoded pages do not fit "
+                    + "the merge budget; raise swath.sort.merge-budget-bytes and resume", e);
         } catch (IOException | UncheckedIOException e) {
             // A CLASSIFIED merge failure (a staged page-run invariant or proof-spool allocation)
             // must
@@ -1114,6 +1149,12 @@ public final class ListRunner {
             }
             if (c instanceof ProofSpoolAllocationException allocation) {
                 return allocation.errorClass();
+            }
+            if (c instanceof MergeDiskExhaustedException exhausted) {
+                return exhausted.errorClass();
+            }
+            if (c instanceof MergeMemoryExhaustedException exhausted) {
+                return exhausted.errorClass();
             }
         }
         return null;

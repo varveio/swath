@@ -13,7 +13,7 @@ import io.varve.swath.sort.StagingRetention;
 final class SortOptions {
 
     static final int MIN_MERGE_PARALLELISM = 1;
-    static final int MAX_MERGE_PARALLELISM = 16;
+    static final int MAX_MERGE_PARALLELISM = SortConfig.MAX_MERGE_PARALLELISM;
 
     boolean sort;
 

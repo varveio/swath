@@ -113,6 +113,10 @@ proof. Proof-spool fields separate requested fixed-slot address space
 (`merge_proof_spool_logical_extent_bytes`), attempted physical allocation operations/bytes,
 mapped key/field access operations/bytes, and summed service time (`merge_proof_spool_ms`). They
 are zero on the serial path; logical extent is not transferred bytes or a memory-neutral claim.
+Before worker startup, the merge planner charges the exact fixed extent against the configured
+merge budget alongside stream capacity. `SORT.merge_range_proof_budget_limited` reports a range
+clamp caused specifically by that backing cost; its warning includes requested and effective proof
+extents.
 An allocation or writable-map failure emits `SORT.proof_spool_allocation_failed` and terminates with
 `error_class=proof_spool_allocation_failed` after attempted work is published; cooperative
 cancellation remains cancellation.

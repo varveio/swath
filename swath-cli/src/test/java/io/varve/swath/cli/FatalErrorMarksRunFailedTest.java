@@ -27,6 +27,7 @@ import io.varve.swath.error.CancelledException;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
 import io.varve.swath.error.ProtocolViolationException;
 import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.filter.FilterChain;
@@ -193,6 +194,30 @@ final class FatalErrorMarksRunFailedTest {
         assertThat(markedFailed)
                 .as("durable parts must remain resumable for a publication-only retry")
                 .isFalse();
+    }
+
+    /** Merge-start disk admission is a zero-LIST-resumable refusal, never a fatal run poison. */
+    @Test
+    void mergePendingDiskRefusalLeavesTheRunEligibleForRetry(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            long node = store.insertNode(NodeSpec.rootRange(run.id()));
+            store.commitPage(new PageCommit(node, "k9".getBytes(StandardCharsets.UTF_8), true));
+            MergePendingException refusal = new MergePendingException(
+                    "sort merge deferred for insufficient disk", new IOException("injected"));
+
+            assertThatThrownBy(() -> ListCommand.runEngineGuarded(store, run.id(), () -> {
+                throw refusal;
+            })).isSameAs(refusal);
+
+            RunMeta retry = store.openRun(textKey(), true, false);
+            assertThat(retry.status()).isEqualTo(RunStatus.RUNNING);
+            assertThat(retry.fatalError()).isFalse();
+            assertThat(store.loadResumable(run.id(), false))
+                    .as("all listing nodes remain complete, so retry can take merge-only")
+                    .isEmpty();
+        }
     }
 
     /**

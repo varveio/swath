@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Pre-worker range positioning plan over untrusted type-2 page-index hints.
+ * Pre-worker range positioning plan over untrusted validated page-index hints.
  *
  * <p>Each segment retains only {@code O(R)} primitive seams. Sample keys exist only while the
  * extension cursor is being scanned; neither descriptors nor the plan retain a sample list. A seam
@@ -26,7 +26,7 @@ final class PageRunSeekPlan {
 
     static final long NO_INDEX_ENTRY = -1L;
 
-    /** One chosen type-2 entry, represented entirely by primitive extension fields. */
+    /** One chosen page-index entry, represented entirely by primitive extension fields. */
     record SeekSeam(long entryPayloadOffset, int sampleIndex, long pageOrdinal,
                     long frameOffset, long cumulativeEntries, long cumulativeFramedBytes) {
         boolean indexed() {

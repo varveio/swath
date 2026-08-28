@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Bounded exact-stride type-2 index builder for a listing buffer whose page count is known. */
+/** Bounded exact-stride current page-index builder for a listing buffer whose page count is known. */
 final class PageRunPageIndexBuilder {
 
     private final int expectedPages;
@@ -17,6 +17,7 @@ final class PageRunPageIndexBuilder {
     private final List<PageRunPageIndex.IndexEntry> entries;
     private long pagesSeen;
     private byte[] prefixMax = new byte[0];
+    private int maxRawPayloadLength;
 
     PageRunPageIndexBuilder(int expectedPages) {
         if (expectedPages < 0) {
@@ -37,6 +38,7 @@ final class PageRunPageIndexBuilder {
         if (pagesSeen == 0 || Arrays.compareUnsigned(pageMax, prefixMax) > 0) {
             prefixMax = pageMax.clone();
         }
+        maxRawPayloadLength = Math.max(maxRawPayloadLength, page.rawPayloadLength());
         if (pageOrdinal % stride == 0) {
             entries.add(new PageRunPageIndex.IndexEntry(pageOrdinal, frameOffset, cumulativeEntries,
                     cumulativeFramedBytes, page.firstKeyUnsafe().clone(), prefixMax.clone()));
@@ -49,6 +51,7 @@ final class PageRunPageIndexBuilder {
             throw new IllegalStateException("page-run page index page count mismatch: expected "
                     + expectedPages + " but saw " + pagesSeen);
         }
-        return new PageRunPageIndex.Snapshot(List.copyOf(entries), prefixMax.clone());
+        return new PageRunPageIndex.Snapshot(
+                List.copyOf(entries), prefixMax.clone(), maxRawPayloadLength);
     }
 }

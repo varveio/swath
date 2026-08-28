@@ -96,6 +96,9 @@ final class SqliteCheckpointStoreTest {
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
                 PageRunFormat.LEGACY_MINIMA_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
         assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION))
+                .isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
                 PageRunFormat.PAGE_INDEX_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
         assertThat(PageRunFormat.compatibility(null, null))
                 .isEqualTo(PageRunFormat.Compatibility.LEGACY_UNRECORDED);

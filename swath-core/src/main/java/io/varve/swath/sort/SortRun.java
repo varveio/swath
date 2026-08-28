@@ -26,6 +26,7 @@ import java.util.function.IntSupplier;
  * @param rangeMergeTimer records parallel range and boundary-sampling wall time
  * @param softFdLimitSupplier process soft open-file limit source, or a deterministic test value
  * @param staleFinalSweep ownership scope for replacement-publish cleanup
+ * @param mergeDiskPolicy merge-start filesystem admission and explicit CLI bypass policy
  */
 public record SortRun(
         SortConfig config,
@@ -37,7 +38,18 @@ public record SortRun(
         MergeInputProfile inputProfile,
         RangeMergeTimer rangeMergeTimer,
         IntSupplier softFdLimitSupplier,
-        StaleFinalSweep staleFinalSweep) {
+        StaleFinalSweep staleFinalSweep,
+        MergeDiskPolicy mergeDiskPolicy) {
+
+    /** Compatibility constructor for library callers; merge-start disk admission remains enforced. */
+    public SortRun(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
+            EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,
+            SortedFileWriterFactory finalWriterFactory, MergeInputProfile inputProfile,
+            RangeMergeTimer rangeMergeTimer, IntSupplier softFdLimitSupplier,
+            StaleFinalSweep staleFinalSweep) {
+        this(config, comparator, hook, equalKeyPolicy, metrics, finalWriterFactory, inputProfile,
+                rangeMergeTimer, softFdLimitSupplier, staleFinalSweep, MergeDiskPolicy.enforced());
+    }
 
     /** Production soft-fd-limit source; tests pass a fixed supplier when they exercise clamps. */
     public static final IntSupplier PROCESS_SOFT_FD_LIMIT = MergeFdBudget::softOpenFileLimit;

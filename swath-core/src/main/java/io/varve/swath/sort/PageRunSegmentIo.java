@@ -49,6 +49,8 @@ final class PageRunSegmentIo implements AutoCloseable {
     private final short formatVersion;
     /** Carries the {@code SORT.page_run_min_regression} engagement counter (NO_OP when unwired). */
     private final SortMetrics metrics;
+    /** Maximum decoded page payload admitted by kickoff planning for this segment. */
+    private final int maxRawPayloadLength;
 
     /** Largest framed body length (from the trailer): bounds a record's claimed length before alloc. */
     final long maxRecordLen;
@@ -80,15 +82,24 @@ final class PageRunSegmentIo implements AutoCloseable {
     private int lastFramedBytes;
     /** One-shot verification owed by the first page after an indexed seek. */
     private SeekExpectation seekExpectation;
-    /** True after a type-2 target positioned this reader away from the ordinary header path. */
+    /** True after a page-index target positioned this reader away from the ordinary header path. */
     private boolean indexedPosition;
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, long maxRecordLen, long totalRecords,
                             long totalEntries, long trailerStart, long fileSize) {
+        this(channel, path, metrics, magic, formatVersion, maxRecordLen, totalRecords,
+                totalEntries, trailerStart, fileSize, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
+                            short formatVersion, long maxRecordLen, long totalRecords,
+                            long totalEntries, long trailerStart, long fileSize,
+                            int maxRawPayloadLength) {
         this.channel = channel;
         this.path = path;
         this.metrics = metrics;
+        this.maxRawPayloadLength = maxRawPayloadLength;
         this.magic = magic;
         this.formatVersion = formatVersion;
         this.maxRecordLen = maxRecordLen;
@@ -106,6 +117,16 @@ final class PageRunSegmentIo implements AutoCloseable {
      * {@code SORT.page_run_min_regression} engagement counter into the run summary.
      */
     static PageRunSegmentIo open(Path path, SortMetrics metrics) throws IOException {
+        return open(path, metrics, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Open with the decoded-page maximum admitted for this segment by kickoff planning. */
+    static PageRunSegmentIo open(Path path, SortMetrics metrics, int maxRawPayloadLength)
+            throws IOException {
+        if (maxRawPayloadLength < 0 || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+            throw new IllegalArgumentException("decoded-page limit is outside the format bound: "
+                    + maxRawPayloadLength);
+        }
         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
         try {
             long size = channel.size();
@@ -158,7 +179,7 @@ final class PageRunSegmentIo implements AutoCloseable {
 
             channel.position(PageRunSegmentWriter.HEADER_BYTES);
             return new PageRunSegmentIo(channel, path, metrics, magic, version, maxRecordLen,
-                    totalRecords, totalEntries, trailerStart, size);
+                    totalRecords, totalEntries, trailerStart, size, maxRawPayloadLength);
         } catch (IOException | RuntimeException e) {
             channel.close();
             throw e;
@@ -219,6 +240,13 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
+        if (header.rawPayloadLength() > maxRawPayloadLength) {
+            metrics.recordStealReason("SORT", "page_run_decoded_page_limit");
+            throw corruption(SegmentCorruptionException.PAGE_RUN_DECODED_PAGE_LIMIT,
+                    "decoded page payload " + header.rawPayloadLength()
+                            + " exceeds the planned segment maximum " + maxRawPayloadLength,
+                    null);
+        }
         long cumulativeFramedBytes = proofTracking
                 ? frameOffset - PageRunSegmentWriter.HEADER_BYTES : 0;
         if (seekExpectation != null) {
@@ -245,7 +273,7 @@ final class PageRunSegmentIo implements AutoCloseable {
     }
 
     /**
-     * Position at one untrusted type-2 entry. The next page must confirm every directly observable
+     * Position at one untrusted page-index entry. The next page must confirm every directly observable
      * target field before it is exposed to a frontier; the zone proof later anchors the ordinal and
      * cumulative entry claim to a header-to-trailer physical chain.
      */

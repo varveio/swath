@@ -87,7 +87,7 @@ public interface SortMetrics {
     /** Observe one active overlap-cluster size for peak gauges. */
     void recordPageAwareOverlapState(long activePages, long retainedRows);
 
-    /** Record type-2 metadata bytes read by seek planning and exact worker proof reads. */
+    /** Record page-index metadata bytes read by seek planning and exact worker proof reads. */
     void recordRangeIndexBytes(long bytes);
 
     /** Record logical page-frame bytes read by parallel range workers, including cascades. */

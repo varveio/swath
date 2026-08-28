@@ -33,7 +33,8 @@ import java.util.List;
  *   <li><b>Disjoint pages (the common case) — decode-once fast path.</b> When the next page's
  *       {@code minKey} is strictly greater (unsigned) than the current page's {@code maxKey}, the
  *       page is decoded once and streamed whole in file order ({@code
- *       SORT.page_run_entry_whole_page}). No key comparison per entry, no heap.</li>
+ *       SORT.page_run_entry_whole_page}). There is no merge heap; the persisted-page cursor still
+ *       compares adjacent rows to prove that the body is internally ordered.</li>
  *   <li><b>Overlapping pages — key-merged.</b> Otherwise the overlapping pages are decoded and
  *       merged at the key level under the full comparator (the merger's existing overlap
  *       fallback), so the emitted stream is sorted by construction ({@code

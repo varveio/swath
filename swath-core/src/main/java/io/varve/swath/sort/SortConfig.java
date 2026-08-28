@@ -40,11 +40,13 @@ import java.util.function.UnaryOperator;
  *   <li>{@code mergePerStreamBytes} — the configured planning price for one OPEN merge stream,
  *       and the denominator of the serial page-run merge's {@link #effectiveFanIn()}. A
  *       {@link PageFrontierReader} retains packed page bodies per open stream, so the default uses
- *       64&nbsp;KiB as a capacity estimate. The runtime merge-entry clamp ({@link SortTransform})
- *       raises that price to the largest encoded {@code maxRecordLen} from the page-run trailers
- *       when necessary. Neither value is a measurement or hard bound of decoded JVM heap.</li>
- *   <li>{@code mergeBudgetBytes} — the merge-phase planning budget: caps how many
- *       segment streams a single {@link KWayMerge} pass may hold open at once, via
+ *       64&nbsp;KiB as a capacity floor. The runtime merge-entry clamp ({@link SortTransform})
+ *       raises that price to two maximum encoded bodies plus the type-3 decoded-page maximum.
+ *       Legacy inputs retain the configured floor and are guarded against their actual header
+ *       claims immediately before allocation.</li>
+ *   <li>{@code mergeBudgetBytes} — the merge-phase residency budget: covers exact parallel
+ *       proof-spool backing first, caps how many segment streams a single
+ *       {@link KWayMerge} pass may hold open, and bounds page-aware decoded overlap state, via
  *       {@link #effectiveFanIn()} = {@code min(fanIn, max(2, mergeBudgetBytes / mergePerStreamBytes))}
  *       — keeping planned open-stream capacity a function of the budget, never of segment count
  *       (I11), even when {@code fanIn} alone would allow more streams. Same heap-adaptive shape as
@@ -70,6 +72,9 @@ import java.util.function.UnaryOperator;
  * through {@link #fromSystemProperties()} and derive test or internal variants with {@code withX}.
  */
 public final class SortConfig {
+
+    /** Largest merge range count supported by the core sorter and the public tune surface. */
+    public static final int MAX_MERGE_PARALLELISM = 16;
 
     /** Floor for the heap-adaptive segment gate (§7). */
     public static final long SEGMENT_BYTES_FLOOR = 64L * 1024 * 1024;
@@ -230,10 +235,11 @@ public final class SortConfig {
         if (mergePerStreamBytes() <= 0) {
             throw new IllegalArgumentException("merge-per-stream-bytes must be > 0, got " + mergePerStreamBytes());
         }
-        if (mergeParallelism() < 1) {
-            // 1 == serial (the shipped default); the knob only ever ADDS ranges. A
-            // value < 1 is meaningless — rejected here, consistent with every other knob.
-            throw new IllegalArgumentException("merge-parallelism must be >= 1, got " + mergeParallelism());
+        if (mergeParallelism() < 1 || mergeParallelism() > MAX_MERGE_PARALLELISM) {
+            // 1 is the explicit serial opt-out. The shipped default is half the processors,
+            // capped at eight; the supported override ceiling is sixteen on every entry point.
+            throw new IllegalArgumentException("merge-parallelism must be between 1 and "
+                    + MAX_MERGE_PARALLELISM + ", got " + mergeParallelism());
         }
         if (segmentCodec() == null) {
             throw new IllegalArgumentException("segment-codec must not be null");
@@ -452,19 +458,22 @@ public final class SortConfig {
      * The <b>static</b> budget-bounded merge fan-in: {@code min(fanIn,
      * max(2, mergeBudgetBytes / mergePerStreamBytes))}. {@link KWayMerge} opens at most this many streams
      * per pass, so planned open-stream capacity remains a function of the budget knob, never of how
-     * many segments a run happens to produce (I11). The price is advisory capacity planning, not a
-     * measurement or hard bound of decoded JVM heap; {@code fanIn} alone is only a correctness/fd
+     * many segments a run happens to produce (I11). This result is only the static config-level
+     * advisory; runtime planning additionally prices retained encoded/decoded page state and
+     * rejects a minimum width that cannot fit. {@code fanIn} alone remains only a correctness/fd
      * bound (I2).
      *
-     * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate),
+     * <p>The denominator is {@code mergePerStreamBytes} (a page-run packed-page estimate).
      * This is the <em>static</em> config-level bound; the actual merge additionally applies a
      * <em>runtime</em> clamp at merge entry ({@link SortTransform}) against the process fd limit and the
-     * largest per-segment encoded {@code maxRecordLen}.
+     * largest per-segment encoded {@code maxRecordLen}, the type-3 decoded-page maximum, exact proof
+     * backing, and the runtime aggregate decoded-page guard.
      *
      * <p><b>The {@code max(2, …)} floor is documented, not rejected:</b> a merge pass needs at least
      * 2 streams to merge anything, so this never returns fewer than 2 regardless of how tiny
      * {@code mergeBudgetBytes} is. Below two configured stream prices, the planning arithmetic
-     * intentionally exceeds the requested budget; it does not imply an exact resident-memory peak.
+     * intentionally exceeds the requested budget at this static configuration layer. Runtime merge
+     * admission refuses resumably when that minimum safe width does not fit actual page residency.
      */
     public int effectiveFanIn() {
         long budgetBound = mergeBudgetBytes() / mergePerStreamBytes();

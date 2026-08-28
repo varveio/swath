@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.varve.swath.model.ListEntry;
 import java.util.ArrayList;
@@ -69,6 +70,22 @@ class DuplicateReportingTest {
         reporting.close();
         reporting.close();
         assertThat(closes).hasValue(1);
+    }
+
+    @Test
+    void rejectsAComparatorRegressionAfterPayingTheAdjacentComparison() {
+        DuplicateReporting reporting = new DuplicateReporting(
+                new InMemoryCursor(List.of(object("a"), object("z"), object("m")),
+                        comparator, DuplicateHook.NO_OP),
+                comparator, DuplicateHook.NO_OP);
+
+        assertThat(reporting.next()).isEqualTo(object("a"));
+        assertThat(reporting.next()).isEqualTo(object("z"));
+        assertThatThrownBy(reporting::next)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("merged output order regressed")
+                .hasMessageContaining("z")
+                .hasMessageContaining("m");
     }
 
     private static List<ListEntry> drain(SortedCursor cursor) {

@@ -111,6 +111,14 @@ final class KWayMerge<S> {
         default PageFrontierStream openFrontier(S segment) throws IOException {
             throw new UnsupportedOperationException("segment does not support a page frontier: " + segment);
         }
+
+        /**
+         * Aggregate decoded-page residency available to one merger instance. Called before any
+         * frontier body is opened so a page-run implementation can preflight intermediate trailers.
+         */
+        default long decodedPageBudgetBytes(List<S> segments) throws IOException {
+            return Long.MAX_VALUE;
+        }
     }
 
     private final Comparator<ListEntry> comparator;
@@ -192,9 +200,10 @@ final class KWayMerge<S> {
             throws IOException {
         SortedCursor merger;
         if (allSupportPageFrontier(group)) {
+            long decodedBudget = io.decodedPageBudgetBytes(group);
             List<PageFrontierStream> frontiers = openFrontiers(group);
             merger = new PageAwareMerger(frontiers, comparator, MergeScope.CROSS_SEGMENT, metrics,
-                    disjointSink);
+                    disjointSink, decodedBudget);
         } else {
             List<EntryStream> streams = open(group);
             merger = new StreamingMerger(streams, comparator, this::recordFastPath, disjointSink);

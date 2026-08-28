@@ -312,7 +312,7 @@ final class SortPipelineTest {
         }
     }
 
-    /** Raw test mutation, intentionally independent of the production type-2 parser. */
+    /** Raw test mutation, intentionally independent of the production sparse-index parser. */
     private static void repairCrcAfterSecondEntryCumulativeLie(Path segment) throws Exception {
         byte[] bytes = Files.readAllBytes(segment);
         ByteBuffer data = ByteBuffer.wrap(bytes);
@@ -323,7 +323,8 @@ final class SortPipelineTest {
         position += 2 + (data.getShort(position) & 0xffff);
         int extensionStart = position;
         assertThat(data.getInt(extensionStart)).isEqualTo(0x53504758);
-        assertThat(data.getShort(extensionStart + 4)).isEqualTo((short) 2);
+        assertThat(data.getShort(extensionStart + 4))
+                .isEqualTo((short) PageRunFormat.PAGE_INDEX_EXTENSION);
         assertThat(data.getInt(extensionStart + 12)).isGreaterThan(2);
         int firstEntry = extensionStart + 16;
         int firstMinLength = data.getShort(firstEntry + 32) & 0xffff;

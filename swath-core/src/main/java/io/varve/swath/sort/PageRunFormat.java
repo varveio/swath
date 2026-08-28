@@ -10,8 +10,8 @@ package io.varve.swath.sort;
  *
  * <p>The page-run header version and extension type are separate compatibility axes: a reader may
  * understand the segment body while not understanding metadata embedded before the fixed EOF tail.
- * Original listing segments written by this build always carry the type-2 page index; extension-free
- * and legacy type-1 minima page runs remain readable for compatibility but are never produced as
+ * Original listing segments written by this build always carry the type-3 page index; extension-free,
+ * legacy type-1 minima, and legacy type-2 page-index runs remain readable for compatibility but are never produced as
  * newly checkpointed listing segments. A writer that emits a new listing extension updates this
  * value in the same change, so checkpoint metadata cannot describe different bytes.
  */
@@ -29,8 +29,11 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     /** The legacy page-minimum boundary-sample extension. */
     public static final int LEGACY_MINIMA_EXTENSION = 1;
 
-    /** The current sparse page-offset index extension. */
-    public static final int PAGE_INDEX_EXTENSION = 2;
+    /** The legacy sparse page-offset index without decoded-page residency metadata. */
+    public static final int LEGACY_PAGE_INDEX_EXTENSION = 2;
+
+    /** The current sparse page-offset index with decoded-page residency metadata. */
+    public static final int PAGE_INDEX_EXTENSION = 3;
 
     private static final PageRunFormat CURRENT_LISTING =
             new PageRunFormat(CURRENT_FORMAT_VERSION, PAGE_INDEX_EXTENSION);
@@ -58,6 +61,7 @@ public record PageRunFormat(int formatVersion, int extensionType) {
             return Compatibility.UNKNOWN_FORMAT_VERSION;
         }
         if (extensionType != ABSENT_EXTENSION && extensionType != LEGACY_MINIMA_EXTENSION
+                && extensionType != LEGACY_PAGE_INDEX_EXTENSION
                 && extensionType != PAGE_INDEX_EXTENSION) {
             return Compatibility.UNKNOWN_EXTENSION_TYPE;
         }

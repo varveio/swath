@@ -68,10 +68,22 @@ class SortConfigTest {
     void rejectsMergeParallelismBelowOne() {
         assertThatThrownBy(() -> minimalConfigWithMergeParallelism(0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("merge-parallelism must be >= 1, got 0");
+                .hasMessage("merge-parallelism must be between 1 and 16, got 0");
         assertThatThrownBy(() -> fromProperties(Map.of("merge-parallelism", "0")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("merge-parallelism");
+    }
+
+    @Test
+    void rejectsMergeParallelismAboveTheSupportedCoreCeiling() {
+        assertThat(minimalConfigWithMergeParallelism(16).mergeParallelism()).isEqualTo(16);
+        assertThatThrownBy(() -> minimalConfigWithMergeParallelism(17))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("merge-parallelism must be between 1 and 16, got 17");
+        assertThatThrownBy(() -> fromProperties(Map.of("merge-parallelism", "17")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("merge-parallelism")
+                .hasMessageContaining("16");
     }
 
     @Test

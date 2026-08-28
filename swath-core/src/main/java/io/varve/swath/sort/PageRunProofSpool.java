@@ -155,7 +155,19 @@ final class PageRunProofSpool {
     }
 
     static long logicalBytes(int slots) {
+        if (slots < 0) {
+            throw new IllegalArgumentException("proof spool slots must not be negative");
+        }
         return Math.multiplyExact((long) slots, SLOT_BYTES);
+    }
+
+    /** Exact fixed backing extent for one slot per {@code (range, original segment)} pair. */
+    static long logicalBytes(int ranges, int segments) {
+        if (ranges < 0 || segments < 0) {
+            throw new IllegalArgumentException("proof spool dimensions must not be negative");
+        }
+        long slots = Math.multiplyExact((long) ranges, segments);
+        return Math.multiplyExact(slots, SLOT_BYTES);
     }
 
     static int slotBytes() {
@@ -344,9 +356,13 @@ final class PageRunProofSpool {
         private final Stats stats;
         private final AtomicBoolean closed = new AtomicBoolean();
 
-        Reader(Path path, Stats stats) throws IOException {
+        Reader(Path path, int expectedSlots, Stats stats) throws IOException {
             this.path = path;
             this.stats = stats;
+            if (expectedSlots < 0) {
+                throw new IllegalArgumentException("expected proof spool slots must not be negative");
+            }
+            long expectedBytes = logicalBytes(expectedSlots);
             // The coordinator polls cancellation immediately after its injected/open seam. Preserve
             // the pre-existing contract that merely constructing the read-only proof view does not
             // turn an already-latched interrupt into ClosedByInterruptException before that typed
@@ -360,6 +376,28 @@ final class PageRunProofSpool {
                 } finally {
                     stats.recordService(System.nanoTime() - openStarted);
                 }
+                long actualBytes;
+                try {
+                    actualBytes = opened.size();
+                } catch (IOException | RuntimeException failure) {
+                    try {
+                        opened.close();
+                    } catch (IOException closeFailure) {
+                        failure.addSuppressed(closeFailure);
+                    } finally {
+                        stats.publish();
+                    }
+                    throw failure;
+                }
+                if (actualBytes != expectedBytes) {
+                    try {
+                        opened.close();
+                    } finally {
+                        stats.publish();
+                    }
+                    throw new IOException("page-run proof spool extent mismatch in " + path
+                            + ": expected " + expectedBytes + " bytes, got " + actualBytes);
+                }
                 Arena mappingArena;
                 long arenaStarted = System.nanoTime();
                 try {
@@ -368,12 +406,12 @@ final class PageRunProofSpool {
                     stats.recordService(System.nanoTime() - arenaStarted);
                 }
                 try {
-                    long bytes = opened.size();
                     long mapStarted = System.nanoTime();
                     try {
-                        this.storage = bytes == 0
+                        this.storage = expectedBytes == 0
                                 ? MemorySegment.ofArray(new byte[0])
-                                : opened.map(FileChannel.MapMode.READ_ONLY, 0, bytes, mappingArena);
+                                : opened.map(FileChannel.MapMode.READ_ONLY, 0, expectedBytes,
+                                        mappingArena);
                     } finally {
                         stats.recordService(System.nanoTime() - mapStarted);
                     }
@@ -399,8 +437,8 @@ final class PageRunProofSpool {
             }
         }
 
-        Reader(Path path) throws IOException {
-            this(path, new Stats(SortMetrics.NO_OP));
+        Reader(Path path, int expectedSlots) throws IOException {
+            this(path, expectedSlots, new Stats(SortMetrics.NO_OP));
         }
 
         Summary read(int segment, boolean hasPages, boolean hasSamples) throws IOException {

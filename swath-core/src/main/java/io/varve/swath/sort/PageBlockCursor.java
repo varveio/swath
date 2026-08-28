@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
@@ -25,13 +26,19 @@ final class PageBlockCursor {
     private int position;
     private int emitted;
     private byte[] previousKey = EMPTY_KEY;
+    private boolean havePreviousKey;
+    private int currentRawOrder;
     private byte[] decodedFirstKey;
+    private ListEntry previousEntry;
 
     PageBlockCursor(PageBlock block, byte[] payload, int offset, int length) {
         this.block = block;
         this.payload = payload;
         this.position = offset;
         this.payloadEnd = Math.addExact(offset, length);
+        if (offset < 0 || length < 0 || payloadEnd > payload.length) {
+            throw PageBlockCodec.malformed("payload slice exceeds its owning array");
+        }
     }
 
     boolean hasNext() {
@@ -43,7 +50,7 @@ final class PageBlockCursor {
             throw new NoSuchElementException();
         }
         try {
-            emitted++;
+            requireRemaining(1, "row tag");
             byte tag = payload[position++];
             ListEntry entry = switch (tag) {
                 case PageBlockCodec.TAG_OBJECT -> object();
@@ -51,6 +58,15 @@ final class PageBlockCursor {
                 case PageBlockCodec.TAG_DELETE_MARKER -> deleteMarker();
                 default -> throw new IllegalStateException("bad PageBlock tag: " + tag);
             };
+            if (block.validatesPersistedOrder() && previousEntry != null) {
+                if (currentRawOrder > 0 || (currentRawOrder == 0
+                        && PageBlockCodec.ENTRY_COMPARATOR.compare(previousEntry, entry) > 0)) {
+                    throw PageBlockCodec.malformed(
+                            "decoded row order regressed inside persisted page");
+                }
+            }
+            previousEntry = entry;
+            emitted++;
             if (emitted == 1) {
                 decodedFirstKey = entry.key().rawUnsafe();
             }
@@ -108,17 +124,51 @@ final class PageBlockCursor {
     }
 
     private KeyBytes key() {
-        int shared = varint();
-        int suffixLength = varint();
-        byte[] full = new byte[shared + suffixLength];
-        System.arraycopy(previousKey, 0, full, 0, shared);
+        int shared = varint("key shared-prefix length");
+        int suffixLength = varint("key suffix length");
+        if (shared > previousKey.length) {
+            throw PageBlockCodec.malformed("key shared-prefix length " + shared
+                    + " exceeds previous key length " + previousKey.length);
+        }
+        requireRemaining(suffixLength, "key suffix");
+        int fullLength;
+        try {
+            fullLength = Math.addExact(shared, suffixLength);
+        } catch (ArithmeticException e) {
+            throw PageBlockCodec.malformed("reconstructed key length overflows int32");
+        }
+        if (fullLength > ByteMidpoint.MAX_KEY_LEN) {
+            throw PageBlockCodec.malformed("reconstructed key length " + fullLength
+                    + " exceeds the S3 key limit of " + ByteMidpoint.MAX_KEY_LEN + " bytes");
+        }
+        byte[] prior = previousKey;
+        byte[] full = new byte[fullLength];
+        System.arraycopy(prior, 0, full, 0, shared);
         System.arraycopy(payload, position, full, shared, suffixLength);
+        currentRawOrder = havePreviousKey
+                ? compareFrontCoded(prior, full, shared, suffixLength) : 0;
         position += suffixLength;
         previousKey = full;
+        havePreviousKey = true;
         return KeyBytes.of(full);
     }
 
+    /** Compare previous to current from the front-coding seam; ordinary canonical rows need one byte. */
+    private static int compareFrontCoded(byte[] previous, byte[] current, int shared,
+                                         int suffixLength) {
+        if (shared == previous.length) {
+            return suffixLength == 0 ? 0 : -1;
+        }
+        if (suffixLength == 0) {
+            return 1;
+        }
+        int firstDifference = Integer.compare(previous[shared] & 0xFF, current[shared] & 0xFF);
+        return firstDifference != 0
+                ? firstDifference : Arrays.compareUnsigned(previous, current);
+    }
+
     private long fixedLong() {
+        requireRemaining(Long.BYTES, "fixed-width long");
         long value = ((long) (payload[position] & 0xFF) << 56)
                 | ((long) (payload[position + 1] & 0xFF) << 48)
                 | ((long) (payload[position + 2] & 0xFF) << 40)
@@ -132,31 +182,40 @@ final class PageBlockCursor {
     }
 
     private boolean bool() {
-        return payload[position++] != 0;
+        requireRemaining(1, "boolean");
+        byte value = payload[position++];
+        if (value != 0 && value != 1) {
+            throw PageBlockCodec.malformed("boolean must be 0 or 1, got " + (value & 0xFF));
+        }
+        return value == 1;
     }
 
     private String nullableString() {
-        int encodedLength = varint();
+        int encodedLength = varint("nullable string length");
         if (encodedLength == 0) {
             return null;
         }
         int length = encodedLength - 1;
+        requireRemaining(length, "nullable string");
         String value = new String(payload, position, length, StandardCharsets.UTF_8);
         position += length;
         return value;
     }
 
     private String etag() {
+        requireRemaining(1, "etag marker");
         byte marker = payload[position++];
         return switch (marker) {
             case PageBlockCodec.ETAG_NULL -> null;
             case PageBlockCodec.ETAG_PACKED_MD5 -> {
+                requireRemaining(16, "packed etag");
                 String value = PageBlockCodec.unpackMd5(payload, position);
                 position += 16;
                 yield value;
             }
             case PageBlockCodec.ETAG_RAW -> {
-                int length = varint();
+                int length = varint("raw etag length");
+                requireRemaining(length, "raw etag");
                 String value = new String(payload, position, length, StandardCharsets.UTF_8);
                 position += length;
                 yield value;
@@ -166,29 +225,46 @@ final class PageBlockCursor {
     }
 
     private String dictOrRaw(PageBlockCodec.DictColumn column) {
-        int encoded = varint();
+        int encoded = varint(column + " value");
         if (encoded == 0) {
             return null;
         }
         if (block.useDictUnsafe()[column.ordinal()]) {
-            return block.dictsUnsafe()[column.ordinal()][encoded - 1];
+            String[] dictionary = block.dictsUnsafe()[column.ordinal()];
+            int index = encoded - 1;
+            if (index >= dictionary.length) {
+                throw PageBlockCodec.malformed(column + " dictionary index " + index
+                        + " exceeds dictionary size " + dictionary.length);
+            }
+            return dictionary[index];
         }
         int length = encoded - 1;
+        requireRemaining(length, column + " raw value");
         String value = new String(payload, position, length, StandardCharsets.UTF_8);
         position += length;
         return value;
     }
 
-    private int varint() {
+    private int varint(String field) {
         int result = 0;
-        int shift = 0;
-        while (true) {
-            byte value = payload[position++];
+        for (int shift = 0; shift <= 28; shift += 7) {
+            requireRemaining(1, field + " varint");
+            int value = payload[position++] & 0xFF;
+            if (shift == 28 && (value & 0xF8) != 0) {
+                throw PageBlockCodec.malformed(field + " varint overflows int32");
+            }
             result |= (value & 0x7F) << shift;
             if ((value & 0x80) == 0) {
                 return result;
             }
-            shift += 7;
+        }
+        throw PageBlockCodec.malformed(field + " varint is too long");
+    }
+
+    private void requireRemaining(int needed, String field) {
+        if (needed < 0 || needed > payloadEnd - position) {
+            throw PageBlockCodec.malformed(field + " exceeds decoded payload (needed " + needed
+                    + ", remaining " + (payloadEnd - position) + ")");
         }
     }
 }

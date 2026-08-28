@@ -72,6 +72,7 @@ final class PublicationStepHookTest {
                 new Hit(PublicationStep.AFTER_PART_RENAME, 2),
                 hit(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC),
                 hit(PublicationStep.AFTER_PUBLISH_LISTENER),
+                new Hit(PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP, 0),
                 hit(PublicationStep.AFTER_STAGING_COMPLETION));
     }
 

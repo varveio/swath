@@ -7,11 +7,12 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -139,6 +140,10 @@ public final class SortTransform {
             // resources unwind before this boundary; retain the caller's ordinary interrupt state.
             Thread.currentThread().interrupt();
             throw new IOException("sort merge interrupted", cancelled);
+        } catch (UncheckedIOException unchecked) {
+            // SortedCursor follows Iterator and therefore transports page-read failures unchecked.
+            // Restore this public transform's checked IOException contract at its outer boundary.
+            throw unchecked.getCause();
         }
     }
 
@@ -146,8 +151,11 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         PageRunCatalog.requirePageRunNames(stagingSegments);
+        StagingReconciliation ownedInputs =
+                StagingReconciliation.fromPaths(stagingDir, stagingSegments);
+        stagingSegments = ownedInputs.ownedPaths();
         StagingReconciliation retainedOriginals =
-                datasetPublisher.retainedOriginals(stagingSegments, stagingDir);
+                datasetPublisher.retainedOriginals(ownedInputs);
         boolean parallelKickoff = config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
         MergePlanner.BoundaryCandidates boundaryCandidates =
@@ -159,7 +167,8 @@ public final class SortTransform {
         // range planning consume these descriptors; parallel candidates also stream their embedded
         // sample keys into one globally bounded set during this same open. An unreadable segment is
         // not an optional memory refinement and must fail at kickoff while the prior output and
-        // working evidence are intact. Explicit serial and arbitrary-run merges skip extensions.
+        // working evidence are intact. Serial/arbitrary merges do not engage boundary sampling,
+        // though current type-3 resource metadata is still validated for decoded-page planning.
         long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
         PageRunCatalog catalog = PageRunCatalog.preflight(
                 stagingSegments, catalogOpener, boundaryKeySink);
@@ -167,7 +176,21 @@ public final class SortTransform {
                 ? elapsed(boundaryPreflightStarted, boundaryNanoClock.getAsLong()) : 0;
         // Disposable working files are cleared before work; prior finals remain until their complete
         // replacements are durable. DatasetPublisher owns this and every later physical mutation.
+        // This must precede disk admission: otherwise a large stale proof/range/cascade temporary
+        // from a prior crashed attempt can consume the very headroom its safe deletion would recover,
+        // permanently refusing resume. Ownership/catalog validation above has already succeeded;
+        // originals and prior finals are not part of this narrowly-owned disposable sweep.
         datasetPublisher.sweepWorking(outputDir, stagingDir);
+        MergePlanner.EffectiveRanges resourcePlan = parallelKickoff
+                ? mergePlanner.effectiveRanges(config.mergeParallelism(), catalog)
+                : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
+        if (parallelKickoff) {
+            recordResourceRangeClamp(config.mergeParallelism(), resourcePlan, catalog);
+        }
+        // First allocation gate: a refusal creates no proof/output state. A parallel candidate may
+        // clamp down to the serial path while leaving every checkpoint-owned original untouched.
+        MergePlanner.EffectiveRanges rangePlan =
+                mergePlanner.admitDisk(resourcePlan, catalog, stagingDir, outputDir);
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
         // memory, and fd gates, split the keyspace into
@@ -181,7 +204,7 @@ public final class SortTransform {
         if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(catalog, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting, boundaryCandidates,
-                    retainedOriginals, boundaryPreflightNanos);
+                    ownedInputs, retainedOriginals, boundaryPreflightNanos, rangePlan);
             if (parallel != null) {
                 return parallel;
             }
@@ -192,7 +215,7 @@ public final class SortTransform {
         DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(outputDir, stagingDir);
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
-                "merge-", null, Map.of(), frontier -> { }, -1, null, null);
+                "merge-", null, catalog.byPath(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. serialFanIn() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = mergePlanner.serialFanIn(catalog);
@@ -209,6 +232,7 @@ public final class SortTransform {
                     true, progressCallback, metrics, equalKeyPolicy, comparator);
         }
         datasetPublisher.allTmpPartsDurable();
+        datasetPublisher.verifyCardinality(pending, catalog.totalEntries(), totalRows);
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.
         long mergePasses = merge.mergePasses();
@@ -219,7 +243,7 @@ public final class SortTransform {
                 pending.finalFiles(), pending.outputBytes(), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
         try {
-            datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
+            datasetPublisher.publish(pending, totalRows, publishListener, ownedInputs,
                     retainedOriginals, io.intermediates());
         } catch (CommittedPublicationCleanupException e) {
             throw e.withPublishedResult(result);
@@ -243,7 +267,8 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting,
             MergePlanner.BoundaryCandidates boundaryCandidates,
-            StagingReconciliation retainedOriginals, long boundaryPreflightNanos)
+            StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
+            long boundaryPreflightNanos, MergePlanner.EffectiveRanges rangePlan)
             throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
         List<Path> stagingSegments = catalog.paths();
@@ -255,30 +280,7 @@ public final class SortTransform {
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
         // -- silently, since the engagement counter still fires once per range. See
         // MergePlanner#effectiveRanges.
-        int requestedRanges = config.mergeParallelism();
-        MergePlanner.EffectiveRanges rangePlan =
-                mergePlanner.effectiveRanges(requestedRanges, catalog);
         int desiredRanges = rangePlan.ranges();
-        if (rangePlan.reason() != MergePlanner.ClampReason.NONE) {
-            // WARN, not debug: the operator asked for something the run could not give them. Keep
-            // the typed reason in both the log and metrics so a size-floor decline is never reported
-            // as an unsplittable keyspace (and an fd failure is not mistaken for a memory cascade).
-            log.warn("sort_merge_range_clamped requested={} effective={} segments={} "
-                            + "reason={} merge_budget_bytes={}",
-                    requestedRanges, desiredRanges, stagingSegments.size(),
-                    rangePlan.reason().logValue(), config.mergeBudgetBytes());
-            switch (rangePlan.reason()) {
-                case BELOW_STAGED_FLOOR ->
-                        metrics.recordStealReason("SORT", "merge_range_below_staged_floor");
-                case FD_EXHAUSTED ->
-                        metrics.recordStealReason("SORT", "merge_range_fd_exhausted");
-                case FD_LIMITED ->
-                        metrics.recordStealReason("SORT", "merge_range_fd_limited");
-                case WOULD_CASCADE ->
-                        metrics.recordStealReason("SORT", "merge_range_would_cascade");
-                case NONE -> throw new AssertionError("unreachable unclamped range plan");
-            }
-        }
         if (desiredRanges <= 1) {
             recordBoundaryPlanning(stagingSegments.size(), 1, boundaryPreflightNanos, 0, false);
             // A size/budget/fd policy decline is not an unsplittable keyspace. That signal belongs
@@ -315,38 +317,51 @@ public final class SortTransform {
                 segmentDescriptors.size()
                         <= mergePlanner.perRangeFanIn(boundaries.size() + 1, catalog));
         List<ParallelRangeWorker.Result> results =
-                rangeMerge.run(catalog, stagingDir, boundaries, progressCallback);
-
-        List<Path> tmpsInOrder = new ArrayList<>();
-        List<SortedFileWriter> partsInOrder = new ArrayList<>();
-        long totalRows = 0;
-        long mergePasses = 0;
-        long cascadedPasses = 0;
-        long fastPathEmissions = 0;
-        // results are in RANGE order, and ranges are contiguous and ascending, so concatenating each
-        // range's parts in its own write order gives the output's global key order — which is exactly
-        // the roll sequence the completeness stamp describes.
-        for (ParallelRangeWorker.Result rr : results) {
-            tmpsInOrder.addAll(rr.tmpParts());
-            partsInOrder.addAll(rr.writers());
-            totalRows += rr.rows();
-            mergePasses += rr.mergePasses();
-            cascadedPasses += rr.cascadedPasses();
-            fastPathEmissions += rr.fastPathEmissions();
-        }
-
-        DatasetPublisher.PendingParts pending = datasetPublisher.parallelParts(
-                outputDir, stagingDir, tmpsInOrder, partsInOrder);
-        SortTransformResult result = new SortTransformResult(
-                pending.finalFiles(), pending.outputBytes(), totalRows,
-                mergePasses, cascadedPasses, fastPathEmissions, results.size());
+                rangeMerge.run(catalog, stagingDir, outputDir, boundaries, progressCallback);
+        Path verifiedProofSpool = stagingDir.resolve(StagingNames.rangeProofTmp());
         try {
-            datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
-                    retainedOriginals, List.of());
+            List<Path> tmpsInOrder = new ArrayList<>();
+            List<SortedFileWriter> partsInOrder = new ArrayList<>();
+            long totalRows = 0;
+            long mergePasses = 0;
+            long cascadedPasses = 0;
+            long fastPathEmissions = 0;
+            // results are in RANGE order, and ranges are contiguous and ascending, so concatenating
+            // each range's parts in its own write order gives the output's global key order — which
+            // is exactly the roll sequence the completeness stamp describes.
+            for (ParallelRangeWorker.Result rr : results) {
+                tmpsInOrder.addAll(rr.tmpParts());
+                partsInOrder.addAll(rr.writers());
+                totalRows = Math.addExact(totalRows, rr.rows());
+                mergePasses = Math.addExact(mergePasses, rr.mergePasses());
+                cascadedPasses = Math.addExact(cascadedPasses, rr.cascadedPasses());
+                fastPathEmissions = Math.addExact(fastPathEmissions, rr.fastPathEmissions());
+            }
+
+            DatasetPublisher.PendingParts pending = datasetPublisher.parallelParts(
+                    outputDir, stagingDir, tmpsInOrder, partsInOrder);
+            datasetPublisher.verifyCardinality(pending, catalog.totalEntries(), totalRows);
+            SortTransformResult result = new SortTransformResult(
+                    pending.finalFiles(), pending.outputBytes(), totalRows,
+                    mergePasses, cascadedPasses, fastPathEmissions, results.size());
+            try {
+                datasetPublisher.publish(pending, totalRows, publishListener, ownedInputs,
+                        retainedOriginals, List.of(verifiedProofSpool));
+            } catch (CommittedPublicationCleanupException e) {
+                throw e.withPublishedResult(result);
+            }
+            return result;
         } catch (CommittedPublicationCleanupException e) {
-            throw e.withPublishedResult(result);
+            // Publication committed: the PUBLISHED cleanup-only recovery path now owns the spool.
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(verifiedProofSpool);
+            } catch (IOException cleanupFailure) {
+                e.addSuppressed(cleanupFailure);
+            }
+            throw e;
         }
-        return result;
     }
 
     private void recordBoundaryPlanning(int segments, int ranges, long preflightNanos,
@@ -358,6 +373,39 @@ public final class SortTransform {
                 segments, ranges, config.mergeBoundaryPolicy().configValue(), policyEngaged,
                 preflightNanos / 1_000_000L, policyNanos / 1_000_000L,
                 totalNanos / 1_000_000L);
+    }
+
+    /** Record the heap/proof/FD decision before the independent disk pass can clamp it again. */
+    private void recordResourceRangeClamp(int requestedRanges,
+            MergePlanner.EffectiveRanges plan, PageRunCatalog catalog) {
+        if (plan.reason() == MergePlanner.ClampReason.NONE) {
+            return;
+        }
+        if (plan.reason() == MergePlanner.ClampReason.DISK_LIMITED) {
+            throw new AssertionError("disk reason cannot originate in resource planning");
+        }
+        int effectiveRanges = plan.ranges();
+        int segments = catalog.descriptors().size();
+        log.warn("sort_merge_range_clamped requested={} effective={} segments={} "
+                        + "reason={} merge_budget_bytes={} requested_proof_spool_bytes={} "
+                        + "effective_proof_spool_bytes={}",
+                requestedRanges, effectiveRanges, segments, plan.reason().logValue(),
+                config.mergeBudgetBytes(), PageRunProofSpool.logicalBytes(requestedRanges, segments),
+                effectiveRanges > 1
+                        ? PageRunProofSpool.logicalBytes(effectiveRanges, segments) : 0L);
+        switch (plan.reason()) {
+            case BELOW_STAGED_FLOOR ->
+                    metrics.recordStealReason("SORT", "merge_range_below_staged_floor");
+            case FD_EXHAUSTED ->
+                    metrics.recordStealReason("SORT", "merge_range_fd_exhausted");
+            case FD_LIMITED ->
+                    metrics.recordStealReason("SORT", "merge_range_fd_limited");
+            case PROOF_BUDGET_LIMITED ->
+                    metrics.recordStealReason("SORT", "merge_range_proof_budget_limited");
+            case WOULD_CASCADE ->
+                    metrics.recordStealReason("SORT", "merge_range_would_cascade");
+            case DISK_LIMITED, NONE -> throw new AssertionError("unreachable resource clamp");
+        }
     }
 
     private static long elapsed(long started, long finished) {

@@ -19,19 +19,24 @@ import org.junit.jupiter.api.io.TempDir;
 class PageRunProofSpoolReservedFieldTest {
 
     @Test
-    void emptyAndTruncatedSlotsFailWithTypedIoBeforeAddressing(@TempDir Path root)
+    void exactExpectedExtentRejectsTruncatedAndOversizedSpoolsBeforeMapping(@TempDir Path root)
             throws Exception {
-        for (int length : new int[] {0, 1, PageRunProofSpool.slotBytes() - 1}) {
-            Path path = root.resolve("truncated-" + length + ".tmp");
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(metrics);
+        for (int length : new int[] {
+                0, 1, PageRunProofSpool.slotBytes() - 1, PageRunProofSpool.slotBytes() + 1}) {
+            Path path = root.resolve("wrong-extent-" + length + ".tmp");
             Files.write(path, new byte[length]);
 
-            try (PageRunProofSpool.Reader reader = new PageRunProofSpool.Reader(path)) {
-                assertThatThrownBy(() -> reader.read(0, false, false))
-                        .as("mapped extent %s", length)
-                        .isExactlyInstanceOf(java.io.IOException.class)
-                        .hasMessageContaining("proof spool is truncated");
-            }
+            assertThatThrownBy(() -> new PageRunProofSpool.Reader(path, 1, stats))
+                    .as("file extent %s", length)
+                    .isExactlyInstanceOf(java.io.IOException.class)
+                    .hasMessageContaining("proof spool extent mismatch")
+                    .hasMessageContaining("expected " + PageRunProofSpool.slotBytes())
+                    .hasMessageContaining("got " + length);
         }
+        assertThat(metrics.proofSpoolMappedOperations.sum()).isZero();
+        assertThat(metrics.proofSpoolMappedBytes.sum()).isZero();
     }
 
     @Test
@@ -54,7 +59,7 @@ class PageRunProofSpoolReservedFieldTest {
         long operationsBefore = metrics.proofSpoolMappedOperations.sum();
         long bytesBefore = metrics.proofSpoolMappedBytes.sum();
 
-        try (PageRunProofSpool.Reader reader = new PageRunProofSpool.Reader(path, stats)) {
+        try (PageRunProofSpool.Reader reader = new PageRunProofSpool.Reader(path, 1, stats)) {
             assertThatThrownBy(() -> reader.read(0, false, false))
                     .isInstanceOf(java.io.IOException.class)
                     .hasMessageContaining("reserved field is non-zero");

@@ -41,7 +41,7 @@ import java.util.List;
  * [magic u32][format-version u16 = 1]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [segMinKey u16-len-prefixed][segMaxKey u16-len-prefixed]
- *           [optional trailer extension: type-1 minima or type-2 page index]
+ *           [optional trailer extension: type-1 minima, legacy type-2 index, or type-3 page index]
  *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
  * </pre>
  * {@code segMinKey}/{@code segMaxKey} are the ACTUAL unsigned minimum of all page minima and
@@ -52,8 +52,9 @@ import java.util.List;
  * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in planner uses it
  * to tighten its configured per-stream estimate, and the reader uses it to bound a claimed length before
  * allocating). A listing-phase segment's optional extension stores the exact capped systematic
- * sparse page-offset index used by the parallel merge while preserving format version 1 and the fixed
- * 28-byte EOF tail; post-boundary cascade intermediates omit it. The trailer is written LAST: with
+ * sparse page-offset index plus the exact largest decoded page payload used by merge planning, while
+ * preserving format version 1 and the fixed 28-byte EOF tail; post-boundary cascade intermediates
+ * omit it. The trailer is written LAST: with
  * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
  * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
  */
@@ -173,28 +174,52 @@ final class PageRunSegmentWriter {
      * selection has already completed, this path omits the unused index extension. Returns total rows.
      */
     long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
-        return writeSorted(sorted, path, SegmentKind.CASCADE_INTERMEDIATE);
+        return writeIntermediate(sorted, path, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Write a cascade whose generated pages cannot exceed the merge-planned decoded-page price. */
+    long writeIntermediate(SortedCursor sorted, Path path, int maxRawPayloadBytes)
+            throws IOException {
+        return writeSorted(sorted, path, SegmentKind.CASCADE_INTERMEDIATE, maxRawPayloadBytes);
     }
 
     /** Write one locally sorted fixture chunk without retaining an unused boundary sample. */
     long writeFixtureChunk(SortedCursor sorted, Path path) throws IOException {
-        return writeSorted(sorted, path, SegmentKind.FIXTURE_CHUNK);
+        return writeSorted(sorted, path, SegmentKind.FIXTURE_CHUNK,
+                PageBlock.MAX_RAW_PAYLOAD_BYTES);
     }
 
-    private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind) throws IOException {
+    private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind,
+                             int maxRawPayloadBytes) throws IOException {
         try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics, null)) {
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
                 batch.add(sorted.next());
                 if (batch.size() == INTERMEDIATE_PAGE_ENTRIES) {
-                    encoder.append(PageBlock.pack(batch, comparator, codec));
+                    appendBounded(encoder, batch, maxRawPayloadBytes);
                     batch.clear();
                 }
             }
             if (!batch.isEmpty()) {
-                encoder.append(PageBlock.pack(batch, comparator, codec));
+                appendBounded(encoder, batch, maxRawPayloadBytes);
             }
             return encoder.finish(kind);
+        }
+    }
+
+    /** Split before serialization allocation can cross the admitted decoded-page ceiling. */
+    private void appendBounded(PageRunSegmentEncoder encoder, List<ListEntry> entries,
+                               int maxRawPayloadBytes) throws IOException {
+        try {
+            encoder.append(PageBlock.pack(entries, comparator, codec, maxRawPayloadBytes));
+        } catch (PageBlock.RawPayloadLimitException tooLarge) {
+            if (entries.size() == 1) {
+                throw new IOException("one cascade row exceeds the planned decoded-page limit of "
+                        + maxRawPayloadBytes + " bytes", tooLarge);
+            }
+            int split = entries.size() / 2;
+            appendBounded(encoder, entries.subList(0, split), maxRawPayloadBytes);
+            appendBounded(encoder, entries.subList(split, entries.size()), maxRawPayloadBytes);
         }
     }
 }

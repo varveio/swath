@@ -110,6 +110,9 @@ class PageRunSeekPlanTest {
                 .filter(field -> field.getType() == byte[].class))
                 .hasSize(1);
         assertThat(PageRunProofSpool.logicalBytes(10_000 * 16)).isEqualTo(993_920_000L);
+        assertThat(PageRunProofSpool.logicalBytes(16, 10_000)).isEqualTo(993_920_000L);
+        assertThatThrownBy(() -> PageRunProofSpool.logicalBytes(-1, 10_000))
+                .isInstanceOf(IllegalArgumentException.class);
         int beyondSingleBuffer = Math.toIntExact(
                 Math.floorDiv(Integer.MAX_VALUE, PageRunProofSpool.slotBytes()) + 1);
         assertThat(PageRunProofSpool.logicalBytes(beyondSingleBuffer))

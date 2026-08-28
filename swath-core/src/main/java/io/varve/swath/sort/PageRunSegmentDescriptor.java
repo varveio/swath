@@ -15,7 +15,21 @@ import java.nio.file.Path;
  */
 record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunTrailer.Trailer trailer,
-                                PageRunPageIndex.ReadResult extension) {
+                                PageRunPageIndex.ReadResult extension,
+                                int maxRawPayloadLength) {
+
+    /** Compatibility constructor for already validated descriptors assembled in focused tests. */
+    PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
+            PageRunTrailer.Trailer trailer, PageRunPageIndex.ReadResult extension) {
+        this(path, fileSize, trailerStart, trailer, extension,
+                extension.hasDecodedPageMaximum()
+                        ? extension.maxRawPayloadLength()
+                        : -1);
+    }
+
+    boolean hasDecodedPageMaximum() {
+        return maxRawPayloadLength >= 0;
+    }
 
     /** Legacy-compatible boundary-sample view used by the existing range-boundary planner. */
     PageRunBoundarySample.ReadResult sample() {

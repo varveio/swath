@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -35,19 +36,81 @@ final class MergePlanner {
     private final SortConfig config;
     private final SortMetrics metrics;
     private final IntSupplier softFdLimitSupplier;
+    private final MergeDiskPolicy diskPolicy;
 
     MergePlanner(SortRun run) {
-        this(run.config(), run.metrics(), run.softFdLimitSupplier());
+        this(run.config(), run.metrics(), run.softFdLimitSupplier(), run.mergeDiskPolicy());
     }
 
     MergePlanner(SortConfig config, SortMetrics metrics, IntSupplier softFdLimitSupplier) {
+        this(config, metrics, softFdLimitSupplier, MergeDiskPolicy.disabled());
+    }
+
+    MergePlanner(SortConfig config, SortMetrics metrics, IntSupplier softFdLimitSupplier,
+            MergeDiskPolicy diskPolicy) {
         this.config = config;
         this.metrics = metrics;
         this.softFdLimitSupplier = softFdLimitSupplier;
+        this.diskPolicy = diskPolicy;
+    }
+
+    /**
+     * Apply filesystem admission after heap/FD planning. Disk is a distinct pass because reducing
+     * {@code R} changes only the exact proof extent; it must not obscure the earlier clamp reason.
+     */
+    EffectiveRanges admitDisk(EffectiveRanges resourcePlan, PageRunCatalog catalog,
+            Path stagingDir, Path outputDir) throws MergeDiskExhaustedException {
+        if (diskPolicy.bypassedByCaller()) {
+            return resourcePlan;
+        }
+        MergeDiskPolicy.Snapshot space = diskPolicy.snapshot(stagingDir, outputDir);
+        MergeDiskPlan.Decision decision = MergeDiskPlan.decide(
+                resourcePlan.ranges(), catalog.descriptors().size(), stagedBytes(catalog), space);
+        if (decision.refused()) {
+            metrics.recordStealReason("SORT", "merge_disk_exhausted");
+            String reason = MergeDiskPlan.refusalReason(decision.reservation(), space);
+            log.error("sort_merge_disk_refused reason=\"{}\" error_class=sort_disk_exhausted "
+                            + "stop_reason=sort_disk_exhausted resumable=true",
+                    reason);
+            throw new MergeDiskExhaustedException(reason);
+        }
+        if (decision.ranges() < resourcePlan.ranges()) {
+            metrics.recordStealReason("SORT", "merge_range_disk_limited");
+            log.warn("sort_merge_range_clamped requested={} effective={} segments={} reason=disk_limited "
+                            + "requested_proof_spool_bytes={} effective_proof_spool_bytes={}",
+                    resourcePlan.ranges(), decision.ranges(), catalog.descriptors().size(),
+                    PageRunProofSpool.logicalBytes(resourcePlan.ranges(), catalog.descriptors().size()),
+                    decision.ranges() > 1 ? decision.reservation().proofBytes() : 0L);
+            return new EffectiveRanges(decision.ranges(), ClampReason.DISK_LIMITED);
+        }
+        return resourcePlan;
+    }
+
+    /** Fresh usable-space sample immediately before proof-file creation and zero-fill. */
+    void recheckDiskBeforeProof(int ranges, PageRunCatalog catalog,
+            Path stagingDir, Path outputDir) throws MergeDiskExhaustedException {
+        if (diskPolicy.bypassedByCaller()) {
+            return;
+        }
+        MergeDiskPolicy.Snapshot space = diskPolicy.snapshot(stagingDir, outputDir);
+        MergeDiskPlan.Decision decision = MergeDiskPlan.decide(
+                ranges, catalog.descriptors().size(), stagedBytes(catalog), space);
+        if (decision.ranges() != ranges) {
+            metrics.recordStealReason("SORT", "merge_disk_recheck_refused");
+            String reason = MergeDiskPlan.refusalReason(
+                    MergeDiskPlan.reservation(stagedBytes(catalog),
+                            PageRunProofSpool.logicalBytes(ranges, catalog.descriptors().size())),
+                    space);
+            log.error("sort_merge_disk_recheck_refused reason=\"{}\" "
+                            + "error_class=sort_disk_exhausted stop_reason=sort_disk_exhausted "
+                            + "resumable=true ranges={}", reason, ranges);
+            throw new MergeDiskExhaustedException(reason);
+        }
     }
 
     /** Runtime-clamped serial fan-in plus its exact predicted-cascade signal. */
-    int serialFanIn(PageRunCatalog catalog) {
+    int serialFanIn(PageRunCatalog catalog) throws MergeMemoryExhaustedException {
+        requireDecodedPageFits(catalog);
         int staticFanIn = config.effectiveFanIn();
         int softFdLimit = softFdLimitSupplier.getAsInt();
         int recordSizedFanIn = recordSizedFanIn(catalog);
@@ -85,11 +148,10 @@ final class MergePlanner {
     }
 
     private int recordSizedFanIn(PageRunCatalog catalog) {
-        long maxRecordLen = catalog.maxRecordLen();
-        if (maxRecordLen <= 0) {
+        long perStreamPrice = perStreamBytes(catalog);
+        if (perStreamPrice <= 0) {
             return Integer.MAX_VALUE;
         }
-        long perStreamPrice = Math.max(config.mergePerStreamBytes(), maxRecordLen);
         long bound = config.mergeBudgetBytes() / perStreamPrice;
         return (int) Math.min(Integer.MAX_VALUE, Math.max(2L, bound));
     }
@@ -227,11 +289,15 @@ final class MergePlanner {
     }
 
     int perRangeFanIn(int ranges, PageRunCatalog catalog) {
-        return perRangeFanIn(ranges, perStreamBytes(catalog), ranges);
+        return perRangeFanIn(ranges, perStreamBytes(catalog), ranges,
+                catalog.descriptors().size());
     }
 
-    private int perRangeFanIn(int ranges, long perStreamBytes, long openPartBudget) {
-        long perRangeBudget = config.mergeBudgetBytes() / ranges;
+    private int perRangeFanIn(int ranges, long perStreamBytes, long openPartBudget,
+                              int segments) {
+        long proofBytes = PageRunProofSpool.logicalBytes(ranges, segments);
+        long streamBudget = Math.max(0L, config.mergeBudgetBytes() - proofBytes);
+        long perRangeBudget = streamBudget / ranges;
         long budgetBound = perRangeBudget / perStreamBytes;
         long fdBound = streamFdBudget(openPartBudget) / (long) ranges;
         return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
@@ -246,7 +312,9 @@ final class MergePlanner {
         return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, usable - inputReservation));
     }
 
-    EffectiveRanges effectiveRanges(int requested, PageRunCatalog catalog) {
+    EffectiveRanges effectiveRanges(int requested, PageRunCatalog catalog)
+            throws MergeMemoryExhaustedException {
+        requireDecodedPageFits(catalog);
         int segments = catalog.descriptors().size();
         if (requested <= 1 || segments <= 0) {
             return new EffectiveRanges(Math.max(1, requested), ClampReason.NONE);
@@ -258,37 +326,94 @@ final class MergePlanner {
         if (streamFdBudget(1) < 2) {
             return new EffectiveRanges(1, ClampReason.FD_EXHAUSTED);
         }
-        long byBudget = config.mergeBudgetBytes() / perStream / segments;
+        long byStreamBudget = config.mergeBudgetBytes() / perStream / segments;
+        // The fixed proof spool is physically allocated and completely mapped. Charge its exact
+        // range×segment extent to the same configured merge-phase resource budget as the open
+        // streams, rather than discovering an unsafe plan only after worker startup.
+        long combinedRangePrice = combinedRangePrice(perStream, segments);
+        long byBudget = combinedRangePrice == Long.MAX_VALUE
+                ? 0
+                : config.mergeBudgetBytes() / combinedRangePrice;
         long usableFds = usableFdBudget();
         long byFd = usableFds == Long.MAX_VALUE
                 ? Long.MAX_VALUE
                 : Math.max(0L, usableFds - PROOF_SPOOL_FDS) / (segments + 1L);
         int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
-        while (candidate > 1 && perRangeFanIn(candidate, perStream, candidate) < segments) {
+        int beforeCascadeClamp = candidate;
+        while (candidate > 1
+                && perRangeFanIn(candidate, perStream, candidate, segments) < segments) {
             candidate--;
         }
         ClampReason reason = ClampReason.NONE;
         if (candidate < requested) {
-            boolean nonFdForcesSerial = config.fanIn() < segments || byBudget < 2;
+            boolean cascadeBinding = candidate < beforeCascadeClamp;
             boolean fdBinding = byFd < requested && byFd <= byBudget;
-            reason = candidate == 1
-                    ? (nonFdForcesSerial ? ClampReason.WOULD_CASCADE : ClampReason.FD_EXHAUSTED)
-                    : (fdBinding ? ClampReason.FD_LIMITED : ClampReason.WOULD_CASCADE);
+            boolean proofBinding = byBudget < requested && byBudget < byStreamBudget
+                    && byBudget < byFd;
+            if (cascadeBinding) {
+                reason = ClampReason.WOULD_CASCADE;
+            } else if (fdBinding) {
+                reason = candidate == 1 ? ClampReason.FD_EXHAUSTED : ClampReason.FD_LIMITED;
+            } else if (proofBinding) {
+                reason = ClampReason.PROOF_BUDGET_LIMITED;
+            } else {
+                reason = ClampReason.WOULD_CASCADE;
+            }
         }
         return new EffectiveRanges(candidate, reason);
     }
 
+    private void requireDecodedPageFits(PageRunCatalog catalog)
+            throws MergeMemoryExhaustedException {
+        long minimumWidth = Math.min(2L, catalog.descriptors().size());
+        long required;
+        try {
+            required = Math.multiplyExact(minimumWidth, perStreamBytes(catalog));
+        } catch (ArithmeticException overflow) {
+            required = Long.MAX_VALUE;
+        }
+        if (catalog.maxRawPayloadLength() <= config.mergeBudgetBytes()
+                && required <= config.mergeBudgetBytes()) {
+            return;
+        }
+        metrics.recordStealReason("SORT", "merge_decoded_page_budget_exhausted");
+        throw new MergeMemoryExhaustedException(
+                "minimum merge width does not fit decoded-page residency: page_bytes="
+                        + catalog.maxRawPayloadLength() + ", merge_budget_bytes="
+                        + config.mergeBudgetBytes() + ", required_bytes=" + required
+                        + ", minimum_streams=" + minimumWidth);
+    }
+
+    private static long combinedRangePrice(long perStreamBytes, int segments) {
+        try {
+            long streamAndProofSlot = Math.addExact(
+                    perStreamBytes, (long) PageRunProofSpool.slotBytes());
+            return Math.multiplyExact(streamAndProofSlot, segments);
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private long perStreamBytes(PageRunCatalog catalog) {
-        long pageRun = catalog.maxRecordLen();
-        return pageRun > 0
-                ? Math.max(config.mergePerStreamBytes(), pageRun)
-                : config.mergePerStreamBytes();
+        long encodedAndDecoded;
+        try {
+            // One stream normally retains the decoded current page's record body and raw payload
+            // plus its already-advanced successor frontier body. The runtime overlap guard below
+            // charges every additional retained page in a legal overlap cluster.
+            long twoEncoded = Math.multiplyExact(
+                    2L, Math.max(0L, catalog.maxRecordLen()));
+            encodedAndDecoded = Math.addExact(twoEncoded, catalog.maxRawPayloadLength());
+        } catch (ArithmeticException overflow) {
+            encodedAndDecoded = Long.MAX_VALUE;
+        }
+        return Math.max(config.mergePerStreamBytes(), encodedAndDecoded);
     }
 
     private static long stagedBytes(PageRunCatalog catalog) {
         long total = 0;
         for (PageRunSegmentDescriptor descriptor : catalog.descriptors()) {
-            total += descriptor.fileSize();
+            long bytes = Math.max(0L, descriptor.fileSize());
+            total = total > Long.MAX_VALUE - bytes ? Long.MAX_VALUE : total + bytes;
         }
         return total;
     }
@@ -312,6 +437,8 @@ final class MergePlanner {
         BELOW_STAGED_FLOOR("below_staged_floor"),
         FD_EXHAUSTED("fd_exhausted"),
         FD_LIMITED("fd_limited"),
+        PROOF_BUDGET_LIMITED("proof_budget_limited"),
+        DISK_LIMITED("disk_limited"),
         WOULD_CASCADE("would_cascade");
 
         private final String logValue;

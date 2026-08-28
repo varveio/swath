@@ -11,7 +11,7 @@ import java.util.Locale;
 public enum MergeBoundaryPolicy {
     /** Existing evenly spaced selection over the bounded distinct-key candidate set. */
     DISTINCT("distinct"),
-    /** Entry-mass quantiles derived from validated type-2 page indexes. */
+    /** Entry-mass quantiles derived from validated legacy type-2 or current type-3 page indexes. */
     ROWS("rows");
 
     private final String configValue;

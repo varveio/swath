@@ -122,8 +122,18 @@ final class PageBlock {
      * sorted-input assumption.
      */
     static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec) {
+        return pack(entries, comparator, codec, MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Pack while refusing to grow the raw payload beyond a merge-planned page residency limit. */
+    static PageBlock pack(List<ListEntry> entries, Comparator<ListEntry> comparator, PageCodec codec,
+                          int maxRawPayloadBytes) {
         if (entries.isEmpty()) {
             throw new IllegalArgumentException("cannot pack an empty page");
+        }
+        if (maxRawPayloadBytes <= 0 || maxRawPayloadBytes > MAX_RAW_PAYLOAD_BYTES) {
+            throw new IllegalArgumentException("raw page limit is outside the format bound: "
+                    + maxRawPayloadBytes);
         }
 
         boolean ordered = true;
@@ -159,7 +169,8 @@ final class PageBlock {
             useDict[i] = probes[i].useDict();
         }
 
-        PageBlockCodec.Writer writer = new PageBlockCodec.Writer(entries.size(), useDict);
+        PageBlockCodec.Writer writer =
+                new PageBlockCodec.Writer(entries.size(), useDict, maxRawPayloadBytes);
         long estimate = 0;
         for (ListEntry entry : entries) {
             estimate += estimatedBytes(entry);
@@ -172,6 +183,15 @@ final class PageBlock {
         return new PageBlock(stored, raw.length, codec, writer.dictArrays(), useDict,
                 entries.size(), first.key().rawUnsafe(), last.key().rawUnsafe(), first, last,
                 estimate, ordered, null);
+    }
+
+    /** Internal control signal used to split a cascade batch before it exceeds planned residency. */
+    static final class RawPayloadLimitException extends IllegalArgumentException {
+        private static final long serialVersionUID = 1L;
+
+        RawPayloadLimitException(int limit) {
+            super("raw page payload exceeds the planned " + limit + " byte limit");
+        }
     }
 
     /** The first entry's key as a defensive copy. */
@@ -291,8 +311,18 @@ final class PageBlock {
         return parsedHeader;
     }
 
+    /** True for a deserialized page, where stored row order is format truth. */
+    boolean validatesPersistedOrder() {
+        return parsedHeader != null;
+    }
+
     int rawPayloadLength() {
         return rawPayloadLength;
+    }
+
+    /** Bytes of the retained CRC-verified record body backing a persisted page. */
+    int retainedRecordBytes() {
+        return payloadOwner.length;
     }
 
     String[][] dictsUnsafe() {

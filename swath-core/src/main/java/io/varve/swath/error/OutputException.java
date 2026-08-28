@@ -12,7 +12,8 @@ import io.varve.swath.output.DiskFull;
  * otherwise this exits 1. {@link PublicationPendingException} identifies the narrower terminal
  * dataset-publication failure whose already-durable parts permit a publication-only retry.
  */
-public sealed class OutputException extends SwathException permits PublicationPendingException {
+public sealed class OutputException extends SwathException
+        permits MergePendingException, PublicationPendingException {
 
     /**
      * {@code EX_IOERR} (sysexits.h) for the out-of-space case. It is repeated literally because

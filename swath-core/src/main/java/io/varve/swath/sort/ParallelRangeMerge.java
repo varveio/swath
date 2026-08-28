@@ -41,7 +41,7 @@ import org.slf4j.LoggerFactory;
  * choice therefore only affects <em>balance</em>, never correctness — a badly chosen boundary just
  * yields uneven (or empty) ranges, still a total, gap-free partition. Boundaries always come from
  * the bounded distinct page-minimum candidate set. The default spaces them by candidate position;
- * the explicit rows policy weights those same candidates with validated type-2 entry mass.
+ * the explicit rows policy weights those same candidates with validated page-index entry mass.
  *
  * <p><b>Page-run staging.</b> Every input is a {@code .pageseg} segment. Its range-scoped page
  * frontier skips irrelevant pages while retaining {@link PageAwareMerger}'s
@@ -168,18 +168,27 @@ final class ParallelRangeMerge {
     List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
+        return run(catalog, stagingDir, stagingDir, boundaries, progressCallback);
+    }
+
+    List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir, Path outputDir,
+                          List<byte[]> boundaries,
+                          LongConsumer progressCallback) throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
         List<Path> stagingSegments = catalog.paths();
         Map<Path, PageRunSegmentDescriptor> descriptorsByPath = catalog.byPath();
         int ranges = boundaries.size() + 1;
         int perRangeFanIn = planner.perRangeFanIn(ranges, catalog);
         // Position every range before worker launch. The plan retains O(segments*R) primitives,
-        // never sampled-key lists; type-2 values remain hints until the post-worker physical-zone
+        // never sampled-key lists; page-index values remain hints until the post-worker physical-zone
         // proof below chains them from the fixed header to the trailer.
         PageRunSeekPlan seekPlan = PageRunSeekPlan.plan(segmentDescriptors, boundaries, metrics);
         Path proofSpoolPath = stagingDir.resolve(StagingNames.rangeProofTmp());
         PageRunProofSpool.Stats proofSpoolStats = new PageRunProofSpool.Stats(metrics);
         int proofSlots = Math.multiplyExact(ranges, seekPlan.segments().size());
+        // Close the time-of-check/time-of-allocation window as far as practical. This second sample
+        // happens after boundary/seek planning but before Writer can create or zero-fill the spool.
+        planner.recheckDiskBeforeProof(ranges, catalog, stagingDir, outputDir);
         PageRunProofSpool.Writer proofSpool =
                 new PageRunProofSpool.Writer(proofSpoolPath, proofSlots, proofSpoolStats);
         Object progressLock = new Object();

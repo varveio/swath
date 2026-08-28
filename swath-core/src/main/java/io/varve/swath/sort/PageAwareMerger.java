@@ -74,6 +74,9 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
     private final SortMetrics metrics;
     private final MergeRunSink runSink;
     private final List<PageFrontierStream> allStreams;
+    /** Per-merger share of the process merge budget; checked before compressed payload allocation. */
+    private final long decodedPageBudgetBytes;
+    private long residentDecodedBytes;
 
     /** Segments whose CURRENT (undecoded) page is still a frontier candidate, keyed by unsigned minKey. */
     private final PriorityQueue<Seg> frontier;
@@ -86,7 +89,7 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
 
     /** A single decoded page being streamed whole (fast path); null otherwise. */
     private PageBlockCursor wholeCursor;
-    private int wholeSource = -1;
+    private long wholeDecodedBytes;
 
     private ListEntry pending;
     private final MergeRunTracker sourceRuns;
@@ -100,11 +103,18 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
 
     PageAwareMerger(List<PageFrontierStream> streams, Comparator<ListEntry> comparator,
                     MergeScope scope, SortMetrics metrics, MergeRunSink runSink) {
+        this(streams, comparator, scope, metrics, runSink, Long.MAX_VALUE);
+    }
+
+    PageAwareMerger(List<PageFrontierStream> streams, Comparator<ListEntry> comparator,
+                    MergeScope scope, SortMetrics metrics, MergeRunSink runSink,
+                    long decodedPageBudgetBytes) {
         this.comparator = comparator;
         this.scope = scope;
         this.metrics = metrics;
         this.runSink = runSink;
         this.allStreams = streams;
+        this.decodedPageBudgetBytes = decodedPageBudgetBytes;
         this.frontier = new PriorityQueue<>((a, b) -> Arrays.compareUnsigned(a.minKey(), b.minKey()));
         this.active = new PriorityQueue<>((a, b) -> comparator.compare(a.head, b.head));
         this.sourceRuns = new MergeRunTracker(streams.size());
@@ -153,11 +163,11 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                 // (1) Streaming a whole page (fast path)?
                 if (wholeCursor != null) {
                     if (wholeCursor.hasNext()) {
-                        recordSource(wholeSource);
                         return wholeCursor.next();
                     }
                     wholeCursor = null;
-                    wholeSource = -1;
+                    releaseDecoded(wholeDecodedBytes);
+                    wholeDecodedBytes = 0;
                 }
                 // (2) Key-merging overlapping pages?
                 if (!active.isEmpty()) {
@@ -168,6 +178,9 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                     activeRows--;
                     if (dp.head != null) {
                         active.add(dp);
+                    } else {
+                        releaseDecoded(dp.decodedBytes);
+                        dp.decodedBytes = 0;
                     }
                     if (active.isEmpty()) {
                         ceiling = null;   // event resolved; the next plan() starts a fresh one
@@ -196,26 +209,36 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
         Seg m = frontier.poll();
         byte[] pageMax = m.maxKey().clone();   // snapshot: m.advance() invalidates the reader's buffer
         PageBlock page = m.decodeCurrentPage();
-        m.advance();
-        if (m.stream.hasPage()) {
-            frontier.add(m);   // m's NEXT page re-enters contention (and the intra-segment check below)
-        }
+        // Reserve the current body-as-extra plus its decompression target BEFORE advance() can
+        // allocate the successor body. The per-stream base already reserves one frontier body;
+        // this reservation is what makes the transient current+successor overlap safe.
+        long reserved = reserveDecoded(page);
+        try {
+            m.advance();
+            if (m.stream.hasPage()) {
+                frontier.add(m);   // m's NEXT page re-enters contention
+            }
 
-        // Whole iff NOTHING remaining in the frontier — neither another segment's current page nor m's
-        // own next page — starts at/inside this page's [.., pageMax] range (strict, unsigned).
-        boolean whole = frontier.isEmpty()
-                || Arrays.compareUnsigned(frontier.peek().minKey(), pageMax) > 0;
-
-        if (whole) {
-            recordEngagement(true);
-            wholeCursor = page.cursor();
-            wholeSource = m.source;
-        } else {
-            recordEngagement(false);
-            metrics.recordStealReason("SORT", "merge_overlap_cluster");
-            metrics.recordPageAwareOverlapCluster();
-            addActive(m.source, page);
-            ceiling = pageMax;
+            // Whole iff NOTHING remaining in the frontier — neither another segment's current page
+            // nor m's own next page — starts at/inside this page's range.
+            boolean whole = frontier.isEmpty()
+                    || Arrays.compareUnsigned(frontier.peek().minKey(), pageMax) > 0;
+            if (whole) {
+                recordEngagement(true);
+                recordSource(m.source);
+                wholeCursor = page.cursor();
+                wholeDecodedBytes = reserved;
+                reserved = 0;
+            } else {
+                recordEngagement(false);
+                metrics.recordStealReason("SORT", "merge_overlap_cluster");
+                metrics.recordPageAwareOverlapCluster();
+                addActive(m.source, page, reserved);
+                reserved = 0;
+                ceiling = pageMax;
+            }
+        } finally {
+            releaseDecoded(reserved);
         }
     }
 
@@ -232,13 +255,19 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
             Seg f = frontier.poll();
             byte[] fMax = f.maxKey().clone();
             PageBlock page = f.decodeCurrentPage();
-            f.advance();
-            if (f.stream.hasPage()) {
-                frontier.add(f);
-            }
-            addActive(f.source, page);
-            if (Arrays.compareUnsigned(fMax, ceiling) > 0) {
-                ceiling = fMax;
+            long reserved = reserveDecoded(page);
+            try {
+                f.advance();
+                if (f.stream.hasPage()) {
+                    frontier.add(f);
+                }
+                addActive(f.source, page, reserved);
+                reserved = 0;
+                if (Arrays.compareUnsigned(fMax, ceiling) > 0) {
+                    ceiling = fMax;
+                }
+            } finally {
+                releaseDecoded(reserved);
             }
         }
     }
@@ -264,10 +293,43 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
     }
 
     /** Add one decoded page to the active cluster and publish only cheap peak observations. */
-    private void addActive(int source, PageBlock page) {
-        active.add(new DecodedPage(source, page.cursor(), page.count()));
+    private void addActive(int source, PageBlock page, long decodedBytes) {
+        active.add(new DecodedPage(source, page.cursor(), page.count(), decodedBytes));
         activeRows += page.count();
         metrics.recordPageAwareOverlapState(active.size(), activeRows);
+    }
+
+    /**
+     * Reserve the decoded page's retained record body plus any separate decompression target before
+     * {@link PageBlock#cursor()} can allocate it. The per-merger base budget has already reserved one
+     * encoded frontier body per open stream; after advance, this page owner is an additional retained
+     * body alongside that stream's successor frontier.
+     */
+    private long reserveDecoded(PageBlock page) throws MergeMemoryExhaustedException {
+        long decodedBytes = (long) page.retainedRecordBytes()
+                + (page.codec() == PageCodec.NONE ? 0L : page.rawPayloadLength());
+        long next;
+        try {
+            next = Math.addExact(residentDecodedBytes, decodedBytes);
+        } catch (ArithmeticException overflow) {
+            next = Long.MAX_VALUE;
+        }
+        if (next > decodedPageBudgetBytes) {
+            metrics.recordStealReason("SORT", "merge_decoded_residency_exhausted");
+            throw new MergeMemoryExhaustedException(
+                    "decoded-page retained residency exceeds the per-merger merge budget: resident_bytes="
+                            + residentDecodedBytes + ", next_page_bytes=" + decodedBytes
+                            + ", budget_bytes=" + decodedPageBudgetBytes);
+        }
+        residentDecodedBytes = next;
+        return decodedBytes;
+    }
+
+    private void releaseDecoded(long decodedBytes) {
+        residentDecodedBytes -= decodedBytes;
+        if (residentDecodedBytes < 0) {
+            throw new IllegalStateException("decoded-page residency accounting underflow");
+        }
     }
 
     /** Track source runs with an int comparison only; no row key comparison or allocation is added. */
@@ -332,6 +394,9 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                 wholeCursor.drainAndValidate();
             } catch (RuntimeException e) {
                 failure = append(failure, e);
+            } finally {
+                releaseDecoded(wholeDecodedBytes);
+                wholeDecodedBytes = 0;
             }
         }
         for (DecodedPage page : active) {
@@ -339,6 +404,9 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
                 page.drainAndValidate();
             } catch (RuntimeException e) {
                 failure = append(failure, e);
+            } finally {
+                releaseDecoded(page.decodedBytes);
+                page.decodedBytes = 0;
             }
         }
         return failure;
@@ -385,11 +453,13 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
     private static final class DecodedPage {
         private final int source;
         private final PageBlockCursor cursor;
+        private long decodedBytes;
         private ListEntry head;
 
-        DecodedPage(int source, PageBlockCursor cursor, int count) {
+        DecodedPage(int source, PageBlockCursor cursor, int count, long decodedBytes) {
             this.source = source;
             this.cursor = cursor;
+            this.decodedBytes = decodedBytes;
             this.head = cursor.hasNext() ? cursor.next() : null;   // a page always has >= 1 entry
             if (count < 1 || head == null) {
                 throw new IllegalArgumentException("decoded page must contain at least one row");

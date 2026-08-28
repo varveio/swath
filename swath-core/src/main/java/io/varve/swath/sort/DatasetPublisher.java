@@ -45,14 +45,13 @@ final class DatasetPublisher {
         this.log = log;
     }
 
-    /** Resolve and validate diagnostic retention before any merge or publication mutation. */
-    StagingReconciliation retainedOriginals(List<Path> stagingSegments, Path stagingDir)
-            throws IOException {
+    /** Derive diagnostic retention from the unconditionally validated owned input set. */
+    StagingReconciliation retainedOriginals(StagingReconciliation ownedInputs) {
         if (!config.stagingRetention().retainsOriginals()
                 || inputProfile != MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
             return null;
         }
-        return StagingReconciliation.fromPaths(stagingDir, stagingSegments);
+        return ownedInputs;
     }
 
     /** Sweep every disposable working namespace, then expose the post-sweep publication boundary. */
@@ -117,9 +116,32 @@ final class DatasetPublisher {
         publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
     }
 
+    /**
+     * Refuse publication unless source trailers, the merge drain, and the closed final writers all
+     * account for the same exact row total. Writer rows are read only after every part has closed,
+     * so an open or failed footer can never satisfy this gate.
+     */
+    void verifyCardinality(PendingParts pending, long sourceRows, long drainedRows)
+            throws IOException {
+        long finalPartRows = 0;
+        for (SortedFileWriter writer : pending.writers) {
+            finalPartRows = Math.addExact(finalPartRows, writer.rows());
+        }
+        requireExactCardinality(sourceRows, drainedRows, finalPartRows);
+    }
+
+    static void requireExactCardinality(long sourceRows, long drainedRows, long finalPartRows)
+            throws IOException {
+        if (sourceRows != drainedRows || sourceRows != finalPartRows) {
+            throw new IOException("sort output cardinality mismatch before publication: source_rows="
+                    + sourceRows + " drained_rows=" + drainedRows
+                    + " final_part_rows=" + finalPartRows);
+        }
+    }
+
     /** Complete the ordered physical publish and configured staging ownership policy. */
     void publish(PendingParts pending, long totalRows, PublishListener publishListener,
-            List<Path> stagingSegments, StagingReconciliation retainedOriginals,
+            StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
             List<Path> disposableIntermediates) throws IOException {
         cleanStaleFinals(pending.outputDir);
         publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
@@ -136,11 +158,13 @@ final class DatasetPublisher {
             publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
 
             cleanupStage = CommittedPublicationCleanupException.Stage.DISPOSABLE_INTERMEDIATE_CLEANUP;
-            for (Path intermediate : disposableIntermediates) {
+            for (int i = 0; i < disposableIntermediates.size(); i++) {
+                Path intermediate = disposableIntermediates.get(i);
+                publicationStep(PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP, i);
                 Files.deleteIfExists(intermediate);
             }
             cleanupStage = CommittedPublicationCleanupException.Stage.ORIGINAL_STAGING_COMPLETION;
-            completeOriginalStaging(stagingSegments, pending.stagingDir, retainedOriginals);
+            completeOriginalStaging(ownedInputs, pending.stagingDir, retainedOriginals);
             cleanupStage = CommittedPublicationCleanupException.Stage.AFTER_STAGING_COMPLETION_HOOK;
             publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
         } catch (IOException | RuntimeException failure) {
@@ -153,7 +177,7 @@ final class DatasetPublisher {
         }
     }
 
-    private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir,
+    private void completeOriginalStaging(StagingReconciliation ownedInputs, Path stagingDir,
             StagingReconciliation retainedOriginals) throws IOException {
         if (retainedOriginals != null) {
             StagingReconciliation.Result result = retainedOriginals.reconcile(stagingDir);
@@ -162,9 +186,7 @@ final class DatasetPublisher {
                     stagingDir, result.retainedEntries(), result.removedEntries());
             return;
         }
-        for (Path path : stagingSegments) {
-            Files.deleteIfExists(path);
-        }
+        ownedInputs.deleteOwnedOriginals();
         tryDeleteEmptyStagingDir(stagingDir);
     }
 

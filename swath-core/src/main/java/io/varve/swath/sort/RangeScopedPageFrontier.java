@@ -26,7 +26,7 @@ import java.io.IOException;
  * <p><b>Why both sides can now be bounded.</b> Pages are stored in non-decreasing
  * {@code minKey} order ({@link PageRunSegmentWriter}), so once {@code min >= hi} every later page
  * also has {@code min >= hi}: the scan stops there and the rest of the segment is never read at all.
- * {@code maxKey}, by contrast, is NOT monotone, so a safe head seek uses the type-2 index's
+ * {@code maxKey}, by contrast, is NOT monotone, so a safe head seek uses the page index's
  * monotone {@code prefixMax}, never a sampled page max or minimum. The selected entry remains an
  * untrusted hint: the reader verifies its next frame and the coordinator proves the complete
  * header-to-trailer physical-zone chain before publication. Legacy/type-1 inputs retain the header

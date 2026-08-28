@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
@@ -24,6 +25,8 @@ import java.util.Map;
  * the stored payload.
  */
 final class PageBlockCodec {
+
+    static final ListEntryComparator ENTRY_COMPARATOR = new ListEntryComparator();
 
     static final byte TAG_OBJECT = 0;
     static final byte TAG_COMMON_PREFIX = 1;
@@ -62,6 +65,10 @@ final class PageBlockCodec {
             int size = 2;
             for (int j = 0; j < values.length; j++) {
                 valueBytes[j] = values[j].getBytes(StandardCharsets.UTF_8);
+                if (valueBytes[j].length > 0xFFFF) {
+                    throw new IllegalArgumentException(
+                            "dictionary value exceeds the persisted u16 length limit");
+                }
                 size += 2 + valueBytes[j].length;
             }
             dictValueBytes[i] = valueBytes;
@@ -70,6 +77,8 @@ final class PageBlockCodec {
 
         byte[] firstKey = block.firstKeyUnsafe();
         byte[] lastKey = block.lastKeyUnsafe();
+        requireWriterKey(firstKey, "first key");
+        requireWriterKey(lastKey, "last key");
         byte[] payloadOwner = block.payloadOwnerUnsafe();
         int payloadOffset = block.payloadOffset();
         int payloadLength = block.payloadLength();
@@ -124,8 +133,8 @@ final class PageBlockCodec {
     /** Validate every header length, count, and mode and return a zero-copy payload slice. */
     static Header parseHeader(byte[] record) {
         ByteBuffer buffer = ByteBuffer.wrap(record);
-        byte[] minKey = getBoundedLenBytes(buffer, "minKey");
-        byte[] maxKey = getBoundedLenBytes(buffer, "maxKey");
+        byte[] minKey = getBoundedKey(buffer, "minKey");
+        byte[] maxKey = getBoundedKey(buffer, "maxKey");
         requireRemaining(buffer, 5, "count and ordered flag");
         int count = buffer.getInt();
         if (count <= 0) {
@@ -200,6 +209,9 @@ final class PageBlockCodec {
     }
 
     private static void putLenBytes(ByteBuffer buffer, byte[] bytes) {
+        if (bytes.length > 0xFFFF) {
+            throw new IllegalArgumentException("value exceeds the persisted u16 length limit");
+        }
         buffer.putShort((short) bytes.length);
         buffer.put(bytes);
     }
@@ -211,6 +223,22 @@ final class PageBlockCodec {
         byte[] bytes = new byte[length];
         buffer.get(bytes);
         return bytes;
+    }
+
+    private static byte[] getBoundedKey(ByteBuffer buffer, String field) {
+        byte[] key = getBoundedLenBytes(buffer, field);
+        if (key.length > ByteMidpoint.MAX_KEY_LEN) {
+            throw malformed(field + " length " + key.length + " exceeds the S3 key limit of "
+                    + ByteMidpoint.MAX_KEY_LEN + " bytes");
+        }
+        return key;
+    }
+
+    private static void requireWriterKey(byte[] key, String field) {
+        if (key.length > ByteMidpoint.MAX_KEY_LEN) {
+            throw new IllegalArgumentException(field + " length " + key.length
+                    + " exceeds the S3 key limit of " + ByteMidpoint.MAX_KEY_LEN + " bytes");
+        }
     }
 
     private static void requireRemaining(ByteBuffer buffer, int needed, String field) {
@@ -231,13 +259,20 @@ final class PageBlockCodec {
         private int length;
         private final Dict[] dicts;
         private final boolean[] useDict;
+        private final int maxRawPayloadBytes;
         private byte[] previousKey = EMPTY_KEY;
 
         Writer(int hint, boolean[] useDict) {
+            this(hint, useDict, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+        }
+
+        Writer(int hint, boolean[] useDict, int maxRawPayloadBytes) {
             if (hint > 8) {
-                buffer = new byte[Math.min(hint * 48, 1 << 20)];
+                buffer = new byte[(int) Math.min(
+                        Math.min((long) hint * 48, 1 << 20), maxRawPayloadBytes)];
             }
             this.useDict = useDict;
+            this.maxRawPayloadBytes = maxRawPayloadBytes;
             this.dicts = new Dict[DICT_COLUMN_COUNT];
             for (int i = 0; i < dicts.length; i++) {
                 dicts[i] = new Dict();
@@ -285,6 +320,7 @@ final class PageBlockCodec {
 
         private void key(KeyBytes key) {
             byte[] raw = key.rawUnsafe();
+            requireWriterKey(raw, "row key");
             int shared = commonPrefixLength(previousKey, raw);
             int suffixLength = raw.length - shared;
             varint(shared);
@@ -389,12 +425,17 @@ final class PageBlockCodec {
         }
 
         private void ensure(int extra) {
-            if (length + extra <= buffer.length) {
+            if (extra < 0 || extra > maxRawPayloadBytes - length) {
+                throw new PageBlock.RawPayloadLimitException(maxRawPayloadBytes);
+            }
+            int required = length + extra;
+            if (required <= buffer.length) {
                 return;
             }
             int capacity = buffer.length;
-            while (capacity < length + extra) {
-                capacity <<= 1;
+            while (capacity < required) {
+                capacity = Math.min(maxRawPayloadBytes,
+                        Math.max(capacity + 1, capacity << 1));
             }
             byte[] grown = new byte[capacity];
             System.arraycopy(buffer, 0, grown, 0, length);
@@ -444,6 +485,10 @@ final class PageBlockCodec {
         int indexOf(String value) {
             Integer existing = index.get(value);
             if (existing == null) {
+                if (value.getBytes(StandardCharsets.UTF_8).length > 0xFFFF) {
+                    throw new IllegalArgumentException(
+                            "dictionary value exceeds the persisted u16 length limit");
+                }
                 existing = values.size();
                 values.add(value);
                 index.put(value, existing);

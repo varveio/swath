@@ -9,6 +9,7 @@ import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.model.CommonPrefixEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
@@ -528,6 +529,59 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void crcValidInteriorRowRegressionFailsDuringEmissionAndCloseTimeDrain(@TempDir Path dir)
+            throws IOException {
+        Path path = dir.resolve("interior-regression.pageseg");
+        SortBuffer buffer = new SortBuffer(config.withSegmentCodec(PageCodec.NONE), CMP);
+        buffer.admit(1L, List.of(prefix("a"), prefix("m"), prefix("z")));
+        writer().flush(buffer.seal(SealTrigger.DRAIN), path);
+        mutateFirstBodyAndRepairCrc(path, body -> {
+            PayloadLayout layout = payloadLayout(body);
+            // Three one-byte CommonPrefix rows encode as [tag][shared=0][suffix=1][key].
+            body.put(layout.payloadOffset() + 7, (byte) 'z');
+            body.put(layout.payloadOffset() + 11, (byte) 'm');
+        });
+        PageRunRawFixtures.understatePageMaxAndRepairIndex(path, 0, bytes("m"));
+
+        assertThatThrownBy(() -> readBack(path))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_body_corruption")
+                .hasStackTraceContaining("decoded row order regressed inside persisted page");
+
+        try (PageFrontierReader frontier = new PageFrontierReader(path, SortMetrics.NO_OP)) {
+            PageBlockCursor cursor = frontier.decodeCurrentPage().cursor();
+            assertThat(cursor.next()).isEqualTo(prefix("a"));
+            assertThatThrownBy(cursor::drainAndValidate)
+                    .isInstanceOf(java.io.UncheckedIOException.class)
+                    .hasStackTraceContaining("decoded row order regressed inside persisted page");
+        }
+    }
+
+    @Test
+    void productionWriterRejectsAKeyThePersistedReaderWouldReject(@TempDir Path dir) {
+        byte[] overlong = new byte[io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN + 1];
+        SortBuffer buffer = new SortBuffer(config, CMP);
+
+        assertThatThrownBy(() -> buffer.admit(1L, List.of(
+                new CommonPrefixEntry(KeyBytes.of(overlong)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exceeds the S3 key limit");
+        assertThat(dir).isEmptyDirectory();
+    }
+
+    @Test
+    void productionWriterRejectsADictionaryValueThatCannotFitItsPersistedLength(@TempDir Path dir) {
+        ObjectEntry overlongStorageClass = new ObjectEntry(KeyBytes.ofUtf8("a"), 1L, 0L, null,
+                "x".repeat(0x1_0000), null, false, null, null, null, null);
+        SortBuffer buffer = new SortBuffer(config, CMP);
+
+        assertThatThrownBy(() -> buffer.admit(1L, List.of(overlongStorageClass)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("dictionary value exceeds the persisted u16 length limit");
+        assertThat(dir).isEmptyDirectory();
+    }
+
+    @Test
     void corruptedTotalEntriesDownwardFailsTheEndOfStreamCrossCheck(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);
@@ -691,6 +745,10 @@ class PageRunSegmentTest {
     private static ObjectEntry objectWithSize(String key, long size) {
         return new ObjectEntry(KeyBytes.ofUtf8(key), size, 0L, null, null, null,
                 false, null, null, null, null);
+    }
+
+    private static CommonPrefixEntry prefix(String key) {
+        return new CommonPrefixEntry(KeyBytes.ofUtf8(key));
     }
 
 }

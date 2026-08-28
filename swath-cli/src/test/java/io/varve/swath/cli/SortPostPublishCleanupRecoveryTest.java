@@ -309,8 +309,9 @@ final class SortPostPublishCleanupRecoveryTest {
                     SortConfig.KEEP_STAGING_TUNE_KEY + "=off",
                     "sort.merge-parallelism=3");
             initial.listRunnerOverride = new ListRunner((step, ordinal) -> {
-                if (step == PublicationStep.AFTER_PUBLISH_LISTENER) {
-                    throw new java.io.IOException("injected parallel post-publish cleanup failure");
+                if (step == PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP) {
+                    throw new java.io.IOException(
+                            "injected verified proof-spool cleanup failure");
                 }
             });
 
@@ -320,6 +321,8 @@ final class SortPostPublishCleanupRecoveryTest {
                     .hasCauseInstanceOf(CommittedPublicationCleanupException.class);
             CommittedPublicationCleanupException committed =
                     (CommittedPublicationCleanupException) failure.getCause();
+            assertThat(committed.stage()).isEqualTo(
+                    CommittedPublicationCleanupException.Stage.DISPOSABLE_INTERMEDIATE_CLEANUP);
             var result = committed.publishedResult();
             assertThat(result.finalizationParallelism()).isEqualTo(3);
             assertThat(result.mergePasses()).isPositive();
@@ -353,6 +356,17 @@ final class SortPostPublishCleanupRecoveryTest {
             assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expectedKeys);
             assertThat(CheckpointDbProbe.runStatus(checkpoint)).isEqualTo("RUNNING");
             assertThat(CheckpointDbProbe.fatalError(checkpoint)).isFalse();
+            Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+            assertThat(staging).isDirectory();
+
+            MockPageFetcher forbidden = failOnAnyList();
+            ListCommand resume = command(outputDir, checkpoint, forbidden, false);
+            resume.checkpoint.resume = true;
+            assertThat(resume.call()).isEqualTo(ExitCodes.SUCCESS);
+            assertThat(forbidden.apiCalls()).isZero();
+            assertThat(staging).doesNotExist();
+            assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expectedKeys);
+            assertThat(CheckpointDbProbe.runStatus(checkpoint)).isEqualTo("COMPLETED");
         } finally {
             if (previous == null) {
                 System.clearProperty(property);

@@ -307,7 +307,9 @@ class PageRunZoneProofAdversarialTest {
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         PageRunZoneVerifier.verify(plan, exact, metrics);
         assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
-        assertThat(exact).allSatisfy(summary -> assertThat(summary.spool()).doesNotExist());
+        assertThat(exact).allSatisfy(summary -> assertThat(summary.spool()).exists());
+        PageRunProofSpool.delete(exact.getFirst().spool(),
+                new PageRunProofSpool.Stats(SortMetrics.NO_OP));
     }
 
     @Test
@@ -333,8 +335,8 @@ class PageRunZoneProofAdversarialTest {
         assertThat(small.proofSpoolMappedBytes.sum()).isEqualTo(2_556);
         assertThat(large.proofSpoolMappedOperations.sum()).isEqualTo(3_148);
         assertThat(large.proofSpoolMappedBytes.sum()).isEqualTo(35_292);
-        assertThat(small.proofSpoolMetricUpdates.sum()).isEqualTo(3);
-        assertThat(large.proofSpoolMetricUpdates.sum()).isEqualTo(3);
+        assertThat(small.proofSpoolMetricUpdates.sum()).isEqualTo(2);
+        assertThat(large.proofSpoolMetricUpdates.sum()).isEqualTo(2);
         assertThat(large.proofSpoolServiceNanos.sum()).isPositive();
     }
 
@@ -430,7 +432,7 @@ class PageRunZoneProofAdversarialTest {
                 RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
                 StaleFinalSweep.OWN_PARTS_ONLY);
         AtomicBoolean proofEntered = new AtomicBoolean();
-        ParallelRangeMerge merge = new ParallelRangeMerge(run, (spool, stats) -> {
+        ParallelRangeMerge merge = new ParallelRangeMerge(run, (spool, expectedSlots, stats) -> {
             assertThat(spool).exists();
             assertThat(writers.opened.get()).isEqualTo(4);
             assertThat(writers.openNow.get()).isEqualTo(4);
@@ -438,7 +440,7 @@ class PageRunZoneProofAdversarialTest {
             assertNoLiveWorkers();
             proofEntered.set(true);
             Thread.currentThread().interrupt();
-            return new PageRunProofSpool.Reader(spool, stats);
+            return new PageRunProofSpool.Reader(spool, expectedSlots, stats);
         });
 
         try {

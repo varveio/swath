@@ -15,11 +15,13 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.zip.CRC32C;
 
-/** Current sparse page-offset index stored in the optional page-run trailer extension. */
+/** Current and legacy sparse page-offset indexes stored in the optional page-run trailer extension. */
 final class PageRunPageIndex {
 
     static final short TYPE = PageRunFormat.PAGE_INDEX_EXTENSION;
+    static final short LEGACY_TYPE = PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION;
     static final short VERSION = 1;
+    private static final int DECODED_MAX_BYTES = Integer.BYTES;
     private static final int ENTRY_FIXED_BYTES = 4 * Long.BYTES;
     private static final int MAX_INDEX_KEY_BYTES = ByteMidpoint.MAX_KEY_LEN;
 
@@ -44,14 +46,19 @@ final class PageRunPageIndex {
 
     /** Validated extension result plus the legacy-compatible boundary-sample view. */
     record ReadResult(Status status, short extensionType, int entryCount, long totalRecords,
-                      long bytesRead, long firstOffset, long lastOffset, Locator locator,
+                      long bytesRead, long firstOffset, long lastOffset,
+                      int maxRawPayloadLength, Locator locator,
                       PageRunBoundarySample.ReadResult boundarySample) {
         boolean valid() {
             return status == Status.EMBEDDED;
         }
+
+        boolean hasDecodedPageMaximum() {
+            return valid() && extensionType == TYPE;
+        }
     }
 
-    /** One decoded type-2 entry. Arrays are owned by this value and treated as read-only. */
+    /** One decoded page-index entry. Arrays are owned by this value and treated as read-only. */
     record IndexEntry(long pageOrdinal, long fileOffset, long cumulativeEntries,
                       long cumulativeFramedBytes, byte[] minKey, byte[] prefixMax) {
     }
@@ -65,7 +72,7 @@ final class PageRunPageIndex {
     }
 
     /** Bounded in-memory index assembled while listing pages are framed. */
-    record Snapshot(List<IndexEntry> entries, byte[] finalPrefixMax) {
+    record Snapshot(List<IndexEntry> entries, byte[] finalPrefixMax, int maxRawPayloadLength) {
     }
 
     private PageRunPageIndex() {
@@ -77,12 +84,12 @@ final class PageRunPageIndex {
 
     static ReadResult skipped(long totalRecords) {
         return new ReadResult(Status.SKIPPED, (short) 0, 0, totalRecords, 0, -1, -1,
-                null, PageRunBoundarySample.skipped(totalRecords));
+                -1, null, PageRunBoundarySample.skipped(totalRecords));
     }
 
     /**
-     * Dispatch the optional extension. Type 1 retains its legacy minima-only behavior; a valid type 2
-     * additionally retains only a positional locator for the later planning cursor.
+     * Dispatch the optional extension. Type 1 retains minima-only behavior; valid legacy type 2 and
+     * current type 3 retain a positional locator, while type 3 also declares decoded-page residency.
      */
     static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
                            Consumer<byte[]> validMinKeySink) throws IOException {
@@ -114,20 +121,20 @@ final class PageRunPageIndex {
                     io, trailer, validMinKeySink, header);
             Status status = legacy.valid() ? Status.EMBEDDED_MINIMA_ONLY : fromLegacy(legacy.status());
             return new ReadResult(status, type, legacy.entryCount(), legacy.totalRecords(),
-                    legacy.bytesRead(), -1, -1, null, legacy);
+                    legacy.bytesRead(), -1, -1, -1, null, legacy);
         }
-        if (type != TYPE || version != VERSION) {
+        if ((type != TYPE && type != LEGACY_TYPE) || version != VERSION) {
             return result(Status.UNKNOWN, type, 0, trailer.totalRecords(), header.length, -1, -1,
                     null);
         }
         return readType2(io, trailer, validMinKeySink, extensionStart, extensionBytes,
-                header, payloadLength, declaredCount);
+                header, payloadLength, declaredCount, type);
     }
 
-    /** Open a bounded, non-retaining cursor over entries of an already validated type-2 block. */
+    /** Open a bounded, non-retaining cursor over an already validated page-index block. */
     static Cursor cursor(PageRunSegmentIo io, ReadResult result) {
         if (!result.valid() || result.locator() == null) {
-            throw new IllegalArgumentException("page-run page index is not valid type 2");
+            throw new IllegalArgumentException("page-run page index is not valid");
         }
         return new Cursor(io, result.locator());
     }
@@ -136,7 +143,7 @@ final class PageRunPageIndex {
     static EntryRead readEntryAt(PageRunSegmentIo io, ReadResult result, long payloadOffset)
             throws IOException {
         if (!result.valid() || result.locator() == null) {
-            throw new IllegalArgumentException("page-run page index is not valid type 2");
+            throw new IllegalArgumentException("page-run page index is not valid");
         }
         Locator locator = result.locator();
         if (payloadOffset < locator.payloadStart()
@@ -160,7 +167,7 @@ final class PageRunPageIndex {
     }
 
     static void write(WritableByteChannel channel, Snapshot snapshot) throws IOException {
-        long payloadLength = 2L + snapshot.finalPrefixMax().length;
+        long payloadLength = 2L + snapshot.finalPrefixMax().length + DECODED_MAX_BYTES;
         for (IndexEntry entry : snapshot.entries()) {
             requireKeyLength(entry.minKey());
             requireKeyLength(entry.prefixMax());
@@ -168,6 +175,12 @@ final class PageRunPageIndex {
                     + 2L + entry.prefixMax().length;
         }
         requireKeyLength(snapshot.finalPrefixMax());
+        if (snapshot.entries().isEmpty() != (snapshot.maxRawPayloadLength() == 0)
+                || snapshot.maxRawPayloadLength() < 0
+                || snapshot.maxRawPayloadLength() > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+            throw new IOException("invalid page-run decoded-page maximum: "
+                    + snapshot.maxRawPayloadLength());
+        }
         if (snapshot.entries().size() > PageRunBoundarySample.MAX_ENTRIES) {
             throw new IOException("page-run page index exceeds entry cap: " + snapshot.entries().size());
         }
@@ -195,33 +208,34 @@ final class PageRunPageIndex {
             writeKey(out, crc, entry.prefixMax());
         }
         writeKey(out, crc, snapshot.finalPrefixMax());
+        writeInt(out, crc, snapshot.maxRawPayloadLength());
         out.writeInt((int) crc.getValue());
         out.flush();
     }
 
     private static ReadResult readType2(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
             Consumer<byte[]> validMinKeySink, long extensionStart, long extensionBytes,
-            byte[] header, long payloadLength, long declaredCount) throws IOException {
+            byte[] header, long payloadLength, long declaredCount, short type) throws IOException {
         long bytesRead = header.length;
         if (payloadLength != extensionBytes - PageRunBoundarySample.HEADER_BYTES
                 - PageRunBoundarySample.CRC_BYTES) {
-            return result(Status.INVALID_LENGTH, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1,
+            return result(Status.INVALID_LENGTH, type, 0, trailer.totalRecords(), bytesRead, -1, -1,
                     null);
         }
         int expectedCount = PageRunBoundarySample.expectedCount(trailer.totalRecords());
         if (declaredCount != expectedCount || declaredCount > PageRunBoundarySample.MAX_ENTRIES) {
-            return result(Status.INVALID_COUNT, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1,
+            return result(Status.INVALID_COUNT, type, 0, trailer.totalRecords(), bytesRead, -1, -1,
                     null);
         }
-        if (payloadLength > maximumPayloadLength(expectedCount)) {
-            return result(Status.INVALID_LENGTH, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1,
+        if (payloadLength > maximumPayloadLength(expectedCount, type)) {
+            return result(Status.INVALID_LENGTH, type, 0, trailer.totalRecords(), bytesRead, -1, -1,
                     null);
         }
         // Validate the complete block before allocating or retaining a single key. A torn extension
         // must take the bounded fallback path, never consume hundreds of MiB in provisional arrays
         // only to discover its bad CRC at the end.
         if (!crcValid(io, extensionStart, payloadLength, header)) {
-            return result(Status.INVALID_CRC, TYPE, 0, trailer.totalRecords(), extensionBytes,
+            return result(Status.INVALID_CRC, type, 0, trailer.totalRecords(), extensionBytes,
                     -1, -1, null);
         }
         bytesRead = extensionBytes;
@@ -242,7 +256,7 @@ final class PageRunPageIndex {
         long lastOffset = -1;
         for (int i = 0; i < declaredCount; i++) {
             if (payloadRemaining < ENTRY_FIXED_BYTES + 4L) {
-                return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
             }
             long ordinal = in.readLong(ignoredCrc);
             long offset = in.readLong(ignoredCrc);
@@ -251,23 +265,23 @@ final class PageRunPageIndex {
             payloadRemaining -= ENTRY_FIXED_BYTES;
             KeyRead min = readKey(in, ignoredCrc, payloadRemaining);
             if (min == null) {
-                return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
             }
             payloadRemaining -= min.encodedBytes();
             KeyRead prefix = readKey(in, ignoredCrc, payloadRemaining);
             if (prefix == null) {
-                return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
             }
             payloadRemaining -= prefix.encodedBytes();
 
             long expectedOrdinal = (long) i * stride;
             if (ordinal != expectedOrdinal || ordinal >= trailer.totalRecords()) {
-                return invalid(Status.INVALID_COUNT, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_COUNT, type, trailer, bytesRead + in.bytesRead());
             }
             if (offset < PageRunSegmentWriter.HEADER_BYTES || offset >= io.trailerStart
                     || (i == 0 && offset != PageRunSegmentWriter.HEADER_BYTES)
                     || (previousOffset >= 0 && offset <= previousOffset)) {
-                return invalid(Status.INVALID_OFFSET, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_OFFSET, type, trailer, bytesRead + in.bytesRead());
             }
             if (cumulativeEntries < 0 || cumulativeEntries > trailer.totalEntries()
                     || (i == 0 && cumulativeEntries != 0)
@@ -276,15 +290,15 @@ final class PageRunPageIndex {
                     || cumulativeFramedBytes != offset - PageRunSegmentWriter.HEADER_BYTES
                     || (i == 0 && cumulativeFramedBytes != 0)
                     || (previousFramedBytes >= 0 && cumulativeFramedBytes <= previousFramedBytes)) {
-                return invalid(Status.INVALID_CUMULATIVE, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_CUMULATIVE, type, trailer, bytesRead + in.bytesRead());
             }
             if ((previousMin != null && Arrays.compareUnsigned(min.key(), previousMin) < 0)
                     || (previousPrefixMax != null
                     && Arrays.compareUnsigned(prefix.key(), previousPrefixMax) < 0)) {
-                return invalid(Status.INVALID_ORDER, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_ORDER, type, trailer, bytesRead + in.bytesRead());
             }
             if (Arrays.compareUnsigned(min.key(), prefix.key()) > 0) {
-                return invalid(Status.INVALID_BOUNDS, trailer, bytesRead + in.bytesRead());
+                return invalid(Status.INVALID_BOUNDS, type, trailer, bytesRead + in.bytesRead());
             }
 
             minima.add(min.key());
@@ -299,31 +313,45 @@ final class PageRunPageIndex {
             lastOffset = offset;
         }
         long entriesEnd = payloadStart + in.consumed();
-        KeyRead finalPrefix = readKey(in, ignoredCrc, payloadRemaining);
+        long metadataBytes = type == TYPE ? DECODED_MAX_BYTES : 0;
+        KeyRead finalPrefix = readKey(in, ignoredCrc, payloadRemaining - metadataBytes);
         if (finalPrefix == null) {
-            return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
+            return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
         }
         payloadRemaining -= finalPrefix.encodedBytes();
+        int maxRawPayloadLength = -1;
+        if (type == TYPE) {
+            if (payloadRemaining != DECODED_MAX_BYTES) {
+                return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
+            }
+            maxRawPayloadLength = in.readInt();
+            payloadRemaining -= DECODED_MAX_BYTES;
+            if ((declaredCount == 0) != (maxRawPayloadLength == 0)
+                    || maxRawPayloadLength < 0
+                    || maxRawPayloadLength > PageBlock.MAX_RAW_PAYLOAD_BYTES) {
+                return invalid(Status.INVALID_BOUNDS, type, trailer, bytesRead + in.bytesRead());
+            }
+        }
         if (payloadRemaining != 0) {
-            return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
+            return invalid(Status.INVALID_LENGTH, type, trailer, bytesRead + in.bytesRead());
         }
         bytesRead += in.bytesRead();
         if (minima.isEmpty()) {
             if (trailer.segMinKey().length != 0 || trailer.segMaxKey().length != 0
                     || finalPrefix.key().length != 0) {
-                return invalid(Status.INVALID_BOUNDS, trailer, bytesRead);
+                return invalid(Status.INVALID_BOUNDS, type, trailer, bytesRead);
             }
         } else if (!Arrays.equals(minima.getFirst(), trailer.segMinKey())
                 || !Arrays.equals(finalPrefix.key(), trailer.segMaxKey())
                 || Arrays.compareUnsigned(previousPrefixMax, finalPrefix.key()) > 0) {
-            return invalid(Status.INVALID_BOUNDS, trailer, bytesRead);
+            return invalid(Status.INVALID_BOUNDS, type, trailer, bytesRead);
         }
         minima.forEach(validMinKeySink);
         Locator locator = new Locator(payloadStart, entriesEnd, payloadLength, minima.size());
         PageRunBoundarySample.ReadResult sample = new PageRunBoundarySample.ReadResult(
                 PageRunBoundarySample.Status.EMBEDDED, minima.size(), trailer.totalRecords(), bytesRead);
-        return new ReadResult(Status.EMBEDDED, TYPE, minima.size(), trailer.totalRecords(), bytesRead,
-                firstOffset, lastOffset, locator, sample);
+        return new ReadResult(Status.EMBEDDED, type, minima.size(), trailer.totalRecords(), bytesRead,
+                firstOffset, lastOffset, maxRawPayloadLength, locator, sample);
     }
 
     private static KeyRead readKey(PageRunBoundarySample.ChunkedReader in, CRC32C crc,
@@ -354,7 +382,12 @@ final class PageRunPageIndex {
     }
 
     private static ReadResult invalid(Status status, PageRunTrailer.Trailer trailer, long bytesRead) {
-        return result(status, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1, null);
+        return invalid(status, TYPE, trailer, bytesRead);
+    }
+
+    private static ReadResult invalid(Status status, short type,
+            PageRunTrailer.Trailer trailer, long bytesRead) {
+        return result(status, type, 0, trailer.totalRecords(), bytesRead, -1, -1, null);
     }
 
     private static ReadResult result(Status status, short type, int count, long totalRecords,
@@ -374,7 +407,7 @@ final class PageRunPageIndex {
         PageRunBoundarySample.ReadResult sample = new PageRunBoundarySample.ReadResult(
                 sampleStatus, count, totalRecords, bytesRead);
         return new ReadResult(status, type, count, totalRecords, bytesRead, firstOffset,
-                lastOffset, locator, sample);
+                lastOffset, -1, locator, sample);
     }
 
     private static Status fromLegacy(PageRunBoundarySample.Status status) {
@@ -397,9 +430,10 @@ final class PageRunPageIndex {
         }
     }
 
-    private static long maximumPayloadLength(int entryCount) {
+    private static long maximumPayloadLength(int entryCount, short type) {
         long keyBytes = Short.BYTES + (long) MAX_INDEX_KEY_BYTES;
-        return (long) entryCount * (ENTRY_FIXED_BYTES + 2L * keyBytes) + keyBytes;
+        long metadataBytes = type == TYPE ? DECODED_MAX_BYTES : 0;
+        return (long) entryCount * (ENTRY_FIXED_BYTES + 2L * keyBytes) + keyBytes + metadataBytes;
     }
 
     /** CRC-first streaming validation with one fixed scratch buffer and no key allocation. */
@@ -427,6 +461,14 @@ final class PageRunPageIndex {
         out.writeLong(value);
         for (int shift = 56; shift >= 0; shift -= 8) {
             crc.update((int) (value >>> shift) & 0xFF);
+        }
+    }
+
+    private static void writeInt(PageRunBoundarySample.ChunkedWriter out, CRC32C crc, int value)
+            throws IOException {
+        out.writeInt(value);
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            crc.update(value >>> shift & 0xFF);
         }
     }
 

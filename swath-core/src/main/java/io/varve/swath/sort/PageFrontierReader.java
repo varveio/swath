@@ -59,13 +59,24 @@ final class PageFrontierReader implements PageFrontierStream {
      * engagement counter into the run summary.
      */
     PageFrontierReader(Path path, SortMetrics metrics) throws IOException {
-        this(path, metrics, null, -1);
+        this(path, metrics, null, -1, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Open with the decoded-page maximum admitted for this segment by kickoff planning. */
+    PageFrontierReader(Path path, SortMetrics metrics, int maxRawPayloadLength) throws IOException {
+        this(path, metrics, null, -1, maxRawPayloadLength);
     }
 
     /** Open an original parallel input at its pre-worker planned seam. */
     PageFrontierReader(Path path, SortMetrics metrics, PageRunSeekPlan.SegmentPlan plan,
                        int range) throws IOException {
-        this.io = PageRunSegmentIo.open(path, metrics);
+        this(path, metrics, plan, range, PageBlock.MAX_RAW_PAYLOAD_BYTES);
+    }
+
+    /** Open an indexed original with the decoded-page maximum admitted at kickoff. */
+    PageFrontierReader(Path path, SortMetrics metrics, PageRunSeekPlan.SegmentPlan plan,
+                       int range, int maxRawPayloadLength) throws IOException {
+        this.io = PageRunSegmentIo.open(path, metrics, maxRawPayloadLength);
         this.metrics = metrics;
         this.deferCompletenessToZoneProof = plan != null;
         try {
@@ -168,6 +179,11 @@ final class PageFrontierReader implements PageFrontierStream {
 
     long totalRecords() {
         return io.totalRecords;
+    }
+
+    /** Exact encoded-body ceiling from this opened segment's validated fixed trailer. */
+    long maxRecordLen() {
+        return io.maxRecordLen;
     }
 
     long nextFrameOffset() {

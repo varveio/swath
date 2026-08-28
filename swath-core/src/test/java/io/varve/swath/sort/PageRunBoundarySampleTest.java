@@ -96,7 +96,7 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
-    void trailerOnlyKickoffSkipsEmbeddedExtensionAndDescriptorsRetainNoKeyCollections(
+    void serialKickoffReadsResourceMetadataWithoutRetainingKeyCollections(
             @TempDir Path dir) throws IOException {
         Path segment = writePages(dir.resolve("serial.pageseg"), 4);
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
@@ -104,26 +104,27 @@ class PageRunBoundarySampleTest {
                 Optional.empty()).descriptors();
 
         PageRunBoundarySample.ReadResult sample = descriptors.getFirst().sample();
-        assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.SKIPPED);
-        assertThat(sample.entryCount()).isZero();
-        assertThat(sample.bytesRead()).isZero();
+        assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
+        assertThat(sample.entryCount()).isEqualTo(4);
+        assertThat(sample.bytesRead()).isPositive();
         assertThat(Arrays.stream(PageRunSegmentDescriptor.class.getRecordComponents())
                 .map(component -> component.getType()))
                 .allMatch(type -> type != List.class);
         assertThat(Arrays.stream(PageRunBoundarySample.ReadResult.class.getRecordComponents())
                 .map(component -> component.getType()))
                 .allMatch(type -> type != List.class && !type.isArray());
-        assertThat(descriptors.getFirst().extension().status()).isEqualTo(PageRunPageIndex.Status.SKIPPED);
-        assertThat(descriptors.getFirst().extension().bytesRead()).isZero();
-        assertThat(descriptors.getFirst().extension().locator()).isNull();
+        assertThat(descriptors.getFirst().extension().status()).isEqualTo(PageRunPageIndex.Status.EMBEDDED);
+        assertThat(descriptors.getFirst().extension().bytesRead()).isPositive();
+        assertThat(descriptors.getFirst().extension().locator()).isNotNull();
+        assertThat(descriptors.getFirst().maxRawPayloadLength()).isPositive();
     }
 
     @Test
-    void explicitSerialAndArbitraryRunTransformsSkipEmbeddedExtensionIo(@TempDir Path root)
+    void explicitSerialAndArbitraryTransformsDoNotEngageBoundarySampling(@TempDir Path root)
             throws IOException {
-        assertTransformSkipsBoundaryExtension(root.resolve("serial"), 1,
+        assertTransformSkipsBoundarySampling(root.resolve("serial"), 1,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES);
-        assertTransformSkipsBoundaryExtension(root.resolve("arbitrary"), 4,
+        assertTransformSkipsBoundarySampling(root.resolve("arbitrary"), 4,
                 MergeInputProfile.ARBITRARY_SORTED_RUNS);
     }
 
@@ -289,8 +290,8 @@ class PageRunBoundarySampleTest {
 
         assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
         assertThat(read.keys()).isEmpty();
-        // CRC-first validation reads the 22-byte block once, then parses its 2-byte payload.
-        assertThat(sample.bytesRead()).isEqualTo(24);
+        // CRC-first validation reads the type-3 block once, including decoded-page metadata.
+        assertThat(sample.bytesRead()).isEqualTo(32);
     }
 
     @Test
@@ -449,7 +450,7 @@ class PageRunBoundarySampleTest {
         }
     }
 
-    private static void assertTransformSkipsBoundaryExtension(Path root, int mergeParallelism,
+    private static void assertTransformSkipsBoundarySampling(Path root, int mergeParallelism,
             MergeInputProfile inputProfile) throws IOException {
         Path output = Files.createDirectories(root.resolve("data"));
         Path staging = Files.createDirectories(root.resolve("_staging"));

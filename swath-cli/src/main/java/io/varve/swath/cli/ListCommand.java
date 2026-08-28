@@ -27,6 +27,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.InvalidUriException;
 import io.varve.swath.error.ListingException;
+import io.varve.swath.error.MergePendingException;
 import io.varve.swath.error.OutputException;
 import io.varve.swath.error.ProtocolViolationException;
 import io.varve.swath.error.PublicationPendingException;
@@ -902,6 +903,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type in ["
                                 + PageRunFormat.ABSENT_EXTENSION + ", "
                                 + PageRunFormat.LEGACY_MINIMA_EXTENSION + ", "
+                                + PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION + ", "
                                 + PageRunFormat.PAGE_INDEX_EXTENSION + "]) — the staging "
                                 + "segments cannot be safely reused; use --restart to discard the "
                                 + "run and start fresh");
@@ -1238,6 +1240,13 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // its listener-owned _SUCCESS and be waiting only on PUBLISHED cleanup. Leave managed
             // Parquet non-fatal so resume can take the corresponding zero-LIST branch. One-shot
             // sinks have no persistent checkpoint, so the same classification changes nothing.
+            markUnresumableIfProtocolViolation(store, runId, e);
+            throw e;
+        } catch (MergePendingException e) {
+            // Listing and every original staging segment are durable. Any pre-publication proof,
+            // range, cascade, or output work is disposable and is cleaned during unwind or at the
+            // next kickoff. Keep the checkpoint resumable so retry takes the zero-LIST merge-only
+            // path after space/budget is corrected (or the explicit disk bypass is selected).
             markUnresumableIfProtocolViolation(store, runId, e);
             throw e;
         } catch (CancelledException | InterruptedException | InvalidUriException
@@ -1608,7 +1617,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             // published output.
             Files.createDirectories(stagingDir);
             listRunner().runSortMergeOnly(ctx, outputDir, stagingDir, store, run.id(),
-                    sortConfig, sortMode, parquetSpec);
+                    sortConfig, sortMode, parquetSpec, sorting.forceSort);
             return ExitCodes.SUCCESS;
         }
         // The periodic half of the disk pre-check — polls the LIVE swath.sort.segment.bytes
@@ -1620,7 +1629,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 outputDir, ctx.metrics()::sortSegmentBytesWritten, sorting.forceSort)) {
             listRunner().runToSortedParquetWorkStealing(ctx, fetcher, outputDir, stagingDir, parquetSpec,
                     store, run.id(), connection.maxParallelListings, nodes, sortConfig, sortMode, engine.toggles,
-                    traceSink, run.resumed(), retryConfig());
+                    traceSink, run.resumed(), retryConfig(), sorting.forceSort);
         }
         return ExitCodes.SUCCESS;
     }

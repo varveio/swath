@@ -18,13 +18,13 @@ final class RowWeightedBoundaries {
 
     /**
      * Return row-quantile boundaries, or {@code null} after recording one exact fallback reason.
-     * A mixed or legacy input is deliberately all-or-nothing: combining type-2 mass with unweighted
+     * A mixed or minima-only input is deliberately all-or-nothing: combining indexed mass with unweighted
      * candidates would give the arm a biased denominator while looking successfully engaged.
      */
     static List<byte[]> select(List<PageRunSegmentDescriptor> segments, List<byte[]> candidates,
                                int desiredRanges, SortMetrics metrics) throws IOException {
         InputKind kind = classifyRowInputs(segments);
-        if (kind != InputKind.TYPE2) {
+        if (kind != InputKind.INDEXED) {
             recordRowsFallback(kind, metrics);
             return null;
         }
@@ -166,7 +166,7 @@ final class RowWeightedBoundaries {
         InputKind found = null;
         for (PageRunSegmentDescriptor descriptor : segments) {
             InputKind current = switch (descriptor.extension().status()) {
-                case EMBEDDED -> InputKind.TYPE2;
+                case EMBEDDED -> InputKind.INDEXED;
                 case EMBEDDED_MINIMA_ONLY -> InputKind.TYPE1;
                 case ABSENT -> InputKind.EXTENSIONLESS;
                 default -> InputKind.INVALID;
@@ -190,12 +190,12 @@ final class RowWeightedBoundaries {
                     "SORT", "merge_boundary_rows_fallback_invalid");
             case MIXED -> metrics.recordStealReason(
                     "SORT", "merge_boundary_rows_fallback_mixed");
-            case TYPE2 -> throw new AssertionError("type-2 input does not fall back");
+            case INDEXED -> throw new AssertionError("indexed input does not fall back");
         }
     }
 
     private enum InputKind {
-        TYPE2,
+        INDEXED,
         EXTENSIONLESS,
         TYPE1,
         INVALID,

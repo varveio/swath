@@ -10,18 +10,23 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
-/** Exact post-publish reconciliation of sorter-owned staging against its durable originals. */
+/** Validated sorter-owned inputs and exact post-publish reconciliation of their staging directory. */
 public final class StagingReconciliation {
 
+    private final Path ownedStagingDir;
+    private final List<String> originalNamesInOrder;
     private final Set<String> originalNames;
 
-    private StagingReconciliation(Set<String> originalNames) {
+    private StagingReconciliation(Path ownedStagingDir, Collection<String> originalNames) {
+        this.ownedStagingDir = ownedStagingDir;
+        this.originalNamesInOrder = List.copyOf(originalNames);
         this.originalNames = Set.copyOf(originalNames);
     }
 
@@ -34,20 +39,31 @@ public final class StagingReconciliation {
             throws IOException {
         Path normalizedStaging = stagingDir.toAbsolutePath().normalize();
         LinkedHashSet<String> names = new LinkedHashSet<>();
+        LinkedHashSet<Object> physicalIdentities = new LinkedHashSet<>();
         for (Path original : originals) {
             Path normalized = original.toAbsolutePath().normalize();
             if (!normalizedStaging.equals(normalized.getParent())) {
-                throw new IOException("retained sort staging segment is not an immediate child of "
+                throw new IOException("sort staging segment is not an immediate child of "
                         + stagingDir + ": " + original);
             }
             String name = normalized.getFileName().toString();
             requireSafePageRunName(name);
             if (!names.add(name)) {
-                throw new IOException("duplicate retained sort staging segment: " + name);
+                throw new IOException("duplicate sort staging segment: " + name);
+            }
+            BasicFileAttributes attributes = Files.readAttributes(
+                    normalized, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attributes.isRegularFile()) {
+                throw new IOException(
+                        "sort staging segment is missing or not an ordinary file: " + normalized);
+            }
+            Object physicalIdentity = attributes.fileKey();
+            if (physicalIdentity != null && !physicalIdentities.add(physicalIdentity)) {
+                throw new IOException("duplicate physical sort staging segment: " + normalized);
             }
         }
-        StagingReconciliation reconciliation = new StagingReconciliation(names);
-        reconciliation.requireOriginalFiles(stagingDir);
+        StagingReconciliation reconciliation = new StagingReconciliation(normalizedStaging, names);
+        reconciliation.requireOriginalFiles(normalizedStaging);
         return reconciliation;
     }
 
@@ -60,12 +76,32 @@ public final class StagingReconciliation {
                 throw new IOException("duplicate retained sort staging segment: " + name);
             }
         }
-        return new StagingReconciliation(names);
+        return new StagingReconciliation(null, names);
     }
 
     /** An empty exact set, used by owner-authorized fresh/default cleanup. */
     public static StagingReconciliation discardAll() {
-        return new StagingReconciliation(Set.of());
+        return new StagingReconciliation(null, Set.of());
+    }
+
+    /**
+     * Return the path-backed originals in their caller-supplied order, after lexical aliases have
+     * been collapsed to the validated absolute staging authority. Only {@link #fromPaths} creates
+     * a path-backed reconciliation.
+     */
+    List<Path> ownedPaths() {
+        if (ownedStagingDir == null) {
+            throw new IllegalStateException(
+                    "checkpoint-name reconciliation has no owned path authority");
+        }
+        return originalNamesInOrder.stream().map(ownedStagingDir::resolve).toList();
+    }
+
+    /** Delete only the normalized originals validated by {@link #fromPaths}. */
+    void deleteOwnedOriginals() throws IOException {
+        for (Path path : ownedPaths()) {
+            Files.deleteIfExists(path);
+        }
     }
 
     /**
@@ -76,19 +112,21 @@ public final class StagingReconciliation {
      * are unlinked and never followed by {@link Sweeps#deleteTree}.
      */
     public Result reconcile(Path stagingDir) throws IOException {
-        if (!Files.exists(stagingDir, LinkOption.NOFOLLOW_LINKS)) {
+        Path normalizedStaging = requireAuthority(stagingDir);
+        if (!Files.exists(normalizedStaging, LinkOption.NOFOLLOW_LINKS)) {
             if (originalNames.isEmpty()) {
                 return new Result(0, 0);
             }
-            throw new IOException("sort staging directory is missing: " + stagingDir);
+            throw new IOException("sort staging directory is missing: " + normalizedStaging);
         }
-        if (!Files.isDirectory(stagingDir, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("sort staging path is not an ordinary directory: " + stagingDir);
+        if (!Files.isDirectory(normalizedStaging, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException(
+                    "sort staging path is not an ordinary directory: " + normalizedStaging);
         }
-        requireOriginalFiles(stagingDir);
+        requireOriginalFiles(normalizedStaging);
 
         int removed = 0;
-        try (Stream<Path> entries = Files.list(stagingDir)) {
+        try (Stream<Path> entries = Files.list(normalizedStaging)) {
             for (Path entry : entries.toList()) {
                 if (originalNames.contains(entry.getFileName().toString())) {
                     continue;
@@ -100,6 +138,15 @@ public final class StagingReconciliation {
         return new Result(originalNames.size(), removed);
     }
 
+    private Path requireAuthority(Path stagingDir) throws IOException {
+        Path normalized = stagingDir.toAbsolutePath().normalize();
+        if (ownedStagingDir != null && !ownedStagingDir.equals(normalized)) {
+            throw new IOException("sort staging authority changed after input validation: expected "
+                    + ownedStagingDir + " but was " + normalized);
+        }
+        return normalized;
+    }
+
     /** Sweep the sorter-owned final temporary namespace through its canonical glob. */
     public static void sweepFinalTemporaries(Path dir) throws IOException {
         Sweeps.sweep(dir, ignored -> { }, StagingNames.FINAL_TMP_GLOB);
@@ -109,7 +156,7 @@ public final class StagingReconciliation {
         for (String name : originalNames) {
             Path original = stagingDir.resolve(name);
             if (!Files.isRegularFile(original, LinkOption.NOFOLLOW_LINKS)) {
-                throw new IOException("retained sort staging segment is missing or not an ordinary file: "
+                throw new IOException("sort staging segment is missing or not an ordinary file: "
                         + original);
             }
         }

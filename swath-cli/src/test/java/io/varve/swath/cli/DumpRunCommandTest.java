@@ -8,6 +8,7 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.varve.swath.sort.PageRunFixtures;
+import io.varve.swath.sort.PageRunFormat;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
@@ -60,7 +61,8 @@ class DumpRunCommandTest {
         assertThat(text).contains("count=2");
         assertThat(text).contains("crc=OK");
         assertThat(text).doesNotContain("crc=FAIL");
-        assertThat(text).contains("page-index: type=2 status=EMBEDDED entries=1 firstOffset=6 lastOffset=6");
+        assertThat(text).contains("page-index: type=" + PageRunFormat.PAGE_INDEX_EXTENSION
+                + " status=EMBEDDED entries=1 firstOffset=6 lastOffset=6");
         // Trailer bounds are the exact segment min/max keys.
         assertThat(text).contains("segMin=" + hex("alpha"));
         assertThat(text).contains("segMax=" + hex("bravo"));

@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import org.junit.jupiter.api.Test;
@@ -155,6 +156,69 @@ class SortTransformParallelMergeTest {
         assertThat(d.staging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
         assertThat(metrics.proofSpoolMetricUpdates.sum()).isEqualTo(2);
         assertThat(metrics.proofSpoolServiceNanos.sum()).isPositive();
+    }
+
+    @Test
+    void postProofPrePublicationFailureDeletesTheVerifiedSpool(@TempDir Path root)
+            throws IOException {
+        Dirs d = dirs(root, "post-proof-failure");
+        List<Path> staging = stage(d.staging, List.of(
+                objects("a", "d", "g"),
+                objects("b", "e", "h"),
+                objects("c", "f", "i")));
+        Path priorFinal = Files.writeString(d.output.resolve(StagingNames.finalPart(0)), "prior");
+        SortedFileWriterFactory undercountsClosedRows = (path, fileIndex) -> {
+            SortedFileWriter delegate = SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
+            return new SortedFileWriter() {
+                @Override
+                public void write(ListEntry entry) throws IOException {
+                    delegate.write(entry);
+                }
+
+                @Override
+                public long rows() {
+                    return Math.max(0L, delegate.rows() - 1L);
+                }
+
+                @Override
+                public long dataSize() {
+                    return delegate.dataSize();
+                }
+
+                @Override
+                public void markFinal() {
+                    delegate.markFinal();
+                }
+
+                @Override
+                public void setFileIndex(int index) {
+                    delegate.setFileIndex(index);
+                }
+
+                @Override
+                public Optional<FinalPartMetadata> finalMetadata() {
+                    return delegate.finalMetadata();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    delegate.close();
+                }
+            };
+        };
+        SortTransform transform = new SortTransform(new SortRun(config(3), cmp,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                undercountsClosedRows, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
+                RangeMergeTimer.NO_OP, SortRun.PROCESS_SOFT_FD_LIMIT,
+                StaleFinalSweep.OWN_PARTS_ONLY));
+
+        assertThatThrownBy(() -> transform.transform(staging, d.output, d.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("sort output cardinality mismatch before publication");
+
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(d.staging.resolve(StagingNames.rangeProofTmp())).doesNotExist();
     }
 
     @Test

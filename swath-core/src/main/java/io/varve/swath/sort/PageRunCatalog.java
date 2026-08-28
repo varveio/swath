@@ -9,9 +9,11 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -29,20 +31,35 @@ final class PageRunCatalog {
     private final List<Path> paths;
     private final Map<Path, PageRunSegmentDescriptor> byPath;
     private final long maxRecordLen;
+    private final int maxRawPayloadLength;
+    private final long totalEntries;
 
     private PageRunCatalog(List<PageRunSegmentDescriptor> descriptors) {
         this.descriptors = List.copyOf(descriptors);
         List<Path> orderedPaths = new ArrayList<>(descriptors.size());
         Map<Path, PageRunSegmentDescriptor> indexed = new LinkedHashMap<>();
+        Set<Path> normalizedIdentities = new LinkedHashSet<>();
         long maximum = -1;
+        int maximumRaw = 0;
+        long entries = 0;
         for (PageRunSegmentDescriptor descriptor : descriptors) {
+            Path identity = normalizedIdentity(descriptor.path());
+            if (!normalizedIdentities.add(identity)) {
+                throw new IllegalArgumentException("duplicate page-run catalog path: " + identity);
+            }
             orderedPaths.add(descriptor.path());
-            indexed.putIfAbsent(descriptor.path(), descriptor);
+            indexed.put(descriptor.path(), descriptor);
             maximum = Math.max(maximum, descriptor.trailer().maxRecordLen());
+            if (descriptor.hasDecodedPageMaximum()) {
+                maximumRaw = Math.max(maximumRaw, descriptor.maxRawPayloadLength());
+            }
+            entries = Math.addExact(entries, descriptor.trailer().totalEntries());
         }
         this.paths = List.copyOf(orderedPaths);
         this.byPath = Map.copyOf(indexed);
         this.maxRecordLen = maximum;
+        this.maxRawPayloadLength = maximumRaw;
+        this.totalEntries = entries;
     }
 
     /** Validate the complete input list before any path is opened or working file is swept. */
@@ -62,22 +79,43 @@ final class PageRunCatalog {
 
     /**
      * Open every already-name-validated input once for its trailer and optional boundary extension.
-     * An empty sink is the serial/arbitrary-run policy: the extension is not read at all.
+     * Current type-3 resource metadata is validated even with an empty serial/arbitrary boundary
+     * sink; only delivery of sampled minima and later boundary-planning metrics stays disabled.
      */
     static PageRunCatalog preflight(List<Path> paths, Opener opener,
             Optional<Consumer<byte[]>> boundaryKeySink) throws IOException {
-        List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(paths.size());
-        for (Path path : paths) {
+        List<Path> normalizedPaths = requireUniqueNormalizedPaths(paths);
+        List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(normalizedPaths.size());
+        for (Path path : normalizedPaths) {
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-                PageRunPageIndex.ReadResult extension = boundaryKeySink.isPresent()
-                        ? PageRunPageIndex.read(io, trailer, boundaryKeySink.orElseThrow())
-                        : PageRunPageIndex.skipped(trailer.totalRecords());
+                PageRunPageIndex.ReadResult extension = PageRunPageIndex.read(
+                        io, trailer, boundaryKeySink.orElse(ignored -> { }));
+                int maxRawPayloadLength = extension.hasDecodedPageMaximum()
+                        ? extension.maxRawPayloadLength()
+                        : -1;
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, extension));
+                        trailer, extension, maxRawPayloadLength));
             }
         }
         return new PageRunCatalog(descriptors);
+    }
+
+    private static List<Path> requireUniqueNormalizedPaths(List<Path> paths) throws IOException {
+        List<Path> normalizedPaths = new ArrayList<>(paths.size());
+        Set<Path> identities = new LinkedHashSet<>();
+        for (Path path : paths) {
+            Path normalized = normalizedIdentity(path);
+            if (!identities.add(normalized)) {
+                throw new IOException("duplicate page-run catalog path: " + normalized);
+            }
+            normalizedPaths.add(normalized);
+        }
+        return List.copyOf(normalizedPaths);
+    }
+
+    private static Path normalizedIdentity(Path path) {
+        return path.toAbsolutePath().normalize();
     }
 
     /** Assemble a catalog from descriptors already opened by a focused planner/worker test. */
@@ -99,6 +137,16 @@ final class PageRunCatalog {
 
     long maxRecordLen() {
         return maxRecordLen;
+    }
+
+    /** Exact maximum decoded payload bytes for one original input page. */
+    int maxRawPayloadLength() {
+        return maxRawPayloadLength;
+    }
+
+    /** Exact source-row authority summed from every independently validated original trailer. */
+    long totalEntries() {
+        return totalEntries;
     }
 
     @FunctionalInterface
