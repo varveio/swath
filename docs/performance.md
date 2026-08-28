@@ -440,7 +440,8 @@ publishes a methodology and tool roster; it does not currently publish comparati
 Local replay A1/B1/A2 over the full 9,919,142-row SOREL fixture did not trigger sustained staging
 backpressure, so WP4.2/4.3 are not triggered. Warm retained PageRun brackets on current `e00e62f`
 were full-row exact with zero LIST work: median merge time was 15,748 ms (R=1), 5,065 ms (R=4),
-3,562 ms (R=8), and 2,749 ms (R=16). These are warm local measurements only. DISTINCT remains the
+3,562 ms (R=8), and 2,749 ms (R=16); current-only ROWS medians were 15,019/4,927/3,335/2,652 ms.
+These are warm local measurements only. DISTINCT remains the
 default: there is no comparable `6d816d1` baseline, cold physical-read evidence, or row-skew output,
 and its policy differences are small; this is not a candidate-throughput claim. WP5.3 is not
 triggered; WP5.2 remains deferred where no public flush seam exists.
