@@ -80,6 +80,8 @@ class PageRunBoundarySampleTest {
         assertThat(descriptor.trailerStart()).isPositive();
         assertThat(descriptor.sample().status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
         assertThat(descriptor.sample().entryCount()).isEqualTo(4);
+        assertThat(descriptor.extension().status()).isEqualTo(PageRunPageIndex.Status.EMBEDDED);
+        assertThat(descriptor.extension().locator()).isNotNull();
 
         for (Path segment : segments) {
             Files.delete(segment);
@@ -111,6 +113,9 @@ class PageRunBoundarySampleTest {
         assertThat(Arrays.stream(PageRunBoundarySample.ReadResult.class.getRecordComponents())
                 .map(component -> component.getType()))
                 .allMatch(type -> type != List.class && !type.isArray());
+        assertThat(descriptors.getFirst().extension().status()).isEqualTo(PageRunPageIndex.Status.SKIPPED);
+        assertThat(descriptors.getFirst().extension().bytesRead()).isZero();
+        assertThat(descriptors.getFirst().extension().locator()).isNull();
     }
 
     @Test
@@ -180,10 +185,26 @@ class PageRunBoundarySampleTest {
     }
 
     @Test
+    void type1ExtensionRemainsAnEmbeddedMinimaOnlyBoundarySource(@TempDir Path dir)
+            throws IOException {
+        Path legacy = writeLegacyPages(dir.resolve("type1.pageseg"), 7);
+        PreparedDescriptors prepared = descriptors(legacy);
+        PageRunSegmentDescriptor descriptor = prepared.descriptors().getFirst();
+
+        assertThat(descriptor.extension().status())
+                .isEqualTo(PageRunPageIndex.Status.EMBEDDED_MINIMA_ONLY);
+        assertThat(descriptor.extension().extensionType()).isEqualTo(PageRunBoundarySample.TYPE);
+        assertThat(descriptor.extension().locator()).isNull();
+        assertThat(descriptor.sample().status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
+        assertThat(descriptor.sample().entryCount()).isEqualTo(7);
+        assertThat(boundaries(prepared, 3, SortMetrics.NO_OP)).hasSize(2);
+    }
+
+    @Test
     void malformedExtensionsFallBackTransactionallyWithExactReasons(@TempDir Path dir)
             throws IOException {
         for (Mutation mutation : Mutation.values()) {
-            Path path = writePages(dir.resolve(mutation.name() + ".pageseg"), 5);
+            Path path = writeLegacyPages(dir.resolve(mutation.name() + ".pageseg"), 5);
             Layout originalLayout = layout(Files.readAllBytes(path));
             Path legacy = stripExtension(path, dir.resolve(mutation.name() + "-legacy.pageseg"));
             List<byte[]> expected = boundaries(descriptors(legacy), 3,
@@ -245,7 +266,7 @@ class PageRunBoundarySampleTest {
 
         assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
         assertThat(read.keys()).isEmpty();
-        assertThat(sample.bytesRead()).isEqualTo(20);
+        assertThat(sample.bytesRead()).isEqualTo(22);
     }
 
     @Test
@@ -468,10 +489,29 @@ class PageRunBoundarySampleTest {
     private static SampleRead readSample(Path path) throws IOException {
         List<byte[]> keys = new ArrayList<>();
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
-            PageRunBoundarySample.ReadResult result =
-                    PageRunBoundarySample.read(io, PageRunTrailer.read(io), keys::add);
-            return new SampleRead(result, List.copyOf(keys));
+            PageRunPageIndex.ReadResult extension =
+                    PageRunPageIndex.read(io, PageRunTrailer.read(io), keys::add);
+            return new SampleRead(extension.boundarySample(), List.copyOf(keys));
         }
+    }
+
+    private static Path writeLegacyPages(Path path, int pages) throws IOException {
+        Path source = path.resolveSibling(path.getFileName() + ".type2");
+        writePages(source, pages);
+        SampleRead sample = readSample(source);
+        byte[] bytes = Files.readAllBytes(source);
+        Layout layout = layout(bytes);
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            SortTestSupport.writeFully(channel, ByteBuffer.wrap(bytes, 0,
+                    Math.toIntExact(layout.extensionStart)));
+            PageRunBoundarySample.write(channel, sample.keys());
+            SortTestSupport.writeFully(channel, ByteBuffer.wrap(bytes,
+                    Math.toIntExact(layout.fixedTailStart),
+                    PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES));
+        }
+        Files.delete(source);
+        return path;
     }
 
     private static PreparedDescriptors descriptors(Path... paths) throws IOException {

@@ -11,15 +11,14 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 import java.util.zip.CRC32C;
 
 /**
  * The single page-run file encoder. Callers append already-packed pages, then finish with either a
- * retained boundary sample or {@code null} for an extension-free cascade/fixture segment. A
- * successful finish writes the trailer, forces and closes the file, fsyncs its directory, and only
- * then records completion for the supplied {@link SegmentKind}.
+ * bounded page index or no extension for a cascade/fixture segment. A successful finish writes the
+ * trailer, forces and closes the file, fsyncs its directory, and only then records completion for
+ * the supplied {@link SegmentKind}.
  */
 final class PageRunSegmentEncoder implements AutoCloseable {
 
@@ -28,6 +27,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private final Path path;
     private final FileChannel channel;
     private final SortMetrics metrics;
+    private final PageRunPageIndexBuilder pageIndexBuilder;
     private byte[] segmentMin = EMPTY_KEY;
     private byte[] segmentMax = EMPTY_KEY;
     private int totalRecords;
@@ -35,13 +35,16 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     private int maxRecordLen;
     private boolean closed;
 
-    private PageRunSegmentEncoder(Path path, FileChannel channel, SortMetrics metrics) {
+    private PageRunSegmentEncoder(Path path, FileChannel channel, SortMetrics metrics,
+                                  PageRunPageIndexBuilder pageIndexBuilder) {
         this.path = path;
         this.channel = channel;
         this.metrics = metrics;
+        this.pageIndexBuilder = pageIndexBuilder;
     }
 
-    static PageRunSegmentEncoder open(Path path, SortMetrics metrics) throws IOException {
+    static PageRunSegmentEncoder open(Path path, SortMetrics metrics,
+                                      PageRunPageIndexBuilder pageIndexBuilder) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(metrics, "metrics");
         FileChannel channel = FileChannel.open(path,
@@ -49,7 +52,7 @@ final class PageRunSegmentEncoder implements AutoCloseable {
                 StandardOpenOption.TRUNCATE_EXISTING);
         try {
             writeHeader(channel);
-            return new PageRunSegmentEncoder(path, channel, metrics);
+            return new PageRunSegmentEncoder(path, channel, metrics, pageIndexBuilder);
         } catch (IOException | RuntimeException | Error failure) {
             try {
                 channel.close();
@@ -71,6 +74,11 @@ final class PageRunSegmentEncoder implements AutoCloseable {
             segmentMax = pageMax;
         }
 
+        long frameOffset = channel.position();
+        if (pageIndexBuilder != null) {
+            pageIndexBuilder.recordPage(totalRecords, frameOffset, totalEntries,
+                    frameOffset - PageRunSegmentWriter.HEADER_BYTES, page);
+        }
         byte[] body = page.serialize();
         writeFrame(channel, body);
         maxRecordLen = Math.max(maxRecordLen, body.length);
@@ -78,11 +86,14 @@ final class PageRunSegmentEncoder implements AutoCloseable {
         totalRecords++;
     }
 
-    long finish(List<byte[]> boundarySample, SegmentKind kind) throws IOException {
+    long finish(SegmentKind kind) throws IOException {
         requireOpen();
         Objects.requireNonNull(kind, "kind");
         long trailerStart = channel.position();
-        writeTrailer(channel, segmentMin, segmentMax, boundarySample, trailerStart,
+        PageRunPageIndex.Snapshot pageIndex = pageIndexBuilder == null
+                ? null
+                : pageIndexBuilder.finish();
+        writeTrailer(channel, segmentMin, segmentMax, pageIndex, trailerStart,
                 totalRecords, totalEntries, maxRecordLen);
         channel.force(true);
         channel.close();
@@ -124,14 +135,14 @@ final class PageRunSegmentEncoder implements AutoCloseable {
     }
 
     private static void writeTrailer(FileChannel channel, byte[] segmentMin, byte[] segmentMax,
-                                     List<byte[]> boundarySample, long trailerStart, int totalRecords,
+                                     PageRunPageIndex.Snapshot pageIndex, long trailerStart, int totalRecords,
                                      long totalEntries, int maxRecordLen) throws IOException {
         ByteBuffer bounds = ByteBuffer.allocate(2 + segmentMin.length + 2 + segmentMax.length);
         bounds.putShort((short) segmentMin.length).put(segmentMin);
         bounds.putShort((short) segmentMax.length).put(segmentMax);
         writeFully(channel, bounds.flip());
-        if (boundarySample != null) {
-            PageRunBoundarySample.write(channel, boundarySample);
+        if (pageIndex != null) {
+            PageRunPageIndex.write(channel, pageIndex);
         }
         ByteBuffer trailer = ByteBuffer.allocate(PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES);
         trailer.putLong(trailerStart);

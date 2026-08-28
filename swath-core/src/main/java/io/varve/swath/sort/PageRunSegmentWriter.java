@@ -41,7 +41,7 @@ import java.util.List;
  * [magic u32][format-version u16 = 1]
  * record* : [len u32][crc32c u32][ &lt;PageBlock.serialize() body&gt; ]   // crc32c over the body bytes
  * trailer : [segMinKey u16-len-prefixed][segMaxKey u16-len-prefixed]
- *           [optional boundary-sample extension]
+ *           [optional trailer extension: type-1 minima or type-2 page index]
  *           [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
  * </pre>
  * {@code segMinKey}/{@code segMaxKey} are the ACTUAL unsigned minimum of all page minima and
@@ -52,7 +52,7 @@ import java.util.List;
  * {@code maxRecordLen} is the largest framed body length (the runtime merge fan-in planner uses it
  * to tighten its configured per-stream estimate, and the reader uses it to bound a claimed length before
  * allocating). A listing-phase segment's optional extension stores the exact capped systematic
- * page-minimum sample used by the parallel merge while preserving format version 1 and the fixed
+ * sparse page-offset index used by the parallel merge while preserving format version 1 and the fixed
  * 28-byte EOF tail; post-boundary cascade intermediates omit it. The trailer is written LAST: with
  * the file-then-directory fsync below, a half-written page-run file has no valid trailer and is
  * discarded whole on resume (I6 — durable iff finalized; segment-granularity, not sub-file).
@@ -144,7 +144,8 @@ final class PageRunSegmentWriter {
         pages.sort((a, b) -> Arrays.compareUnsigned(a.firstKeyUnsafe(), b.firstKeyUnsafe()));
 
         long totalEntries;
-        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics)) {
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics,
+                PageRunPageIndex.exactBuilder(pages.size()))) {
             PageBlock previous = null;
             for (PageBlock page : pages) {
                 if (previous != null
@@ -154,7 +155,7 @@ final class PageRunSegmentWriter {
                 encoder.append(page);
                 previous = page;
             }
-            totalEntries = encoder.finish(PageRunBoundarySample.select(pages), SegmentKind.LISTING);
+            totalEntries = encoder.finish(SegmentKind.LISTING);
         }
 
         if (buffer.trigger() == SealTrigger.BYTE_GATE) {
@@ -169,7 +170,7 @@ final class PageRunSegmentWriter {
      * the staging-segment count): batch an already-sorted {@link SortedCursor} into
      * pages of {@link #INTERMEDIATE_PAGE_ENTRIES} and write them as a page-run segment. The caller
      * closes {@code sorted}. Streams one page at a time so memory stays bounded; because boundary
-     * selection has already completed, this path omits the unused sample extension. Returns total rows.
+     * selection has already completed, this path omits the unused index extension. Returns total rows.
      */
     long writeIntermediate(SortedCursor sorted, Path path) throws IOException {
         return writeSorted(sorted, path, SegmentKind.CASCADE_INTERMEDIATE);
@@ -181,7 +182,7 @@ final class PageRunSegmentWriter {
     }
 
     private long writeSorted(SortedCursor sorted, Path path, SegmentKind kind) throws IOException {
-        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics)) {
+        try (PageRunSegmentEncoder encoder = PageRunSegmentEncoder.open(path, metrics, null)) {
             List<ListEntry> batch = new ArrayList<>(INTERMEDIATE_PAGE_ENTRIES);
             while (sorted.hasNext()) {
                 batch.add(sorted.next());
@@ -193,7 +194,7 @@ final class PageRunSegmentWriter {
             if (!batch.isEmpty()) {
                 encoder.append(PageBlock.pack(batch, comparator, codec));
             }
-            return encoder.finish(null, kind);
+            return encoder.finish(kind);
         }
     }
 }

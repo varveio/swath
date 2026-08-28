@@ -840,24 +840,45 @@ which owns the at-most-once-text durability questions it would reopen):
   (`SORT.merge_redone`), regardless of how many cascade passes the redo
   itself needs to run.
 
-### 6.1 Page-run v1 trailer extension
+### 6.1 Page-run v1 trailer extensions
 
-Each original listing-phase page-run segment embeds the parallel merge's exact bounded page-minimum
-sample in an optional extension between `segMaxKey` and the existing fixed EOF tail. Cascade
-intermediates are created only after boundary selection and omit the unused extension, avoiding a
-write-side reread of their streamed pages. `FORMAT_VERSION` remains 1,
-`trailerStart` still points at `segMinKey`, and the final 28 bytes are unchanged, so a pre-extension
-reader continues to stream exactly `totalRecords` and ignores the extra bytes:
+Each original listing-phase page-run segment embeds a bounded type-2 sparse page index in the
+optional extension between `segMaxKey` and the existing fixed EOF tail. Type 1 is the legacy
+minima-only block and remains readable as a boundary source. Cascade intermediates and fixture
+chunks are streamed after boundary selection or outside the structured live path and remain
+extensionless. `FORMAT_VERSION` remains 1, `trailerStart` still points at `segMinKey`, and the final
+28 bytes are unchanged, so older page-run readers continue to stream exactly `totalRecords` and
+ignore the extension:
 
 ```text
 records*
 segMinKey u16-len-prefixed
 segMaxKey u16-len-prefixed
 [extensionMagic u32][type u16][version u16][payloadLength u32][entryCount u32]
-payload: entryCount * [keyLength u16][key]
+
+type 1 payload (legacy):
+  entryCount * [keyLength u16][minKey]
+
+type 2 payload (current):
+  entryCount * [pageOrdinal u64]
+               [fileOffset u64]
+               [cumulativeEntries u64]
+               [cumulativeFramedBytes u64]
+               [minKeyLength u16][minKey]
+               [prefixMaxLength u16][prefixMax]
+  [finalPrefixMaxLength u16][finalPrefixMax]
+
 [crc32c u32]
 [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
 ```
+
+`fileOffset` is the absolute offset of the sampled page's frame-length word. `cumulativeEntries`
+and `cumulativeFramedBytes` describe pages before the sample; the byte value therefore equals
+`fileOffset - HEADER_BYTES`. `prefixMax` is the unsigned maximum page maximum through and including
+the sampled page, while `finalPrefixMax` covers all pages and equals `segMaxKey`. The writer records
+these values while it writes each frame, with no page-body reread. For `P` listing pages it uses the
+same `max(1, ceil(P / 4096))` stride and ordinals `0, stride, 2*stride, ...` as the type-1 sample, so
+the page minima supplied to boundary selection are unchanged.
 
 For non-empty segments, `segMinKey` is the unsigned minimum of all persisted page minima and
 `segMaxKey` is the unsigned maximum of all persisted page maxima. Nested legal page ranges such as
@@ -872,21 +893,24 @@ Each page's ordered flag records full-comparator order: comparator ties remain o
 regression clears the flag. The writer repacks only pages whose flag is false, and every codec
 preserves the flag in the serialized header.
 
-For `P` pages the sample stride is `max(1, ceil(P / 4096))`; minima at physical page ordinals
-`0, stride, 2*stride, ...` are retained, including repeats. The block CRC covers its complete header
-and payload, excluding only the CRC field. A reader bounds the extension against the fixed tail,
-validates lengths before allocation, caps the declared count at `min(P, 4096)`, requires the exact
-systematic count and non-decreasing unsigned keys, and publishes no provisional key until every
-check passes. The first sampled key must equal `segMinKey`, the last must not exceed `segMaxKey`,
-and an empty sample requires empty bounds. An absent, unknown, or invalid extension falls back for that segment to the legacy
-full-page scan. Mixed legacy/new input therefore selects the same boundaries as an all-legacy scan.
+The block CRC covers its complete header and payload, excluding only the CRC field. Before retaining
+a locator or publishing any provisional minimum, the type-2 reader bounds all lengths and counts,
+requires the exact systematic ordinals, strictly increasing in-file frame offsets, non-decreasing
+cumulative fields/minima/prefix maxima, `cumulativeFramedBytes == fileOffset - HEADER_BYTES`, an
+exact first offset of `HEADER_BYTES`, a first minimum equal to `segMinKey`, and a final prefix maximum
+equal to `segMaxKey`. These checks establish a bounded, self-consistent index representation; direct
+positioning additionally requires comparison with the referenced page frames before it can be used
+to omit input bytes. Type 1 continues to receive its existing length/count/order/bounds/CRC checks.
+An absent, unknown, or structurally invalid extension falls back for that segment to the legacy
+full-page boundary scan. Mixed absent/type-1/type-2 input therefore retains the same boundary rule.
 
 Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
 issuing per-key writes; the reader streams the bounded extension with O(extension bytes / 64 KiB)
 positioned reads. At a structured parallel kickoff, each segment's trailer and extension are read
 during the descriptor's single open. The reader validates one segment's sample transactionally,
 then feeds its keys into the merge-wide capped candidate set before closing that descriptor;
-descriptors retain only status, count, and byte metadata. Explicit `R=1` and arbitrary-sorted-run
+descriptors retain only status, counts, primitive offsets, and a type-2 payload locator — never a
+sample-key collection. Explicit `R=1` and arbitrary-sorted-run
 merges do not read the extension. Reader peak boundary state is the global candidate cap plus at
 most one segment's 4,096-key validation sample and one 64 KiB scratch buffer, never
 O(segments × samples).

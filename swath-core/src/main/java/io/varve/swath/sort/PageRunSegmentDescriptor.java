@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
- * One kickoff-opened page-run segment and its retained file, trailer, and boundary-sample metadata.
+ * One kickoff-opened page-run segment and its retained file, trailer, and extension metadata.
  * Reading all descriptors before cleanup makes an unreadable internal input a preflight failure
  * rather than an optional fan-in refinement that silently falls back and fails later after working
  * files were removed. Embedded sample keys flow into the merge-wide bounded candidate set while the
@@ -23,7 +23,12 @@ import java.util.stream.Collectors;
  */
 record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunTrailer.Trailer trailer,
-                                PageRunBoundarySample.ReadResult sample) {
+                                PageRunPageIndex.ReadResult extension) {
+
+    /** Legacy-compatible boundary-sample view used by the existing range-boundary planner. */
+    PageRunBoundarySample.ReadResult sample() {
+        return extension.boundarySample();
+    }
 
     /**
      * Open every segment once for its trailer and, when {@code boundaryKeySink} is present, its
@@ -36,11 +41,11 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
         for (Path path : paths) {
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-                PageRunBoundarySample.ReadResult sample = boundaryKeySink.isPresent()
-                        ? PageRunBoundarySample.read(io, trailer, boundaryKeySink.orElseThrow())
-                        : PageRunBoundarySample.skipped(trailer.totalRecords());
+                PageRunPageIndex.ReadResult extension = boundaryKeySink.isPresent()
+                        ? PageRunPageIndex.read(io, trailer, boundaryKeySink.orElseThrow())
+                        : PageRunPageIndex.skipped(trailer.totalRecords());
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, sample));
+                        trailer, extension));
             }
         }
         return List.copyOf(descriptors);
