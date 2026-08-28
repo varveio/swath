@@ -36,9 +36,13 @@ final class S3Query {
             int eq = part.indexOf('=');
             String name = eq >= 0 ? part.substring(0, eq) : part;
             String value = eq >= 0 ? part.substring(eq + 1) : "";
-            values.put(new String(ByteKeys.percentDecode(name), StandardCharsets.UTF_8),
-                    ByteKeys.percentDecode(value));
+            values.put(new String(queryDecode(name), StandardCharsets.UTF_8), queryDecode(value));
         }
         return new S3Query(values);
+    }
+
+    /** Decode an HTTP query component: {@code +} is a space, while {@code %2B} is a literal plus. */
+    private static byte[] queryDecode(String encoded) {
+        return ByteKeys.percentDecode(encoded.replace("+", "%20"));
     }
 }

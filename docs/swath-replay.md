@@ -322,7 +322,9 @@ swath list s3://digitalcorpora \
 
 Supported parameters are `list-type=2`, `prefix`, `delimiter`, `start-after`,
 `continuation-token`, `max-keys`, `encoding-type=url`, and `fetch-owner`. Replay tokens and
-real S3 continuation tokens are intentionally not interchangeable.
+real S3 continuation tokens are intentionally not interchangeable. Query components accept both
+percent encoding and the form-style `+` spelling for a space that AWS SDK clients can emit;
+`%2B` remains a literal plus byte.
 
 A request may carry both `continuation-token` and `start-after`, which some clients do because
 they keep their opening `start-after` in the request template and add the token as they page.
