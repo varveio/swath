@@ -456,6 +456,8 @@ final class JsonRunSummaryWriterTest {
         metrics.recordSortPublication(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeTail(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeParallelism(4);
+        metrics.recordSortMergeOverlapCluster();
+        metrics.recordSortMergeOverlapState(3, 12);
 
         RunSummary snapshot = summary();
         JsonRunSummaryWriter.RunConfig runConfig = runConfig().withSortEnabled(true);
@@ -481,6 +483,9 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("local_publication_ms").asLong()).isEqualTo(4_000);
         assertThat(sort.get("finalize_parallelism").asLong()).isEqualTo(4);
         assertThat(sort.get("phase_rows_per_sec").asDouble()).isEqualTo(100.0);
+        assertThat(sort.get("merge_overlap_clusters").asLong()).isEqualTo(1);
+        assertThat(sort.get("merge_overlap_pages_peak").asLong()).isEqualTo(3);
+        assertThat(sort.get("merge_overlap_rows_peak").asLong()).isEqualTo(12);
     }
 
     /** The pre-{@code effective_fan_in} {@code sortEnabled} constructor renders the field as JSON null. */

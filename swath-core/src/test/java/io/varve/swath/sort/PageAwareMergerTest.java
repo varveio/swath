@@ -59,6 +59,9 @@ class PageAwareMergerTest {
         // pages: 3 per segment × 4 segments = 12, ALL emitted whole; zero overlap fallback.
         assertThat(metrics.get("SORT.page_whole_emitted")).isEqualTo(12);
         assertThat(metrics.get("SORT.page_overlap_keymerge")).isZero();
+        assertThat(metrics.overlapClusters).isZero();
+        assertThat(metrics.overlapPagesPeak).isZero();
+        assertThat(metrics.overlapRowsPeak).isZero();
     }
 
     @Test
@@ -70,13 +73,71 @@ class PageAwareMergerTest {
         List<Path> files = stage(dir, segs);
 
         CountingMetrics metrics = new CountingMetrics();
-        List<String> merged = drainKeys(files, metrics);
+        long[] classification = new long[2];
+        List<String> merged = new ArrayList<>();
+        try (PageAwareMerger merger = new PageAwareMerger(frontiers(files), cmp,
+                MergeScope.CROSS_SEGMENT, metrics,
+                (copyable, interleaved) -> {
+                    classification[0] = copyable;
+                    classification[1] = interleaved;
+                })) {
+            while (merger.hasNext()) {
+                merged.add(merger.next().key().asString());
+            }
+        }
 
         assertThat(merged).containsExactly("a", "b", "c", "d", "e", "f", "g", "h");
         assertThat(merged).isSorted();
         // The overlap guard fired (loud alarm on a genuinely-interleaving input); no whole page possible.
         assertThat(metrics.get("SORT.page_overlap_keymerge")).isGreaterThan(0);
         assertThat(metrics.get("SORT.page_whole_emitted")).isZero();
+        assertThat(metrics.get("SORT.merge_overlap_cluster")).isEqualTo(1);
+        assertThat(metrics.overlapClusters).isEqualTo(1);
+        assertThat(metrics.overlapPagesPeak).isEqualTo(2);
+        assertThat(metrics.overlapRowsPeak).isEqualTo(8);
+        assertThat(classification).containsExactly(0L, 2L);
+    }
+
+    @Test
+    void equalBoundaryReportsOneDuplicateWithoutChangingOverlapAccounting(@TempDir Path dir)
+            throws IOException {
+        List<Path> files = stage(dir, List.of(sorted("dup"), sorted("dup")));
+        CountingMetrics metrics = new CountingMetrics();
+        List<String> duplicates = new ArrayList<>();
+
+        List<String> merged = new ArrayList<>();
+        try (SortedCursor cursor = new DuplicateReporting(
+                new PageAwareMerger(frontiers(files), cmp, MergeScope.CROSS_SEGMENT, metrics), cmp,
+                (previous, duplicate) -> duplicates.add(duplicate.key().asString()))) {
+            while (cursor.hasNext()) {
+                merged.add(cursor.next().key().asString());
+            }
+        }
+
+        assertThat(merged).containsExactly("dup", "dup");
+        assertThat(duplicates).containsExactly("dup");
+        assertThat(metrics.overlapClusters).isEqualTo(1);
+        assertThat(metrics.overlapPagesPeak).isEqualTo(2);
+        assertThat(metrics.overlapRowsPeak).isEqualTo(2);
+    }
+
+    @Test
+    void nestedPagesFormOneBoundedOverlapCluster(@TempDir Path dir) throws IOException {
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), cmp);
+        buffer.admit(1, sorted("a", "z"));
+        buffer.admit(2, sorted("b", "c"));
+        buffer.admit(3, sorted("d", "e"));
+        Path segment = dir.resolve("nested.pageseg");
+        new PageRunSegmentWriter(cmp, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), segment);
+        CountingMetrics metrics = new CountingMetrics();
+
+        List<String> merged = drainKeys(List.of(segment), metrics);
+
+        assertThat(merged).containsExactly("a", "b", "c", "d", "e", "z");
+        assertThat(metrics.overlapClusters).isEqualTo(1);
+        assertThat(metrics.overlapPagesPeak).isEqualTo(3);
+        assertThat(metrics.overlapRowsPeak).isEqualTo(6);
     }
 
     @Test
@@ -161,6 +222,9 @@ class PageAwareMergerTest {
 
     private static final class CountingMetrics implements SortMetrics {
         private final Map<String, Integer> counts = new HashMap<>();
+        private int overlapClusters;
+        private long overlapPagesPeak;
+        private long overlapRowsPeak;
 
         @Override
         public void recordStealReason(String outcome, String reason) {
@@ -173,6 +237,17 @@ class PageAwareMergerTest {
 
         @Override
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+        }
+
+        @Override
+        public void recordPageAwareOverlapCluster() {
+            overlapClusters++;
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+            overlapPagesPeak = Math.max(overlapPagesPeak, activePages);
+            overlapRowsPeak = Math.max(overlapRowsPeak, retainedRows);
         }
 
         int get(String key) {

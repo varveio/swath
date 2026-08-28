@@ -24,7 +24,7 @@ class PageAwareMergerCounterNamesTest {
     private int seq;
 
     @Test
-    void theScopeSwitchEmitsOnlyItsTwoExactRouteSpecificReasons(@TempDir Path dir)
+    void theScopeSwitchEmitsRouteSpecificReasonsAndTheOverlapClusterReason(@TempDir Path dir)
             throws IOException {
         // Three pages that force BOTH paths in one run: [a..c] and [b..d] OVERLAP (key-merge fallback),
         // while [x..z] is disjoint from everything ahead of it (whole-page fast path). Page mins ascend
@@ -61,6 +61,14 @@ class PageAwareMergerCounterNamesTest {
             @Override
             public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
             }
+
+            @Override
+            public void recordPageAwareOverlapCluster() {
+            }
+
+            @Override
+            public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+            }
         };
 
         List<String> merged = new ArrayList<>();
@@ -76,9 +84,9 @@ class PageAwareMergerCounterNamesTest {
         assertThat(merged).containsExactly("a", "b", "c", "d", "x", "z");
 
         assertThat(reasons)
-                .containsOnly(wholeReason, overlapReason)
+                .containsOnly(wholeReason, overlapReason, "merge_overlap_cluster")
                 .contains(wholeReason)
-                .contains(overlapReason);
+                .contains(overlapReason, "merge_overlap_cluster");
     }
 
     private ListEntry entry(String key) {

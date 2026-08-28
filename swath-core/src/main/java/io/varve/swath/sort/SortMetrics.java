@@ -32,6 +32,14 @@ public interface SortMetrics {
         @Override
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
+
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
     };
 
     /** Record one engagement-counter increment, exactly as {@code RunMetrics.recordStealReason}. */
@@ -55,4 +63,10 @@ public interface SortMetrics {
      * traversed by fallback scans. Parquet index metadata is deliberately outside these byte totals.
      */
     void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes);
+
+    /** Record one page-aware overlap cluster engagement. */
+    void recordPageAwareOverlapCluster();
+
+    /** Observe one active overlap-cluster size for peak gauges. */
+    void recordPageAwareOverlapState(long activePages, long retainedRows);
 }

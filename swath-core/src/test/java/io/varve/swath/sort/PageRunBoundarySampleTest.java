@@ -702,6 +702,14 @@ class PageRunBoundarySampleTest {
             progress.increment();
         }
 
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
         long count(String name) {
             LongAdder count = counts.get(name);
             return count == null ? 0 : count.sum();

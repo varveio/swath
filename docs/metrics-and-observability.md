@@ -108,6 +108,12 @@ For page-run staging, the `sort` block reports `merge_boundary_embedded_entries`
 trailer samples from compatibility fallback scans. `merge_boundary_bytes` is the sum of
 the two byte fields.
 
+Page-aware merge reports `merge_overlap_clusters`, `merge_overlap_pages_peak`, and
+`merge_overlap_rows_peak`. They describe decoded overlap clusters only: zero is the ordinary
+whole-page path, while nonzero identifies the bounded key-merge fallback and its largest retained
+decoded page/row state. `merge_disjoint_copyable` and `merge_interleaved_segment` remain separate
+source-run classifications, so they can be compared without conflating overlap with row ordering.
+
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
 time from the first final close through publication, while `finalize_close_ms` sums per-part

@@ -217,6 +217,22 @@ class SortTransformTest {
     }
 
     @Test
+    void pageAwareKWayRouteClassifiesSourceRuns(@TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        List<Path> staging = List.of(
+                writeSegment(dirs.staging, "seg-0.parquet", objects("a", "c", "e")),
+                writeSegment(dirs.staging, "seg-1.parquet", objects("b", "d", "f")),
+                writeSegment(dirs.staging, "seg-2.parquet", objects("x", "y")));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        transformWithMetrics(SortConfigs.base(), metrics).transform(staging, dirs.output, dirs.staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(metrics.count("SORT.merge_interleaved_segment")).isEqualTo(2);
+        assertThat(metrics.count("SORT.merge_disjoint_copyable")).isEqualTo(1);
+    }
+
+    @Test
     void publishCallbackFiresAfterRenamesButBeforeStagingDelete(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b")));

@@ -30,4 +30,14 @@ record RunSortMetrics(RunMetrics metrics) implements SortMetrics {
     public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         metrics.recordSortMergeBoundaryIo(embeddedEntries, embeddedBytes, scanBytes);
     }
+
+    @Override
+    public void recordPageAwareOverlapCluster() {
+        metrics.recordSortMergeOverlapCluster();
+    }
+
+    @Override
+    public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        metrics.recordSortMergeOverlapState(activePages, retainedRows);
+    }
 }

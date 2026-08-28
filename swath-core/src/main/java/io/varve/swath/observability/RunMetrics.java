@@ -243,6 +243,9 @@ public final class RunMetrics {
     private final Counter sortMergeBoundaryEmbeddedEntries;
     private final Counter sortMergeBoundaryEmbeddedBytes;
     private final Counter sortMergeBoundaryScanBytes;
+    private final Counter sortMergeOverlapClusters;
+    private final AtomicLong sortMergeOverlapPagesPeak = new AtomicLong();
+    private final AtomicLong sortMergeOverlapRowsPeak = new AtomicLong();
     private final Timer sortFinalizeCloseLatency;
     private final Timer sortFinalizeLatency;
     private final Timer sortPublicationLatency;
@@ -578,6 +581,11 @@ public final class RunMetrics {
                 .baseUnit("bytes").register(registry);
         sortMergeBoundaryScanBytes = Counter.builder("swath.sort.merge.boundaries.scan.bytes")
                 .baseUnit("bytes").register(registry);
+        sortMergeOverlapClusters = Counter.builder("swath.sort.merge.overlap.clusters").register(registry);
+        Gauge.builder("swath.sort.merge.overlap.pages.peak", sortMergeOverlapPagesPeak, AtomicLong::get)
+                .register(registry);
+        Gauge.builder("swath.sort.merge.overlap.rows.peak", sortMergeOverlapRowsPeak, AtomicLong::get)
+                .register(registry);
         sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency").register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
@@ -1127,6 +1135,17 @@ public final class RunMetrics {
         sortMergeBoundaryEmbeddedEntries.increment(embeddedEntries);
         sortMergeBoundaryEmbeddedBytes.increment(embeddedBytes);
         sortMergeBoundaryScanBytes.increment(scanBytes);
+    }
+
+    /** One page-aware overlap cluster entered the decoded key-merge fallback. */
+    public void recordSortMergeOverlapCluster() {
+        sortMergeOverlapClusters.increment();
+    }
+
+    /** Observe active decoded-page/row state for the page-aware merger's bounded peak gauges. */
+    public void recordSortMergeOverlapState(long activePages, long retainedRows) {
+        sortMergeOverlapPagesPeak.getAndAccumulate(activePages, Math::max);
+        sortMergeOverlapRowsPeak.getAndAccumulate(retainedRows, Math::max);
     }
 
     /** One final part's footer-write + fsync durability span. */

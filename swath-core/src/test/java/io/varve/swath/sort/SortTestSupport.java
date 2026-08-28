@@ -231,6 +231,14 @@ final class SortTestSupport {
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
 
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
         int count(String key) {
             return counts.getOrDefault(key, 0);
         }

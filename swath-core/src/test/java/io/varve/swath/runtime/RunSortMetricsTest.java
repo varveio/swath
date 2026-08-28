@@ -55,4 +55,18 @@ class RunSortMetricsTest {
         assertEquals(123.0, registry.get("swath.sort.merge.boundaries.embedded.bytes").counter().count());
         assertEquals(456.0, registry.get("swath.sort.merge.boundaries.scan.bytes").counter().count());
     }
+
+    @Test
+    void pageAwareOverlapMetersReachTheLiveRegistry() {
+        var registry = new SimpleMeterRegistry();
+        var adapter = new RunSortMetrics(new RunMetrics(registry));
+
+        adapter.recordPageAwareOverlapCluster();
+        adapter.recordPageAwareOverlapState(2, 10);
+        adapter.recordPageAwareOverlapState(3, 8);
+
+        assertEquals(1.0, registry.get("swath.sort.merge.overlap.clusters").counter().count());
+        assertEquals(3.0, registry.get("swath.sort.merge.overlap.pages.peak").gauge().value());
+        assertEquals(10.0, registry.get("swath.sort.merge.overlap.rows.peak").gauge().value());
+    }
 }

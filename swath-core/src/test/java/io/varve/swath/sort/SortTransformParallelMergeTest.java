@@ -263,6 +263,14 @@ class SortTransformParallelMergeTest {
         public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
         }
 
+        @Override
+        public void recordPageAwareOverlapCluster() {
+        }
+
+        @Override
+        public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+        }
+
         long count(String key) {
             LongAdder a = counts.get(key);
             return a == null ? 0 : a.sum();

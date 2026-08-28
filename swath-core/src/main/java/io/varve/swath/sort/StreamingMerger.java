@@ -58,23 +58,9 @@ import java.util.function.LongConsumer;
  */
 final class StreamingMerger implements SortedCursor {
 
-    /**
-     * Reports, once at {@link #close()}, this merge's count of "fully disjoint copyable" input
-     * segments (every emitted row formed one uninterrupted run) versus "interleaved" segments (more
-     * than one run) — see the class javadoc's disjoint-copyable classification. {@link #NO_OP} is the
-     * default for callers that don't need the counters (e.g. {@link SealedBuffer}'s in-memory
-     * seal-path merge, out of scope for this measurement).
-     */
-    @FunctionalInterface
-    interface DisjointSink {
-        DisjointSink NO_OP = (copyableSegments, interleavedSegments) -> { };
-
-        void accept(long copyableSegments, long interleavedSegments);
-    }
-
     private final Comparator<ListEntry> comparator;
     private final LongConsumer fastPathSink;
-    private final DisjointSink disjointSink;
+    private final MergeRunSink disjointSink;
     private final List<EntryStream> allStreams;
     private final PriorityQueue<EntryStream> heap;
     private final IdentityHashMap<EntryStream, Integer> streamIndex;
@@ -87,11 +73,11 @@ final class StreamingMerger implements SortedCursor {
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
                     LongConsumer fastPathSink) {
-        this(streams, comparator, fastPathSink, DisjointSink.NO_OP);
+        this(streams, comparator, fastPathSink, MergeRunSink.NO_OP);
     }
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
-                    LongConsumer fastPathSink, DisjointSink disjointSink) {
+                    LongConsumer fastPathSink, MergeRunSink disjointSink) {
         this.comparator = comparator;
         this.fastPathSink = fastPathSink;
         this.disjointSink = disjointSink;
