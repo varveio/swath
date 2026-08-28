@@ -32,12 +32,46 @@ class SortBenchCorpusTest {
     }
 
     @Test
+    void generatedCursorRejectsNonPositiveNumSegments() {
+        assertThatThrownBy(() -> SortBenchCorpus.generatedCursor(0, 0, 1, 1, 1,
+                LocalDate.of(2026, 1, 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("numSegments")
+                .hasMessageContaining("positive");
+        assertThatThrownBy(() -> SortBenchCorpus.generatedCursor(0, -1, 1, 1, 1,
+                LocalDate.of(2026, 1, 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("numSegments")
+                .hasMessageContaining("positive");
+    }
+
+    @Test
+    void generatedCursorRejectsSegmentOutsideLowerBound() {
+        assertThatThrownBy(() -> SortBenchCorpus.generatedCursor(-1, 2, 1, 1, 1,
+                LocalDate.of(2026, 1, 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("segment")
+                .hasMessageContaining("[0, 2)");
+    }
+
+    @Test
+    void generatedCursorRejectsSegmentOutsideUpperBound() {
+        assertThatThrownBy(() -> SortBenchCorpus.generatedCursor(2, 2, 1, 1, 1,
+                LocalDate.of(2026, 1, 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("segment")
+                .hasMessageContaining("[0, 2)");
+    }
+
+    @Test
     void generatedCursorAcceptsPositiveBlockRows() {
-        try (SortedCursor cursor = SortBenchCorpus.generatedCursor(0, 1, 1, 1, 1,
-                LocalDate.of(2026, 1, 1))) {
-            assertThat(cursor.hasNext()).isTrue();
-            assertThat(cursor.next()).isNotNull();
-            assertThat(cursor.hasNext()).isFalse();
+        for (int segment : new int[]{0, 1}) {
+            try (SortedCursor cursor = SortBenchCorpus.generatedCursor(segment, 2, 1, 2, 1,
+                    LocalDate.of(2026, 1, 1))) {
+                assertThat(cursor.hasNext()).isTrue();
+                assertThat(cursor.next()).isNotNull();
+                assertThat(cursor.hasNext()).isFalse();
+            }
         }
     }
 }
