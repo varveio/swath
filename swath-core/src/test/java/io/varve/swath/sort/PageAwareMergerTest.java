@@ -122,6 +122,31 @@ class PageAwareMergerTest {
     }
 
     @Test
+    void comparatorEqualMultiPageSourcesKeepTheirActualRunClassification(@TempDir Path dir)
+            throws IOException {
+        List<Path> files = stage(dir, List.of(sorted("dup", "dup"), sorted("dup", "dup")));
+        long[] pageRuns = new long[2];
+        long[] streamingRuns = new long[2];
+        List<ListEntry> page;
+        List<ListEntry> streaming;
+        try (SortedCursor cursor = new DuplicateReporting(new PageAwareMerger(frontiers(files), cmp,
+                MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
+                (copyable, interleaved) -> { pageRuns[0] = copyable; pageRuns[1] = interleaved; }),
+                cmp, DuplicateHook.NO_OP)) {
+            page = drainEntries(cursor);
+        }
+        try (SortedCursor cursor = new DuplicateReporting(new StreamingMerger(entryStreams(files), cmp, n -> { },
+                (copyable, interleaved) -> { streamingRuns[0] = copyable; streamingRuns[1] = interleaved; }),
+                cmp, DuplicateHook.NO_OP)) {
+            streaming = drainEntries(cursor);
+        }
+        assertThat(page).containsExactlyElementsOf(streaming);
+        assertThat(page).hasSize(4);
+        assertThat(pageRuns).containsExactly(0L, 2L);
+        assertThat(streamingRuns).containsExactly(2L, 0L);
+    }
+
+    @Test
     void nestedPagesFormOneBoundedOverlapCluster(@TempDir Path dir) throws IOException {
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), cmp);
         buffer.admit(1, sorted("a", "z"));
