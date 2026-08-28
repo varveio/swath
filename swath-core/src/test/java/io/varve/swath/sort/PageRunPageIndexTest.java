@@ -65,6 +65,23 @@ class PageRunPageIndexTest {
     }
 
     @Test
+    void emittedType2BytesAndSegmentMetadataAgree(@TempDir Path dir) throws IOException {
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), CMP);
+        buffer.admit(1, List.of(object("a")));
+        Path segment = dir.resolve("typed.pageseg");
+        SegmentResult result = new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                PageCodec.NONE).flush(buffer.seal(SealTrigger.DRAIN), segment);
+
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+            PageRunPageIndex.ReadResult index = PageRunPageIndex.read(
+                    io, PageRunTrailer.read(io), ignored -> { });
+            assertThat(index.extensionType()).isEqualTo((short) PageRunFormat.PAGE_INDEX_EXTENSION);
+            assertThat(result.pageRunFormat()).isEqualTo(PageRunFormat.currentListing());
+            assertThat(result.pageRunFormat().extensionType()).isEqualTo(index.extensionType());
+        }
+    }
+
+    @Test
     void structurallyInvalidType2FieldsAreRejectedTransactionally(@TempDir Path dir)
             throws IOException {
         for (Mutation mutation : Mutation.values()) {

@@ -25,7 +25,7 @@ final class PageRunBoundarySample {
     static final int IO_BUFFER_BYTES = 64 * 1_024;
 
     static final int MAGIC = 0x53504758; // "SPGX"
-    static final short TYPE = 1;
+    static final short TYPE = PageRunFormat.LEGACY_MINIMA_EXTENSION;
     static final short VERSION = 1;
     static final int HEADER_BYTES = 4 + 2 + 2 + 4 + 4;
     static final int CRC_BYTES = 4;

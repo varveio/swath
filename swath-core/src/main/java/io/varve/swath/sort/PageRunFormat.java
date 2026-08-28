@@ -10,9 +10,10 @@ package io.varve.swath.sort;
  *
  * <p>The page-run header version and extension type are separate compatibility axes: a reader may
  * understand the segment body while not understanding metadata embedded before the fixed EOF tail.
- * Original listing segments written by this build always carry the boundary-sample extension;
- * extension-free page runs remain readable for legacy/cascade compatibility but are never produced
- * as newly checkpointed listing segments.
+ * Original listing segments written by this build always carry the type-2 page index; extension-free
+ * and legacy type-1 minima page runs remain readable for compatibility but are never produced as
+ * newly checkpointed listing segments. A writer that emits a new listing extension updates this
+ * value in the same change, so checkpoint metadata cannot describe different bytes.
  */
 public record PageRunFormat(int formatVersion, int extensionType) {
 
@@ -23,13 +24,16 @@ public record PageRunFormat(int formatVersion, int extensionType) {
     public static final int CURRENT_FORMAT_VERSION = 1;
 
     /** A readable page run with no extension before the fixed EOF tail. */
-    public static final int NO_EXTENSION = 0;
+    public static final int ABSENT_EXTENSION = 0;
 
-    /** The legacy/current page-minimum boundary-sample extension. */
-    public static final int BOUNDARY_SAMPLE_EXTENSION = 1;
+    /** The legacy page-minimum boundary-sample extension. */
+    public static final int LEGACY_MINIMA_EXTENSION = 1;
+
+    /** The current sparse page-offset index extension. */
+    public static final int PAGE_INDEX_EXTENSION = 2;
 
     private static final PageRunFormat CURRENT_LISTING =
-            new PageRunFormat(CURRENT_FORMAT_VERSION, BOUNDARY_SAMPLE_EXTENSION);
+            new PageRunFormat(CURRENT_FORMAT_VERSION, PAGE_INDEX_EXTENSION);
 
     public PageRunFormat {
         if (formatVersion < 0 || extensionType < 0) {
@@ -53,7 +57,8 @@ public record PageRunFormat(int formatVersion, int extensionType) {
         if (formatVersion != CURRENT_FORMAT_VERSION) {
             return Compatibility.UNKNOWN_FORMAT_VERSION;
         }
-        if (extensionType != NO_EXTENSION && extensionType != BOUNDARY_SAMPLE_EXTENSION) {
+        if (extensionType != ABSENT_EXTENSION && extensionType != LEGACY_MINIMA_EXTENSION
+                && extensionType != PAGE_INDEX_EXTENSION) {
             return Compatibility.UNKNOWN_EXTENSION_TYPE;
         }
         return Compatibility.SUPPORTED;

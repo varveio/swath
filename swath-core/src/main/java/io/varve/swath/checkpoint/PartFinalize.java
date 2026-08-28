@@ -5,6 +5,7 @@
  */
 package io.varve.swath.checkpoint;
 
+import io.varve.swath.sort.PageRunFormat;
 import java.util.List;
 
 /**
@@ -46,6 +47,11 @@ public record PartFinalize(
         if ((formatVersion != null && formatVersion < 0)
                 || (extensionType != null && extensionType < 0)) {
             throw new IllegalArgumentException("part format metadata must be non-negative");
+        }
+        if (!PageRunFormat.NAME.equals(format)
+                && (formatVersion != null || extensionType != null)) {
+            throw new IllegalArgumentException(
+                    "only page-run staging parts may carry format_version and extension_type");
         }
     }
 

@@ -784,8 +784,10 @@ which owns the at-most-once-text durability questions it would reopen):
   staging by `page-run`) would treat the un-recognized old-format finalized
   segments as non-finalized, sweep them, and silently re-list their data
   (dup/loss). New page-run rows additionally record the segment header
-  `format_version` and trailer `extension_type`; a resume refuses an explicit
-  value this binary does not understand before opening or sweeping staging.
+  `format_version` and trailer `extension_type`; the current listing writer
+  records type 2, while type 1 is legacy minima-only metadata; the listing writer
+  and `PageRunFormat.currentListing()` change together. A resume refuses
+  an explicit value this binary does not understand before opening or sweeping staging.
   Both columns are nullable additive migrations: a pre-column page-run row has
   both `NULL` and retains the legacy reader-validation path, while non-page-run
   output rows also remain `NULL` and are never classified as page-run version 0.

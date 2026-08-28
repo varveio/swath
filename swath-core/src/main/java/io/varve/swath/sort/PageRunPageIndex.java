@@ -17,7 +17,7 @@ import java.util.zip.CRC32C;
 /** Current sparse page-offset index stored in the optional page-run trailer extension. */
 final class PageRunPageIndex {
 
-    static final short TYPE = 2;
+    static final short TYPE = PageRunFormat.PAGE_INDEX_EXTENSION;
     static final short VERSION = 1;
     private static final int ENTRY_FIXED_BYTES = 4 * Long.BYTES;
 

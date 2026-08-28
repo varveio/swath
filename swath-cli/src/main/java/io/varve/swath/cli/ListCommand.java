@@ -881,8 +881,9 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                         .toList()
                                 + " (this build reads format_version="
                                 + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type in ["
-                                + PageRunFormat.NO_EXTENSION + ", "
-                                + PageRunFormat.BOUNDARY_SAMPLE_EXTENSION + "]) — the staging "
+                                + PageRunFormat.ABSENT_EXTENSION + ", "
+                                + PageRunFormat.LEGACY_MINIMA_EXTENSION + ", "
+                                + PageRunFormat.PAGE_INDEX_EXTENSION + "]) — the staging "
                                 + "segments cannot be safely reused; use --restart to discard the "
                                 + "run and start fresh");
                     }

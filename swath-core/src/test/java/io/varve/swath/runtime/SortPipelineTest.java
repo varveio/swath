@@ -124,7 +124,7 @@ final class SortPipelineTest {
             assertThat(store.finalizedParts(run.id())).isNotEmpty().allSatisfy(part -> {
                 assertThat(part.format()).isEqualTo(PageRunFormat.NAME);
                 assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
-                assertThat(part.extensionType()).isEqualTo(PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.PAGE_INDEX_EXTENSION);
             });
 
             // durable_cursor advanced via the reused part-finalize machinery (segments carried it).
@@ -177,7 +177,7 @@ final class SortPipelineTest {
             assertThat(segmentRows).allMatch(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()));
             assertThat(segmentRows).allSatisfy(part -> {
                 assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
-                assertThat(part.extensionType()).isEqualTo(PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.PAGE_INDEX_EXTENSION);
             });
             assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).isFalse();
 

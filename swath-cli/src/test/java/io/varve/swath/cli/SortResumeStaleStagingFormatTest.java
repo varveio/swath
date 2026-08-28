@@ -24,7 +24,9 @@ import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.sort.PageRunFormat;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -49,11 +51,11 @@ final class SortResumeStaleStagingFormatTest {
             FilterSpecCodec.encode(null, null, null, null, null, null, null);
 
     /** Seed a resumable --sort run and record ONE staging {@code part_file} row with {@code segFormat}. */
-    private static void seedSortRunWithSegmentFormat(Path db, String segFormat) throws Exception {
-        seedSortRunWithSegmentFormat(db, segFormat, null, null);
+    private static long seedSortRunWithSegmentFormat(Path db, String segFormat) throws Exception {
+        return seedSortRunWithSegmentFormat(db, segFormat, null, null);
     }
 
-    private static void seedSortRunWithSegmentFormat(Path db, String segFormat,
+    private static long seedSortRunWithSegmentFormat(Path db, String segFormat,
             Integer formatVersion, Integer extensionType) throws Exception {
         String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, BUCKET, PREFIX).hash();
         RunKey key = new RunKey("s3", ENDPOINT, BUCKET, PREFIX.getBytes(StandardCharsets.UTF_8),
@@ -67,15 +69,20 @@ final class SortResumeStaleStagingFormatTest {
                     segFormat, formatVersion, extensionType, 2L, 128L, List.of()));
             store.markOutputComplete(run.id());
             store.markRunFinished(run.id(), RunStatus.COMPLETED);
+            return run.id();
         }
     }
 
     private static ListCommand resumeSortCommand(Path db) {
+        return resumeSortCommand(db, null);
+    }
+
+    private static ListCommand resumeSortCommand(Path db, Path outputDir) {
         ListCommand cmd = new ListCommand();
         cmd.uri = "s3://" + BUCKET + "/" + PREFIX;
         cmd.connection.endpointUrl = ENDPOINT;
         cmd.output.format = OutputFormat.PARQUET;
-        cmd.output.destination = "out";
+        cmd.output.destination = outputDir == null ? "out" : outputDir.toString();
         cmd.checkpoint.location = db.toString();
         cmd.checkpoint.resume = true;
         cmd.sorting.sort = true;
@@ -119,11 +126,21 @@ final class SortResumeStaleStagingFormatTest {
     }
 
     @Test
+    void legacyMinimaPageRunMetadataRemainsReadable(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
+                PageRunFormat.CURRENT_FORMAT_VERSION, PageRunFormat.LEGACY_MINIMA_EXTENSION);
+
+        Throwable t = catchThrowable(() -> resumeSortCommand(db).call());
+        assertThat(t).isNotInstanceOf(InvalidArgsException.class);
+    }
+
+    @Test
     void unknownPageRunFormatVersionIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
         seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
                 PageRunFormat.CURRENT_FORMAT_VERSION + 1,
-                PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+                PageRunFormat.PAGE_INDEX_EXTENSION);
 
         assertThatThrownBy(() -> resumeSortCommand(db).call())
                 .isInstanceOf(InvalidArgsException.class)
@@ -137,7 +154,7 @@ final class SortResumeStaleStagingFormatTest {
     @Test
     void unknownPageRunExtensionTypeIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("c.sqlite");
-        int unknownType = PageRunFormat.BOUNDARY_SAMPLE_EXTENSION + 99;
+        int unknownType = PageRunFormat.PAGE_INDEX_EXTENSION + 99;
         seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
                 PageRunFormat.CURRENT_FORMAT_VERSION, unknownType);
 
@@ -147,5 +164,35 @@ final class SortResumeStaleStagingFormatTest {
                 .hasMessageContaining("extension_type=" + unknownType)
                 .hasMessageContaining("UNKNOWN_EXTENSION_TYPE")
                 .hasMessageContaining("--restart");
+    }
+
+    @Test
+    void missingExtensionTypeIsRefusedBeforeStagingMutation(@TempDir Path dir) throws Exception {
+        assertIncompletePairRefusedBeforeStagingMutation(dir, "extension_type");
+    }
+
+    @Test
+    void missingFormatVersionIsRefusedBeforeStagingMutation(@TempDir Path dir) throws Exception {
+        assertIncompletePairRefusedBeforeStagingMutation(dir, "format_version");
+    }
+
+    private static void assertIncompletePairRefusedBeforeStagingMutation(Path dir, String nullColumn)
+            throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        PageRunFormat current = PageRunFormat.currentListing();
+        long runId = seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
+                current.formatVersion(), current.extensionType());
+        try (var c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
+             var st = c.createStatement()) {
+            st.execute("UPDATE part_file SET " + nullColumn + "=NULL WHERE run_id=" + runId);
+        }
+        Path staging = Files.createDirectories(dir.resolve("out/_staging"));
+        Path sentinel = Files.writeString(staging.resolve("must-survive"), "sentinel");
+
+        assertThatThrownBy(() -> resumeSortCommand(db, staging.getParent()).call())
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("page-run staging metadata")
+                .hasMessageContaining("INCOMPLETE");
+        assertThat(sentinel).exists();
     }
 }

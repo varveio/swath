@@ -65,6 +65,26 @@ final class SqliteCheckpointStoreTest {
     }
 
     @Test
+    void ordinaryOutputCannotCarryPageRunFormatMetadata() {
+        PageRunFormat pageRun = PageRunFormat.currentListing();
+
+        assertThatThrownBy(() -> new PartFinalize(1, 0, "part-0.parquet", "parquet",
+                pageRun.formatVersion(), pageRun.extensionType(), 1, 1, List.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("only page-run staging parts");
+    }
+
+    @Test
+    void pageRunCompatibilityAcceptsAbsentLegacyMinimaAndCurrentIndex() {
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.ABSENT_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.LEGACY_MINIMA_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+        assertThat(PageRunFormat.compatibility(PageRunFormat.CURRENT_FORMAT_VERSION,
+                PageRunFormat.PAGE_INDEX_EXTENSION)).isEqualTo(PageRunFormat.Compatibility.SUPPORTED);
+    }
+
+    @Test
     void preColumnPartRowsMigrateAsUnrecordedLegacyMetadata(@TempDir Path dir) throws Exception {
         Path db = dir.resolve("ckpt.sqlite");
         long runId;
