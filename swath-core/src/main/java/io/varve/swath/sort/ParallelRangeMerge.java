@@ -257,7 +257,7 @@ final class ParallelRangeMerge {
             metrics.markProgress();
             return SampleSource.EMBEDDED;
         }
-        recordFallback(embedded.status(), metrics);
+        recordFallback(descriptor.extension().status(), metrics);
 
         // Boundary choice affects balance only, so cap retained samples independently of row count.
         long stride = PageRunBoundarySample.stride(embedded.totalRecords());
@@ -361,7 +361,7 @@ final class ParallelRangeMerge {
         }
     }
 
-    private static void recordFallback(PageRunBoundarySample.Status status, SortMetrics metrics) {
+    private static void recordFallback(PageRunPageIndex.Status status, SortMetrics metrics) {
         switch (status) {
             case ABSENT -> metrics.recordStealReason("SORT", "merge_boundary_fallback_absent");
             case UNKNOWN -> metrics.recordStealReason("SORT", "merge_boundary_fallback_unknown");
@@ -375,8 +375,13 @@ final class ParallelRangeMerge {
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_order");
             case INVALID_BOUNDS ->
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_bounds");
+            case INVALID_OFFSET ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_offset");
+            case INVALID_CUMULATIVE ->
+                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_cumulative");
             case SKIPPED -> throw new AssertionError("parallel boundary sampling was skipped");
-            case EMBEDDED -> throw new AssertionError("valid sample cannot fall back");
+            case EMBEDDED, EMBEDDED_MINIMA_ONLY ->
+                    throw new AssertionError("valid sample cannot fall back");
         }
     }
 

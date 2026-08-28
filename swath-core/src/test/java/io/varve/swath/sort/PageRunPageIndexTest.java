@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -98,6 +99,83 @@ class PageRunPageIndexTest {
             assertThat(result.locator()).as(mutation.name()).isNull();
             assertThat(minima).as("no provisional minima from %s", mutation).isEmpty();
         }
+    }
+
+    @Test
+    void cumulativeEntriesMustStrictlyIncreaseAfterTheFirstSample(@TempDir Path dir)
+            throws IOException {
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), CMP);
+        for (int page = 0; page < 3; page++) {
+            buffer.admit(page, List.of(object("k" + page + "a"), object("k" + page + "b")));
+        }
+        Path segment = dir.resolve("equal-cumulative.pageseg");
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), segment);
+        byte[] bytes = Files.readAllBytes(segment);
+        Layout layout = layout(bytes);
+        int secondEntry = entryPosition(bytes, layout, 1);
+        int thirdEntry = entryPosition(bytes, layout, 2);
+        long secondCumulative = ByteBuffer.wrap(bytes).getLong(secondEntry + 16);
+        assertThat(secondCumulative).isEqualTo(2L);
+        assertThat(ByteBuffer.wrap(bytes).getLong(thirdEntry)).isEqualTo(2L);
+        ByteBuffer.wrap(bytes).putLong(thirdEntry + 16, secondCumulative);
+        rewriteExtensionCrc(bytes, layout);
+        Files.write(segment, bytes);
+
+        assertThat(readIndex(segment).status()).isEqualTo(PageRunPageIndex.Status.INVALID_CUMULATIVE);
+    }
+
+    @Test
+    void cumulativeEntriesCannotFallBelowSampledPageOrdinal(@TempDir Path dir)
+            throws IOException {
+        Path segment = writePages(dir.resolve("below-ordinal.pageseg"), 4_097);
+        byte[] bytes = Files.readAllBytes(segment);
+        Layout layout = layout(bytes);
+        int secondEntry = entryPosition(bytes, layout, 1);
+        assertThat(ByteBuffer.wrap(bytes).getLong(secondEntry)).isEqualTo(2L); // stride=2
+        ByteBuffer.wrap(bytes).putLong(secondEntry + 16, 1L); // increasing from zero, but < ordinal
+        rewriteExtensionCrc(bytes, layout);
+        Files.write(segment, bytes);
+
+        assertThat(readIndex(segment).status()).isEqualTo(PageRunPageIndex.Status.INVALID_CUMULATIVE);
+    }
+
+    @Test
+    void badCrcIsRejectedBeforeAnOversizedKeyCanBeAllocated(@TempDir Path dir) throws IOException {
+        Path segment = writePages(dir.resolve("oversized-bad-crc.pageseg"), 32);
+        byte[] bytes = Files.readAllBytes(segment);
+        Layout layout = layout(bytes);
+        int firstEntry = entryPosition(bytes, layout, 0);
+        ByteBuffer.wrap(bytes).putShort(firstEntry + 32, (short) 1_025);
+        Files.write(segment, bytes); // deliberately leave the old CRC
+        List<byte[]> minima = new ArrayList<>();
+
+        PageRunPageIndex.ReadResult result = readIndex(segment, minima);
+
+        assertThat(result.status()).isEqualTo(PageRunPageIndex.Status.INVALID_CRC);
+        assertThat(minima).isEmpty();
+    }
+
+    @Test
+    void crcValidOversizedIndexKeyIsRejectedByTheS3Ceiling(@TempDir Path dir) throws IOException {
+        Path segment = writePages(dir.resolve("oversized-valid-crc.pageseg"), 32);
+        byte[] bytes = Files.readAllBytes(segment);
+        Layout layout = layout(bytes);
+        int firstEntry = entryPosition(bytes, layout, 0);
+        ByteBuffer.wrap(bytes).putShort(firstEntry + 32, (short) 1_025);
+        rewriteExtensionCrc(bytes, layout);
+        Files.write(segment, bytes);
+
+        assertThat(readIndex(segment).status()).isEqualTo(PageRunPageIndex.Status.INVALID_LENGTH);
+    }
+
+    @Test
+    void type2OffsetAndCumulativeFallbacksKeepDistinctRuntimeReasons(@TempDir Path dir)
+            throws IOException {
+        assertFallbackReason(dir.resolve("offset.pageseg"), Mutation.OFFSET,
+                "SORT.merge_boundary_fallback_invalid_offset");
+        assertFallbackReason(dir.resolve("cumulative.pageseg"), Mutation.CUMULATIVE,
+                "SORT.merge_boundary_fallback_invalid_cumulative");
     }
 
     @Test
@@ -191,6 +269,45 @@ class PageRunPageIndexTest {
             rewriteExtensionCrc(bytes, layout);
         }
         Files.write(path, bytes);
+    }
+
+    private static PageRunPageIndex.ReadResult readIndex(Path segment) throws IOException {
+        return readIndex(segment, new ArrayList<>());
+    }
+
+    private static PageRunPageIndex.ReadResult readIndex(Path segment, List<byte[]> minima)
+            throws IOException {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
+            return PageRunPageIndex.read(io, PageRunTrailer.read(io), minima::add);
+        }
+    }
+
+    private static void assertFallbackReason(Path segment, Mutation mutation, String reason)
+            throws IOException {
+        writePages(segment, 3);
+        mutate(segment, mutation);
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(
+                List.of(segment), path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(candidates::add));
+
+        ParallelRangeMerge.boundaries(descriptors, candidates, 2, metrics);
+
+        assertThat(metrics.count(reason)).isEqualTo(1);
+    }
+
+    private static int entryPosition(byte[] bytes, Layout layout, int target) {
+        int position = layout.extensionStart + PageRunBoundarySample.HEADER_BYTES;
+        for (int i = 0; i < target; i++) {
+            position += 32;
+            int minLength = ByteBuffer.wrap(bytes).getShort(position) & 0xFFFF;
+            position += 2 + minLength;
+            int prefixLength = ByteBuffer.wrap(bytes).getShort(position) & 0xFFFF;
+            position += 2 + prefixLength;
+        }
+        return position;
     }
 
     private static void rewriteExtensionCrc(byte[] bytes, Layout layout) {

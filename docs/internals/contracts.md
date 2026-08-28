@@ -874,6 +874,11 @@ type 2 payload (current):
 [trailerStart u64][totalRecords u32][totalEntries u64][maxRecordLen u32][magic u32]
 ```
 
+The u16 key-length fields preserve the extension envelope, but current type-2 listing indexes
+accept at most the S3 key limit of 1,024 bytes for each minimum/prefix maximum. This supplies an
+up-front extension-size ceiling of roughly 8 MiB at the 4,096-entry cap; a corrupt block cannot turn
+the bounded boundary sample into hundreds of MiB of provisional key arrays.
+
 `fileOffset` is the absolute offset of the sampled page's frame-length word. `cumulativeEntries`
 and `cumulativeFramedBytes` describe pages before the sample; the byte value therefore equals
 `fileOffset - HEADER_BYTES`. `prefixMax` is the unsigned maximum page maximum through and including
@@ -898,7 +903,9 @@ preserves the flag in the serialized header.
 The block CRC covers its complete header and payload, excluding only the CRC field. Before retaining
 a locator or publishing any provisional minimum, the type-2 reader bounds all lengths and counts,
 requires the exact systematic ordinals, strictly increasing in-file frame offsets, non-decreasing
-cumulative fields/minima/prefix maxima, `cumulativeFramedBytes == fileOffset - HEADER_BYTES`, an
+minima/prefix maxima, strictly increasing cumulative entries and framed bytes after the first sample
+with `cumulativeEntries >= pageOrdinal`,
+`cumulativeFramedBytes == fileOffset - HEADER_BYTES`, an
 exact first offset of `HEADER_BYTES`, a first minimum equal to `segMinKey`, and a final prefix maximum
 equal to `segMaxKey`. These checks establish a bounded, self-consistent index representation; direct
 positioning additionally requires comparison with the referenced page frames before it can be used
@@ -907,8 +914,8 @@ An absent, unknown, or structurally invalid extension falls back for that segmen
 full-page boundary scan. Mixed absent/type-1/type-2 input therefore retains the same boundary rule.
 
 Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
-issuing per-key writes; the reader streams the bounded extension with O(extension bytes / 64 KiB)
-positioned reads. At a structured parallel kickoff, each segment's trailer and extension are read
+issuing per-key writes; the reader first streams CRC validation without allocating keys, then parses
+the CRC-valid bounded payload transactionally. At a structured parallel kickoff, each segment's trailer and extension are read
 during the descriptor's single open. The reader validates one segment's sample transactionally,
 then feeds its keys into the merge-wide capped candidate set before closing that descriptor;
 descriptors retain only status, counts, primitive offsets, and a type-2 payload locator — never a

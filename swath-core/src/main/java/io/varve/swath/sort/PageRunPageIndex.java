@@ -5,6 +5,7 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.model.ByteMidpoint;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
@@ -20,6 +21,7 @@ final class PageRunPageIndex {
     static final short TYPE = PageRunFormat.PAGE_INDEX_EXTENSION;
     static final short VERSION = 1;
     private static final int ENTRY_FIXED_BYTES = 4 * Long.BYTES;
+    private static final int MAX_INDEX_KEY_BYTES = ByteMidpoint.MAX_KEY_LEN;
 
     enum Status {
         EMBEDDED,
@@ -180,12 +182,23 @@ final class PageRunPageIndex {
             return result(Status.INVALID_COUNT, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1,
                     null);
         }
+        if (payloadLength > maximumPayloadLength(expectedCount)) {
+            return result(Status.INVALID_LENGTH, TYPE, 0, trailer.totalRecords(), bytesRead, -1, -1,
+                    null);
+        }
+        // Validate the complete block before allocating or retaining a single key. A torn extension
+        // must take the bounded fallback path, never consume hundreds of MiB in provisional arrays
+        // only to discover its bad CRC at the end.
+        if (!crcValid(io, extensionStart, payloadLength, header)) {
+            return result(Status.INVALID_CRC, TYPE, 0, trailer.totalRecords(), extensionBytes,
+                    -1, -1, null);
+        }
+        bytesRead = extensionBytes;
 
         long payloadStart = extensionStart + PageRunBoundarySample.HEADER_BYTES;
         PageRunBoundarySample.ChunkedReader in = new PageRunBoundarySample.ChunkedReader(
-                io, payloadStart, extensionBytes - PageRunBoundarySample.HEADER_BYTES);
-        CRC32C crc = new CRC32C();
-        crc.update(header, 0, header.length);
+                io, payloadStart, payloadLength);
+        CRC32C ignoredCrc = new CRC32C();
         List<byte[]> minima = new ArrayList<>((int) declaredCount);
         long stride = PageRunBoundarySample.stride(trailer.totalRecords());
         long payloadRemaining = payloadLength;
@@ -200,17 +213,17 @@ final class PageRunPageIndex {
             if (payloadRemaining < ENTRY_FIXED_BYTES + 4L) {
                 return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
             }
-            long ordinal = in.readLong(crc);
-            long offset = in.readLong(crc);
-            long cumulativeEntries = in.readLong(crc);
-            long cumulativeFramedBytes = in.readLong(crc);
+            long ordinal = in.readLong(ignoredCrc);
+            long offset = in.readLong(ignoredCrc);
+            long cumulativeEntries = in.readLong(ignoredCrc);
+            long cumulativeFramedBytes = in.readLong(ignoredCrc);
             payloadRemaining -= ENTRY_FIXED_BYTES;
-            KeyRead min = readKey(in, crc, payloadRemaining);
+            KeyRead min = readKey(in, ignoredCrc, payloadRemaining);
             if (min == null) {
                 return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
             }
             payloadRemaining -= min.encodedBytes();
-            KeyRead prefix = readKey(in, crc, payloadRemaining);
+            KeyRead prefix = readKey(in, ignoredCrc, payloadRemaining);
             if (prefix == null) {
                 return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
             }
@@ -227,7 +240,8 @@ final class PageRunPageIndex {
             }
             if (cumulativeEntries < 0 || cumulativeEntries > trailer.totalEntries()
                     || (i == 0 && cumulativeEntries != 0)
-                    || (previousEntries >= 0 && cumulativeEntries < previousEntries)
+                    || cumulativeEntries < ordinal
+                    || (previousEntries >= 0 && cumulativeEntries <= previousEntries)
                     || cumulativeFramedBytes != offset - PageRunSegmentWriter.HEADER_BYTES
                     || (i == 0 && cumulativeFramedBytes != 0)
                     || (previousFramedBytes >= 0 && cumulativeFramedBytes <= previousFramedBytes)) {
@@ -254,7 +268,7 @@ final class PageRunPageIndex {
             lastOffset = offset;
         }
         long entriesEnd = payloadStart + in.consumed();
-        KeyRead finalPrefix = readKey(in, crc, payloadRemaining);
+        KeyRead finalPrefix = readKey(in, ignoredCrc, payloadRemaining);
         if (finalPrefix == null) {
             return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
         }
@@ -262,11 +276,7 @@ final class PageRunPageIndex {
         if (payloadRemaining != 0) {
             return invalid(Status.INVALID_LENGTH, trailer, bytesRead + in.bytesRead());
         }
-        int expectedCrc = in.readInt();
         bytesRead += in.bytesRead();
-        if ((int) crc.getValue() != expectedCrc) {
-            return invalid(Status.INVALID_CRC, trailer, bytesRead);
-        }
         if (minima.isEmpty()) {
             if (trailer.segMinKey().length != 0 || trailer.segMaxKey().length != 0
                     || finalPrefix.key().length != 0) {
@@ -291,7 +301,7 @@ final class PageRunPageIndex {
             return null;
         }
         int length = in.readUnsignedShort(crc);
-        if (length > payloadRemaining - Short.BYTES) {
+        if (length > MAX_INDEX_KEY_BYTES || length > payloadRemaining - Short.BYTES) {
             return null;
         }
         byte[] key = new byte[length];
@@ -338,9 +348,34 @@ final class PageRunPageIndex {
     }
 
     private static void requireKeyLength(byte[] key) throws IOException {
-        if (key.length > 0xFFFF) {
-            throw new IOException("page-run page index key exceeds u16 length: " + key.length);
+        if (key.length > MAX_INDEX_KEY_BYTES) {
+            throw new IOException("page-run page index key exceeds the S3 key limit: " + key.length);
         }
+    }
+
+    private static long maximumPayloadLength(int entryCount) {
+        long keyBytes = Short.BYTES + (long) MAX_INDEX_KEY_BYTES;
+        return (long) entryCount * (ENTRY_FIXED_BYTES + 2L * keyBytes) + keyBytes;
+    }
+
+    /** CRC-first streaming validation with one fixed scratch buffer and no key allocation. */
+    private static boolean crcValid(PageRunSegmentIo io, long extensionStart, long payloadLength,
+                                    byte[] header) throws IOException {
+        CRC32C crc = new CRC32C();
+        crc.update(header, 0, header.length);
+        ByteBuffer scratch = ByteBuffer.allocate(PageRunBoundarySample.IO_BUFFER_BYTES);
+        long position = extensionStart + PageRunBoundarySample.HEADER_BYTES;
+        long remaining = payloadLength;
+        while (remaining > 0) {
+            int length = (int) Math.min(scratch.capacity(), remaining);
+            scratch.clear().limit(length);
+            io.readAt(position, scratch);
+            crc.update(scratch.array(), 0, length);
+            position += length;
+            remaining -= length;
+        }
+        int expected = io.readAt(position, PageRunBoundarySample.CRC_BYTES).getInt();
+        return (int) crc.getValue() == expected;
     }
 
     private static void writeLong(PageRunBoundarySample.ChunkedWriter out, CRC32C crc, long value)

@@ -266,7 +266,8 @@ class PageRunBoundarySampleTest {
 
         assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.EMBEDDED);
         assertThat(read.keys()).isEmpty();
-        assertThat(sample.bytesRead()).isEqualTo(22);
+        // CRC-first validation reads the 22-byte block once, then parses its 2-byte payload.
+        assertThat(sample.bytesRead()).isEqualTo(24);
     }
 
     @Test
@@ -288,9 +289,8 @@ class PageRunBoundarySampleTest {
             throws IOException {
         byte[] binary = {0x00, (byte) 0x80, (byte) 0xff};
         byte[] s3Max = extremeKey(1_024, (byte) 0x80);
-        byte[] formatMax = extremeKey(0xffff, (byte) 0xff);
         List<byte[]> minima = List.of(new byte[]{0x00}, binary, binary.clone(), new byte[]{(byte) 0x80},
-                s3Max, new byte[]{(byte) 0xff}, formatMax);
+                s3Max, new byte[]{(byte) 0xff});
         Path embedded = writeBinaryPages(dir.resolve("extremes.pageseg"), minima);
         Path legacy = stripExtension(embedded, dir.resolve("extremes-legacy.pageseg"));
 
@@ -298,7 +298,6 @@ class PageRunBoundarySampleTest {
         assertByteExact(sample.keys(), minima);
         assertThat(sample.keys().get(1)).containsExactly(0x00, (byte) 0x80, (byte) 0xff);
         assertThat(sample.keys().get(4)).hasSize(1_024);
-        assertThat(sample.keys().getLast()).hasSize(0xffff);
         assertByteExact(boundaries(descriptors(embedded), 32, SortMetrics.NO_OP),
                 boundaries(descriptors(legacy), 32, SortMetrics.NO_OP));
     }
