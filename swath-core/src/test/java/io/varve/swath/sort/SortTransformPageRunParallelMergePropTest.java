@@ -18,6 +18,9 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -42,6 +46,7 @@ import java.util.function.IntSupplier;
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
+import net.jqwik.api.Tag;
 import net.jqwik.api.constraints.IntRange;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.io.LocalInputFile;
@@ -542,7 +547,7 @@ class SortTransformPageRunParallelMergePropTest {
         try {
             Path staging = Files.createDirectories(root.resolve("_staging"));
             List<Path> segments = stage(staging, scenario.segments());
-            TrackingWriterFactory writers = new TrackingWriterFactory(null, null);
+            TrackingWriterFactory writers = new TrackingWriterFactory(2L);
             SortConfig config = SortConfigs.base()
                     .withFinalFileBytes(1L)
                     .withMergeParallelism(2);
@@ -564,6 +569,118 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(writers.opened.get()).isEqualTo(2);
             assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
             assertThat(writers.openNow.get()).as("all real file channels closed").isZero();
+            assertNoOwnedDebris(staging);
+            assertNoLiveWorkers(merge.workerThreadPrefix());
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
+    void outputPartFdGuardR8BudgetMathSmoke() throws Exception {
+        Scenario scenario = manyDistinctKeys(8, 320);
+        Path root = Files.createTempDirectory("prange-output-fd-guard-r8-");
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
+            TrackingWriterFactory writers = new TrackingWriterFactory(1L);
+            SortConfig config = SortConfigs.base()
+                    .withFanIn(8)
+                    .withFinalFileBytes(1L)
+                    .withMergeParallelism(8);
+            int ranges = 8;
+            int perRangeFanIn = 8;
+            int outputAllowance = 40;
+            int softLimit = MergeFdBudget.FD_HEADROOM + ranges * perRangeFanIn + outputAllowance;
+            ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit));
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
+                    kickoff.candidates(), ranges, SortMetrics.NO_OP);
+
+            assertThat(boundaries).hasSize(ranges - 1);
+            assertThat(merge.effectiveRanges(ranges, kickoff.descriptors()).ranges())
+                    .as("the production planner admits all requested ranges")
+                    .isEqualTo(ranges);
+            assertThat(merge.perRangeFanIn(ranges, kickoff.descriptors())).isEqualTo(perRangeFanIn);
+            assertThat(rangeRows(scenario.allEntries(), boundaries))
+                    .as("page-minimum boundaries leave one row in each early range")
+                    .containsExactly(1, 1, 1, 1, 1, 1, 1, 313);
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM
+                    - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
+                    .as("open output allowance after actual input reservation")
+                    .isEqualTo(outputAllowance);
+            assertThatThrownBy(() -> merge.run(kickoff.descriptors(), staging, boundaries, units -> { }))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
+                            + ", attempted=" + (outputAllowance + 1));
+            assertThat(writers.opened.get()).isEqualTo(outputAllowance);
+            assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+            assertThat(writers.openNow.get()).isZero();
+            assertThat(root.resolve("data")).doesNotExist();
+            assertNoOwnedDebris(staging);
+            assertNoLiveWorkers(merge.workerThreadPrefix());
+        } finally {
+            deleteTreeBestEffort(root);
+        }
+    }
+
+    @Example
+    @Tag("deep")
+    void finalWriterStressR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
+        // 112,000 rows × 2 KiB is deliberately above the 41 × 4 MiB roll requirement even after
+        // Parquet compression, while each
+        // 1,000-row page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the deep
+        // test JVM before the final writers exercise their own bounded-memory behavior.
+        Scenario scenario = wideOwnerScenario(8, 14_000, 2 * 1024);
+        Path root = Files.createTempDirectory("prange-final-writer-stress-");
+        try {
+            Path staging = Files.createDirectories(root.resolve("_staging"));
+            ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
+            SortConfig config = SortConfigs.base()
+                    .withFanIn(8)
+                    .withFinalFileBytes(4L << 20)
+                    .withMergeParallelism(8);
+            int ranges = 8;
+            int perRangeFanIn = 8;
+            int outputAllowance = 40;
+            int softLimit = MergeFdBudget.FD_HEADROOM + ranges * perRangeFanIn + outputAllowance;
+            CountingWriterFactory writers = new CountingWriterFactory(
+                    new SortedParquetWriterFactory(config, SortMode.OBJECTS));
+            ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit));
+            List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
+                    kickoff.candidates(), ranges, SortMetrics.NO_OP);
+
+            assertThat(boundaries).hasSize(ranges - 1);
+            assertThat(merge.effectiveRanges(ranges, kickoff.descriptors()).ranges())
+                    .as("the production planner admits all requested ranges")
+                    .isEqualTo(ranges);
+            assertThat(merge.perRangeFanIn(ranges, kickoff.descriptors())).isEqualTo(perRangeFanIn);
+            assertThat(rangeRows(scenario.allEntries(), boundaries))
+                    .as("wide rows yield enough page-minimum samples to balance every range")
+                    .containsExactly(14_000, 14_000, 14_000, 14_000,
+                            14_000, 14_000, 14_000, 14_000);
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM
+                    - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
+                    .as("open output allowance after actual input reservation")
+                    .isEqualTo(outputAllowance);
+            // The persisted segments and descriptors are now the only merge inputs. Do not retain
+            // the construction objects while characterizing the final-writer heap peak.
+            scenario = null;
+            resetHeapPeaks();
+            assertThatThrownBy(() -> merge.run(kickoff.descriptors(), staging, boundaries, units -> { }))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
+                            + ", attempted=" + (outputAllowance + 1));
+            long peakHeap = peakHeapBytes();
+            System.out.printf("WP5_1_FINAL_WRITER_STRESS ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
+                            + "initial_output_allowance=%d final_file_bytes=%d peak_heap_bytes=%d%n",
+                    ranges, perRangeFanIn, softLimit, outputAllowance, config.finalFileBytes(), peakHeap);
+            assertThat(peakHeap).isPositive();
+            assertThat(writers.opened.get()).isEqualTo(outputAllowance);
+            assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
+            assertThat(writers.openNow.get()).isZero();
+            assertThat(root.resolve("data")).doesNotExist();
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
@@ -878,6 +995,67 @@ class SortTransformPageRunParallelMergePropTest {
         return new Scenario(segs, all);
     }
 
+    private Scenario wideOwnerScenario(int segmentCount, int rowsPerSegment, int ownerBytes) {
+        List<List<ListEntry>> segments = new ArrayList<>();
+        List<ListEntry> all = new ArrayList<>();
+        for (int segment = 0; segment < segmentCount; segment++) {
+            List<ListEntry> rows = new ArrayList<>();
+            for (int row = 0; row < rowsPerSegment; row++) {
+                int ordinal = segment * rowsPerSegment + row;
+                ListEntry entry = new ObjectEntry(KeyBytes.ofUtf8(String.format("k%08d", ordinal)), ordinal,
+                        0L, null, null, null, false, "owner-" + segment,
+                        wideOwner(ordinal, ownerBytes), null, null);
+                rows.add(entry);
+                all.add(entry);
+            }
+            segments.add(rows);
+        }
+        return new Scenario(segments, all);
+    }
+
+    private static String wideOwner(int ordinal, int bytes) {
+        char[] chars = new char[bytes];
+        int state = 0x9e3779b9 ^ ordinal;
+        for (int i = 0; i < chars.length; i++) {
+            state ^= state << 13;
+            state ^= state >>> 17;
+            state ^= state << 5;
+            chars[i] = (char) ('!' + Math.floorMod(state, 90));
+        }
+        return new String(chars);
+    }
+
+    private static List<Integer> rangeRows(List<ListEntry> entries, List<byte[]> boundaries) {
+        List<Integer> rows = new ArrayList<>(Collections.nCopies(boundaries.size() + 1, 0));
+        for (ListEntry entry : entries) {
+            int range = 0;
+            while (range < boundaries.size()
+                    && KeyBytes.compareUnsigned(entry.key().rawUnsafe(), boundaries.get(range)) >= 0) {
+                range++;
+            }
+            rows.set(range, rows.get(range) + 1);
+        }
+        return rows;
+    }
+
+    private static void resetHeapPeaks() {
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP) {
+                pool.resetPeakUsage();
+            }
+        }
+    }
+
+    private static long peakHeapBytes() {
+        long total = 0;
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP && pool.getPeakUsage() != null) {
+                total += pool.getPeakUsage().getUsed();
+            }
+        }
+        return total;
+    }
+
     /** Four splittable key ranges, with every key's versions divided across two page-run segments. */
     private Scenario versionClustersAcrossSegments() {
         List<List<ListEntry>> segments = new ArrayList<>();
@@ -1115,6 +1293,7 @@ class SortTransformPageRunParallelMergePropTest {
         private final CountDownLatch writerReached;
         private final CountDownLatch releaseSibling;
         private final boolean blockAll;
+        private final long bytesPerRow;
         private final AtomicInteger opened = new AtomicInteger();
         private final AtomicInteger closed = new AtomicInteger();
         private final AtomicInteger openNow = new AtomicInteger();
@@ -1124,12 +1303,21 @@ class SortTransformPageRunParallelMergePropTest {
             this.writerReached = writerReached;
             this.releaseSibling = releaseSibling;
             this.blockAll = false;
+            this.bytesPerRow = 1;
+        }
+
+        TrackingWriterFactory(long bytesPerRow) {
+            this.writerReached = null;
+            this.releaseSibling = null;
+            this.blockAll = false;
+            this.bytesPerRow = bytesPerRow;
         }
 
         TrackingWriterFactory(CountDownLatch writerReached) {
             this.writerReached = writerReached;
             this.releaseSibling = null;
             this.blockAll = true;
+            this.bytesPerRow = 1;
         }
 
         @Override
@@ -1182,7 +1370,7 @@ class SortTransformPageRunParallelMergePropTest {
 
                 @Override
                 public long dataSize() {
-                    return rows;
+                    return rows * bytesPerRow;
                 }
 
                 @Override
@@ -1194,6 +1382,70 @@ class SortTransformPageRunParallelMergePropTest {
                     if (isClosed.compareAndSet(false, true)) {
                         try {
                             channel.close();
+                        } finally {
+                            openNow.decrementAndGet();
+                            closed.incrementAndGet();
+                        }
+                    }
+                }
+            };
+        }
+    }
+
+    /** Counts the real final writers used by the deep fixture without changing their roll behavior. */
+    private static final class CountingWriterFactory implements SortedFileWriterFactory {
+        private final SortedFileWriterFactory delegate;
+        private final AtomicInteger opened = new AtomicInteger();
+        private final AtomicInteger closed = new AtomicInteger();
+        private final AtomicInteger openNow = new AtomicInteger();
+
+        CountingWriterFactory(SortedFileWriterFactory delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public SortedFileWriter create(Path path, int fileIndex) throws IOException {
+            SortedFileWriter writer = delegate.create(path, fileIndex);
+            opened.incrementAndGet();
+            openNow.incrementAndGet();
+            return new SortedFileWriter() {
+                private final AtomicBoolean isClosed = new AtomicBoolean();
+
+                @Override
+                public void write(ListEntry entry) throws IOException {
+                    writer.write(entry);
+                }
+
+                @Override
+                public long rows() {
+                    return writer.rows();
+                }
+
+                @Override
+                public long dataSize() {
+                    return writer.dataSize();
+                }
+
+                @Override
+                public void markFinal() {
+                    writer.markFinal();
+                }
+
+                @Override
+                public void setFileIndex(int index) {
+                    writer.setFileIndex(index);
+                }
+
+                @Override
+                public Optional<FinalPartMetadata> finalMetadata() {
+                    return writer.finalMetadata();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    if (isClosed.compareAndSet(false, true)) {
+                        try {
+                            writer.close();
                         } finally {
                             openNow.decrementAndGet();
                             closed.incrementAndGet();
