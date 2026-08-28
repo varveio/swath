@@ -106,20 +106,27 @@ or moves a seed cut count should assume the default build cannot see it.
 ## Parallel range-merge harness
 
 `ParallelMergeBenchmark` measures the production merge over page-run staging only; every result
-is labelled `arm=MERGE_ONLY_PAGE_RUN` and records zero listing fetches. It is never evidence for
+is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never evidence for
 live `swath list --sort` listing throughput.
 
-By default it generates its corpus. To replay retained staging without re-listing, pass its
-directory with at least one `*.pageseg` file:
+By default it generates and validates a non-empty corpus. External staging must be a completed
+retained sorted run's `<out>/_staging`: the harness reads `<out>/.swath/checkpoint.sqlite` and
+the run identity to snapshot exactly the checkpoint-tracked original listing segments. It refuses
+untracked `*.pageseg` files, including stale cascade or fixture debris.
 
 ```
 ./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
   -Dswath.bench=on -Pperf -Dswath.bench.staging-dir=/path/to/_staging
 ```
 
-The harness copies the supplied staging into a disposable directory per arm and leaves the source
-unchanged. It fails before running an arm if the path is not a directory or contains no page-run
-inputs.
+The harness snapshots and validates the catalog once, then materializes every arm with
+same-filesystem hard links; it refuses physical-copy fallback so a cold-storage result cannot
+measure copying instead of merging. Source inputs remain untouched. It also opens every input for
+the per-stream heap probe before the arms, so its own results are **warm/primed**, never cold.
+The harness does not drop caches; cold brackets require a separately controlled runner that drops
+caches after all preparation/materialization and before each measured arm (for example, on Linux:
+`sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`). Record the cache state, `git_sha`,
+`corpus_id`, and logical output fingerprint from every `BENCH_*` line.
 
 ## JMH micro-benchmarks
 

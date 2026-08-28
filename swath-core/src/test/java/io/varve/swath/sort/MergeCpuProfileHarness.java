@@ -72,7 +72,8 @@ class MergeCpuProfileHarness {
 
             Path output = Files.createDirectory(root.resolve("data"));
             Path staging = Files.createDirectory(root.resolve("_staging"));
-            List<Path> stagingSegments = SortBenchCorpus.copyCorpus(master, staging);
+            List<Path> stagingSegments = SortBenchCorpus.hardLinkCorpus(
+                    SortBenchCorpus.pageRunSegments(master), staging);
 
             // Force R=1 (serial merge) regardless of ambient swath.sort.merge-parallelism.
             SortConfig config = SortConfig.fromProperties(

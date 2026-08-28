@@ -5,16 +5,30 @@
  */
 package io.varve.swath.sort;
 
+import io.varve.swath.checkpoint.SqliteCheckpointStore;
+import io.varve.swath.model.CommonPrefixEntry;
+import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
+import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.runtime.ListRunner;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +68,10 @@ class ParallelMergeBenchmark {
 
     private static final ListEntryComparator CMP = new ListEntryComparator();
     private static final String EXTERNAL_STAGING_PROPERTY = "swath.bench.staging-dir";
-    static final String ARM = "MERGE_ONLY_PAGE_RUN";
+    static final String ARM = "MERGE_BENCH_PAGE_RUN";
+    private static final String NO_FINGERPRINT = "not_applicable";
+    private static final String CHECKPOINT_DIR = ".swath";
+    private static final String CHECKPOINT_FILE = "checkpoint.sqlite";
 
     // --- Corpus knobs (system-property overridable for a fast smoke run before the full-size one). ---
     private static final int NUM_SEGMENTS = Integer.getInteger("swath.bench.segments", 64);
@@ -119,35 +136,38 @@ class ParallelMergeBenchmark {
     @Test
     @Timeout(value = 120, unit = TimeUnit.MINUTES)
     void parallelMergeScaling() throws IOException {
-        Path root = Files.createTempDirectory("swath-parallel-merge-bench-");
-        System.out.println("BENCH_ROOT " + root);
-        System.out.println("BENCH_ARM arm=" + ARM + " listing_fetches=0");
-        System.out.printf("BENCH_HEAP max_memory_mb=%.1f available_processors=%d%n",
-                Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0), Runtime.getRuntime().availableProcessors());
+        CorpusCatalog corpus = externalStaging();
+        Path root;
+        if (corpus == null) {
+            root = Files.createTempDirectory("swath-parallel-merge-bench-");
+            Path master = Files.createDirectory(root.resolve("master"));
+            long t0 = System.nanoTime();
+            SortBenchCorpus.Stats stats = buildCorpus(master);
+            corpus = snapshotCatalog("generated", master, SortBenchCorpus.pageRunSegments(master));
+            corpus = corpus.withBuildMillis((System.nanoTime() - t0) / 1_000_000L)
+                    .withGeneratedStats(stats);
+        } else {
+            root = Files.createTempDirectory(corpus.stagingDir().getParent(),
+                    "swath-parallel-merge-bench-");
+        }
+        BenchContext context = new BenchContext(corpus, gitSha());
+        bench(context, "BENCH_ROOT", NO_FINGERPRINT, "path=" + root);
+        bench(context, "BENCH_ARM", NO_FINGERPRINT, "listing_fetches=0");
+        bench(context, "BENCH_HEAP", NO_FINGERPRINT,
+                String.format("max_memory_mb=%.1f available_processors=%d",
+                        Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0),
+                        Runtime.getRuntime().availableProcessors()));
         try {
-            Path master = externalStaging();
-            if (master == null) {
-                master = Files.createDirectory(root.resolve("master"));
-                long t0 = System.nanoTime();
-                SortBenchCorpus.Stats corpus = buildCorpus(master);
-                long buildMs = (System.nanoTime() - t0) / 1_000_000;
-                System.out.printf("BENCH_CORPUS arm=%s source=generated segments=%d rows=%d bytes=%d build_ms=%d%n",
-                        ARM, corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
-            } else {
-                List<Path> inputs = requirePageRunInputs(master);
-                long bytes = inputs.stream().mapToLong(ParallelMergeBenchmark::size).sum();
-                System.out.printf("BENCH_CORPUS arm=%s source=external staging=%s segments=%d bytes=%d build_ms=0%n",
-                        ARM, master, inputs.size(), bytes);
-            }
+            bench(context, "BENCH_CORPUS", NO_FINGERPRINT, corpus.describe());
 
-            measureOpenReaderHeap(master);
+            measureOpenReaderHeap(corpus, context);
 
             List<Integer> ranges = RANGES;
             Map<Integer, ArmResult> results = new LinkedHashMap<>();
             List<Path> baselineFinals = null;
 
             for (int r : ranges) {
-                ArmResult ar = runArm(root, master, r, "r" + r);
+                ArmResult ar = runArm(root, corpus, r, "r" + r);
                 results.put(r, ar);
                 if (r == 1) {
                     baselineFinals = ar.finalFiles;
@@ -155,36 +175,42 @@ class ParallelMergeBenchmark {
                     boolean exact = fullRowsEqual(baselineFinals, ar.finalFiles);
                     ar.fullRowExact = exact;
                     if (!exact) {
-                        System.out.println("BENCH_FULL_ROW_EXACT_FAIL requested_r=" + r
-                                + " actual_ranges=" + ar.actualRanges);
+                        bench(context, "BENCH_FULL_ROW_EXACT_FAIL", ar.logicalOutputFingerprint,
+                                "requested_r=" + r + " actual_ranges=" + ar.actualRanges
+                                        + " baseline_fingerprint=" + results.get(1).logicalOutputFingerprint);
                         throw new AssertionError(
                                 "full-row mismatch at requested R=" + r + " (actual ranges="
                                         + ar.actualRanges + ") vs the R=1 baseline — silent data loss");
                     }
                     SortBenchCorpus.deleteTree(ar.armRoot);
                 }
-                System.out.println(ar.toLine());
+                System.out.println(ar.toLine(context));
             }
 
             // R=1 repeat, for run-to-run variance.
-            ArmResult repeat = runArm(root, master, 1, "r1-repeat");
+            ArmResult repeat = runArm(root, corpus, 1, "r1-repeat");
             boolean repeatExact = fullRowsEqual(baselineFinals, repeat.finalFiles);
             if (!repeatExact) {
+                bench(context, "BENCH_FULL_ROW_EXACT_FAIL", repeat.logicalOutputFingerprint,
+                        "requested_r=1 actual_ranges=" + repeat.actualRanges
+                                + " baseline_fingerprint=" + results.get(1).logicalOutputFingerprint);
                 throw new AssertionError("R=1 repeat mismatched the R=1 baseline");
             }
-            System.out.println(repeat.toLine());
+            System.out.println(repeat.toLine(context));
             SortBenchCorpus.deleteTree(repeat.armRoot);
 
             ArmResult baseline = results.get(1);
-            System.out.printf("BENCH_VARIANCE requested_r=1 actual_ranges=1 first_elapsed_ms=%d "
-                            + "repeat_elapsed_ms=%d delta_pct=%.1f%n",
-                    baseline.elapsedNanos / 1_000_000, repeat.elapsedNanos / 1_000_000,
-                    100.0 * (repeat.elapsedNanos - baseline.elapsedNanos) / baseline.elapsedNanos);
+            bench(context, "BENCH_VARIANCE", baseline.logicalOutputFingerprint,
+                    String.format("requested_r=1 actual_ranges=1 first_elapsed_ms=%d repeat_elapsed_ms=%d"
+                                    + " delta_pct=%.1f",
+                            baseline.elapsedNanos / 1_000_000, repeat.elapsedNanos / 1_000_000,
+                            100.0 * (repeat.elapsedNanos - baseline.elapsedNanos) / baseline.elapsedNanos));
 
             for (int r : ranges) {
                 ArmResult ar = results.get(r);
                 if (r == 1) {
-                    System.out.println("BENCH_SPEEDUP requested_r=1 actual_ranges=1 status=baseline speedup=1.000");
+                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
+                            "requested_r=1 actual_ranges=1 status=baseline speedup=1.000");
                 } else if (ar.rangeBelowStagedFloorCount > 0
                         || ar.rangeFdLimitedCount > 0
                         || ar.rangeFdExhaustedCount > 0
@@ -192,14 +218,14 @@ class ParallelMergeBenchmark {
                         || ar.rangeUnsplittableCount > 0
                         || ar.actualRanges != ar.requestedRanges) {
                     String status = ar.actualRanges <= 1 ? "not_engaged" : "clamped_or_reduced";
-                    System.out.printf("BENCH_SPEEDUP requested_r=%d actual_ranges=%d status=%s "
-                                    + "speedup=unavailable%n",
-                            r, ar.actualRanges, status);
+                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
+                            "requested_r=" + r + " actual_ranges=" + ar.actualRanges + " status=" + status
+                                    + " speedup=unavailable");
                 } else {
                     double speedup = (double) baseline.elapsedNanos / ar.elapsedNanos;
-                    System.out.printf("BENCH_SPEEDUP requested_r=%d actual_ranges=%d status=engaged "
-                                    + "speedup=%.3f%n",
-                            r, ar.actualRanges, speedup);
+                    bench(context, "BENCH_SPEEDUP", ar.logicalOutputFingerprint,
+                            String.format("requested_r=%d actual_ranges=%d status=engaged speedup=%.3f",
+                                    r, ar.actualRanges, speedup));
                 }
             }
 
@@ -213,11 +239,11 @@ class ParallelMergeBenchmark {
     // Per-arm execution
     // =====================================================================
 
-    private ArmResult runArm(Path root, Path master, int mergeParallelism, String label) throws IOException {
+    private ArmResult runArm(Path root, CorpusCatalog corpus, int mergeParallelism, String label) throws IOException {
         Path armRoot = Files.createDirectory(root.resolve("arm-" + label));
         Path output = Files.createDirectory(armRoot.resolve("data"));
         Path staging = Files.createDirectory(armRoot.resolve("_staging"));
-        List<Path> stagingSegments = SortBenchCorpus.copyCorpus(master, staging);
+        List<Path> stagingSegments = corpus.materialize(staging);
 
         // merge-parallelism is the swept knob; every OTHER swath.sort.* property falls through to the
         // real system properties, so an arm can hold one knob fixed while another varies (e.g. pinning
@@ -279,6 +305,7 @@ class ParallelMergeBenchmark {
         ar.fastPathEmissions = result.fastPathEmissions();
         ar.totalRows = result.totalRows();
         ar.finalFiles = result.finalFiles();
+        ar.logicalOutputFingerprint = logicalOutputFingerprint(result.finalFiles());
         ar.inputSegments = stagingSegments.size();
         ar.rangeParallelCount = metrics.count("SORT.merge_range_parallel");
         ar.actualRanges = ar.rangeParallelCount > 0 ? ar.rangeParallelCount : 1;
@@ -305,8 +332,8 @@ class ParallelMergeBenchmark {
      * peak-heap slope and dividing by the segment count — which then "explains" the same slope it
      * was derived from. This makes it a measurement instead.
      */
-    private static void measureOpenReaderHeap(Path master) throws IOException {
-        List<Path> segments = SortBenchCorpus.pageRunSegments(master);
+    private static void measureOpenReaderHeap(CorpusCatalog corpus, BenchContext context) throws IOException {
+        List<Path> segments = corpus.paths();
         long before = settledHeapBytes();
         List<PageFrontierReader> open = new ArrayList<>(segments.size());
         try {
@@ -316,10 +343,11 @@ class ParallelMergeBenchmark {
             }
             long after = settledHeapBytes();
             long delta = after - before;
-            System.out.printf("BENCH_STREAM_HEAP staging_format=page-run open_frontiers=%d "
-                            + "retained_bytes=%d per_frontier_bytes=%d per_frontier_mb=%.2f%n",
-                    open.size(), delta, delta / Math.max(1, open.size()),
-                    delta / (1024.0 * 1024.0) / Math.max(1, open.size()));
+            bench(context, "BENCH_STREAM_HEAP", NO_FINGERPRINT,
+                    String.format("staging_format=page-run open_frontiers=%d retained_bytes=%d "
+                                    + "per_frontier_bytes=%d per_frontier_mb=%.2f",
+                            open.size(), delta, delta / Math.max(1, open.size()),
+                            delta / (1024.0 * 1024.0) / Math.max(1, open.size())));
         } finally {
             for (PageFrontierReader reader : open) {
                 reader.close();
@@ -341,33 +369,245 @@ class ParallelMergeBenchmark {
         return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
     }
 
-    private static Path externalStaging() throws IOException {
+    static CorpusCatalog externalStaging() throws IOException {
+        return externalStaging(ParallelMergeBenchmark::checkpointTrackedSegments);
+    }
+
+    static CorpusCatalog externalStaging(CatalogResolver resolver) throws IOException {
         String configured = System.getProperty(EXTERNAL_STAGING_PROPERTY);
         if (configured == null || configured.isBlank()) {
             return null;
         }
         Path staging = Path.of(configured).toAbsolutePath().normalize();
-        requirePageRunInputs(staging);
-        return staging;
-    }
-
-    static List<Path> requirePageRunInputs(Path staging) throws IOException {
         if (!Files.isDirectory(staging)) {
             throw new IllegalArgumentException("swath.bench.staging-dir must name a directory: " + staging);
         }
-        List<Path> inputs = SortBenchCorpus.pageRunSegments(staging);
-        if (inputs.isEmpty()) {
-            throw new IllegalArgumentException("swath.bench.staging-dir contains no *.pageseg inputs: " + staging);
-        }
-        return inputs;
+        return snapshotCatalog("checkpoint", staging, resolver.resolve(staging));
     }
 
-    private static long size(Path path) {
-        try {
-            return Files.size(path);
-        } catch (IOException e) {
-            throw new IllegalArgumentException("failed to stat external staging input " + path, e);
+    private static List<Path> checkpointTrackedSegments(Path staging) throws IOException {
+        Path output = staging.getParent();
+        if (output == null) {
+            throw new IllegalArgumentException("swath.bench.staging-dir has no dataset parent: " + staging);
         }
+        long runId = Manifest.readIdentity(output)
+                .map(Manifest.Identity::runId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "external staging requires the dataset .swath-state.json run identity: " + output));
+        if (runId < 0) {
+            throw new IllegalArgumentException("external staging requires a checkpoint-backed run identity: " + output);
+        }
+        Path checkpoint = output.resolve(CHECKPOINT_DIR).resolve(CHECKPOINT_FILE);
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
+            return store.finalizedParts(runId).stream()
+                    .filter(part -> ListRunner.SORT_SEGMENT_FORMAT.equals(part.format()))
+                    .map(part -> staging.resolve(part.path()))
+                    .toList();
+        } catch (Exception e) {
+            throw new IOException("failed to read checkpoint catalog for external staging " + staging, e);
+        }
+    }
+
+    static CorpusCatalog snapshotCatalog(String source, Path staging, List<Path> inputs) throws IOException {
+        if (inputs.isEmpty()) {
+            throw new IllegalArgumentException(source + " corpus contains no page-run inputs: " + staging);
+        }
+        List<CorpusInput> catalog = new ArrayList<>(inputs.size());
+        Set<Path> tracked = new HashSet<>();
+        for (Path input : inputs) {
+            Path normalized = input.toAbsolutePath().normalize();
+            if (!normalized.getParent().equals(staging)) {
+                throw new IllegalArgumentException("checkpoint catalog path escapes staging directory: " + input);
+            }
+            if (!normalized.getFileName().toString().endsWith(StagingNames.PAGE_RUN_SUFFIX)) {
+                throw new IllegalArgumentException("checkpoint catalog entry is not a page-run segment: " + input);
+            }
+            if (!tracked.add(normalized)) {
+                throw new IllegalArgumentException("checkpoint catalog repeats staging segment: " + input);
+            }
+            validatePageRun(normalized);
+            catalog.add(CorpusInput.capture(normalized));
+        }
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(staging, "*" + StagingNames.PAGE_RUN_SUFFIX)) {
+            for (Path entry : entries) {
+                if (!tracked.contains(entry.toAbsolutePath().normalize())) {
+                    throw new IllegalArgumentException("staging contains an untracked page-run segment (stale merge or"
+                            + " fixture debris): " + entry);
+                }
+            }
+        }
+        catalog.sort(Comparator.comparing(input -> input.path().getFileName().toString()));
+        return new CorpusCatalog(source, staging, List.copyOf(catalog), catalogIdentity(source, catalog), 0L, null);
+    }
+
+    private static void validatePageRun(Path path) throws IOException {
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            PageRunTrailer.read(io);
+        }
+    }
+
+    @FunctionalInterface
+    interface CatalogResolver {
+        List<Path> resolve(Path staging) throws IOException;
+    }
+
+    record CorpusCatalog(String source, Path stagingDir, List<CorpusInput> inputs, String identity,
+                         long buildMillis, SortBenchCorpus.Stats generatedStats) {
+        CorpusCatalog withBuildMillis(long buildMillis) {
+            return new CorpusCatalog(source, stagingDir, inputs, identity, buildMillis, generatedStats);
+        }
+
+        CorpusCatalog withGeneratedStats(SortBenchCorpus.Stats generatedStats) {
+            return new CorpusCatalog(source, stagingDir, inputs, identity, buildMillis, generatedStats);
+        }
+
+        List<Path> paths() {
+            return inputs.stream().map(CorpusInput::path).toList();
+        }
+
+        List<Path> materialize(Path target) throws IOException {
+            for (CorpusInput input : inputs) {
+                input.verifyUnchanged();
+            }
+            return SortBenchCorpus.hardLinkCorpus(paths(), target);
+        }
+
+        String describe() {
+            long bytes = inputs.stream().mapToLong(CorpusInput::size).sum();
+            String generated = generatedStats == null
+                    ? "rows=unknown"
+                    : "rows=" + generatedStats.rows();
+            return "staging_format=page-run segments=" + inputs.size() + " bytes=" + bytes + " "
+                    + generated + " build_ms=" + buildMillis;
+        }
+    }
+
+    record CorpusInput(Path path, long size, long modifiedMillis, Object fileKey) {
+        static CorpusInput capture(Path path) throws IOException {
+            BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class);
+            return new CorpusInput(path, attributes.size(), attributes.lastModifiedTime().toMillis(),
+                    attributes.fileKey());
+        }
+
+        void verifyUnchanged() throws IOException {
+            BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class);
+            if (attributes.size() != size || attributes.lastModifiedTime().toMillis() != modifiedMillis
+                    || !java.util.Objects.equals(attributes.fileKey(), fileKey)) {
+                throw new IOException("benchmark corpus changed after catalog snapshot: " + path);
+            }
+        }
+    }
+
+    record BenchContext(CorpusCatalog corpus, String gitSha) {
+        String tags(String fingerprint) {
+            return "arm=" + ARM + " source=" + corpus.source() + " corpus_id=" + corpus.identity()
+                    + " git_sha=" + gitSha + " logical_output_fingerprint=" + fingerprint;
+        }
+    }
+
+    private static void bench(BenchContext context, String event, String fingerprint, String fields) {
+        System.out.println(benchLine(context, event, fingerprint, fields));
+    }
+
+    static String benchLine(BenchContext context, String event, String fingerprint, String fields) {
+        return event + " " + context.tags(fingerprint) + " " + fields;
+    }
+
+    private static String catalogIdentity(String source, List<CorpusInput> inputs) {
+        MessageDigest digest = sha256();
+        updateString(digest, source);
+        for (CorpusInput input : inputs) {
+            updateString(digest, input.path().getFileName().toString());
+            updateLong(digest, input.size());
+            updateLong(digest, input.modifiedMillis());
+            updateString(digest, String.valueOf(input.fileKey()));
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static String logicalOutputFingerprint(List<Path> files) throws IOException {
+        MessageDigest digest = sha256();
+        try (MultiFileStream rows = new MultiFileStream(files)) {
+            while (rows.hasNext()) {
+                updateEntry(digest, rows.next());
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void updateEntry(MessageDigest digest, ListEntry entry) {
+        switch (entry) {
+            case ObjectEntry object -> {
+                digest.update((byte) 1);
+                updateBytes(digest, object.key().rawUnsafe());
+                updateLong(digest, object.size());
+                updateString(digest, object.lastModifiedText());
+                updateString(digest, object.etag());
+                updateString(digest, object.storageClass());
+                updateString(digest, object.versionId());
+                digest.update((byte) (object.isLatest() ? 1 : 0));
+                updateString(digest, object.ownerId());
+                updateString(digest, object.ownerDisplayName());
+                updateString(digest, object.checksumAlgorithm());
+                updateString(digest, object.checksumType());
+            }
+            case CommonPrefixEntry prefix -> {
+                digest.update((byte) 2);
+                updateBytes(digest, prefix.key().rawUnsafe());
+            }
+            case DeleteMarkerEntry marker -> {
+                digest.update((byte) 3);
+                updateBytes(digest, marker.key().rawUnsafe());
+                updateString(digest, marker.versionId());
+                digest.update((byte) (marker.isLatest() ? 1 : 0));
+                updateString(digest, marker.lastModifiedText());
+                updateString(digest, marker.ownerId());
+            }
+        }
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new AssertionError("SHA-256 is required by the JDK", e);
+        }
+    }
+
+    private static void updateLong(MessageDigest digest, long value) {
+        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(value).array());
+    }
+
+    private static void updateString(MessageDigest digest, String value) {
+        if (value == null) {
+            updateLong(digest, -1L);
+            return;
+        }
+        updateBytes(digest, value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void updateBytes(MessageDigest digest, byte[] bytes) {
+        updateLong(digest, bytes.length);
+        digest.update(bytes);
+    }
+
+    private static String gitSha() {
+        String configured = System.getProperty("swath.git.sha");
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        try {
+            Process git = new ProcessBuilder("git", "rev-parse", "HEAD").start();
+            if (git.waitFor(2, TimeUnit.SECONDS) && git.exitValue() == 0) {
+                return new String(git.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            }
+            git.destroyForcibly();
+        } catch (IOException e) {
+            // A source archive can still run the harness; its output labels the unavailable revision.
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return "unknown";
     }
 
     /** Clear every HEAP pool's recorded peak, so the next arm's peak is attributable to that arm alone. */
@@ -452,13 +692,11 @@ class ParallelMergeBenchmark {
                 ListEntry ea = a.next();
                 ListEntry eb = b.next();
                 if (!ea.equals(eb)) {
-                    System.out.println("BENCH_MISMATCH row=" + row + " expected=" + ea + " actual=" + eb);
                     return false;
                 }
                 row++;
             }
             if (a.hasNext() != b.hasNext()) {
-                System.out.println("BENCH_MISMATCH row_count_diverges after row=" + row);
                 return false;
             }
             return true;
@@ -567,6 +805,7 @@ class ParallelMergeBenchmark {
         long fastPathEmissions;
         long totalRows;
         List<Path> finalFiles;
+        String logicalOutputFingerprint;
         long rangeParallelCount;
         long rangeBelowStagedFloorCount;
         long rangeFdLimitedCount;
@@ -581,7 +820,7 @@ class ParallelMergeBenchmark {
         List<Long> rangeLatenciesNanos;
         boolean fullRowExact = true;   // R=1 baseline is trivially exact against itself
 
-        String toLine() {
+        String toLine(BenchContext context) {
             long rangeMergeSumNanos = rangeLatenciesNanos.stream().mapToLong(Long::longValue).sum();
             String boundaryMs = boundaryNanos < 0 ? "unavailable" : String.valueOf(boundaryNanos / 1_000_000);
             String rangeMergeSumMs = rangeLatenciesNanos.isEmpty()
@@ -590,7 +829,7 @@ class ParallelMergeBenchmark {
             List<Long> rangeLatenciesMs =
                     rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
             return String.format(
-                    "BENCH_ROW arm=%s label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
+                    "BENCH_ROW %s label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
                             + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
                             + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
                             + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
@@ -603,7 +842,8 @@ class ParallelMergeBenchmark {
                             + "page_overlap_keymerges=%d page_reads=unavailable "
                             + "read_amplification=unavailable identity_check=full-row "
                             + "full_row_exact=%s range_latencies_ms=%s",
-                    ARM, label, requestedRanges, actualRanges, elapsedNanos / 1_000_000, boundaryMs,
+                    context.tags(logicalOutputFingerprint), label, requestedRanges, actualRanges,
+                    elapsedNanos / 1_000_000, boundaryMs,
                     rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
                     peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
                     mergePasses, cascadedPasses, fastPathEmissions, rangeParallelCount,
