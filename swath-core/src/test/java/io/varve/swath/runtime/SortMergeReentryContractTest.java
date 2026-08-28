@@ -27,6 +27,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPassListener;
@@ -221,9 +222,34 @@ final class SortMergeReentryContractTest {
                     .as("orphaned final file overwritten with the correct merge output")
                     .containsExactlyElementsOf(sortedStrings(keyspace));
             assertThat(SortStamp.read(finalFile)).isPresent();
-            assertThat(Files.readString(DatasetLayout.of(outputDir).manifest())).contains("part-00000.parquet");
+            DatasetLayout layout = DatasetLayout.of(outputDir);
+            JsonNode manifest = MAPPER.readTree(layout.manifest().toFile());
+            assertThat(manifest.path("files")).hasSize(1);
+            assertThat(manifest.path("files").get(0).path("key").asText())
+                    .isEqualTo("data/part-00000.parquet");
+            assertThat(manifest.path("files").get(0).path("rowCount").asLong())
+                    .isEqualTo(keyspace.size());
+            assertThat(manifest.path("files").get(0).path("size").asLong())
+                    .isEqualTo(Files.size(finalFile));
+            assertThat(manifest.path("files").get(0).path("MD5checksum").asText()).isNotBlank();
+            assertThat(layout.success()).as("runtime listener writes the authoritative marker last").exists();
+            assertThat(Files.readString(layout.symlink())).isEqualTo("data/part-00000.parquet\n");
+            assertThat(Manifest.readIdentity(outputDir)).contains(
+                    new Manifest.Identity(ARGS_HASH, run.id()));
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
+            assertThat(store.finalizedParts(run.id()))
+                    .as("merge-only publication never rewrites checkpoint staging identity")
+                    .containsExactlyElementsOf(segRows);
             assertThat(Files.exists(stagingDir)).as("staging removed after republish").isFalse();
+            try (var files = Files.walk(outputDir)) {
+                assertThat(files.filter(Files::isRegularFile)
+                        .map(path -> path.getFileName().toString())
+                        .filter(name -> name.endsWith(".tmp")
+                                || name.startsWith("merge-")
+                                || name.startsWith("prange-")))
+                        .as("no final tmp, cascade, range, or proof debris survives re-entry")
+                        .isEmpty();
+            }
             assertThat(counter(ctx, "swath.steal_reason", "merge_redone"))
                     .as("SORT.merge_redone fired (zero LIST fetches)").isEqualTo(1.0);
 

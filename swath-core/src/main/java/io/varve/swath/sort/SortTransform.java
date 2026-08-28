@@ -68,16 +68,22 @@ public final class SortTransform {
     // Deterministic package-private crash-matrix seam. Production installs NO_OP, so each
     // publication boundary costs one non-allocating no-op call and carries no global state.
     private final PublicationStepHook publicationStepHook;
+    private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
     private final MergeFanInPlanner fanInPlanner;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
-        this(run, PublicationStepHook.NO_OP);
+        this(run, PublicationStepHook.NO_OP, PageRunProofSpool.Reader::new);
     }
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
+        this(run, publicationStepHook, PageRunProofSpool.Reader::new);
+    }
+
+    SortTransform(SortRun run, PublicationStepHook publicationStepHook,
+            PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -88,6 +94,7 @@ public final class SortTransform {
         this.inputProfile = run.inputProfile();
         this.rangeTimer = run.rangeMergeTimer();
         this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
+        this.proofReaderFactory = Objects.requireNonNull(proofReaderFactory, "proofReaderFactory");
         this.fanInPlanner = new MergeFanInPlanner(config, metrics, run.softFdLimitSupplier());
     }
 
@@ -252,7 +259,7 @@ public final class SortTransform {
             StagingReconciliation retainedOriginals) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run);
+                new ParallelRangeMerge(run, proofReaderFactory);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced

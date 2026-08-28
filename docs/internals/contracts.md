@@ -808,6 +808,21 @@ which owns the at-most-once-text durability questions it would reopen):
   and re-run the merge idempotently (rewriting manifest/state/symlink/`_SUCCESS`);
   a crash between the manifest write and staging deletion leaves double data,
   which the same re-entry path cleans up.
+- **Replacement publication order is crash-matrix tested, not inferred from filenames.**
+  Serial output, parallel range output, and the empty-output serial fallback use the same ordered
+  tail: sweep disposable working files; finish and fsync the complete replacement under temporary
+  names; only then sweep stale finals; rename each dense part in ordinal order; fsync `data/`; invoke
+  the publication listener; then delete or reconcile original staging. Thus an output-close or
+  post-worker range-proof failure leaves the prior finals and checkpoint-tracked originals intact.
+  A failure during the rename loop may expose only a prefix of replacement parts, but no transform
+  step writes `manifest.json` or `_SUCCESS`: those authority artifacts belong exclusively to the
+  listener/runtime and `_SUCCESS` remains the last one. Re-entry from the same originals removes
+  every owned final/range/cascade/proof temporary and converges to one dense, gap-free part set;
+  staging is still present while the listener runs and is completed only after it returns. A failure
+  after staging completion is already after the direct transform's complete file publication; in
+  the managed runtime the listener has committed `_SUCCESS` before that point, so PUBLISHED re-entry
+  performs cleanup/status repair rather than relisting. If the durable originals themselves are no
+  longer available, the separately tested `--restart` route discards that run and lists fresh.
 - By default the staging dir is cleaned on successful publish and a co-located
   checkpoint is deleted; **a crash mid-sort redoes only the sort (the LIST work
   is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the
