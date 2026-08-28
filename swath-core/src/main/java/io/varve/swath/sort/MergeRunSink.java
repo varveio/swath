@@ -6,7 +6,8 @@
 package io.varve.swath.sort;
 
 /**
- * Receives one raw merger's source-run classification when it closes.
+ * Receives one raw merger's source-run classification after successful logical completion and
+ * close-time validation.
  *
  * <p>This reports actual emitted source runs, not a proof of disjoint key ranges. Comparator-equal
  * rows may remain contiguous from one source under either merger's existing heap tie behavior; the

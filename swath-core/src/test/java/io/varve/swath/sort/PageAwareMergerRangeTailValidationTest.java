@@ -152,10 +152,12 @@ class PageAwareMergerRangeTailValidationTest {
         TrackingFrontier failing = new TrackingFrontier(
                 List.of(PageBlock.pack(List.of(object("c"), object("d")), COMPARATOR)),
                 true, true);
+        AtomicInteger classifications = new AtomicInteger();
 
         Throwable thrown = catchThrowable(() -> new PageAwareMerger(
                 List.of(decoded, failing), COMPARATOR,
-                MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP));
+                MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
+                (copyable, interleaved) -> classifications.incrementAndGet()));
 
         assertThat(thrown).isInstanceOf(UncheckedIOException.class)
                 .hasMessageContaining("page-aware merge read failed")
@@ -168,6 +170,7 @@ class PageAwareMergerRangeTailValidationTest {
                         .hasMessageContaining("injected close failure"));
         assertThat(decoded.closes).isEqualTo(1);
         assertThat(failing.closes).isEqualTo(1);
+        assertThat(classifications).hasValue(0);
     }
 
     @Test

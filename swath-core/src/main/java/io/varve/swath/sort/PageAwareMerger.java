@@ -67,7 +67,7 @@ import java.util.PriorityQueue;
  * the optimization: a page is emitted whole only when strictly {@code maxKey <} every other {@code
  * minKey}; any equal-key boundary, version tiebreak, or ambiguity falls back to the key-merge.
  */
-final class PageAwareMerger implements SortedCursor {
+final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
 
     private final Comparator<ListEntry> comparator;
     private final MergeScope scope;
@@ -90,6 +90,7 @@ final class PageAwareMerger implements SortedCursor {
 
     private ListEntry pending;
     private final MergeRunTracker sourceRuns;
+    private boolean logicalMergeComplete;
     private boolean closed;
 
     PageAwareMerger(List<PageFrontierStream> streams, Comparator<ListEntry> comparator,
@@ -176,6 +177,7 @@ final class PageAwareMerger implements SortedCursor {
                 }
                 // (3) Plan the next page group.
                 if (frontier.isEmpty()) {
+                    logicalMergeComplete = true;
                     return null;
                 }
                 plan();
@@ -274,6 +276,11 @@ final class PageAwareMerger implements SortedCursor {
     }
 
     @Override
+    public void completeLogicalMerge() {
+        logicalMergeComplete = true;
+    }
+
+    @Override
     public void close() {
         if (closed) {
             return;
@@ -281,21 +288,6 @@ final class PageAwareMerger implements SortedCursor {
         closed = true;
 
         RuntimeException failure = validateDecodedPages();
-        long copyable = 0;
-        long interleaved = 0;
-        for (int source = 0; source < allStreams.size(); source++) {
-            int runs = sourceRuns.count(source);
-            if (runs == 1) {
-                copyable++;
-            } else if (runs > 1) {
-                interleaved++;
-            }
-        }
-        try {
-            runSink.accept(copyable, interleaved);
-        } catch (RuntimeException e) {
-            failure = append(failure, e);
-        }
         for (PageFrontierStream s : allStreams) {
             try {
                 s.close();
@@ -304,6 +296,23 @@ final class PageAwareMerger implements SortedCursor {
                         new UncheckedIOException("closing page frontier stream failed", e));
             } catch (RuntimeException e) {
                 failure = append(failure, e);
+            }
+        }
+        if (logicalMergeComplete && failure == null) {
+            long copyable = 0;
+            long interleaved = 0;
+            for (int source = 0; source < allStreams.size(); source++) {
+                int runs = sourceRuns.count(source);
+                if (runs == 1) {
+                    copyable++;
+                } else if (runs > 1) {
+                    interleaved++;
+                }
+            }
+            try {
+                runSink.accept(copyable, interleaved);
+            } catch (RuntimeException e) {
+                failure = e;
             }
         }
         if (failure != null) {

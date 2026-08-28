@@ -56,7 +56,7 @@ import java.util.function.LongConsumer;
  * contributed zero rows, e.g. an empty input, is reported as neither). Cost is O(1) extra per emitted
  * row (a reference compare plus, on a run change only, one map lookup) — no extra decode pass.
  */
-final class StreamingMerger implements SortedCursor {
+final class StreamingMerger implements SortedCursor, LogicalMergeCompletion {
 
     private final Comparator<ListEntry> comparator;
     private final LongConsumer fastPathSink;
@@ -69,6 +69,7 @@ final class StreamingMerger implements SortedCursor {
     private EntryStream currentStream;   // stream held out of the heap (fast-path candidate)
     private ListEntry pending;           // next entry to return; null once fully drained
     private long fastPathCount;
+    private boolean logicalMergeComplete;
     private boolean closed;
 
     StreamingMerger(List<EntryStream> streams, Comparator<ListEntry> comparator,
@@ -138,6 +139,7 @@ final class StreamingMerger implements SortedCursor {
                 }
                 if (heap.isEmpty()) {
                     currentStream = null;
+                    logicalMergeComplete = true;
                     return null;
                 }
                 src = heap.poll();
@@ -155,24 +157,17 @@ final class StreamingMerger implements SortedCursor {
     }
 
     @Override
+    public void completeLogicalMerge() {
+        logicalMergeComplete = true;
+    }
+
+    @Override
     public void close() {
         if (closed) {
             return;
         }
         closed = true;
         fastPathSink.accept(fastPathCount);   // once per merge/pass, not once per row
-        long copyableSegments = 0;
-        long interleavedSegments = 0;
-        for (int source = 0; source < allStreams.size(); source++) {
-            int runCount = runTracker.count(source);
-            if (runCount == 1) {
-                copyableSegments++;
-            } else if (runCount > 1) {
-                interleavedSegments++;
-            }
-            // runCount == 0: the input contributed no row (e.g. an empty segment) — counted as neither.
-        }
-        disjointSink.accept(copyableSegments, interleavedSegments);
         List<IOException> failures = new ArrayList<>();
         for (EntryStream s : allStreams) {
             try {
@@ -187,6 +182,20 @@ final class StreamingMerger implements SortedCursor {
                 wrapped.addSuppressed(failures.get(i));
             }
             throw wrapped;
+        }
+        if (logicalMergeComplete) {
+            long copyableSegments = 0;
+            long interleavedSegments = 0;
+            for (int source = 0; source < allStreams.size(); source++) {
+                int runCount = runTracker.count(source);
+                if (runCount == 1) {
+                    copyableSegments++;
+                } else if (runCount > 1) {
+                    interleavedSegments++;
+                }
+                // runCount == 0: an empty input is counted as neither.
+            }
+            disjointSink.accept(copyableSegments, interleavedSegments);
         }
     }
 }

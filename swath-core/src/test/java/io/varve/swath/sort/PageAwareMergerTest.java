@@ -7,6 +7,7 @@ package io.varve.swath.sort;
 
 import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
@@ -181,6 +182,138 @@ class PageAwareMergerTest {
     }
 
     @Test
+    void partialConsumerAbortReportsNoSourceRunClassificationOnEitherMerger(
+            @TempDir Path dir) throws IOException {
+        List<Path> files = stage(dir, List.of(
+                sorted("a", "c", "e", "g"),
+                sorted("b", "d", "f", "h")));
+        long[] pageReports = new long[1];
+        long[] streamingReports = new long[1];
+
+        try (PageAwareMerger page = new PageAwareMerger(frontiers(files), cmp,
+                MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
+                (copyable, interleaved) -> pageReports[0]++)) {
+            assertThat(page.next().key().asString()).isEqualTo("a");
+        }
+        try (StreamingMerger streaming = new StreamingMerger(
+                entryStreams(files), cmp, ignored -> { },
+                (copyable, interleaved) -> streamingReports[0]++)) {
+            assertThat(streaming.next().key().asString()).isEqualTo("a");
+        }
+
+        assertThat(pageReports).containsExactly(0L);
+        assertThat(streamingReports).containsExactly(0L);
+    }
+
+    @Test
+    void expectedRangeCutoffDelegatesLogicalCompletionThroughDuplicateWrapper(
+            @TempDir Path dir) throws IOException {
+        List<Path> files = stage(dir, List.of(
+                sorted("a", "c", "e", "g"),
+                sorted("b", "d", "f", "h")));
+        long[] pageClassification = new long[3];
+        long[] streamingClassification = new long[3];
+
+        List<ListEntry> page;
+        try (SortedCursor cursor = new RangeFilteredCursor(new DuplicateReporting(
+                new PageAwareMerger(frontiers(files), cmp, MergeScope.CROSS_SEGMENT,
+                        SortMetrics.NO_OP, (copyable, interleaved) -> {
+                            pageClassification[0]++;
+                            pageClassification[1] = copyable;
+                            pageClassification[2] = interleaved;
+                        }), cmp, DuplicateHook.NO_OP), null, "d".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            page = drainOpen(cursor);
+        }
+        List<ListEntry> streaming;
+        try (SortedCursor cursor = new RangeFilteredCursor(new DuplicateReporting(
+                new StreamingMerger(entryStreams(files), cmp, ignored -> { },
+                        (copyable, interleaved) -> {
+                            streamingClassification[0]++;
+                            streamingClassification[1] = copyable;
+                            streamingClassification[2] = interleaved;
+                        }), cmp, DuplicateHook.NO_OP), null,
+                "d".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            streaming = drainOpen(cursor);
+        }
+
+        assertThat(page).extracting(entry -> entry.key().asString())
+                .containsExactly("a", "b", "c");
+        assertThat(streaming).isEqualTo(page);
+        assertThat(pageClassification[0]).isEqualTo(1);
+        assertThat(pageClassification[1] + pageClassification[2]).isPositive();
+        assertThat(streamingClassification[0]).isEqualTo(1);
+        assertThat(streamingClassification[1] + streamingClassification[2]).isPositive();
+    }
+
+    @Test
+    void constructorCancellationReportsNoSourceRunClassificationOnEitherMerger(
+            @TempDir Path dir) throws IOException {
+        List<Path> files = stage(dir, List.of(sorted("a", "b"), sorted("c", "d")));
+        long[] reports = new long[2];
+        List<PageFrontierStream> pageFrontiers = frontiers(files);
+
+        try {
+            Thread.currentThread().interrupt();
+            assertThat(catchThrowable(() -> new PageAwareMerger(pageFrontiers, cmp,
+                    MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
+                    (copyable, interleaved) -> reports[0]++)))
+                    .isInstanceOf(MergeCancellation.Cancelled.class);
+        } finally {
+            Thread.interrupted();
+        }
+        List<EntryStream> streams = entryStreams(files);
+        try {
+            Thread.currentThread().interrupt();
+            assertThat(catchThrowable(() -> new StreamingMerger(
+                    streams, cmp, ignored -> { },
+                    (copyable, interleaved) -> reports[1]++)))
+                    .isInstanceOf(MergeCancellation.Cancelled.class);
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertThat(reports).containsExactly(0L, 0L);
+    }
+
+    @Test
+    void streamingCloseFailureAfterNaturalDrainReportsNoSourceRunClassification() {
+        ListEntry row = object("only");
+        EntryStream failingClose = new EntryStream() {
+            private boolean available = true;
+
+            @Override
+            public boolean hasNext() {
+                return available;
+            }
+
+            @Override
+            public ListEntry peek() {
+                return available ? row : null;
+            }
+
+            @Override
+            public ListEntry next() {
+                available = false;
+                return row;
+            }
+
+            @Override
+            public void close() throws IOException {
+                throw new IOException("injected close failure");
+            }
+        };
+        long[] reports = new long[1];
+        StreamingMerger merger = new StreamingMerger(List.of(failingClose), cmp, ignored -> { },
+                (copyable, interleaved) -> reports[0]++);
+
+        assertThat(drainOpen(merger)).containsExactly(row);
+        assertThat(catchThrowable(merger::close))
+                .isInstanceOf(java.io.UncheckedIOException.class)
+                .hasMessageContaining("closing entry streams failed");
+        assertThat(reports).containsExactly(0L);
+    }
+
+    @Test
     void nestedPagesFormOneBoundedOverlapCluster(@TempDir Path dir) throws IOException {
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), cmp);
         buffer.admit(1, sorted("a", "z"));
@@ -256,9 +389,15 @@ class PageAwareMergerTest {
     private List<ListEntry> drainEntries(SortedCursor cursor) {
         List<ListEntry> out = new ArrayList<>();
         try (cursor) {
-            while (cursor.hasNext()) {
-                out.add(cursor.next());
-            }
+            out.addAll(drainOpen(cursor));
+        }
+        return out;
+    }
+
+    private static List<ListEntry> drainOpen(SortedCursor cursor) {
+        List<ListEntry> out = new ArrayList<>();
+        while (cursor.hasNext()) {
+            out.add(cursor.next());
         }
         return out;
     }

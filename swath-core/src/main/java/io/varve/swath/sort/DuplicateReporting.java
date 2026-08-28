@@ -9,7 +9,7 @@ import io.varve.swath.model.ListEntry;
 import java.util.Comparator;
 
 /** Reports adjacent comparator-equal rows from one merged cursor without changing multiplicity. */
-final class DuplicateReporting implements SortedCursor {
+final class DuplicateReporting implements SortedCursor, LogicalMergeCompletion {
 
     private final SortedCursor inner;
     private final Comparator<ListEntry> comparator;
@@ -44,5 +44,10 @@ final class DuplicateReporting implements SortedCursor {
             closed = true;
             inner.close();
         }
+    }
+
+    @Override
+    public void completeLogicalMerge() {
+        LogicalMergeCompletion.complete(inner);
     }
 }
