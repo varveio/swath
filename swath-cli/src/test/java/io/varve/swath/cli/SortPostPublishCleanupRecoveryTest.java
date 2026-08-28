@@ -29,6 +29,8 @@ import io.varve.swath.sort.CommittedPublicationCleanupException;
 import io.varve.swath.sort.PublicationStep;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortTransform;
+import io.varve.swath.sort.StagingReconciliation;
+import io.varve.swath.sort.StagingRetention;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
@@ -231,6 +233,63 @@ final class SortPostPublishCleanupRecoveryTest {
                 outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME).toFile());
         assertThat(completed.path("completed").asBoolean()).isTrue();
         assertThat(completed.path("sort").path("arm").asText()).isEqualTo("PUBLISHED_REENTRY");
+    }
+
+    @Test
+    void completedKeepOffRunCanReenterRepeatedlyWithKeepOnAfterStagingWasRemoved(
+            @TempDir Path root) throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = root.resolve("checkpoint.sqlite");
+        List<String> expectedKeys = List.of("data/a", "data/b", "data/c");
+        ListCommand initial = command(
+                outputDir, checkpoint, fetcher(expectedKeys), false);
+
+        assertThat(initial.call()).isEqualTo(ExitCodes.SUCCESS);
+
+        DatasetLayout layout = DatasetLayout.of(outputDir);
+        Manifest.Identity identity = Manifest.readIdentity(outputDir).orElseThrow();
+        DatasetSnapshot published = snapshot(layout);
+        Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+        assertThat(checkpoint).as("an explicit checkpoint survives successful publication").exists();
+        assertThat(staging).as("keep-staging=off removed the staging directory").doesNotExist();
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            MockPageFetcher forbidden = failOnAnyList();
+            ListCommand resume = command(outputDir, checkpoint, forbidden, true);
+            resume.checkpoint.resume = true;
+
+            assertThat(resume.call())
+                    .as("PUBLISHED keep-on re-entry %s is an idempotent no-op", attempt)
+                    .isEqualTo(ExitCodes.SUCCESS);
+            assertThat(forbidden.apiCalls()).isZero();
+            assertThat(snapshot(layout)).isEqualTo(published);
+            assertThat(staging).doesNotExist();
+            assertThat(CheckpointDbProbe.runStatusEnum(checkpoint, identity.runId()))
+                    .isEqualTo(RunStatus.COMPLETED);
+            assertThat(reasonCount(
+                    outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME),
+                    "post_publish_cleanup_pending"))
+                    .isZero();
+        }
+    }
+
+    @Test
+    void retainedCleanupHelperTreatsAbsentStagingAsEmptyAndStillSweepsFinalTmp(
+            @TempDir Path root) throws Exception {
+        Path outputDir = Files.createDirectories(root.resolve("out"));
+        Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+        Path staleTmp = Files.createDirectories(DatasetLayout.of(outputDir).dataDir())
+                .resolve("part-00000.parquet.tmp");
+        Files.writeString(staleTmp, "stale");
+        SortConfig keepOn = SortConfig.fromSystemProperties()
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS);
+
+        StagingReconciliation.Result result = ListCommand.cleanSortStagingAndStaleTmp(
+                outputDir, staging, keepOn, List.of("segment-00000.pageseg"));
+
+        assertThat(result).isEqualTo(new StagingReconciliation.Result(0, 0));
+        assertThat(staging).doesNotExist();
+        assertThat(staleTmp).doesNotExist();
     }
 
     @Test

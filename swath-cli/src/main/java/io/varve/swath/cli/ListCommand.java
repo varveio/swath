@@ -1568,6 +1568,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                 // PUBLISHED/RUNNING checkpoint rather than falling back into MERGING or the fatal guard.
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 List<String> retainedSegments = sortConfig.stagingRetention().retainsOriginals()
+                        && Files.isDirectory(stagingDir)
                         ? store.finalizedParts(run.id()).stream()
                                 .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
                                 .map(PartRef::path)
@@ -1733,7 +1734,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             throws IOException, InvalidArgsException {
         DatasetDirGuard.requireNoManagedSymlinks(outputDir);
         boolean retain = sortConfig.stagingRetention().retainsOriginals();
-        StagingReconciliation reconciliation = retain
+        StagingReconciliation reconciliation = retain && Files.isDirectory(stagingDir)
                 ? StagingReconciliation.fromNames(finalizedSegments)
                 : StagingReconciliation.discardAll();
         StagingReconciliation.Result result = reconciliation.reconcile(stagingDir);
