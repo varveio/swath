@@ -10,7 +10,6 @@ import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -54,6 +53,8 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 class ParallelMergeBenchmark {
 
     private static final ListEntryComparator CMP = new ListEntryComparator();
+    private static final String EXTERNAL_STAGING_PROPERTY = "swath.bench.staging-dir";
+    static final String ARM = "MERGE_ONLY_PAGE_RUN";
 
     // --- Corpus knobs (system-property overridable for a fast smoke run before the full-size one). ---
     private static final int NUM_SEGMENTS = Integer.getInteger("swath.bench.segments", 64);
@@ -120,15 +121,24 @@ class ParallelMergeBenchmark {
     void parallelMergeScaling() throws IOException {
         Path root = Files.createTempDirectory("swath-parallel-merge-bench-");
         System.out.println("BENCH_ROOT " + root);
+        System.out.println("BENCH_ARM arm=" + ARM + " listing_fetches=0");
         System.out.printf("BENCH_HEAP max_memory_mb=%.1f available_processors=%d%n",
                 Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0), Runtime.getRuntime().availableProcessors());
         try {
-            Path master = Files.createDirectory(root.resolve("master"));
-            long t0 = System.nanoTime();
-            SortBenchCorpus.Stats corpus = buildCorpus(master);
-            long buildMs = (System.nanoTime() - t0) / 1_000_000;
-            System.out.printf("BENCH_CORPUS segments=%d rows=%d bytes=%d build_ms=%d%n",
-                    corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
+            Path master = externalStaging();
+            if (master == null) {
+                master = Files.createDirectory(root.resolve("master"));
+                long t0 = System.nanoTime();
+                SortBenchCorpus.Stats corpus = buildCorpus(master);
+                long buildMs = (System.nanoTime() - t0) / 1_000_000;
+                System.out.printf("BENCH_CORPUS arm=%s source=generated segments=%d rows=%d bytes=%d build_ms=%d%n",
+                        ARM, corpus.segments(), corpus.rows(), corpus.bytes(), buildMs);
+            } else {
+                List<Path> inputs = requirePageRunInputs(master);
+                long bytes = inputs.stream().mapToLong(ParallelMergeBenchmark::size).sum();
+                System.out.printf("BENCH_CORPUS arm=%s source=external staging=%s segments=%d bytes=%d build_ms=0%n",
+                        ARM, master, inputs.size(), bytes);
+            }
 
             measureOpenReaderHeap(master);
 
@@ -296,10 +306,7 @@ class ParallelMergeBenchmark {
      * was derived from. This makes it a measurement instead.
      */
     private static void measureOpenReaderHeap(Path master) throws IOException {
-        List<Path> segments = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
-            ds.forEach(segments::add);
-        }
+        List<Path> segments = SortBenchCorpus.pageRunSegments(master);
         long before = settledHeapBytes();
         List<PageFrontierReader> open = new ArrayList<>(segments.size());
         try {
@@ -332,6 +339,35 @@ class ParallelMergeBenchmark {
             }
         }
         return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+    }
+
+    private static Path externalStaging() throws IOException {
+        String configured = System.getProperty(EXTERNAL_STAGING_PROPERTY);
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        Path staging = Path.of(configured).toAbsolutePath().normalize();
+        requirePageRunInputs(staging);
+        return staging;
+    }
+
+    static List<Path> requirePageRunInputs(Path staging) throws IOException {
+        if (!Files.isDirectory(staging)) {
+            throw new IllegalArgumentException("swath.bench.staging-dir must name a directory: " + staging);
+        }
+        List<Path> inputs = SortBenchCorpus.pageRunSegments(staging);
+        if (inputs.isEmpty()) {
+            throw new IllegalArgumentException("swath.bench.staging-dir contains no *.pageseg inputs: " + staging);
+        }
+        return inputs;
+    }
+
+    private static long size(Path path) {
+        try {
+            return Files.size(path);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("failed to stat external staging input " + path, e);
+        }
     }
 
     /** Clear every HEAP pool's recorded peak, so the next arm's peak is attributable to that arm alone. */
@@ -554,7 +590,7 @@ class ParallelMergeBenchmark {
             List<Long> rangeLatenciesMs =
                     rangeLatenciesNanos.stream().map(n -> n / 1_000_000L).toList();
             return String.format(
-                    "BENCH_ROW label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
+                    "BENCH_ROW arm=%s label=%s staging_format=page-run requested_r=%d actual_ranges=%d "
                             + "merge_elapsed_ms=%d boundary_ms=%s range_merge_sum_ms=%s "
                             + "avg_cores_busy=%.2f peak_heap_mb=%.1f peak_rss_mb=%.1f "
                             + "rows=%d input_segments=%d output_files=%d merge_passes=%d "
@@ -567,7 +603,7 @@ class ParallelMergeBenchmark {
                             + "page_overlap_keymerges=%d page_reads=unavailable "
                             + "read_amplification=unavailable identity_check=full-row "
                             + "full_row_exact=%s range_latencies_ms=%s",
-                    label, requestedRanges, actualRanges, elapsedNanos / 1_000_000, boundaryMs,
+                    ARM, label, requestedRanges, actualRanges, elapsedNanos / 1_000_000, boundaryMs,
                     rangeMergeSumMs, avgCoresBusy, peakHeapBytes / (1024.0 * 1024.0),
                     peakRssBytes / (1024.0 * 1024.0), totalRows, inputSegments, finalFiles.size(),
                     mergePasses, cascadedPasses, fastPathEmissions, rangeParallelCount,

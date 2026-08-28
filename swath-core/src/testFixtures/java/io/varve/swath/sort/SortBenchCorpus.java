@@ -58,11 +58,7 @@ public final class SortBenchCorpus {
 
     /** Copy page-run inputs in deterministic filename order. */
     public static List<Path> copyCorpus(Path master, Path target) throws IOException {
-        List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(master, "*.pageseg")) {
-            ds.forEach(files::add);
-        }
-        files.sort(Comparator.comparing(path -> path.getFileName().toString()));
+        List<Path> files = pageRunSegments(master);
         List<Path> out = new ArrayList<>();
         for (Path file : files) {
             Path destination = target.resolve(file.getFileName().toString());
@@ -70,6 +66,16 @@ public final class SortBenchCorpus {
             out.add(destination);
         }
         return out;
+    }
+
+    /** List page-run inputs in deterministic filename order without copying or opening them. */
+    public static List<Path> pageRunSegments(Path directory) throws IOException {
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(directory, "*.pageseg")) {
+            ds.forEach(files::add);
+        }
+        files.sort(Comparator.comparing(path -> path.getFileName().toString()));
+        return List.copyOf(files);
     }
 
     /** Process CPU time in nanoseconds, or {@code -1} when the platform cannot provide it. */

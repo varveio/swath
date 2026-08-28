@@ -103,6 +103,24 @@ or moves a seed cut count should assume the default build cannot see it.
 > ~2 GB JVM/native headroom), flagged in `ParquetPerf2Test` for a spec follow-up so the test
 > can assert against the pack instead of a derived bound.
 
+## Parallel range-merge harness
+
+`ParallelMergeBenchmark` measures the production merge over page-run staging only; every result
+is labelled `arm=MERGE_ONLY_PAGE_RUN` and records zero listing fetches. It is never evidence for
+live `swath list --sort` listing throughput.
+
+By default it generates its corpus. To replay retained staging without re-listing, pass its
+directory with at least one `*.pageseg` file:
+
+```
+./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf -Dswath.bench.staging-dir=/path/to/_staging
+```
+
+The harness copies the supplied staging into a disposable directory per arm and leaves the source
+unchanged. It fails before running an arm if the path is not a directory or contains no page-run
+inputs.
+
 ## JMH micro-benchmarks
 
 Three JMH benchmarks live under `swath-core/src/jmh/java/io/varve/swath/benchmarks/` and cover
