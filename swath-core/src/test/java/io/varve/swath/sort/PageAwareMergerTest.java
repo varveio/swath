@@ -8,7 +8,9 @@ package io.varve.swath.sort;
 import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
+import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -127,27 +129,53 @@ class PageAwareMergerTest {
         List<ListEntry> left = new ArrayList<>();
         List<ListEntry> right = new ArrayList<>();
         for (int i = 0; i < 1_001; i++) {
-            left.add(object("dup"));
-            right.add(object("dup"));
+            // These fields deliberately distinguish source and ordinal but are outside the sort
+            // comparator. This catches a route changing equal-key tie emission while retaining the
+            // genuine comparator-equal input needed to exercise DuplicateReporting.
+            left.add(taggedDuplicate(0, i));
+            right.add(taggedDuplicate(1, i));
         }
         List<Path> files = stage(dir, List.of(left, right));
+        // Page-run staging is itself allowed to choose an arbitrary stable order for comparator
+        // ties. Read its physical source order once as the merge oracle; do not accidentally make
+        // this test assume an order that the comparator never promised.
+        List<ListEntry> stagedLeft = readStaged(files.getFirst());
+        List<ListEntry> stagedRight = readStaged(files.getLast());
         long[] pageRuns = new long[2];
         long[] streamingRuns = new long[2];
+        List<String> pageDuplicates = new ArrayList<>();
+        List<String> streamingDuplicates = new ArrayList<>();
         List<ListEntry> page;
         List<ListEntry> streaming;
         try (SortedCursor cursor = new DuplicateReporting(new PageAwareMerger(frontiers(files), cmp,
                 MergeScope.CROSS_SEGMENT, SortMetrics.NO_OP,
                 (copyable, interleaved) -> { pageRuns[0] = copyable; pageRuns[1] = interleaved; }),
-                cmp, DuplicateHook.NO_OP)) {
+                cmp, (previous, current) -> pageDuplicates.add(pair(previous, current)))) {
             page = drainEntries(cursor);
         }
         try (SortedCursor cursor = new DuplicateReporting(new StreamingMerger(entryStreams(files), cmp, n -> { },
                 (copyable, interleaved) -> { streamingRuns[0] = copyable; streamingRuns[1] = interleaved; }),
-                cmp, DuplicateHook.NO_OP)) {
+                cmp, (previous, current) -> streamingDuplicates.add(pair(previous, current)))) {
             streaming = drainEntries(cursor);
         }
-        assertThat(page).containsExactlyElementsOf(streaming);
+        List<ListEntry> streamingExpected = new ArrayList<>(2_002);
+        streamingExpected.addAll(stagedLeft);
+        streamingExpected.addAll(stagedRight);
+
+        // PageAware's heap does not impose a tie-breaker between comparator-equal pages, so its
+        // encounter interleaving is intentionally not a contract. The independently-derived
+        // source/ordinal oracle below is exact after source/ordinal normalization: every tagged
+        // row must appear once (and no row may be substituted or lost) even when equal-key pages
+        // are interleaved in a different legal order.
+        assertSourceOrdinalMembership(page, stagedLeft);
+        assertSourceOrdinalMembership(page, stagedRight);
+        assertThat(tags(page)).containsExactlyInAnyOrderElementsOf(tags(streamingExpected));
+        assertThat(streaming).containsExactlyElementsOf(streamingExpected);
+        assertThat(tags(streaming)).containsExactlyElementsOf(tags(streamingExpected));
         assertThat(page).hasSize(2_002);
+        assertThat(streaming).hasSize(2_002);
+        assertThat(pageDuplicates).hasSize(2_001).containsExactlyElementsOf(pairs(page));
+        assertThat(streamingDuplicates).hasSize(2_001).containsExactlyElementsOf(pairs(streamingExpected));
         assertThat(pageRuns).containsExactly(0L, 2L);
         assertThat(streamingRuns).containsExactly(2L, 0L);
     }
@@ -235,6 +263,40 @@ class PageAwareMergerTest {
         return out;
     }
 
+    private static ObjectEntry taggedDuplicate(int source, int ordinal) {
+        return new ObjectEntry(KeyBytes.ofUtf8("dup"), source * 1_000_000L + ordinal,
+                ordinal, "source-%d/ordinal-%04d".formatted(source, ordinal), null, null,
+                false, null, null, null, null);
+    }
+
+    private static void assertSourceOrdinalMembership(List<ListEntry> entries, List<ListEntry> source) {
+        String sourcePrefix = tag(source.getFirst()).substring(0, "source-0".length());
+        List<String> expected = tags(source).stream().sorted().toList();
+        assertThat(entries.stream().map(PageAwareMergerTest::tag)
+                .filter(tag -> tag.startsWith(sourcePrefix + "/")).sorted().toList())
+                .containsExactlyElementsOf(expected);
+    }
+
+    private static List<String> tags(List<ListEntry> entries) {
+        return entries.stream().map(PageAwareMergerTest::tag).toList();
+    }
+
+    private static List<String> pairs(List<ListEntry> entries) {
+        List<String> pairs = new ArrayList<>(entries.size() - 1);
+        for (int i = 1; i < entries.size(); i++) {
+            pairs.add(pair(entries.get(i - 1), entries.get(i)));
+        }
+        return pairs;
+    }
+
+    private static String pair(ListEntry previous, ListEntry current) {
+        return tag(previous) + " -> " + tag(current);
+    }
+
+    private static String tag(ListEntry entry) {
+        return ((ObjectEntry) entry).etag();
+    }
+
     private List<PageFrontierStream> frontiers(List<Path> files) throws IOException {
         List<PageFrontierStream> out = new ArrayList<>();
         for (Path f : files) {
@@ -249,6 +311,16 @@ class PageAwareMergerTest {
             out.add(PageRunReads.open(f));
         }
         return out;
+    }
+
+    private List<ListEntry> readStaged(Path file) throws IOException {
+        try (EntryStream stream = PageRunReads.open(file)) {
+            List<ListEntry> entries = new ArrayList<>();
+            while (stream.hasNext()) {
+                entries.add(stream.next());
+            }
+            return entries;
+        }
     }
 
     private static final class CountingMetrics implements SortMetrics {
