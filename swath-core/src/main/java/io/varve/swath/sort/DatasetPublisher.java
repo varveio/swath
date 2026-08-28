@@ -55,7 +55,7 @@ final class DatasetPublisher {
         return StagingReconciliation.fromPaths(stagingDir, stagingSegments);
     }
 
-    /** Sweep every disposable working namespace, then expose the first WP8 boundary. */
+    /** Sweep every disposable working namespace, then expose the post-sweep publication boundary. */
     void sweepWorking(Path outputDir, Path stagingDir) throws IOException {
         StagingReconciliation.sweepFinalTemporaries(stagingDir);
         StagingReconciliation.sweepFinalTemporaries(outputDir);

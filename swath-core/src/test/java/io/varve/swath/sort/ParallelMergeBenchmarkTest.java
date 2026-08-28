@@ -37,7 +37,7 @@ class ParallelMergeBenchmarkTest {
 
     @Test
     void benchmarkArmIsExplicitlyDistinctFromManagedMergeReentry() {
-        assertThat(ParallelMergeBenchmark.ARM).isEqualTo("MERGE_BENCH_PAGE_RUN");
+        assertThat(ParallelMergeBenchmark.ARM).isEqualTo(SortArm.MERGE_BENCH_PAGE_RUN.name());
     }
 
     @Test
@@ -370,7 +370,7 @@ class ParallelMergeBenchmarkTest {
                 "BENCH_ROW", "0123", "rows=2");
 
         assertThat(line).startsWith("BENCH_ROW ")
-                .contains("arm=MERGE_BENCH_PAGE_RUN", "source=generated",
+                .contains("arm=" + SortArm.MERGE_BENCH_PAGE_RUN.name(), "source=generated",
                         "corpus_id=" + catalog.identity(), "git_sha=deadbeef",
                         "run_id=-1", "args_hash=not_applicable", "cache_state=warm_primed",
                         "logical_output_fingerprint=0123");

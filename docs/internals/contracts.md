@@ -834,7 +834,8 @@ which owns the at-most-once-text durability questions it would reopen):
   every owned final/range/cascade/proof temporary and converges to one dense, gap-free part set;
   staging is still present while the listener runs and is completed only after it returns. Once the
   listener returns, publication is committed and cannot be rolled back: an `IOException` or runtime
-  failure from the later WP8 hook, disposable-intermediate deletion, staging deletion/reconciliation,
+  failure after the publication listener returns, including disposable-intermediate deletion,
+  staging deletion/reconciliation,
   or final hook is classified as post-publish cleanup pending, records
   `SORT.post_publish_cleanup_pending` plus the stable
   `sort_post_publish_cleanup_pending publication_committed=true cleanup_pending=true stage=...` log,

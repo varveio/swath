@@ -66,7 +66,7 @@ class ParallelMergeBenchmark {
 
     private static final ListEntryComparator CMP = new ListEntryComparator();
     private static final String EXTERNAL_STAGING_PROPERTY = "swath.bench.staging-dir";
-    static final String ARM = "MERGE_BENCH_PAGE_RUN";
+    static final String ARM = SortArm.MERGE_BENCH_PAGE_RUN.name();
     private static final String NO_FINGERPRINT = "not_applicable";
 
     // --- Corpus knobs (system-property overridable for a fast smoke run before the full-size one). ---

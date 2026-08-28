@@ -275,3 +275,92 @@ command: its distributed anchors were fixture-derived and its mixed ratio was sy
 built-in `bench` command remains the reproducible correctness/warm single-walk tool; it does not
 saturate an eight-core server. Do not use these figures to infer cold-storage performance, remote
 network capacity, or an exact production request distribution.
+
+---
+
+## 2026-08-28 — local sort-policy evidence
+
+This investigation records a local retained-PageRun replay used to compare the sorted merge's
+boundary policies and range counts. It is raw diagnostic evidence, not a release benchmark or a
+portable throughput claim.
+
+### Evidence and provenance
+
+- **Source revision:** `e00e62fe9b81e6c7ac1d254da9db41769c0656e5` (`e00e62f`,
+  `test(sort): pin benchmark oracle latest fields`). The current HEAD is a later revision and is
+  not the measured build; subsequent changes must not be attributed to these timings.
+- **Date:** 2026-08-28.
+- **Host:** GCP `c4a-highcpu-32`, `us-east1-b`; 32 physical ARM Neoverse-V2 cores, no SMT;
+  62 GiB RAM; 200 GB Hyperdisk Balanced persistent disk on ext4.
+- **Runtime:** Temurin 25.0.3+9; swath `0.2.2-dev`.
+- **Fixture:** SOREL retained PageRun staging for 9,919,142 rows (9,920 pages), with its
+  checkpoint-authorized completed run and immutable staging set.
+- **Evidence output:** the Gradle XML report at
+  `swath-core/build/test-results/test/TEST-io.varve.swath.sort.ParallelMergeBenchmark.xml`
+  (the benchmark prints `BENCH_*` lines to that report); the [benchmark harness source](../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmark.java)
+  and [oracle tests](../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmarkTest.java)
+  define the validation and output fields.
+
+### Commands and configuration
+
+The retained corpus was prepared with the diagnostic lifecycle, then replayed without listing:
+
+```bash
+swath list s3://<fixture-source>/ --format parquet -o "$RUN" --sort \
+  --tune sort.keep-staging=on \
+  --tune sort.merge-boundary-policy=distinct
+
+./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf \
+  -Dswath.bench.staging-dir="$RUN/_staging" \
+  -Dswath.bench.ranges=1,4,8,16
+```
+
+The ROWS arm used the same retained-corpus procedure with
+`--tune sort.merge-boundary-policy=rows`; `sort.keep-staging=on`, Parquet output, and the
+checkpoint-authorized zero-LIST merge path were unchanged. The measured arms were `R=1`, `R=4`,
+`R=8`, and `R=16`; no listing concurrency or object-store request rate is implied by these
+merge-only runs. The harness first performed an untimed full-transform warm-up and then used its
+interleaved serial/candidate brackets.
+
+**Warm clock:** each value below is merge wall time for a measured retained-corpus transform,
+from merge-phase timing start through merge completion. JVM startup, corpus snapshot/oracle
+validation, staging hard-link materialization, the untimed warm-up, and publication outside the
+merge timer are excluded. `cache_state=warm_primed` means the source files and filesystem page
+cache were warmed; this procedure provides no cold physical-read measurement.
+
+### Boundary-policy table
+
+The retained note preserved aggregate medians for the A1/B1/A2 campaign, not separate timing rows
+for each repetition. `distinct` is the shipped default; `rows` is the explicit experimental arm.
+
+| Boundary policy | R=1 | R=4 | R=8 | R=16 |
+| --- | ---: | ---: | ---: | ---: |
+| `distinct` (A1/B1/A2 campaign median) | 15,748 ms | 5,065 ms | 3,562 ms | 2,749 ms |
+| `rows` (current-only median) | 15,019 ms | 4,927 ms | 3,335 ms | 2,652 ms |
+
+### A1 campaign table
+
+This table records the A1/B1/A2 gate facts that accompanied the medians; the source note did not
+retain per-repetition wall times.
+
+| A1/B1/A2 check | Observation | Scope |
+| --- | --- | --- |
+| Fixture | 9,919,142 rows / 9,920 pages | full SOREL retained PageRun corpus |
+| Listing work | 0 LIST requests | every merge-only measured arm |
+| Row correctness | full-row exact | output multiplicity and fields matched the source oracle |
+| Staging backpressure | not sustained | A1/B1/A2 local replay |
+| Policy disposition | keep `distinct` as default | no cold-read or row-skew evidence; differences are not a default-change case |
+
+### Limitations
+
+- This is one warm local fixture and one host, with no cold physical-read bracket, in-region
+  object-store run, x86 comparison, or repeated variance estimate.
+- The 9,919,142-row fixture does not exercise row-skew output, so these results do not establish
+  that `rows` improves balance on skewed input. The explicit ROWS arm remains experimental.
+- A1/B1/A2 aggregate medians are the retained evidence; individual repetition logs were not
+  preserved, so per-run variance and confidence intervals cannot be reconstructed.
+- Zero LIST requests characterize merge-only replay, not live listing throughput. The Gradle
+  report path is generated output and may be absent until the command is run; retain it with the
+  fixture and commit when publishing a refreshed observation.
