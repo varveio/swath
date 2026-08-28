@@ -128,6 +128,20 @@ final class PageRunPageIndex {
         return new Cursor(io, result.locator());
     }
 
+    /** Open a bounded cursor over a contiguous slice of an already validated type-2 block. */
+    static Cursor cursor(PageRunSegmentIo io, ReadResult result, long payloadOffset,
+                         int entryCount) {
+        if (!result.valid() || result.locator() == null) {
+            throw new IllegalArgumentException("page-run page index is not valid type 2");
+        }
+        Locator locator = result.locator();
+        if (payloadOffset < locator.payloadStart() || payloadOffset > locator.entriesEnd()
+                || entryCount < 0 || entryCount > locator.entryCount()) {
+            throw new IllegalArgumentException("page-run page index cursor slice is out of bounds");
+        }
+        return new Cursor(io, payloadOffset, locator.entriesEnd(), entryCount);
+    }
+
     static void write(WritableByteChannel channel, Snapshot snapshot) throws IOException {
         long payloadLength = 2L + snapshot.finalPrefixMax().length;
         for (IndexEntry entry : snapshot.entries()) {
@@ -406,10 +420,14 @@ final class PageRunPageIndex {
         private int remaining;
 
         private Cursor(PageRunSegmentIo io, Locator locator) {
-            this.in = new PageRunBoundarySample.ChunkedReader(io, locator.payloadStart(),
-                    locator.entriesEnd() - locator.payloadStart());
-            this.payloadStart = locator.payloadStart();
-            this.remaining = locator.entryCount();
+            this(io, locator.payloadStart(), locator.entriesEnd(), locator.entryCount());
+        }
+
+        private Cursor(PageRunSegmentIo io, long payloadStart, long entriesEnd, int entryCount) {
+            this.in = new PageRunBoundarySample.ChunkedReader(io, payloadStart,
+                    entriesEnd - payloadStart);
+            this.payloadStart = payloadStart;
+            this.remaining = entryCount;
         }
 
         boolean hasNext() {

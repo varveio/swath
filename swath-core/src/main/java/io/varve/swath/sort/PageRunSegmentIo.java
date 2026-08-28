@@ -61,8 +61,16 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     /** Previous page's minKey (monotonicity guard); null until the first page is read. */
     private byte[] previousMin;
-    /** Pages read via {@link #nextPage()} so far — the 1-based page number in a violation message. */
+    /** Ordinal of the next page returned by {@link #nextPage()}. */
     private long pagesRead;
+    /** Actual or seek-seeded entries before the next page. */
+    private long cumulativeEntries;
+    /** Framed page bytes physically read by this IO instance. */
+    private long framedBytesRead;
+    /** One-shot verification owed by the first page after an indexed seek. */
+    private SeekExpectation seekExpectation;
+    /** True after a type-2 target positioned this reader away from the ordinary header path. */
+    private boolean indexedPosition;
 
     private PageRunSegmentIo(FileChannel channel, Path path, SortMetrics metrics, int magic,
                             short formatVersion, long maxRecordLen, long totalRecords,
@@ -154,8 +162,17 @@ final class PageRunSegmentIo implements AutoCloseable {
     record FrontierFields(byte[] minKey, byte[] maxKey, int count) {
     }
 
-    /** One validated page record: the CRC-verified body bytes plus its parsed {@link FrontierFields}. */
-    record Page(byte[] body, FrontierFields fields) {
+    /** Physical position and accounting immediately before one page frame. */
+    record PagePosition(long pageOrdinal, long frameOffset, long cumulativeEntries,
+                        long cumulativeFramedBytes, int framedBytes) {
+    }
+
+    /** One validated page record plus its physical position. */
+    record Page(byte[] body, FrontierFields fields, PagePosition position) {
+    }
+
+    private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
+                                   long cumulativeFramedBytes, byte[] minKey) {
     }
 
     /**
@@ -170,7 +187,22 @@ final class PageRunSegmentIo implements AutoCloseable {
      * exactly as the frontier path would.
      */
     Page nextPage() throws IOException {
-        byte[] body = nextBody();
+        long ordinal = pagesRead;
+        long frameOffset;
+        try {
+            frameOffset = channel.position();
+        } catch (IOException e) {
+            throw seekFailureOr(e, "cannot read the positioned frame offset");
+        }
+        if (indexedPosition && frameOffset >= trailerStart && ordinal < totalRecords) {
+            throw indexMismatch("indexed page offset reached the trailer before page ordinal "
+                    + ordinal + " of " + totalRecords, null);
+        }
+        Record record = nextRecord();
+        if (!record.crcOk()) {
+            throw fail("record CRC32C mismatch (torn or corrupt record)");
+        }
+        byte[] body = record.body();
         FrontierFields fields;
         try {
             fields = parseFrontierFields(body);
@@ -178,10 +210,66 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
         }
+        long cumulativeFramedBytes = frameOffset - PageRunSegmentWriter.HEADER_BYTES;
+        verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
+                cumulativeFramedBytes, fields.minKey());
         pagesRead++;
         checkMinMonotonic(fields.minKey());
         previousMin = fields.minKey();
-        return new Page(body, fields);
+        int framedBytes = Math.addExact(8, record.framedLen());
+        PagePosition position = new PagePosition(ordinal, frameOffset, cumulativeEntries,
+                cumulativeFramedBytes, framedBytes);
+        cumulativeEntries += fields.count();
+        framedBytesRead += framedBytes;
+        return new Page(body, fields, position);
+    }
+
+    /**
+     * Position at one untrusted type-2 entry. The next page must confirm every directly observable
+     * target field before it is exposed to a frontier; the zone proof later anchors the ordinal and
+     * cumulative entry claim to a header-to-trailer physical chain.
+     */
+    void seekToPage(PageRunPageIndex.IndexEntry target) throws IOException {
+        long physicalCumulativeBytes = target.fileOffset() - PageRunSegmentWriter.HEADER_BYTES;
+        if (target.pageOrdinal() < 0 || target.pageOrdinal() >= totalRecords
+                || target.fileOffset() < PageRunSegmentWriter.HEADER_BYTES
+                || target.fileOffset() >= trailerStart
+                || target.cumulativeEntries() < 0
+                || target.cumulativeFramedBytes() != physicalCumulativeBytes) {
+            throw indexMismatch("indexed seek target is outside the physical page region", null);
+        }
+        channel.position(target.fileOffset());
+        pagesRead = target.pageOrdinal();
+        cumulativeEntries = target.cumulativeEntries();
+        previousMin = null;
+        indexedPosition = true;
+        seekExpectation = new SeekExpectation(target.pageOrdinal(), target.fileOffset(),
+                target.cumulativeEntries(), target.cumulativeFramedBytes(), target.minKey().clone());
+    }
+
+    private void verifySeekExpectation(long ordinal, long frameOffset, long entries,
+                                       long framedBytes, byte[] minKey) throws IOException {
+        SeekExpectation expected = seekExpectation;
+        if (expected == null) {
+            return;
+        }
+        seekExpectation = null;
+        if (ordinal != expected.pageOrdinal()
+                || frameOffset != expected.frameOffset()
+                || entries != expected.cumulativeEntries()
+                || framedBytes != expected.cumulativeFramedBytes()
+                || !Arrays.equals(minKey, expected.minKey())) {
+            throw indexMismatch("indexed seek target disagrees with the next physical page", null);
+        }
+    }
+
+    private IOException seekFailureOr(IOException failure, String message) {
+        return seekExpectation == null ? failure : indexMismatch(message, failure);
+    }
+
+    SegmentCorruptionException indexMismatch(String message, Throwable cause) {
+        metrics.recordStealReason("SORT", "page_run_index_mismatch");
+        return corruption(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH, message, cause);
     }
 
     /**
@@ -212,18 +300,6 @@ final class PageRunSegmentIo implements AutoCloseable {
                         + " that ascent (the page-aware merger's frontier is a valid lower bound only under"
                         + " it, and the streaming merger assumes each input run is sorted), so a regression"
                         + " would silently misorder the merged output");
-    }
-
-    /**
-     * Read the next framed record and CRC-verify its body, throwing on a mismatch (fail-fast, no silent
-     * skip). Private: page-run readers go through {@link #nextPage()} so the guard cannot be bypassed.
-     */
-    private byte[] nextBody() throws IOException {
-        Record r = nextRecord();
-        if (!r.crcOk()) {
-            throw fail("record CRC32C mismatch (torn or corrupt record)");
-        }
-        return r.body();
     }
 
     /**
@@ -330,6 +406,18 @@ final class PageRunSegmentIo implements AutoCloseable {
 
     Path path() {
         return path;
+    }
+
+    long pagesRead() {
+        return pagesRead;
+    }
+
+    long framedBytesRead() {
+        return framedBytesRead;
+    }
+
+    long nextFrameOffset() throws IOException {
+        return channel.position();
     }
 
     int magic() {

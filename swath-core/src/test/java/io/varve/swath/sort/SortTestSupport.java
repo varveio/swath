@@ -41,6 +41,18 @@ final class SortTestSupport {
         return path;
     }
 
+    /** Write one single-row listing page per ordinal, including the production type-2 index. */
+    static Path writeIndexedPages(Path path, int pages, int keyOffset) throws IOException {
+        ListEntryComparator comparator = new ListEntryComparator();
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), comparator);
+        for (int page = 0; page < pages; page++) {
+            buffer.admit(page, List.of(object(String.format("k%05d", keyOffset + page))));
+        }
+        new PageRunSegmentWriter(comparator, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
+        return path;
+    }
+
     /** Write canonical Parquet input for tests of CaptureSorter/SegmentReader, not internal staging. */
     static Path writeCanonicalParquet(Path path, List<ListEntry> entries) throws IOException {
         try (SortedFileWriter writer =

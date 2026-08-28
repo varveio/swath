@@ -38,6 +38,7 @@ import java.nio.file.Path;
 final class PageFrontierReader implements PageFrontierStream {
 
     private final PageRunSegmentIo io;
+    private final boolean deferCompletenessToZoneProof;
     private long recordsLeft;
     private long seenEntries;
 
@@ -45,6 +46,7 @@ final class PageFrontierReader implements PageFrontierStream {
     private byte[] currentMin;
     private byte[] currentMax;
     private int currentCount;
+    private PageRunSegmentIo.PagePosition currentPosition;
 
     /**
      * Open {@code path}, validate the header magic/version and the trailing magic (truncation check),
@@ -53,9 +55,23 @@ final class PageFrontierReader implements PageFrontierStream {
      * engagement counter into the run summary.
      */
     PageFrontierReader(Path path, SortMetrics metrics) throws IOException {
+        this(path, metrics, null, -1);
+    }
+
+    /** Open an original parallel input at its pre-worker planned seam. */
+    PageFrontierReader(Path path, SortMetrics metrics, PageRunSeekPlan.SegmentPlan plan,
+                       int range) throws IOException {
         this.io = PageRunSegmentIo.open(path, metrics);
+        this.deferCompletenessToZoneProof = plan != null;
         try {
-            this.recordsLeft = io.totalRecords;
+            PageRunPageIndex.IndexEntry target = plan == null ? null : plan.readTarget(io, range);
+            if (target != null) {
+                io.seekToPage(target);
+                this.recordsLeft = io.totalRecords - target.pageOrdinal();
+                this.seenEntries = target.cumulativeEntries();
+            } else {
+                this.recordsLeft = io.totalRecords;
+            }
             advance();
         } catch (IOException | RuntimeException e) {
             io.close();
@@ -101,11 +117,14 @@ final class PageFrontierReader implements PageFrontierStream {
         if (recordsLeft == 0) {
             // Completeness cross-check: fires even when no page was ever loaded — e.g. a one-page
             // segment whose totalRecords was bit-flipped to 0.
-            io.checkComplete(seenEntries);
+            if (!deferCompletenessToZoneProof) {
+                io.checkComplete(seenEntries);
+            }
             currentBody = null;
             currentMin = null;
             currentMax = null;
             currentCount = 0;
+            currentPosition = null;
             return;
         }
         recordsLeft--;
@@ -118,7 +137,29 @@ final class PageFrontierReader implements PageFrontierStream {
         this.currentMin = fields.minKey();
         this.currentMax = fields.maxKey();
         this.currentCount = fields.count();
+        this.currentPosition = page.position();
         this.seenEntries += fields.count();
+    }
+
+    PageRunSegmentIo.PagePosition currentPosition() {
+        return currentPosition;
+    }
+
+    long framedBytesRead() {
+        return io.framedBytesRead();
+    }
+
+    long totalRecords() {
+        return io.totalRecords;
+    }
+
+    long nextFrameOffset() throws IOException {
+        return io.nextFrameOffset();
+    }
+
+    PageRunPageIndex.Cursor indexCursor(PageRunPageIndex.ReadResult extension,
+                                        long payloadOffset, int entryCount) {
+        return PageRunPageIndex.cursor(io, extension, payloadOffset, entryCount);
     }
 
     @Override
