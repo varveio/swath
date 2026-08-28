@@ -136,6 +136,15 @@ class MergeBoundaryPolicyTest {
                 .noneMatch(Class::isArray);
     }
 
+    @Test
+    void rowHistogramBecomesPrefixMassInPlaceWithoutASecondPolicyArray() {
+        long[] histogram = {3, 7, 11, 13};
+
+        long[] prefix = RowWeightedBoundaries.prefixBeforeInPlace(histogram);
+
+        assertThat(prefix).isSameAs(histogram).containsExactly(0, 3, 10, 21);
+    }
+
     private static Scenario scenario(long seed) {
         Random random = new Random(seed);
         List<List<ListEntry>> segments = List.of(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());

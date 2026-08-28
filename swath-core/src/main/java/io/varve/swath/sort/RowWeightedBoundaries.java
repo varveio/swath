@@ -103,12 +103,7 @@ final class RowWeightedBoundaries {
     /** Pick strictly increasing candidate indices whose prefix masses are nearest each quantile. */
     private static List<byte[]> quantiles(List<byte[]> candidates, long[] weights,
                                           long total, int ranges) {
-        long[] prefixBefore = new long[candidates.size()];
-        long prefix = 0;
-        for (int i = 0; i < candidates.size(); i++) {
-            prefixBefore[i] = prefix;
-            prefix = saturatedAdd(prefix, weights[i]);
-        }
+        long[] prefixBefore = prefixBeforeInPlace(weights);
 
         List<byte[]> boundaries = new ArrayList<>(ranges - 1);
         int previous = 0;
@@ -127,6 +122,17 @@ final class RowWeightedBoundaries {
             previous = chosen;
         }
         return List.copyOf(boundaries);
+    }
+
+    /** Convert histogram weights to prefix-before mass in the same policy-sized array. */
+    static long[] prefixBeforeInPlace(long[] weights) {
+        long prefix = 0;
+        for (int i = 0; i < weights.length; i++) {
+            long weight = weights[i];
+            weights[i] = prefix;
+            prefix = saturatedAdd(prefix, weight);
+        }
+        return weights;
     }
 
     private static int lowerBound(long[] values, long target, int from, int to) {
