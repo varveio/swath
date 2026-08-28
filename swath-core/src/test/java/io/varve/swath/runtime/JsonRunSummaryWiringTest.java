@@ -53,7 +53,7 @@ class JsonRunSummaryWiringTest {
     private static JsonRunSummaryWriter.Config summaryConfig(Path path) {
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket/prefix", "us-east-1", "parquet", 64, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false);
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false);
         return new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "argshash123", runConfig,
                 List.of("list", "s3://bucket/prefix"));
     }

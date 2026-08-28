@@ -237,7 +237,7 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "TIMER|swath.sort.publication.latency|{}");
 
     /**
-     * The 22 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
+     * The 23 percentile-timer {@code SUMMARY} series OTLP must export, one per attribute set: the
      * single {@code swath.api.latency} op series, all fifteen {@code swath.fetch.latency.phase}
      * call_class/phase distributions, and the six client-service-cost spans. Asserting the EXACT
      * set (not just count + allowed names) catches one attribute set being duplicated while another
@@ -265,7 +265,8 @@ final class RunMetricsOtlpSeriesIdentityTest {
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=total}",
             "SUMMARY|swath.fetch.latency.phase|{call_class=worker_page,phase=ttfb}",
             "SUMMARY|swath.parquet.write.latency|{}",
-            "SUMMARY|swath.queue.wait|{}");
+            "SUMMARY|swath.queue.wait|{}",
+            "SUMMARY|swath.sort.finalize.close.latency|{}");
 
     @Test
     void otlpMeterSetIdentityIsFrozen(@TempDir Path scratchDir) {

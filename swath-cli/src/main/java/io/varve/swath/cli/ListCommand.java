@@ -61,6 +61,7 @@ import io.varve.swath.runtime.OutputPublisher;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.runtime.SignalHandlers;
 import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortDiskGuard;
 import io.varve.swath.sort.SortMode;
@@ -1925,7 +1926,8 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         uri, config.region() == null ? null : config.region().id(),
                         resolved.name().toLowerCase(Locale.ROOT), connection.maxParallelListings, connection.noSignRequest,
                         connection.rateLimitApi, liveness.resolveEffectiveProgressInterval().toMillis(), filters.descriptions(),
-                        engine.toggles, maxDurationMs, sorting.sort, sortEffectiveFanIn, connection.requestPayerEnabled);
+                        engine.toggles, maxDurationMs, sorting.sort, sortEffectiveFanIn,
+                        sorting.sort ? SortArm.LIVE_LIST_SORT : SortArm.NONE, connection.requestPayerEnabled);
         return new JsonRunSummaryWriter.Config(
                 path, flushInterval, argsHash, runConfig, resolveArgv());
     }

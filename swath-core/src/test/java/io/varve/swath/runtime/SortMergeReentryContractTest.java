@@ -107,7 +107,7 @@ final class SortMergeReentryContractTest {
     private static ListRunner.ParquetSpec spec(Path sidecar) {
         JsonRunSummaryWriter.RunConfig rc = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "parquet", 2, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false)
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false)
                         .withSortEnabled(true);
         JsonRunSummaryWriter.Config summary =
                 new JsonRunSummaryWriter.Config(sidecar, Duration.ofMinutes(10), ARGS_HASH, rc,
@@ -244,6 +244,9 @@ final class SortMergeReentryContractTest {
             assertThat(summaryJson.get("sort").get("merge_only_resume").asBoolean())
                     .as("summary.sort.merge_only_resume marks these as recovered-from-checkpoint counts")
                     .isTrue();
+            assertThat(summaryJson.get("sort").get("arm").asText())
+                    .as("summary.sort.arm is selected by merge-only entry path, not a counter")
+                    .isEqualTo("MERGE_ONLY_PAGE_RUN");
             // ...and every one of those rows is attributed as RECOVERED, because an earlier process
             // listed them. This one issued zero LIST calls, so the figures measured against ITS work
             // must read zero rather than credit a whole bucket to the merge's wall clock.

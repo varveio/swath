@@ -63,6 +63,7 @@ import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
@@ -854,7 +855,10 @@ public final class ListRunner {
         ctx.metrics().recordStealReason("SORT", "merge_redone");
         Supplier<RunSummary> snapshot =
                 () -> ctx.metrics().summary(elapsedSince(startedNs), "WORK_STEALING", 0L, 0L);
-        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, spec.jsonSummary(), snapshot);
+        JsonRunSummaryWriter.Config mergeOnlySummary = spec.jsonSummary() == null ? null
+                : spec.jsonSummary().withRunConfig(
+                        spec.jsonSummary().runConfig().withSortArm(SortArm.MERGE_ONLY_PAGE_RUN));
+        JsonRunSummaryWriter jsonWriter = startJsonSummary(ctx, mergeOnlySummary, snapshot);
         log.info("list_sort_merge_resume run_id={} (re-running merge from staging, zero LIST fetches)", runId);
         // The sink is contracted to observe every run exactly once, the unwound ones included: a
         // merge that throws still writes a CRASH partial to the sidecar, and the operator-facing

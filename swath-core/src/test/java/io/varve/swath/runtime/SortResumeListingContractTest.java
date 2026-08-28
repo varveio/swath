@@ -96,7 +96,7 @@ final class SortResumeListingContractTest {
     private static ListRunner.ParquetSpec spec(Path sidecar) {
         JsonRunSummaryWriter.RunConfig rc = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "parquet", 2, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false)
+                EngineToggles.DEFAULT, null, false, null, io.varve.swath.sort.SortArm.NONE, false)
                         .withSortEnabled(true);
         JsonRunSummaryWriter.Config summary =
                 new JsonRunSummaryWriter.Config(sidecar, Duration.ofMinutes(10), ARGS_HASH, rc,

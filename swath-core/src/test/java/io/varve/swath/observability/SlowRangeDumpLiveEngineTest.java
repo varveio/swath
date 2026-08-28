@@ -19,6 +19,7 @@ import io.varve.swath.engine.EngineToggles;
 import io.varve.swath.engine.WorkStealingScan;
 import io.varve.swath.filter.FilterChain;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.testkit.EngineContexts;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -56,7 +57,7 @@ final class SlowRangeDumpLiveEngineTest {
     private static JsonRunSummaryWriter.Config summaryConfig(Path path) {
         JsonRunSummaryWriter.RunConfig runConfig = new JsonRunSummaryWriter.RunConfig(
                 "s3://bucket", "us-east-1", "jsonl", 1, false, null, 30_000L, List.of(),
-                EngineToggles.DEFAULT, null, false, null, false);
+                EngineToggles.DEFAULT, null, false, null, SortArm.NONE, false);
         return new JsonRunSummaryWriter.Config(path, Duration.ofMinutes(10), "hash", runConfig,
                 List.of("list", "s3://bucket"));
     }

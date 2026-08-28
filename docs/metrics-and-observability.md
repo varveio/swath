@@ -114,6 +114,11 @@ whole-page path, while nonzero identifies the bounded key-merge fallback and its
 decoded page/row state. `merge_disjoint_copyable` and `merge_interleaved_segment` remain separate
 source-run classifications, so they can be compared without conflating overlap with row ordering.
 
+`sort.arm` identifies the typed entry path: `LIVE_LIST_SORT` means this process performed the
+listing, while `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-entry. It is
+independent of the retained `merge_only_resume` compatibility marker. `sort-fixture` has no run
+summary artifact; its existing stdout result line is labelled `arm=SORT_FIXTURE` instead.
+
 The `sort` block decomposes terminal work into `finalize_ms`, `finalize_close_ms`,
 `local_publication_ms`, `finalize_parallelism`, and `manifest_*` fields. `finalize_ms` is wall
 time from the first final close through publication, while `finalize_close_ms` sums per-part
@@ -121,6 +126,9 @@ close service. Final writers close sequentially in publish order; `finalize_para
 the ranges that encoded final output concurrently, not close concurrency. Fresh final parts derive
 their digest, byte count, row count, and exact bounds while writing; nonzero manifest bounds-read
 metrics identify the compatibility path that reopened a carried part.
+The same existing final-writer close timer is also exposed as `finalize_close_count`,
+`finalize_close_max_ms`, and `finalize_close_p50_ms`/`_p90_ms`/`_p99_ms`; these are service-time
+observations, not a second timing surface.
 
 The report can contain the target URI, arguments, filter values, slow-range bounds, and
 key samples. Treat it as operational data and redact it before sharing.

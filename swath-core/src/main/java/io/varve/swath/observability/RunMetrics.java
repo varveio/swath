@@ -586,7 +586,8 @@ public final class RunMetrics {
                 .register(registry);
         Gauge.builder("swath.sort.merge.overlap.rows.peak", sortMergeOverlapRowsPeak, AtomicLong::get)
                 .register(registry);
-        sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency").register(registry);
+        sortFinalizeCloseLatency = runScopedTimer("swath.sort.finalize.close.latency")
+                .publishPercentiles(PUBLISHED_PERCENTILES).register(registry);
         sortFinalizeLatency = runScopedTimer("swath.sort.finalize.latency").register(registry);
         sortPublicationLatency = runScopedTimer("swath.sort.publication.latency").register(registry);
         sortManifestMd5Bytes = Counter.builder("swath.sort.manifest.md5.bytes")

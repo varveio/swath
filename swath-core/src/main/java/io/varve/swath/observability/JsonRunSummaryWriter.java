@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Timer;
 import io.varve.swath.engine.EngineToggles;
+import io.varve.swath.sort.SortArm;
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -767,6 +768,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
 
     private void writeSort(ObjectNode sortNode, RunConfig rc, RunSummary summary) {
         sortNode.put("enabled", true);
+        sortNode.put("arm", rc.sortArm().name());
         sortNode.put("segments", (long) counterCount("swath.sort.segments.written"));
         sortNode.put("passes", (long) counterCount("swath.sort.merge.passes"));
         sortNode.put("segment_bytes", (long) counterCount("swath.sort.segment.bytes"));
@@ -798,6 +800,7 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
                 : Math.max(0L, mergeMs - boundariesMs - finalizeMs));
         sortNode.put("finalize_ms", finalizeMs);
         sortNode.put("finalize_close_ms", timerTotalMs("swath.sort.finalize.close.latency"));
+        putTimerDistribution(sortNode, "finalize_close", "swath.sort.finalize.close.latency");
         sortNode.put("manifest_md5_bytes", (long) counterCount("swath.sort.manifest.md5.bytes"));
         sortNode.put("manifest_md5_ms", timerTotalMs("swath.sort.manifest.md5.latency"));
         sortNode.put("manifest_bounds_rows", (long) counterCount("swath.sort.manifest.bounds.rows"));
@@ -1145,6 +1148,28 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         return t == null ? 0L : t.count();
     }
 
+    /** Adds count/max and the configured whole-run percentiles from one existing timer. */
+    private void putTimerDistribution(ObjectNode node, String fieldPrefix, String meterName) {
+        Timer timer = registry.find(meterName).timer();
+        node.put(fieldPrefix + "_count", timer == null ? 0L : timer.count());
+        node.put(fieldPrefix + "_max_ms", timer == null ? 0L : (long) timer.max(TimeUnit.MILLISECONDS));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p50_ms", timerPercentileMs(timer, 0.5));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p90_ms", timerPercentileMs(timer, 0.90));
+        putDoubleOrNullBoxed(node, fieldPrefix + "_p99_ms", timerPercentileMs(timer, 0.99));
+    }
+
+    private static Double timerPercentileMs(Timer timer, double percentile) {
+        if (timer == null) {
+            return null;
+        }
+        for (var value : timer.takeSnapshot().percentileValues()) {
+            if (Math.abs(value.percentile() - percentile) < 1e-9) {
+                return value.value(TimeUnit.MILLISECONDS);
+            }
+        }
+        return null;
+    }
+
     private double distributionMean(String name) {
         DistributionSummary s = registry.find(name).summary();
         return s == null ? 0.0 : s.mean();
@@ -1198,6 +1223,10 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             // future non-CLI caller from accidentally bypassing the central endpoint/control policy.
             argv = SafeInput.argv(argv);
         }
+
+        public Config withRunConfig(RunConfig runConfig) {
+            return new Config(path, flushInterval, argsHash, runConfig, argv);
+        }
     }
 
     /**
@@ -1221,24 +1250,34 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
             Long maxDurationMs,
             boolean sortEnabled,
             Integer sortEffectiveFanIn,
+            SortArm sortArm,
             boolean requestPayer) {
 
         public RunConfig withSortEnabled(boolean sortEnabled) {
+            SortArm arm = sortEnabled
+                    ? (sortArm == SortArm.NONE ? SortArm.LIVE_LIST_SORT : sortArm)
+                    : SortArm.NONE;
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, arm, requestPayer);
         }
 
         public RunConfig withSortEffectiveFanIn(Integer sortEffectiveFanIn) {
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, sortArm, requestPayer);
+        }
+
+        public RunConfig withSortArm(SortArm sortArm) {
+            return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
+                    progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
+                    sortEffectiveFanIn, sortArm, requestPayer);
         }
 
         public RunConfig withRequestPayer(boolean requestPayer) {
             return new RunConfig(target, region, format, maxParallelListings, noSignRequest, rateLimitApi,
                     progressIntervalMs, filters, engineToggles, maxDurationMs, sortEnabled,
-                    sortEffectiveFanIn, requestPayer);
+                    sortEffectiveFanIn, sortArm, requestPayer);
         }
     }
 }

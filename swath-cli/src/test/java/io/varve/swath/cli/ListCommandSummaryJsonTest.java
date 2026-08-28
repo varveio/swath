@@ -16,6 +16,7 @@ import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.observability.JsonRunSummaryWriter;
 import io.varve.swath.observability.RunProgressReporter;
 import io.varve.swath.output.OutputFormat;
+import io.varve.swath.sort.SortArm;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.store.s3.S3Config;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -368,6 +369,7 @@ final class ListCommandSummaryJsonTest {
         assertThat(config.runConfig().sortEnabled()).isTrue();
         assertThat(config.runConfig().sortEffectiveFanIn())
                 .isEqualTo(SortConfig.fromSystemProperties().effectiveFanIn());
+        assertThat(config.runConfig().sortArm()).isEqualTo(SortArm.LIVE_LIST_SORT);
     }
 
     /** {@code --sort} off (the default): {@code sortEffectiveFanIn()} stays {@code null} (renders JSON null). */
@@ -381,5 +383,6 @@ final class ListCommandSummaryJsonTest {
 
         assertThat(config.runConfig().sortEnabled()).isFalse();
         assertThat(config.runConfig().sortEffectiveFanIn()).isNull();
+        assertThat(config.runConfig().sortArm()).isEqualTo(SortArm.NONE);
     }
 }
