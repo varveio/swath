@@ -156,6 +156,12 @@ class SortTransformTest {
         Path staleCascade = Files.createFile(dirs.staging.resolve("merge-99.pageseg"));
         Path staleRangeTmp = Files.createFile(dirs.staging.resolve("prange-0-99.parquet.tmp"));
         Path staleFinalTmp = Files.createFile(dirs.staging.resolve("part-99.parquet.tmp"));
+        Path arbitraryOrphan = Files.createFile(dirs.staging.resolve("orphan.pageseg"));
+        Path orphanTree = Files.createDirectories(dirs.staging.resolve("orphan-tree"));
+        Files.createFile(orphanTree.resolve("nested.tmp"));
+        Path external = Files.writeString(root.resolve("external.txt"), "keep");
+        Path orphanLink = Files.createSymbolicLink(
+                dirs.staging.resolve("orphan-link"), external);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
 
         SortConfig retained = SortConfigs.base().withFanIn(2)
@@ -169,10 +175,45 @@ class SortTransformTest {
         assertThat(staleCascade).doesNotExist();
         assertThat(staleRangeTmp).doesNotExist();
         assertThat(staleFinalTmp).doesNotExist();
+        assertThat(arbitraryOrphan).doesNotExist();
+        assertThat(orphanTree).doesNotExist();
+        assertThat(orphanLink).doesNotExist();
+        assertThat(external).hasContent("keep");
         try (var entries = Files.list(dirs.staging)) {
             assertThat(entries.toList()).containsExactlyInAnyOrderElementsOf(originals);
         }
         assertThat(metrics.count("SORT.staging_retained")).isEqualTo(1);
+    }
+
+    @Test
+    void retainedStagingRejectsAnOriginalOutsideTheOwnedDirectoryBeforePublishing(
+            @TempDir Path root) throws IOException {
+        Dirs dirs = dirs(root);
+        Path outside = writeSegment(root, "outside.parquet", objects("a"));
+        Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
+
+        assertThatThrownBy(() -> transform(SortConfigs.base()
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS))
+                .transform(List.of(outside), dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("not an immediate child");
+
+        assertThat(priorFinal).hasContent("prior");
+        assertThat(outside).exists();
+    }
+
+    @Test
+    void checkpointRetentionNamesRejectTraversalBeforeAnyStagingDeletion(@TempDir Path root)
+            throws IOException {
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path orphan = Files.createFile(staging.resolve("orphan.pageseg"));
+
+        assertThatThrownBy(() -> StagingReconciliation.fromNames(List.of("../escape.pageseg")))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("unsafe retained sort staging segment name");
+
+        assertThat(orphan).exists();
     }
 
     @Test

@@ -109,15 +109,15 @@ final class TuneOptions {
     }
 
     /** Registry-ordered effective configuration, including defaults for settings not supplied. */
-    String effectiveConfiguration(String resolvedSummaryInterval, int resolvedMergeParallelism) {
+    String effectiveConfiguration(String resolvedSummaryInterval, SortConfig resolvedSortConfig) {
         return REGISTRY.stream()
                 .map(spec -> spec.key() + "=" + effectiveValues.getOrDefault(spec.key(),
                         "summary.interval".equals(spec.key())
                                 ? resolvedSummaryInterval
                                 : "sort.merge-parallelism".equals(spec.key())
-                                        ? Integer.toString(resolvedMergeParallelism)
+                                        ? Integer.toString(resolvedSortConfig.mergeParallelism())
                                         : SortConfig.KEEP_STAGING_TUNE_KEY.equals(spec.key())
-                                                ? SortConfig.fromSystemProperties().stagingRetention().tuneValue()
+                                                ? resolvedSortConfig.stagingRetention().tuneValue()
                                         : spec.defaultValue()))
                 .collect(Collectors.joining(", "));
     }

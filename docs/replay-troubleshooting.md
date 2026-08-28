@@ -121,6 +121,12 @@ Check the harness itself before trusting a margin: run `bench`, warm the JVM and
 and ensure uninjected server cost is small relative to injected delay. Do not run unrelated
 clients or builds on the same server during an arm.
 
+To isolate the sorted merge after the listing decision path has already been measured, use the
+[diagnostic zero-LIST merge-replay recipe](performance.md#diagnostic-zero-list-merge-replay).
+That path reuses retained checkpoint-finalized page runs and deliberately removes `_SUCCESS` to
+force merge-only re-entry. It is a tested diagnostic benchmark seam, not a replay-server fixture,
+not a production recovery instruction, and not evidence about LIST latency or engine scheduling.
+
 ## 6. Know what replay proves
 
 Replay can show that a deterministic keyspace and cost shape trigger the mechanism, that a

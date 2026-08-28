@@ -8,6 +8,13 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.varve.swath.checkpoint.PartRef;
 import io.varve.swath.checkpoint.SortPhase;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.error.InvalidArgsException;
@@ -30,6 +37,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.ResourceLock;
+import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 
 /**
@@ -42,6 +50,7 @@ final class ColocatedCheckpointRunHandleTest {
 
     private static final String BUCKET = "bucket";
     private static final String PREFIX = "data/";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static ListCommand autoCommand(Path outputDir, MockPageFetcher fetcher) {
         ListCommand cmd = new ListCommand();
@@ -88,12 +97,16 @@ final class ColocatedCheckpointRunHandleTest {
     }
 
     private static Set<String> checkpointSegmentNames(Path checkpoint, long runId) throws Exception {
+        return checkpointSegments(checkpoint, runId).stream()
+                .map(PartRef::path)
+                .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
+    }
+
+    private static List<PartRef> checkpointSegments(Path checkpoint, long runId) throws Exception {
         try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
-            Set<String> names = new TreeSet<>();
-            store.finalizedParts(runId).stream()
+            return store.finalizedParts(runId).stream()
                     .filter(part -> ListRunner.SORT_SEGMENT_FORMAT.equals(part.format()))
-                    .forEach(part -> names.add(part.path()));
-            return names;
+                    .toList();
         }
     }
 
@@ -122,6 +135,15 @@ final class ColocatedCheckpointRunHandleTest {
             bytes.add(Files.readAllBytes(part));
         }
         return bytes;
+    }
+
+    private static List<ManifestPart> manifestParts(Path manifest) throws Exception {
+        List<ManifestPart> parts = new ArrayList<>();
+        for (JsonNode file : MAPPER.readTree(manifest.toFile()).path("files")) {
+            parts.add(new ManifestPart(file.path("key").asText(), file.path("rowCount").asLong(),
+                    file.path("size").asLong()));
+        }
+        return parts.stream().sorted(java.util.Comparator.comparing(ManifestPart::key)).toList();
     }
 
     @Test
@@ -167,12 +189,45 @@ final class ColocatedCheckpointRunHandleTest {
                 .resolve("part-99999.parquet.tmp"));
         MockPageFetcher forbidden = failOnAnyList();
 
-        assertThat(resumeWithRetention(outputDir, forbidden)).isEqualTo(ExitCodes.SUCCESS);
+        Logger logger = (Logger) LoggerFactory.getLogger(ListCommand.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Level previous = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        logger.addAppender(appender);
+        try {
+            assertThat(resumeWithRetention(outputDir, forbidden)).isEqualTo(ExitCodes.SUCCESS);
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(previous);
+        }
 
         assertThat(forbidden.apiCalls()).isZero();
         assertThat(checkpoint).exists();
         assertThat(stagingNames(staging)).containsExactlyInAnyOrderElementsOf(finalizedNames);
         assertThat(dataTmp).doesNotExist();
+        assertThat(appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.startsWith("sort_staging_retained "))
+                .toList())
+                .singleElement()
+                .asString()
+                .contains("source=published_reentry")
+                .contains("retained_segments=" + finalizedNames.size())
+                .contains("removed_entries=4");
+        JsonNode summary = MAPPER.readTree(
+                outputDir.resolve(OutputOptions.DEFAULT_SUMMARY_JSON_NAME).toFile());
+        List<JsonNode> retainedMeters = new ArrayList<>();
+        summary.path("meters").forEach(meter -> {
+            if ("swath.steal_reason".equals(meter.path("name").asText())
+                    && "SORT".equals(meter.path("tags").path("outcome").asText())
+                    && "staging_retained".equals(
+                            meter.path("tags").path("reason").asText())) {
+                retainedMeters.add(meter);
+            }
+        });
+        assertThat(retainedMeters).singleElement()
+                .satisfies(meter -> assertThat(meter.path("value").asDouble()).isEqualTo(1.0));
     }
 
     @Test
@@ -182,10 +237,16 @@ final class ColocatedCheckpointRunHandleTest {
         Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
         assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
         DatasetLayout layout = DatasetLayout.of(outputDir);
-        long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        Manifest.Identity expectedIdentity = Manifest.readIdentity(outputDir).orElseThrow();
+        long runId = expectedIdentity.runId();
         Set<String> finalizedNames = checkpointSegmentNames(checkpoint, runId);
+        List<PartRef> expectedFinalized = checkpointSegments(checkpoint, runId);
+        List<ManifestPart> expectedManifestParts = manifestParts(layout.manifest());
+        String expectedSymlink = Files.readString(layout.symlink());
         List<String> expected = outputKeys(outputDir);
         List<byte[]> expectedPartBytes = outputPartBytes(outputDir);
+        Path orphan = Files.createFile(outputDir.resolve(ListCommand.SORT_STAGING_DIR)
+                .resolve("orphan.pageseg"));
         Files.delete(layout.success());
         MockPageFetcher forbidden = failOnAnyList();
 
@@ -200,8 +261,53 @@ final class ColocatedCheckpointRunHandleTest {
             assertThat(actualPartBytes.get(i)).isEqualTo(expectedPartBytes.get(i));
         }
         assertThat(checkpoint).exists();
+        assertThat(manifestParts(layout.manifest())).containsExactlyElementsOf(expectedManifestParts);
+        assertThat(Manifest.readIdentity(outputDir)).contains(expectedIdentity);
+        assertThat(expectedIdentity.runId()).isEqualTo(runId);
+        assertThat(expectedIdentity.argsHash()).isNotBlank();
+        assertThat(Files.readString(layout.symlink())).isEqualTo(expectedSymlink);
+        assertThat(checkpointSegments(checkpoint, runId)).containsExactlyElementsOf(expectedFinalized);
         assertThat(stagingNames(outputDir.resolve(ListCommand.SORT_STAGING_DIR)))
                 .containsExactlyInAnyOrderElementsOf(finalizedNames);
+        assertThat(orphan).doesNotExist();
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void retentionPropertyIsSnapshottedBeforeListingAndCannotSplitCompletionCleanup(
+            @TempDir Path root) throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+        List<byte[]> keys = new ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            keys.add(String.format("data/key-%05d", i).getBytes(StandardCharsets.UTF_8));
+        }
+        MockPageFetcher mutatingFetcher = MockPageFetcher.builder()
+                .keys(keys)
+                .interceptor((request, call, page) -> {
+                    System.setProperty(SortConfig.KEEP_STAGING_PROPERTY, "off");
+                    return page;
+                })
+                .build();
+        String previous = System.getProperty(SortConfig.KEEP_STAGING_PROPERTY);
+        try {
+            System.setProperty(SortConfig.KEEP_STAGING_PROPERTY, "on");
+            ListCommand command = autoCommand(outputDir, mutatingFetcher);
+            command.sorting.sort = true;
+
+            assertThat(command.call()).isEqualTo(ExitCodes.SUCCESS);
+        } finally {
+            if (previous == null) {
+                System.clearProperty(SortConfig.KEEP_STAGING_PROPERTY);
+            } else {
+                System.setProperty(SortConfig.KEEP_STAGING_PROPERTY, previous);
+            }
+        }
+
+        long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        assertThat(checkpoint).exists();
+        assertThat(stagingNames(outputDir.resolve(ListCommand.SORT_STAGING_DIR)))
+                .containsExactlyInAnyOrderElementsOf(checkpointSegmentNames(checkpoint, runId));
     }
 
     @Test
@@ -303,6 +409,9 @@ final class ColocatedCheckpointRunHandleTest {
         // The ephemeral run wrote no checkpoint file at all — the old ./.swath-checkpoint/ default is
         // untouched (compared as a snapshot so this holds regardless of unrelated pre-existing files).
         assertThat(cwdCheckpointDirSnapshot()).isEqualTo(cwdLitterBefore);
+    }
+
+    private record ManifestPart(String key, long rows, long bytes) {
     }
 
     /** Snapshot of the file names in the working-directory {@code .swath-checkpoint} dir (empty if absent). */

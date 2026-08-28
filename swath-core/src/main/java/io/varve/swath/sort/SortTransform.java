@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
 /**
  * The batch merge/publish step of {@code --sort}: cascaded {@link KWayMerge} over staged {@code
  * .pageseg} page-run segments into final sorted Parquet, written to {@code *.tmp} and renamed in key order, with
- * staging deleted only after the {@link PublishListener} fires. The full publish/resume state
+ * staging deleted or exactly reconciled only after the {@link PublishListener} fires. The full publish/resume state
  * machine (manifest-last commit, idempotent re-entry, stale-tmp/stale-final cleanup) is
  * {@code docs/internals/contracts.md} §6; this class's own re-entry sweep-scope safety proof lives at
  * {@link #cleanStaleFinals}, not here.
@@ -85,7 +85,7 @@ public final class SortTransform {
     /**
      * Merge {@code stagingSegments} into the final sorted output under {@code outputDir}, using
      * {@code stagingDir} for cascade intermediates. {@code publishListener} fires after the renames
-     * and before staging deletion (the manifest-last commit point). {@code progressCallback} is
+     * and before staging deletion/reconciliation (the manifest-last commit point). {@code progressCallback} is
      * invoked with the row count of each completed batch — {@code swath.progress.units}'
      * merge-phase feed, wired by {@code ListRunner} to {@code RunMetrics.recordProgress}. Batched
      * ({@link KWayMerge#PROGRESS_BATCH_ROWS}), not per-row, and threaded through <em>every</em> merge
@@ -118,6 +118,7 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         requirePageRunSegments(stagingSegments);
+        StagingReconciliation retainedOriginals = retainedOriginals(stagingSegments, stagingDir);
         boolean parallelKickoff = config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
         ParallelRangeMerge.BoundaryCandidates boundaryCandidates =
@@ -152,7 +153,8 @@ public final class SortTransform {
         // path, and the completeness stamp makes multi-file parallel output self-describing.
         if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
-                    publishListener, progressCallback, onFinalPassStarting, boundaryCandidates);
+                    publishListener, progressCallback, onFinalPassStarting, boundaryCandidates,
+                    retainedOriginals);
             if (parallel != null) {
                 return parallel;
             }
@@ -210,7 +212,7 @@ public final class SortTransform {
         for (Path p : io.intermediates()) {
             Files.deleteIfExists(p);
         }
-        completeOriginalStaging(stagingSegments, stagingDir);
+        completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
     }
@@ -221,7 +223,8 @@ public final class SortTransform {
      * the untouched serial merge. Otherwise it merges the ranges concurrently
      * ({@link ParallelRangeMerge}), then does the SAME serial publish as the serial path — rename the
      * ordered range parts into one ascending {@code part-00000.parquet}… sequence (filename order ==
-     * key order == global sort), fire the publish listener, delete staging. Immediately before that
+     * key order == global sort), fire the publish listener, complete the configured staging policy.
+     * Immediately before that
      * rename it writes the multi-file completeness stamp ({@code file_index} 1..N, one
      * {@code file_final} on N), which is the point at which the global part order is first known.
      */
@@ -229,7 +232,8 @@ public final class SortTransform {
             Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting,
-            ParallelRangeMerge.BoundaryCandidates boundaryCandidates) throws IOException {
+            ParallelRangeMerge.BoundaryCandidates boundaryCandidates,
+            StagingReconciliation retainedOriginals) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
                 new ParallelRangeMerge(run);
@@ -376,17 +380,19 @@ public final class SortTransform {
         }
         Durability.directory(outputDir);
         publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
-        completeOriginalStaging(stagingSegments, stagingDir);
+        completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, results.size());
     }
 
     /** Finish original staging ownership after every successful publish. */
-    private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir) throws IOException {
-        if (config.stagingRetention().retainsOriginals()
-                && inputProfile == MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
+    private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir,
+            StagingReconciliation retainedOriginals) throws IOException {
+        if (retainedOriginals != null) {
+            StagingReconciliation.Result result = retainedOriginals.reconcile(stagingDir);
             metrics.recordStealReason("SORT", "staging_retained");
-            log.info("sort_staging_retained path={}", stagingDir);
+            log.info("sort_staging_retained source=merge path={} retained_segments={} removed_entries={}",
+                    stagingDir, result.retainedEntries(), result.removedEntries());
             return;
         }
         for (Path p : stagingSegments) {
@@ -396,6 +402,16 @@ public final class SortTransform {
         // itself, not just its contents — but only if nothing unexpected is left in it (never a
         // recursive wipe of foreign content the sorter doesn't own).
         tryDeleteEmptyStagingDir(stagingDir);
+    }
+
+    /** Resolve and validate diagnostic retention before any merge or publish mutation. */
+    private StagingReconciliation retainedOriginals(List<Path> stagingSegments, Path stagingDir)
+            throws IOException {
+        if (!config.stagingRetention().retainsOriginals()
+                || inputProfile != MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
+            return null;
+        }
+        return StagingReconciliation.fromPaths(stagingDir, stagingSegments);
     }
 
     /** Delete {@code stagingDir} iff it is now empty; foreign content is logged and left in place. */
@@ -486,7 +502,7 @@ public final class SortTransform {
      * into published {@code data/}.
      */
     private static void cleanStaleTmp(Path dir) throws IOException {
-        Sweeps.sweep(dir, stale -> { }, StagingNames.FINAL_TMP_GLOB);
+        StagingReconciliation.sweepFinalTemporaries(dir);
     }
 
     /**
