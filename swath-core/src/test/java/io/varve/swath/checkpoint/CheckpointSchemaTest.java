@@ -107,7 +107,9 @@ final class CheckpointSchemaTest {
             "part_file|format|TEXT|1|null|0",
             "part_file|finalized|INTEGER|1|0|0",
             "part_file|rows|INTEGER|1|0|0",
-            "part_file|bytes|INTEGER|1|0|0");
+            "part_file|bytes|INTEGER|1|0|0",
+            "part_file|format_version|INTEGER|0|null|0",
+            "part_file|extension_type|INTEGER|0|null|0");
 
     @Test
     void freshDbAndMigratedLegacyDbHaveIdenticalSchemas(@TempDir Path dir) throws Exception {
@@ -196,7 +198,7 @@ final class CheckpointSchemaTest {
         }
         assertThat(actual)
                 .as("durable schema (all tables, full column metadata) matches e7b80f25 plus the "
-                        + "5f-4a destination_kind/output_type and 5f-4c-2 identity_spec backfill columns")
+                        + "documented additive backfill columns")
                 .isEqualTo(HEAD_TABLE_INFO);
     }
 }

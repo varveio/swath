@@ -60,6 +60,7 @@ import io.varve.swath.runtime.LivenessWatchdog;
 import io.varve.swath.runtime.OutputPublisher;
 import io.varve.swath.runtime.RunContext;
 import io.varve.swath.runtime.SignalHandlers;
+import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortDiskGuard;
 import io.varve.swath.sort.SortMode;
@@ -843,21 +844,14 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                             + String.join(", ", changedIdentity)
                             + " changed since the checkpointed run; use --restart to discard it");
                 }
-                // A --sort run whose checkpoint carries staging segments tagged with an older
-                // (or otherwise-unsupported) staging format must REFUSE, not silently
-                // sweep+relist. The reattach path (ListRunner.runToSortedParquetWorkStealing) selects
-                // segments by SORT_SEGMENT_FORMAT ("page-run"); a stale "parquet-segment" row is
-                // invisible to that filter, so its finalized segment would be swept as "non-finalized"
-                // and its data re-listed — wrong/duplicated work, potential loss. Refuse exactly like
-                // the --sort/--no-sort mismatch above. (Past the mismatch guard, sort==run.sortEnabled().)
-                // TODO(future hardening): the page-run FORMAT_VERSION is NOT recorded in the
-                // checkpoint (part_file.format stores only the format string), so a future page-run
-                // version bump cannot be refused here on the recorded metadata alone — it is caught
-                // later/loudly by PageRunSegmentReader's version check when a segment is opened. Record
-                // the format version in the checkpoint to refuse a version mismatch as cleanly as this
-                // format-string mismatch.
+                // A --sort run whose checkpoint carries unsupported staging must REFUSE before
+                // loadResumable or either sort path can inspect/delete a staging file. Null version/type
+                // pairs are pre-column page-run rows and remain compatible; explicit metadata is
+                // checked against the reader's page-run compatibility seam. Non-page-run rows are
+                // governed solely by the format-name mismatch and are never assigned page-run meaning.
                 if (sorting.sort) {
-                    List<String> staleFormats = store.finalizedPartFormats(run.id()).stream()
+                    List<PartRef> finalizedParts = store.finalizedParts(run.id());
+                    List<String> staleFormats = finalizedParts.stream().map(PartRef::format).distinct()
                             .filter(f -> !ListRunner.SORT_SEGMENT_FORMAT.equals(f))
                             .toList();
                     if (!staleFormats.isEmpty()) {
@@ -869,6 +863,28 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                                 + ListRunner.SORT_SEGMENT_FORMAT + "') — the old staging segments "
                                 + "cannot be safely reused; use --restart to discard the run and "
                                 + "start fresh");
+                    }
+                    List<PartRef> incompatiblePageRuns = finalizedParts.stream()
+                            .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
+                            .filter(p -> switch (PageRunFormat.compatibility(
+                                    p.formatVersion(), p.extensionType())) {
+                                case LEGACY_UNRECORDED, SUPPORTED -> false;
+                                case INCOMPLETE, UNKNOWN_FORMAT_VERSION, UNKNOWN_EXTENSION_TYPE -> true;
+                            })
+                            .toList();
+                    if (!incompatiblePageRuns.isEmpty()) {
+                        writeEarlyExitSummary(resolved, config, argsHash, ctx, run.id(), runStartedNs,
+                                false, StopReason.RESUME_REFUSED, STRATEGY_WORK_STEALING);
+                        throw new InvalidArgsException("swath resume refused: the checkpoint's "
+                                + "page-run staging metadata is not supported by this build "
+                                + incompatiblePageRuns.stream().map(ListCommand::pageRunMetadata)
+                                        .toList()
+                                + " (this build reads format_version="
+                                + PageRunFormat.CURRENT_FORMAT_VERSION + " with extension_type in ["
+                                + PageRunFormat.NO_EXTENSION + ", "
+                                + PageRunFormat.BOUNDARY_SAMPLE_EXTENSION + "]) — the staging "
+                                + "segments cannot be safely reused; use --restart to discard the "
+                                + "run and start fresh");
                     }
                 }
             }
@@ -1136,6 +1152,12 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
                         dbPath, output.resolvedKind, output.destination);
             }
         }
+    }
+
+    private static String pageRunMetadata(PartRef part) {
+        return part.path() + "(format_version=" + part.formatVersion()
+                + ", extension_type=" + part.extensionType() + ", compatibility="
+                + PageRunFormat.compatibility(part.formatVersion(), part.extensionType()) + ")";
     }
 
     /**

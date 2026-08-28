@@ -27,6 +27,7 @@ import io.varve.swath.observability.TraceSink;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
+import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortConfigs;
@@ -120,6 +121,11 @@ final class SortPipelineTest {
             assertThat(Files.exists(stagingDir)).as("staging dir removed after publish").isFalse();
             assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.PUBLISHED);
             assertThat(store.loadResumable(run.id(), true)).as("output-complete: nothing to resume").isEmpty();
+            assertThat(store.finalizedParts(run.id())).isNotEmpty().allSatisfy(part -> {
+                assertThat(part.format()).isEqualTo(PageRunFormat.NAME);
+                assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+            });
 
             // durable_cursor advanced via the reused part-finalize machinery (segments carried it).
             assertThat(nodesWithDurableCursor(db, run.id())).isPositive();
@@ -155,8 +161,10 @@ final class SortPipelineTest {
             SegmentSink sink = result -> {
                 List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                         .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
+                PageRunFormat format = result.pageRunFormat();
                 store.partFinalized(new PartFinalize(run.id(), 0, result.path().getFileName().toString(),
-                        ListRunner.SORT_SEGMENT_FORMAT, result.rows(), result.bytes(), advances));
+                        ListRunner.SORT_SEGMENT_FORMAT, format.formatVersion(), format.extensionType(),
+                        result.rows(), result.bytes(), advances));
             };
             SortLane lane = new SortLane(smallSegments(), new ListEntryComparator(), DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, SortLaneMeters.NO_OP, stagingDir, "seg-" + run.id() + "-x", sink);
@@ -167,6 +175,10 @@ final class SortPipelineTest {
 
             List<PartRef> segmentRows = store.finalizedParts(run.id());
             assertThat(segmentRows).allMatch(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()));
+            assertThat(segmentRows).allSatisfy(part -> {
+                assertThat(part.formatVersion()).isEqualTo(PageRunFormat.CURRENT_FORMAT_VERSION);
+                assertThat(part.extensionType()).isEqualTo(PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+            });
             assertThat(Files.exists(DatasetLayout.of(outputDir).manifest())).isFalse();
 
             // Merge-pending re-entry: re-run ONLY the merge (no fetcher ⇒ zero LIST fetches).

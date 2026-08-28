@@ -355,7 +355,9 @@ CREATE TABLE part_file (
   writer_id INTEGER NOT NULL,              -- sticky: node_id % num_writers
   path TEXT NOT NULL, format TEXT NOT NULL,
   finalized INTEGER NOT NULL DEFAULT 0,    -- 1 ⇔ footer flushed+fsynced (durable); else discard on resume
-  rows INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0);
+  rows INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0,
+  format_version INTEGER,                  -- page-run header version; NULL for ordinary output and legacy rows
+  extension_type INTEGER);                 -- page-run trailer extension type; NULL with format_version
 
 -- output_journal (for --resume-output, v1.1): RAW, PRE-FILTER, byte-exact page entries.
 -- NOT created in v1.0 DDL — CREATE TABLE is deferred to v1.1. Shape reserved here for
@@ -775,15 +777,18 @@ which owns the at-most-once-text durability questions it would reopen):
 - **Staging-format mismatch on resume is refused**: if a
   resuming `--sort` run's checkpoint carries staging `part_file` rows tagged
   with a format other than the current `SORT_SEGMENT_FORMAT` (`page-run`) — an
-  older `parquet-segment` in-flight run, or any future format-version
-  mismatch — the run **refuses cleanly** (`InvalidArgsException`, exit 2, same
+  older `parquet-segment` in-flight run — the run **refuses cleanly**
+  (`InvalidArgsException`, exit 2, same
   as the `--sort`/`--no-sort` refusal) naming the recorded vs expected format
   and pointing at `--restart`. Without this, the reattach path (which selects
   staging by `page-run`) would treat the un-recognized old-format finalized
   segments as non-finalized, sweep them, and silently re-list their data
-  (dup/loss). *(The page-run `FORMAT_VERSION` is not yet recorded in the
-  checkpoint, so a version bump is caught later/loudly by the segment reader
-  rather than refused here — recording it is a noted future hardening.)*
+  (dup/loss). New page-run rows additionally record the segment header
+  `format_version` and trailer `extension_type`; a resume refuses an explicit
+  value this binary does not understand before opening or sweeping staging.
+  Both columns are nullable additive migrations: a pre-column page-run row has
+  both `NULL` and retains the legacy reader-validation path, while non-page-run
+  output rows also remain `NULL` and are never classified as page-run version 0.
 - **Sort-phase state machine:** run phases **LISTING → MERGING → PUBLISHED**
   are recorded in `run_meta` (`sort_phase`). Resume dispatch: nodes incomplete ⇒
   resume listing (keep durable segments, re-list only the non-durable tail); nodes
@@ -935,7 +940,7 @@ published.
 | `swath.sort.merge-budget-bytes` | heap-adaptive: same shape as `segment-bytes` (≈8% of `Runtime.maxMemory()`, floored at 64 MB) | capacity budget used to cap `effectiveFanIn` as `budget / per-stream planning price`; it bounds the priced stream slots, not every allocation made while decoding or resolving page overlap. **The `effectiveFanIn` floor of 2 streams is documented, not rejected**: a merge needs at least 2 streams to merge anything, so a smaller budget still admits the minimum two-stream merge. Page-aware overlap remains bounded by staged segment geometry (and therefore the configured segment gate), while arbitrary capture chunks use the bounded entry-stream policy rather than this frontier optimization |
 | `swath.sort.merge-parallelism` | `max(1, min(8, availableProcessors / 2))` | the configured maximum number of contiguous key ranges in the final sorted merge; `1` is the explicit serial opt-out. `--tune sort.merge-parallelism=N` exposes the supported operator override (`1..16`) and wins over the JVM property without changing this default. The tune is resume-free because range finals remain disposable staging files until the complete manifest barrier; a pre-publication resume reruns the merge from durable PageRuns. For an admitted run, the effective range count is clamped to the minimum of this configured/core-derived maximum, configured-`fan-in` viability (`fan-in >= segments`, else 1), the heap/per-stream/segment bound, and the fd bound that reserves one initial output part per candidate range (`usableFds / (segments + 1)`); additional rolled output writers are hard-bounded during execution after reserving the range fleet's input streams. A result below 2 takes the untouched serial path. Reason attribution follows the binding constraint with an explicit tie rule: FD wins an exact partial heap/FD tie (`byFd <= byBudget`), recording `SORT.merge_range_fd_limited` for final `R>1`; heap or configured fan-in records `SORT.merge_range_would_cascade` when it alone tightens the result further, including to `R=1`; an FD final bound of `R=1` records `SORT.merge_range_fd_exhausted`. `SORT.merge_range_unsplittable` remains reserved for boundary sampling that finds fewer than two distinct keys |
 | `swath.sort.min-parallel-staged-bytes` | 256 MiB | staged-input eligibility floor for the default parallel merge. A run below it stays serial and records `SORT.merge_range_below_staged_floor`; this size decision is not an unsplittable keyspace or a resource-clamp result |
-| `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`); a resume whose checkpoint records any other staging format is refused (§6) — informational, not user-tunable |
+| `swath.sort.segment-format` | `page-run` | the staging-segment format string new `--sort` runs stage under and tag `part_file` rows with (`ListRunner.SORT_SEGMENT_FORMAT`), alongside the actual page-run header version and trailer-extension type; a resume refuses another format or explicit unknown page-run metadata while preserving pre-column `NULL` metadata (§6) — informational, not user-tunable |
 | `ulimit -n` (OS, not a swath knob) | raise to ~65536 for single-pass | with fan-in 10000, a single merge pass opens up to ~`min(segments, fan-in)` page-run readers at once; a low `ulimit -n` forces the fd clamp to shrink `effectiveFanIn` and **degrade to a multi-pass cascade**. Raise the soft limit (`ulimit -n 65536`, or the launcher does it) for single-pass merges on large buckets |
 | `--checkpoint` | `auto` (co-located at `<dir>/.swath/checkpoint.sqlite` for a managed Parquet directory; ephemeral for stdout), deleted on clean completion | FILE kind and TSV/JSONL directories accept only `none`; `none` ⇒ in-memory worklist and **no resume**. An explicit path is valid only with a Parquet directory, but the public `swath resume` command opens the managed co-located layout, not an arbitrary SQLite path. |
 

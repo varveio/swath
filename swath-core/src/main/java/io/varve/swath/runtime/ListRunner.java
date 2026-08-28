@@ -59,6 +59,7 @@ import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.MergeInputProfile;
+import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
@@ -672,9 +673,7 @@ public final class ListRunner {
 
     /**
      * Staging {@code part_file} format namespace, so segment rows never pollute the root manifest.
-     * Runs stage page-run segments — this MUST equal {@code PageRunSegmentWriter.FORMAT_NAME}
-     * ("page-run"), the value the writer/reader agree on (that constant is package-private to
-     * {@code io.varve.swath.sort}, so it is mirrored here rather than referenced). Both the write side
+     * Runs stage page-run segments — this is the value the writer/reader agree on. Both the write side
      * ({@code SegmentSink.onSegmentFinalized}) and the select side ({@code sortedSegmentRows}) use this
      * one constant, so new segments are tagged and selected consistently.
      *
@@ -682,7 +681,7 @@ public final class ListRunner {
      * checkpoint carries staging segments tagged with a different, unsupported
      * staging format rather than silently sweep+relist them.
      */
-    public static final String SORT_SEGMENT_FORMAT = "page-run";
+    public static final String SORT_SEGMENT_FORMAT = PageRunFormat.NAME;
 
     /**
      * Engine-backed <b>sorted</b> Parquet run: the listing feeds the single ordered
@@ -783,8 +782,10 @@ public final class ListRunner {
         SegmentSink sink = result -> {
             List<PartFinalize.DurableAdvance> advances = result.perNodeMaxKeys().entrySet().stream()
                     .map(e -> new PartFinalize.DurableAdvance(e.getKey(), e.getValue())).toList();
+            PageRunFormat format = result.pageRunFormat();
             store.partFinalized(new PartFinalize(runId, 0, result.path().getFileName().toString(),
-                    SORT_SEGMENT_FORMAT, result.rows(), result.bytes(), advances));
+                    SORT_SEGMENT_FORMAT, format.formatVersion(), format.extensionType(),
+                    result.rows(), result.bytes(), advances));
         };
         String segmentPrefix = "seg-" + runId + "-" + Long.toHexString(System.nanoTime());
         SortLane lane = new SortLane(sortConfig, comparator, DuplicateHook.NO_OP, sortMetrics,

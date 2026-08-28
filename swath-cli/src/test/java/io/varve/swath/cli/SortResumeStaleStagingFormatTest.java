@@ -22,6 +22,7 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.ListRunner;
+import io.varve.swath.sort.PageRunFormat;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
@@ -49,6 +50,11 @@ final class SortResumeStaleStagingFormatTest {
 
     /** Seed a resumable --sort run and record ONE staging {@code part_file} row with {@code segFormat}. */
     private static void seedSortRunWithSegmentFormat(Path db, String segFormat) throws Exception {
+        seedSortRunWithSegmentFormat(db, segFormat, null, null);
+    }
+
+    private static void seedSortRunWithSegmentFormat(Path db, String segFormat,
+            Integer formatVersion, Integer extensionType) throws Exception {
         String argsHash = ArgsHashFields.forListing("s3", ENDPOINT, BUCKET, PREFIX).hash();
         RunKey key = new RunKey("s3", ENDPOINT, BUCKET, PREFIX.getBytes(StandardCharsets.UTF_8),
                 argsHash, "auto", ListingMode.OBJECTS, NO_FILTER_SPEC, OutputFormat.PARQUET.name(),
@@ -58,7 +64,8 @@ final class SortResumeStaleStagingFormatTest {
             long node = store.insertNode(NodeSpec.rootRange(run.id()));
             store.commitPage(new PageCommit(node, "k9".getBytes(StandardCharsets.UTF_8), true));
             store.partFinalized(new PartFinalize(run.id(), 0, "seg-" + segFormat + ".pageseg",
-                    segFormat, 2L, 128L, List.of()));
+                    segFormat, formatVersion, extensionType, 2L, 128L, List.of()));
+            store.markOutputComplete(run.id());
             store.markRunFinished(run.id(), RunStatus.COMPLETED);
         }
     }
@@ -95,7 +102,50 @@ final class SortResumeStaleStagingFormatTest {
         // later for unrelated reasons (no S3 / missing staging files), but never with THIS refusal.
         Throwable t = catchThrowable(() -> resumeSortCommand(db).call());
         if (t instanceof InvalidArgsException) {
-            assertThat(t).hasMessageNotContaining("sort staging format");
+            assertThat(t).hasMessageNotContaining("sort staging format")
+                    .hasMessageNotContaining("page-run staging metadata");
         }
+    }
+
+    @Test
+    void currentPageRunMetadataReachesMergeOnlyReentry(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        PageRunFormat current = PageRunFormat.currentListing();
+        seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
+                current.formatVersion(), current.extensionType());
+
+        Throwable t = catchThrowable(() -> resumeSortCommand(db).call());
+        assertThat(t).isNotInstanceOf(InvalidArgsException.class);
+    }
+
+    @Test
+    void unknownPageRunFormatVersionIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
+                PageRunFormat.CURRENT_FORMAT_VERSION + 1,
+                PageRunFormat.BOUNDARY_SAMPLE_EXTENSION);
+
+        assertThatThrownBy(() -> resumeSortCommand(db).call())
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("page-run staging metadata")
+                .hasMessageContaining("format_version="
+                        + (PageRunFormat.CURRENT_FORMAT_VERSION + 1))
+                .hasMessageContaining("UNKNOWN_FORMAT_VERSION")
+                .hasMessageContaining("--restart");
+    }
+
+    @Test
+    void unknownPageRunExtensionTypeIsRefusedBeforeMerge(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        int unknownType = PageRunFormat.BOUNDARY_SAMPLE_EXTENSION + 99;
+        seedSortRunWithSegmentFormat(db, ListRunner.SORT_SEGMENT_FORMAT,
+                PageRunFormat.CURRENT_FORMAT_VERSION, unknownType);
+
+        assertThatThrownBy(() -> resumeSortCommand(db).call())
+                .isInstanceOf(InvalidArgsException.class)
+                .hasMessageContaining("page-run staging metadata")
+                .hasMessageContaining("extension_type=" + unknownType)
+                .hasMessageContaining("UNKNOWN_EXTENSION_TYPE")
+                .hasMessageContaining("--restart");
     }
 }

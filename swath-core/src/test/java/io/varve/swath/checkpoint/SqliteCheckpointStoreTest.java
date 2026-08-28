@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import io.varve.swath.error.CheckpointException;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.model.ListingMode;
+import io.varve.swath.sort.PageRunFormat;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -39,6 +40,53 @@ import org.junit.jupiter.api.io.TempDir;
  * RES-1/2/4 fault-injection tests drive it through the runner.
  */
 final class SqliteCheckpointStoreTest {
+
+    @Test
+    void finalizedPartFormatMetadataRoundTripsWithoutClassifyingOrdinaryParquet(@TempDir Path dir)
+            throws Exception {
+        try (SqliteCheckpointStore store = open(dir)) {
+            RunMeta run = store.openRun(key("format-metadata"), false, false);
+            PageRunFormat pageRun = PageRunFormat.currentListing();
+            store.partFinalized(new PartFinalize(run.id(), 0, "seg-0.pageseg", PageRunFormat.NAME,
+                    pageRun.formatVersion(), pageRun.extensionType(), 3, 100, List.of()));
+            store.partFinalized(new PartFinalize(run.id(), 1, "data/part-0.parquet", "parquet",
+                    5, 200, List.of()));
+
+            assertThat(store.finalizedParts(run.id())).satisfiesExactly(
+                    staged -> {
+                        assertThat(staged.formatVersion()).isEqualTo(pageRun.formatVersion());
+                        assertThat(staged.extensionType()).isEqualTo(pageRun.extensionType());
+                    },
+                    output -> {
+                        assertThat(output.formatVersion()).isNull();
+                        assertThat(output.extensionType()).isNull();
+                    });
+        }
+    }
+
+    @Test
+    void preColumnPartRowsMigrateAsUnrecordedLegacyMetadata(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("ckpt.sqlite");
+        long runId;
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(key("legacy-format-metadata"), false, false);
+            runId = run.id();
+            store.partFinalized(new PartFinalize(runId, 0, "seg-legacy.pageseg",
+                    PageRunFormat.NAME, 2, 128, List.of()));
+        }
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db.toAbsolutePath());
+             var st = c.createStatement()) {
+            st.execute("ALTER TABLE part_file DROP COLUMN extension_type");
+            st.execute("ALTER TABLE part_file DROP COLUMN format_version");
+        }
+
+        try (SqliteCheckpointStore migrated = SqliteCheckpointStore.open(db)) {
+            PartRef legacy = migrated.finalizedParts(runId).getFirst();
+            assertThat(legacy.format()).isEqualTo(PageRunFormat.NAME);
+            assertThat(legacy.formatVersion()).isNull();
+            assertThat(legacy.extensionType()).isNull();
+        }
+    }
 
     /**
      * Raw {@code byte[]} literal — for the I10 unsigned-BLOB byte-order tests. These keys

@@ -15,7 +15,7 @@ import java.util.Set;
 /**
  * The checkpoint DB's schema: the {@code CREATE TABLE}/{@code CREATE INDEX} DDL, the version
  * stamp that says the file is a swath checkpoint this build understands, plus the idempotent
- * {@code ALTER TABLE ADD COLUMN} migration that brings an older checkpoint DB up to the current
+ * {@code ALTER TABLE ADD COLUMN} migrations that bring an older checkpoint DB up to the current
  * column set. Lives apart from {@link SqliteCheckpointStore}'s runtime (writer thread, DAO, CAS)
  * because it is touched on exactly one code path — {@link #checkVersion} then {@link #apply} during
  * {@code open}, before the writer thread exists — and nowhere else.
@@ -62,12 +62,12 @@ final class CheckpointSchema {
     }
 
     /**
-     * Create any missing tables/indexes and backfill any {@link #RUN_META_CONTEXT_COLUMNS} an
-     * already-existing {@code run_meta} predates, stamping a database this open created. Idempotent,
+     * Create any missing tables/indexes and backfill additive columns an existing table predates,
+     * stamping a database this open created. Idempotent,
      * and identical in outcome for a fresh DB and for one an earlier build wrote at this schema
      * version: {@link #BASE_DDL} declares only the columns that have existed since the first
-     * release, and every column added since is declared once in {@link #RUN_META_CONTEXT_COLUMNS}
-     * and applied by the same migration for fresh and older DBs alike.
+     * release, and every column added since is declared once in a table-specific registry and
+     * applied by the same migration for fresh and older DBs alike.
      *
      * <p><b>Must run inside a transaction the caller commits.</b> SQLite makes both DDL and
      * {@code PRAGMA user_version} transactional, so committing them together is what keeps creation
@@ -82,7 +82,8 @@ final class CheckpointSchema {
         for (String ddl : BASE_DDL) {
             st.execute(ddl);
         }
-        migrateRunMetaContextColumns(st);
+        migrateColumns(st, "run_meta", RUN_META_CONTEXT_COLUMNS);
+        migrateColumns(st, "part_file", PART_FILE_FORMAT_COLUMNS);
 
         if (fresh) {
             st.execute("PRAGMA user_version=" + SCHEMA_VERSION);
@@ -124,7 +125,7 @@ final class CheckpointSchema {
      * Run-context columns on {@code run_meta}: name → SQLite column DDL fragment (after the name).
      * Declared <b>only</b> here — {@link #BASE_DDL}'s {@code run_meta} deliberately stops at
      * {@code status}, so a fresh DB gains these through the very same
-     * {@link #migrateRunMetaContextColumns} backfill an older checkpoint DB does (schema-migration-safe,
+     * {@link #migrateColumns} backfill an older checkpoint DB does (schema-migration-safe,
      * and one place to add the next column).
      *
      * <p><b>Order is the contract:</b> appended in this order, they reproduce the column order a
@@ -167,17 +168,27 @@ final class CheckpointSchema {
             {"identity_spec", "TEXT"},
     };
 
-    /** Add any {@link #RUN_META_CONTEXT_COLUMNS} the existing {@code run_meta} does not already have. */
-    private static void migrateRunMetaContextColumns(Statement st) throws SQLException {
+    /**
+     * Page-run compatibility metadata. Nullable with no default is deliberate: a row migrated from
+     * a pre-column checkpoint and an ordinary non-page-run output part both remain unclassified,
+     * never misread as format/extension type zero.
+     */
+    private static final String[][] PART_FILE_FORMAT_COLUMNS = {
+            {"format_version", "INTEGER"},
+            {"extension_type", "INTEGER"},
+    };
+
+    /** Add any declared columns the existing table does not already have. */
+    private static void migrateColumns(Statement st, String table, String[][] columns) throws SQLException {
         Set<String> existing = new HashSet<>();
-        try (ResultSet rs = st.executeQuery("PRAGMA table_info(run_meta)")) {
+        try (ResultSet rs = st.executeQuery("PRAGMA table_info(" + table + ")")) {
             while (rs.next()) {
                 existing.add(rs.getString("name"));
             }
         }
-        for (String[] col : RUN_META_CONTEXT_COLUMNS) {
+        for (String[] col : columns) {
             if (!existing.contains(col[0])) {
-                st.execute("ALTER TABLE run_meta ADD COLUMN " + col[0] + " " + col[1]);
+                st.execute("ALTER TABLE " + table + " ADD COLUMN " + col[0] + " " + col[1]);
             }
         }
     }

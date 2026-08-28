@@ -631,14 +631,16 @@ public final class SqliteCheckpointStore implements CheckpointStore {
 
     private void doPartFinalized(Connection c, PartFinalize f) throws SQLException {
         try (PreparedStatement ps = c.prepareStatement(
-                "INSERT INTO part_file (run_id, writer_id, path, format, finalized, rows, bytes) "
-                        + "VALUES (?,?,?,?,1,?,?)")) {
+                "INSERT INTO part_file (run_id, writer_id, path, format, format_version, "
+                        + "extension_type, finalized, rows, bytes) VALUES (?,?,?,?,?,?,1,?,?)")) {
             ps.setLong(1, f.runId());
             ps.setInt(2, f.writerId());
             ps.setString(3, f.path());
             ps.setString(4, f.format());
-            ps.setLong(5, f.rows());
-            ps.setLong(6, f.bytes());
+            ps.setObject(5, f.formatVersion());
+            ps.setObject(6, f.extensionType());
+            ps.setLong(7, f.rows());
+            ps.setLong(8, f.bytes());
             ps.executeUpdate();
         }
         // Advance durable_cursor monotonically for each node whose pages this part held.
@@ -659,18 +661,25 @@ public final class SqliteCheckpointStore implements CheckpointStore {
         return submit(c -> {
             List<PartRef> parts = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT id, writer_id, path, format, finalized, rows, bytes FROM part_file "
+                    "SELECT id, writer_id, path, format, format_version, extension_type, "
+                            + "finalized, rows, bytes FROM part_file "
                             + "WHERE run_id=? AND finalized=1 ORDER BY id")) {
                 ps.setLong(1, runId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         parts.add(new PartRef(rs.getLong(1), rs.getInt(2), rs.getString(3),
-                                rs.getString(4), rs.getInt(5) != 0, rs.getLong(6), rs.getLong(7)));
+                                rs.getString(4), nullableInt(rs, 5), nullableInt(rs, 6),
+                                rs.getInt(7) != 0, rs.getLong(8), rs.getLong(9)));
                     }
                 }
             }
             return parts;
         });
+    }
+
+    private static Integer nullableInt(ResultSet rs, int column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
     }
 
     @Override

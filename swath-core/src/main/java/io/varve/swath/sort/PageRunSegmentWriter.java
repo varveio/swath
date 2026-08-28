@@ -63,10 +63,10 @@ final class PageRunSegmentWriter {
     static final int MAGIC = 0x53504752;
 
     /** On-disk format version. */
-    static final short FORMAT_VERSION = 1;
+    static final short FORMAT_VERSION = PageRunFormat.CURRENT_FORMAT_VERSION;
 
     /** The segment-format name constant, wired into the checkpoint/segment-IO selector. */
-    static final String FORMAT_NAME = "page-run";
+    static final String FORMAT_NAME = PageRunFormat.NAME;
 
     /** Header size: magic u32 + version u16. Package-private: the reader shares this constant instead
      *  of open-coding {@code 6}. */
@@ -160,7 +160,8 @@ final class PageRunSegmentWriter {
         if (buffer.trigger() == SealTrigger.BYTE_GATE) {
             metrics.recordStealReason("SORT", "buffer_byte_gated");
         }
-        return new SegmentResult(path, totalEntries, Files.size(path), buffer.perNodeMaxKeys());
+        return new SegmentResult(path, totalEntries, Files.size(path), buffer.perNodeMaxKeys(),
+                PageRunFormat.currentListing());
     }
 
     /**
