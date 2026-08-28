@@ -72,12 +72,13 @@ class SortedFixturesTest {
     }
 
     @Test
-    void sortMetricsHooksRecordReplayPrefixedProgressAndBoundaryMeters() {
+    void sortMetricsHooksRecordReplayPrefixedProgressBoundaryAndIndexMeters() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         FixtureMetrics metrics = new FixtureMetrics(registry);
 
         metrics.markProgress();
         metrics.recordBoundaryIo(7, 123, 456);
+        metrics.recordRangeIndexBytes(789);
 
         assertThat(registry.find("swath.replay.sort.progress").counter().count()).isEqualTo(1.0);
         assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.entries").counter().count())
@@ -86,6 +87,8 @@ class SortedFixturesTest {
                 .isEqualTo(123.0);
         assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count())
                 .isEqualTo(456.0);
+        assertThat(registry.find("swath.replay.sort.merge.range.index.bytes").counter().count())
+                .isEqualTo(789.0);
     }
 
     @Test

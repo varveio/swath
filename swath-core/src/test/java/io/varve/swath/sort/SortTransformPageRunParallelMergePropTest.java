@@ -533,7 +533,21 @@ class SortTransformPageRunParallelMergePropTest {
             // Three inputs plus one initially reserved output per range let descriptors reduce
             // R=4 to R=2. The configured fan-in of two cannot carry all three segments at any R,
             // however, and is therefore the constraint that ultimately declines parallel merge.
-            int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM + 8;
+            int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM
+                    + ParallelRangeMerge.PROOF_SPOOL_FDS + 8;
+            List<PageRunSegmentDescriptor> descriptors = parallelKickoff(segments).descriptors();
+            ParallelRangeMerge fdOnly = new ParallelRangeMerge(sortRun(
+                    config.withFanIn(3), DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
+            assertThat(fdOnly.effectiveRanges(4, descriptors))
+                    .isEqualTo(new ParallelRangeMerge.EffectiveRanges(
+                            2, ParallelRangeMerge.ClampReason.FD_LIMITED));
+            ParallelRangeMerge combined = new ParallelRangeMerge(sortRun(
+                    config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
+            assertThat(combined.effectiveRanges(4, descriptors))
+                    .isEqualTo(new ParallelRangeMerge.EffectiveRanges(
+                            1, ParallelRangeMerge.ClampReason.WOULD_CASCADE));
 
             new SortTransform(sortRun(config, DuplicateHook.NO_OP, metrics,
                     SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd))
