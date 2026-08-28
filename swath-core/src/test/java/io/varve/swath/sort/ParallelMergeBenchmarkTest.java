@@ -15,6 +15,7 @@ import io.varve.swath.checkpoint.RunStatus;
 import io.varve.swath.checkpoint.SoftRestoreContext;
 import io.varve.swath.checkpoint.SortPhase;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
+import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ListingMode;
@@ -176,7 +177,8 @@ class ParallelMergeBenchmarkTest {
 
     @Test
     @ResourceLock("SYSTEM_PROPERTIES")
-    void retainedType2ObjectsUseTheCanonicalParquetRowOracle(@TempDir Path root) throws Exception {
+    void retainedType2VersionlessLatestTrueCanonicalizesToParquetFalse(@TempDir Path root)
+            throws Exception {
         ObjectEntry liveObject = new ObjectEntry(
                 KeyBytes.ofUtf8("a"),
                 42L,
@@ -237,7 +239,8 @@ class ParallelMergeBenchmarkTest {
     }
 
     @Test
-    void rowOracleNormalizesOnlyTheCanonicalParquetRepresentation() throws Exception {
+    void rowOracleNormalizesOnlyTheCanonicalParquetRepresentation(@TempDir Path root)
+            throws Exception {
         ObjectEntry source = new ObjectEntry(
                 KeyBytes.ofUtf8("a"), 42L, "2026-08-28T14:34:56.123456+02:00",
                 "etag", "STANDARD", null, true, "owner", "display", "SHA256", "FULL_OBJECT");
@@ -247,14 +250,64 @@ class ParallelMergeBenchmarkTest {
                 source.ownerDisplayName(), source.checksumAlgorithm(), source.checksumType());
         BenchmarkRowOracle.InputOracle oracle = BenchmarkRowOracle.inputForTesting(List.of(source));
 
-        assertThat(BenchmarkRowOracle.validateEntriesForTesting(List.of(canonical), oracle, CMP).rows())
+        Path canonicalFile = writeParquet(root.resolve("canonical.parquet"), List.of(source));
+        assertThat(BenchmarkRowOracle.validateOutput(List.of(canonicalFile), oracle, CMP).rows())
                 .isEqualTo(1);
+        try (SegmentReader reader = new SegmentReader(canonicalFile)) {
+            assertThat(reader.next()).isEqualTo(canonical);
+            assertThat(reader.hasNext()).isFalse();
+        }
+
         ObjectEntry changedSize = new ObjectEntry(
                 canonical.key(), canonical.size() + 1, canonical.lastModifiedEpochMicros(),
                 canonical.etag(), canonical.storageClass(), null, false, canonical.ownerId(),
                 canonical.ownerDisplayName(), canonical.checksumAlgorithm(), canonical.checksumType());
-        assertThatThrownBy(() -> BenchmarkRowOracle.validateEntriesForTesting(
-                List.of(changedSize), oracle, CMP)).hasMessageContaining("input oracle");
+        Path changedFile = writeParquet(root.resolve("changed-size.parquet"), List.of(changedSize));
+        assertThatThrownBy(() -> BenchmarkRowOracle.validateOutput(List.of(changedFile), oracle, CMP))
+                .hasMessageContaining("input oracle");
+    }
+
+    @Test
+    void versionedAndDeleteMarkerLatestBitsRemainPartOfTheFullRowOracle(@TempDir Path root)
+            throws Exception {
+        ObjectEntry object = new ObjectEntry(
+                KeyBytes.ofUtf8("a"), 42L, 1_777_000_000_123_456L,
+                "etag", "STANDARD", "object-version", true,
+                "owner", "display", "SHA256", "FULL_OBJECT");
+        DeleteMarkerEntry marker = new DeleteMarkerEntry(
+                KeyBytes.ofUtf8("b"), "delete-version", false,
+                1_777_000_000_654_321L, "owner");
+        List<ListEntry> source = List.of(object, marker);
+        BenchmarkRowOracle.InputOracle oracle = BenchmarkRowOracle.inputForTesting(source);
+
+        Path faithfulFile = writeParquet(root.resolve("faithful.parquet"), source);
+        assertThat(BenchmarkRowOracle.validateOutput(List.of(faithfulFile), oracle, CMP).rows())
+                .isEqualTo(2);
+        try (SegmentReader reader = new SegmentReader(faithfulFile)) {
+            assertThat(reader.next()).isEqualTo(object);
+            assertThat(reader.next()).isEqualTo(marker);
+            assertThat(reader.hasNext()).isFalse();
+        }
+
+        ObjectEntry flippedObject = new ObjectEntry(
+                object.key(), object.size(), object.lastModifiedEpochMicros(),
+                object.etag(), object.storageClass(), object.versionId(), false,
+                object.ownerId(), object.ownerDisplayName(),
+                object.checksumAlgorithm(), object.checksumType());
+        Path flippedObjectFile = writeParquet(
+                root.resolve("flipped-object.parquet"), List.of(flippedObject, marker));
+        assertThatThrownBy(() -> BenchmarkRowOracle.validateOutput(
+                List.of(flippedObjectFile), oracle, CMP))
+                .hasMessageContaining("rows=2 expected_rows=2");
+
+        DeleteMarkerEntry flippedMarker = new DeleteMarkerEntry(
+                marker.key(), marker.versionId(), true,
+                marker.lastModifiedEpochMicros(), marker.ownerId());
+        Path flippedMarkerFile = writeParquet(
+                root.resolve("flipped-marker.parquet"), List.of(object, flippedMarker));
+        assertThatThrownBy(() -> BenchmarkRowOracle.validateOutput(
+                List.of(flippedMarkerFile), oracle, CMP))
+                .hasMessageContaining("rows=2 expected_rows=2");
     }
 
     @Test
@@ -416,6 +469,16 @@ class ParallelMergeBenchmarkTest {
 
     private static Path writeSegment(Path staging, String name, List<ListEntry> entries) throws Exception {
         return SortTestSupport.writePageRun(staging.resolve(name), entries, CMP);
+    }
+
+    private static Path writeParquet(Path path, List<ListEntry> entries) throws IOException {
+        try (SortedFileWriter writer = new SortedParquetWriter(
+                path, SortConfig.fromProperties(ignored -> null), SortMode.VERSIONS, 1)) {
+            for (ListEntry entry : entries) {
+                writer.write(entry);
+            }
+        }
+        return path;
     }
 
     private static ObjectEntry object(String key, long size) {
