@@ -23,6 +23,11 @@ class SortConfigTest {
     }
 
     @Test
+    void exposesNoPublicGenericConfigurationConstructor() {
+        assertThat(SortConfig.class.getConstructors()).isEmpty();
+    }
+
+    @Test
     void defaultsMatchTheContractTable() {
         SortConfig config = fromProperties(Map.of());
         assertThat(config.heapFraction()).isEqualTo(0.08);

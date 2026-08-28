@@ -160,6 +160,12 @@ These are internal seams used by the CLI, tests, simulator, and replay tooling. 
 not a supported Java API or third-party SPI; v0.x does not promise source or binary
 compatibility.
 
+The CLI is swath's only supported public API before 1.0. Public Java types exist where the
+modules need them, but they remain internal implementation seams rather than an embedding API. In
+particular, `SortConfig` is an immutable CLI-configuration snapshot; its former record/canonical
+constructor was internal and unsupported, and its flat accessors and copy methods do not establish
+a generic Java configuration API.
+
 ### Store and page model
 
 `PageFetcher.fetchPage(PageRequest)` is the engine's only listing call. A request carries
@@ -1095,7 +1101,7 @@ the existing page counts.
 | `swath.sort.segment-bytes` | heap-adaptive: ≈8% of `Runtime.maxMemory()` estimated pre-encode bytes, floored at 64 MB | primary segment-flush gate (§6); ~160 MB at `-Xmx2g` ⇒ ~1.3M-row segments, ~5M-row at `-Xmx8g`; bigger heap ⇒ fewer, bigger segments ⇒ single-pass merge as the design point. Active segment buffers are a function of `-Xmx`; retained staging metadata is separately `O(segments)`. |
 | `swath.sort.segment-entries` | secondary cap alongside `segment-bytes` | backstop entry-count cap on a sealed buffer |
 | `swath.sort.heap-fraction` | `0.08` | the adaptive ratio `segment-bytes` derives from `Runtime.maxMemory()`; raise only after measurement, never unattended |
-| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that record |
+| `swath.sort.buffers` | 2 | in-flight sealed buffers (fill buffer while the sealed buffer encodes off-thread); **must be `>= 2`**: `SortLane` bounds live sealed buffers to exactly `buffers` (fill + `buffers - 1` off-thread); `buffers=1` would either deadlock (0 off-thread slots to hand a sealed buffer to) or, if floored instead, silently allow 2 live buffers while claiming a cap of 1 — `SortConfig` rejects `buffers < 2` outright (`IllegalArgumentException`), consistent with every other knob's validation in that immutable snapshot |
 | `swath.sort.fan-in` | 10000 | merge fan-in `F` (§6); open page-run segment readers never exceed `F` per pass. The pass width actually used is clamped at runtime by (a) the **fd budget** — `min(fan-in, usable-fds)` derived from `ulimit -n` with headroom — and (b) the **per-open-stream capacity plan**, `effectiveFanIn = min(fan-in, max(2, merge-budget-bytes / merge-per-stream-bytes))`. `fan-in` alone is a correctness/fd ceiling, not a memory promise; raise `ulimit -n` (below) so the fd clamp does not force a cascade |
 | `swath.sort.segment-codec` | `LZ4` | payload compression for page-run STAGING segments — `NONE` \| `LZ4` \| `ZSTD1`. Trades staging-disk ratio for pack/merge CPU: `LZ4` (default) is fast; `ZSTD1` is smaller-on-disk but slower; `NONE` skips compression. Governs staging only, never the final Parquet output |
 | `swath.sort.merge-per-stream-bytes` | ≈64 KiB fixed per-open-stream estimate (`DEFAULT_MERGE_PER_STREAM_BYTES`, to be validated at the perf gate) | planning estimate for one open page-run stream. The runtime planner prices a stream at `max(merge-per-stream-bytes, maxRecordLen)`, reading the largest encoded record O(1) from each trailer, so an unusually large frame can tighten but never relax the configured estimate. `maxRecordLen` is not a byte-exact heap bound: the current/next encoded bodies, decoded payload, metadata, and a legal overlap cluster add resident state. Active state remains a function of segment/fan-in knobs rather than total object count (I11), but this property is a capacity estimate, not a JVM heap meter |

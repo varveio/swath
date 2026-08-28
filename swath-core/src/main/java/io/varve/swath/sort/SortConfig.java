@@ -64,6 +64,10 @@ import java.util.function.UnaryOperator;
  *       boundaries. The default {@link MergeBoundaryPolicy#DISTINCT} preserves the shipped output
  *       partitioning; {@link MergeBoundaryPolicy#ROWS} is an explicit measurement arm.</li>
  * </ul>
+ *
+ * <p>This is an internal CLI configuration snapshot, not a supported generic Java API before 1.0.
+ * Its former record/canonical constructor was likewise unsupported; construct production snapshots
+ * through {@link #fromSystemProperties()} and derive test or internal variants with {@code withX}.
  */
 public final class SortConfig {
 
