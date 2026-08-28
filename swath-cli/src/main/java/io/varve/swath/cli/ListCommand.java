@@ -64,6 +64,7 @@ import io.varve.swath.sort.PageRunFormat;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortDiskGuard;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.StagingRetention;
 import io.varve.swath.store.FirstRequestMarkerFetcher;
 import io.varve.swath.store.PageFetcher;
 import io.varve.swath.store.s3.S3ClientFactory;
@@ -1526,14 +1527,24 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
 
         if (nodes.isEmpty()) {
             if (isPublishedByThisRun(outputDir, argsHash, run.id())) {
-                // PUBLISHED: idempotent re-entry cleans leftover staging + stale *.tmp, then exits.
+                // PUBLISHED: idempotent re-entry cleans disposable staging + stale *.tmp, then exits.
+                // Diagnostic retention keeps exactly the original segments this checkpoint finalized;
+                // otherwise this short-circuit would preserve the checkpoint below while deleting every
+                // file it names, making a later merge-only replay impossible.
                 // markRunFinished is required here too — the merge/publish path
                 // (runToSortedParquetWorkStealing / runSortMergeOnly) marks the run COMPLETED itself,
                 // but a re-entry that finds a PUBLISHED run (e.g. a fresh process re-invoked after a
                 // crash strictly between manifest-write and the terminal-status commit) must still
                 // close out run_meta, or it stays RUNNING forever. Idempotent: re-marking an already
                 // COMPLETED run is a harmless no-op UPDATE.
-                cleanSortStagingAndStaleTmp(outputDir, stagingDir);
+                Set<String> retainedSegments = sortConfig.stagingRetention().retainsOriginals()
+                        ? store.finalizedParts(run.id()).stream()
+                                .filter(p -> ListRunner.SORT_SEGMENT_FORMAT.equals(p.format()))
+                                .map(PartRef::path)
+                                .collect(Collectors.toSet())
+                        : Set.of();
+                cleanSortStagingAndStaleTmp(outputDir, stagingDir,
+                        sortConfig.stagingRetention(), retainedSegments);
                 store.setSortPhase(run.id(), SortPhase.PUBLISHED);
                 store.markRunFinished(run.id(), RunStatus.COMPLETED);
                 writeEarlyExitSummary(OutputFormat.PARQUET, config, argsHash, ctx, run.id(), runStartedNs,
@@ -1652,8 +1663,25 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
      */
     static void cleanSortStagingAndStaleTmp(Path outputDir,
                                             Path stagingDir) throws IOException, InvalidArgsException {
-        clearSortStagingContents(outputDir, stagingDir);
+        cleanSortStagingAndStaleTmp(outputDir, stagingDir,
+                StagingRetention.DELETE_AFTER_PUBLISH, Set.of());
+    }
+
+    private static void cleanSortStagingAndStaleTmp(Path outputDir, Path stagingDir,
+            StagingRetention retention, Set<String> retainedSegments)
+            throws IOException, InvalidArgsException {
+        DatasetDirGuard.requireNoManagedSymlinks(outputDir);
         if (Files.isDirectory(stagingDir)) {
+            try (Stream<Path> entries = Files.list(stagingDir)) {
+                for (Path p : entries.toList()) {
+                    if (!retention.retainsOriginals()
+                            || !retainedSegments.contains(p.getFileName().toString())) {
+                        Files.deleteIfExists(p);
+                    }
+                }
+            }
+        }
+        if (!retention.retainsOriginals() && Files.isDirectory(stagingDir)) {
             Files.deleteIfExists(stagingDir);
         }
         Path dataDir = DatasetLayout.of(outputDir).dataDir();

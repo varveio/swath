@@ -11,11 +11,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.varve.swath.checkpoint.SortPhase;
 import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.error.InvalidArgsException;
+import io.varve.swath.error.ListingException;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.testkit.MockPageFetcher;
+import io.varve.swath.testkit.ParquetReads;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,6 +29,8 @@ import java.util.TreeSet;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import picocli.CommandLine;
 
 /**
  * The directory-as-run-handle behaviour end to end: with the default {@code --checkpoint auto}, a
@@ -65,6 +70,60 @@ final class ColocatedCheckpointRunHandleTest {
         return cmd;
     }
 
+    private static MockPageFetcher failOnAnyList() {
+        return MockPageFetcher.builder()
+                .keys(List.of())
+                .interceptor((request, call, page) -> {
+                    throw new ListingException("unexpected LIST during merge-only replay");
+                })
+                .build();
+    }
+
+    private static int resumeWithRetention(Path outputDir, MockPageFetcher fetcher) throws Exception {
+        ResumeCommand resume = new ResumeCommand();
+        new CommandLine(resume).parseArgs(outputDir.toString(),
+                "--tune", SortConfig.KEEP_STAGING_TUNE_KEY + "=on");
+        resume.fetcherOverride = fetcher;
+        return resume.call();
+    }
+
+    private static Set<String> checkpointSegmentNames(Path checkpoint, long runId) throws Exception {
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
+            Set<String> names = new TreeSet<>();
+            store.finalizedParts(runId).stream()
+                    .filter(part -> ListRunner.SORT_SEGMENT_FORMAT.equals(part.format()))
+                    .forEach(part -> names.add(part.path()));
+            return names;
+        }
+    }
+
+    private static Set<String> stagingNames(Path staging) throws Exception {
+        if (!Files.isDirectory(staging)) {
+            return Set.of();
+        }
+        try (Stream<Path> entries = Files.list(staging)) {
+            Set<String> names = new TreeSet<>();
+            entries.forEach(path -> names.add(path.getFileName().toString()));
+            return names;
+        }
+    }
+
+    private static List<String> outputKeys(Path outputDir) throws Exception {
+        List<String> keys = new ArrayList<>();
+        for (Path part : DatasetLayout.of(outputDir).dataParts()) {
+            keys.addAll(ParquetReads.keys(part));
+        }
+        return keys;
+    }
+
+    private static List<byte[]> outputPartBytes(Path outputDir) throws Exception {
+        List<byte[]> bytes = new ArrayList<>();
+        for (Path part : DatasetLayout.of(outputDir).dataParts()) {
+            bytes.add(Files.readAllBytes(part));
+        }
+        return bytes;
+    }
+
     @Test
     void retainedSortedRunKeepsCheckpointTrackedInputsForMergeOnlyDiagnostics(@TempDir Path root)
             throws Exception {
@@ -77,6 +136,7 @@ final class ColocatedCheckpointRunHandleTest {
         assertThat(checkpoint).exists();
         assertThat(staging).isDirectory();
         long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        Set<String> finalizedNames = checkpointSegmentNames(checkpoint, runId);
         try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
             assertThat(store.sortPhase(runId)).isEqualTo(SortPhase.PUBLISHED);
             assertThat(store.finalizedParts(runId))
@@ -86,6 +146,90 @@ final class ColocatedCheckpointRunHandleTest {
                         assertThat(staging.resolve(part.path())).exists();
                     });
         }
+        assertThat(stagingNames(staging)).containsExactlyInAnyOrderElementsOf(finalizedNames);
+    }
+
+    @Test
+    void publishedResumeWithRetentionKeepsOnlyCheckpointFinalizedOriginals(@TempDir Path root)
+            throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+        assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
+        long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        Set<String> finalizedNames = checkpointSegmentNames(checkpoint, runId);
+        Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+
+        Files.createFile(staging.resolve("merge-99.pageseg"));
+        Files.createFile(staging.resolve("unfinalized.pageseg"));
+        Files.createFile(staging.resolve("prange-0-99.parquet.tmp"));
+        Files.createFile(staging.resolve("part-99.parquet.tmp"));
+        Path dataTmp = Files.createFile(DatasetLayout.of(outputDir).dataDir()
+                .resolve("part-99999.parquet.tmp"));
+        MockPageFetcher forbidden = failOnAnyList();
+
+        assertThat(resumeWithRetention(outputDir, forbidden)).isEqualTo(ExitCodes.SUCCESS);
+
+        assertThat(forbidden.apiCalls()).isZero();
+        assertThat(checkpoint).exists();
+        assertThat(stagingNames(staging)).containsExactlyInAnyOrderElementsOf(finalizedNames);
+        assertThat(dataTmp).doesNotExist();
+    }
+
+    @Test
+    void mergeOnlyResumeUsesNoListAndRetainsIdenticalOutputAndArtifacts(@TempDir Path root)
+            throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+        assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
+        DatasetLayout layout = DatasetLayout.of(outputDir);
+        long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        Set<String> finalizedNames = checkpointSegmentNames(checkpoint, runId);
+        List<String> expected = outputKeys(outputDir);
+        List<byte[]> expectedPartBytes = outputPartBytes(outputDir);
+        Files.delete(layout.success());
+        MockPageFetcher forbidden = failOnAnyList();
+
+        assertThat(resumeWithRetention(outputDir, forbidden)).isEqualTo(ExitCodes.SUCCESS);
+
+        assertThat(forbidden.apiCalls()).isZero();
+        assertThat(layout.success()).exists();
+        assertThat(outputKeys(outputDir)).containsExactlyElementsOf(expected);
+        List<byte[]> actualPartBytes = outputPartBytes(outputDir);
+        assertThat(actualPartBytes).hasSameSizeAs(expectedPartBytes);
+        for (int i = 0; i < actualPartBytes.size(); i++) {
+            assertThat(actualPartBytes.get(i)).isEqualTo(expectedPartBytes.get(i));
+        }
+        assertThat(checkpoint).exists();
+        assertThat(stagingNames(outputDir.resolve(ListCommand.SORT_STAGING_DIR)))
+                .containsExactlyInAnyOrderElementsOf(finalizedNames);
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void resumeTuneOffOverridesKeepStagingJvmPropertyThroughDelegatedCommand(@TempDir Path root)
+            throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+        assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
+        String previous = System.getProperty(SortConfig.KEEP_STAGING_PROPERTY);
+        try {
+            System.setProperty(SortConfig.KEEP_STAGING_PROPERTY, "on");
+            ResumeCommand resume = new ResumeCommand();
+            new CommandLine(resume).parseArgs(outputDir.toString(),
+                    "--tune", SortConfig.KEEP_STAGING_TUNE_KEY + "=off");
+            resume.fetcherOverride = failOnAnyList();
+
+            assertThat(resume.call()).isEqualTo(ExitCodes.SUCCESS);
+        } finally {
+            if (previous == null) {
+                System.clearProperty(SortConfig.KEEP_STAGING_PROPERTY);
+            } else {
+                System.setProperty(SortConfig.KEEP_STAGING_PROPERTY, previous);
+            }
+        }
+
+        assertThat(outputDir.resolve(ListCommand.SORT_STAGING_DIR)).doesNotExist();
+        assertThat(checkpoint).doesNotExist();
     }
 
     /**

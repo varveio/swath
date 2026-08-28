@@ -813,7 +813,9 @@ which owns the at-most-once-text durability questions it would reopen):
   is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the
   original checkpoint-tracked page-run segments plus that co-located checkpoint
   after successful sorted publication. Cascade intermediates, range output, and
-  temporary files remain disposable, and retention alone makes no replay claim.
+  temporary files remain disposable. A PUBLISHED re-entry with retention enabled
+  reconciles staging back to exactly the checkpoint-finalized original segment set
+  instead of deleting it; retention alone still makes no replay claim.
 - **Cascade-scale resume semantics**:
   every `SortTransform.transform` (the merge-pending re-entry, whether from a
   fresh-listing hand-off or a `runSortMergeOnly` redo) unconditionally sweeps
