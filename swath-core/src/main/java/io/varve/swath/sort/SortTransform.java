@@ -176,7 +176,7 @@ public final class SortTransform {
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
                 "merge-", null, Map.of(), frontier -> { }, -1, null, null);
-        // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
+        // Fan-in: see the class javadoc for the runtime-clamp policy. serialFanIn() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = mergePlanner.serialFanIn(catalog);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);

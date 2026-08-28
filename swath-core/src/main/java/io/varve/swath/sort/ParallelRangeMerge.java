@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  * {@code R} contiguous ordered ranges and merge each range independently on its own thread, each
  * producing its own ordered part file(s). The concatenation of the ranges' outputs, in range order,
  * is the global sort with no duplicate and no gap — given the input segments already had none — so
- * {@link SortTransform} renames them into a single ascending {@code part-00000.parquet}… sequence.
+ * {@link DatasetPublisher} renames them into a single ascending {@code part-00000.parquet}… sequence.
  *
  * <p><b>Why this is correct.</b> Ranges split on the <b>key bytes</b> (the primary component of
  * {@link ListEntryComparator}); each row is assigned to exactly one range by an exact per-row key
@@ -54,14 +54,15 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Peak heap and descriptors, both divided across the ranges.</b> Each range's merge budget is
  * {@code mergeBudgetBytes / R} and its {@link KWayMerge} pass width is that divided by the page-run
- * per-open-stream price ({@link #perStreamBytes}); the process fd budget is divided by {@code R} too,
+ * per-open-stream price ({@link MergePlanner#perRangeFanIn}); the process fd budget is divided by {@code R} too,
  * since the ranges hold their streams open at the same time. Terms the budget does NOT cover, so
  * realized peak still carries an {@code R}× component: the {@code max(2, …)} floor (each range opens
  * at least 2 streams), the {@code R} concurrent writers' buffers, and — the largest term measured in
  * practice — the allocation float of decoding and of stepping over skipped pages, which scales with
  * {@code R} and is reclaimable rather than live.
  *
- * <p><b>Degenerate cases.</b> Fewer than two distinct sample keys ⇒ {@link #boundaries} returns
+ * <p><b>Degenerate cases.</b> Fewer than two distinct sample keys ⇒ {@link MergePlanner#boundaries}
+ * returns
  * {@code null} and {@link SortTransform} falls back to the untouched serial path (so a keyspace that
  * cannot be split is byte-identical to today). Fewer distinct keys than {@code R} ⇒ fewer ranges.
  * Empty ranges produce zero parts. {@code R == 1} never reaches this class — the serial path handles it.
@@ -69,7 +70,7 @@ import org.slf4j.LoggerFactory;
  * <p><b>Cascading ranges are unreachable in normal operation, and probably unnecessary at all.</b>
  * A cascade is a multi-pass merge: when a range's fan-in is narrower than the staged-segment count it
  * merges in several passes, rewriting every one of its rows each time. {@link
- * SortTransform} clamps {@code R} so that cannot happen ({@link MergePlanner#effectiveRanges}) and falls back to
+ * MergePlanner} clamps {@code R} so that cannot happen ({@link MergePlanner#effectiveRanges}) and falls back to
  * the serial merge when not even one range fits, so no production run reaches the cascade branches
  * below.
  *
@@ -92,8 +93,9 @@ import org.slf4j.LoggerFactory;
  * reader can tell a complete file set from a truncated one without trusting a sidecar. It is assigned
  * late by necessity: a part's index is its position in the GLOBAL roll sequence, which depends on how
  * many parts every lower range produced, and no range knows that while it is writing. Each range
- * therefore hands its parts back OPEN ({@link ParallelRangeWorker.Result#writers}), and {@link DatasetPublisher} — which
- * collects the results in range order — assigns the indices, marks the last part final, and closes.
+ * therefore hands its parts back OPEN ({@link ParallelRangeWorker.Result#writers}), and {@link
+ * DatasetPublisher} — which collects the results in range order — assigns the indices, marks the
+ * last part final, and closes.
  * Deferring the footer rather than the data keeps the cost small: a drained-but-unclosed writer has
  * already flushed its row groups and retains only their metadata plus at most one buffered row group.
  */
@@ -351,7 +353,7 @@ final class ParallelRangeMerge {
     /**
      * Release the open, unstamped parts of ranges that SUCCEEDED before a sibling failed. Their
      * writers are handed back open by design (the global index is assigned later), so a failure that
-     * skips {@link SortTransform}'s publish would otherwise strand descriptors until GC — and the
+     * skips {@link DatasetPublisher}'s publish would otherwise strand descriptors until GC — and the
      * sweep below would unlink files still held open. Never stamps: an aborted merge's parts must not
      * claim a position in a sequence that will never be published.
      */
