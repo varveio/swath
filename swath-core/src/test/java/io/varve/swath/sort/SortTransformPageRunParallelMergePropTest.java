@@ -71,6 +71,7 @@ class SortTransformPageRunParallelMergePropTest {
     // eight merge ranges and deliberately keeps rolled writers open, so it is not a new production
     // envelope or an attribution of this heap to final writers alone.
     private static final long PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES = 1L << 30;
+    private static final long PROCESS_MERGE_PERF_WORKER_HEAP_BYTES = 2L << 30;
     private static final int MAX_GC_ATTEMPTS = 50;
 
     private final ListEntryComparator cmp = new ListEntryComparator();
@@ -634,9 +635,9 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     @Example
-    @Tag("deep")
-    void processMergeStressR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
-        Path root = Files.createTempDirectory("prange-final-writer-stress-");
+    @Tag("perf")
+    void processMergePerfR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
+        Path root = Files.createTempDirectory("prange-process-merge-perf-");
         try {
             Path staging = Files.createDirectories(root.resolve("_staging"));
             SortConfig config = SortConfigs.base()
@@ -665,6 +666,10 @@ class SortTransformPageRunParallelMergePropTest {
                     .isEqualTo(outputAllowance);
             awaitCollected(wide.fixture());
             long settledBaseline = settleHeapBytes();
+            long testWorkerMaxHeap = Runtime.getRuntime().maxMemory();
+            assertThat(testWorkerMaxHeap)
+                    .as("the perf tier runs this heap characterization in its isolated 2 GiB worker")
+                    .isGreaterThanOrEqualTo(PROCESS_MERGE_PERF_WORKER_HEAP_BYTES);
             HeapSampler sampler = HeapSampler.start(settledBaseline);
             long sampledPeak;
             try {
@@ -677,12 +682,14 @@ class SortTransformPageRunParallelMergePropTest {
                 sampledPeak = sampler.stop();
             }
             long sampledDelta = Math.max(0L, sampledPeak - settledBaseline);
-            System.out.printf("WP5_1_PROCESS_MERGE_STRESS ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
+            System.out.printf("WP5_1_PROCESS_MERGE_PERF ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
                             + "initial_output_allowance=%d final_file_bytes=%d "
+                            + "test_worker_max_heap_bytes=%d "
                             + "settled_baseline_heap_bytes=%d sampled_peak_heap_bytes=%d "
                             + "sampled_incremental_heap_bytes=%d heap_characterization_budget_bytes=%d%n",
                     ranges, perRangeFanIn, softLimit, outputAllowance, config.finalFileBytes(),
-                    settledBaseline, sampledPeak, sampledDelta, PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
+                    testWorkerMaxHeap, settledBaseline, sampledPeak, sampledDelta,
+                    PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
             assertThat(sampledPeak)
                     .as("sampled process heap is under the §7.2 Parquet characterization budget")
                     .isLessThan(PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
@@ -1023,7 +1030,7 @@ class SortTransformPageRunParallelMergePropTest {
 
     /**
      * Build and persist the wide-owner fixture in a separate frame, then return only durable inputs
-     * and a weak canary. The deep measurement proves that this construction state is reclaimable
+     * and a weak canary. The perf measurement proves that this construction state is reclaimable
      * before it samples merge-process heap.
      *
      * <p>The real writer's compressed {@code dataSize()} controls the 4 MiB roll threshold. Thus
@@ -1032,7 +1039,7 @@ class SortTransformPageRunParallelMergePropTest {
      */
     private WideStressStaging stageWideWriterStress(Path staging, int ranges) throws IOException {
         // 112,000 rows × 2 KiB clears 41 × 4 MiB after Parquet compression, while each 1,000-row
-        // page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the deep test JVM.
+        // page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the perf test JVM.
         Scenario scenario = wideOwnerScenario(ranges, 14_000, 2 * 1024);
         WeakReference<Scenario> fixture = new WeakReference<>(scenario);
         ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
