@@ -1038,7 +1038,10 @@ the opt-in touched-mapping characterization and ordinary peak-RSS meter are the 
 no memory-neutral claim follows from the `O(R)` heap-key bound. Preallocation polls cancellation and
 marks progress per at-most-64-KiB chunk. Allocation/map failure records attempted work, emits the
 stable `proof_spool_allocation_failed` classification, cleans the path, and stays a checked
-`IOException`; cancellation retains its interrupt/cancellation disposition. Spools use one shared
+`IOException`; a pre-latched interrupt or `ClosedByInterruptException` during write/force/map keeps
+the interrupt, publishes attempted work, cleans the path, and translates to merge cancellation
+without that failure reason. The coordinator reads and requires the fixed slot's reserved four-byte
+field to remain zero, so its mapped-byte accounting covers all 56 fixed bytes. Spools use one shared
 open descriptor for the whole range fleet. That descriptor is an explicit
 one-FD reservation in both the effective-range clamp and the dynamic output-writer allowance, not
 generic process headroom. The spool is deleted before successful writer return and joins

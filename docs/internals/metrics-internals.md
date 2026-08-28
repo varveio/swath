@@ -116,7 +116,8 @@ Proof-spool work is no longer an unmetered exclusion. The live meter prefix is
   bytes, resident memory, or a memory-neutral claim.
 - `preallocation.operations` counts every physical write attempt plus the final force;
   `preallocation.attempted.bytes` counts bytes submitted, including a failed attempt. Cancellation
-  is polled and progress marked at each at-most-64-KiB chunk.
+  is polled and progress marked at each at-most-64-KiB chunk. A channel interrupt during write/force
+  retains these attempted-work totals but is cooperative cancellation, not allocation failure.
 - `mapped.operations` / `mapped.bytes` count every fixed-field/key mapped update and read, including
   RangeBuilder source-switch flush/reload. These correctly scale with pages/source switches, not
   merely topology. The `S=2,R=4` characterization records 172 operations / 2,556 bytes at 8 pages

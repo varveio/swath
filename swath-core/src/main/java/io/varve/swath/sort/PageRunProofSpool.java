@@ -12,6 +12,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -229,6 +230,15 @@ final class PageRunProofSpool {
                 stats.publish();
                 throw cancelled;
             } catch (IOException | RuntimeException failure) {
+                if (isInterrupted(failure)) {
+                    Thread.currentThread().interrupt();
+                    stats.publish();
+                    cleanFailedAllocation(path, opened, mappingArena, stats, failure);
+                    stats.publish();
+                    MergeCancellation.Cancelled cancelled = new MergeCancellation.Cancelled();
+                    cancelled.initCause(failure);
+                    throw cancelled;
+                }
                 stats.recordAllocationFailure();
                 stats.publish();
                 cleanFailedAllocation(path, opened, mappingArena, stats, failure);
@@ -400,7 +410,11 @@ final class PageRunProofSpool {
             long firstFrameOffset = storage.get(LONG, offset + 32);
             long endFrameOffset = storage.get(LONG, offset + 40);
             int verifiedSamples = storage.get(INT, offset + 48);
+            int reserved = storage.get(INT, offset + 52);
             stats.recordMapped(1, FIXED_BYTES, System.nanoTime() - started);
+            if (reserved != 0) {
+                throw new IOException("page-run proof spool reserved field is non-zero in " + path);
+            }
             byte[] firstMin = hasPages ? readKey(segment, KeyField.FIRST_MIN) : null;
             byte[] lastMin = hasPages ? readKey(segment, KeyField.LAST_MIN) : null;
             byte[] zoneMax = hasPages ? readKey(segment, KeyField.ZONE_MAX) : null;
@@ -545,6 +559,22 @@ final class PageRunProofSpool {
         } finally {
             stats.recordService(System.nanoTime() - started);
         }
+    }
+
+    private static boolean isInterrupted(Throwable failure) {
+        if (Thread.currentThread().isInterrupted()) {
+            return true;
+        }
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ClosedByInterruptException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static long reservedFieldOffset(int segment) {
+        return slotOffset(segment) + 52;
     }
 
     private static long slotOffset(int segment) {

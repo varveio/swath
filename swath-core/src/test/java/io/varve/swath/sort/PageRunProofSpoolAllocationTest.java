@@ -11,6 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -132,6 +133,64 @@ class PageRunProofSpoolAllocationTest {
         assertThat(metrics.proofSpoolPreallocationAttemptedBytes.sum())
                 .isEqualTo(PageRunProofSpool.slotBytes());
         assertThat(metrics.count("SORT.proof_spool_allocation_failed")).isEqualTo(1);
+        assertThat(path).doesNotExist();
+    }
+
+    @Test
+    void interruptInsidePreallocationWriteIsCancellationWithAttemptMetrics(@TempDir Path root) {
+        assertInterruptedAllocation(root.resolve("write-interrupt.tmp"), new PageRunProofSpool.AllocationIo() {
+            @Override
+            public int write(ByteBuffer source, long position) throws IOException {
+                throw new ClosedByInterruptException();
+            }
+
+            @Override
+            public void force() {
+            }
+        }, 1, PageRunProofSpool.slotBytes(), 0);
+    }
+
+    @Test
+    void interruptInsidePreallocationForceIsCancellationWithCompletedWriteMetrics(
+            @TempDir Path root) {
+        assertInterruptedAllocation(root.resolve("force-interrupt.tmp"),
+                new PageRunProofSpool.AllocationIo() {
+                    @Override
+                    public int write(ByteBuffer source, long position) {
+                        int written = source.remaining();
+                        source.position(source.limit());
+                        return written;
+                    }
+
+                    @Override
+                    public void force() throws IOException {
+                        throw new ClosedByInterruptException();
+                    }
+                }, 2, PageRunProofSpool.slotBytes(), 1);
+    }
+
+    private static void assertInterruptedAllocation(Path path, PageRunProofSpool.AllocationIo io,
+                                                    long operations, long attemptedBytes,
+                                                    long progress) {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+        PageRunProofSpool.Stats stats = new PageRunProofSpool.Stats(metrics);
+        PageRunProofSpool.Preallocator preallocator =
+                (channel, bytes, observed) -> PageRunProofSpool.preallocate(io, bytes, observed);
+        try {
+            assertThatThrownBy(() -> new PageRunProofSpool.Writer(path, 1, stats, preallocator,
+                    (channel, mode, bytes, arena) -> MemorySegment.NULL))
+                    .isInstanceOf(MergeCancellation.Cancelled.class)
+                    .hasCauseInstanceOf(ClosedByInterruptException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+        assertThat(metrics.proofSpoolLogicalExtentBytes.sum())
+                .isEqualTo(PageRunProofSpool.slotBytes());
+        assertThat(metrics.proofSpoolPreallocationOperations.sum()).isEqualTo(operations);
+        assertThat(metrics.proofSpoolPreallocationAttemptedBytes.sum()).isEqualTo(attemptedBytes);
+        assertThat(metrics.progress.sum()).isEqualTo(progress);
+        assertThat(metrics.count("SORT.proof_spool_allocation_failed")).isZero();
         assertThat(path).doesNotExist();
     }
 }
