@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.LongConsumer;
@@ -64,12 +65,19 @@ public final class SortTransform {
     private final MergeInputProfile inputProfile;
     // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
+    // Deterministic package-private crash-matrix seam. Production installs NO_OP, so each
+    // publication boundary costs one non-allocating no-op call and carries no global state.
+    private final PublicationStepHook publicationStepHook;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
     private final MergeFanInPlanner fanInPlanner;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
+        this(run, PublicationStepHook.NO_OP);
+    }
+
+    SortTransform(SortRun run, PublicationStepHook publicationStepHook) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -79,6 +87,7 @@ public final class SortTransform {
         this.finalWriterFactory = run.finalWriterFactory();
         this.inputProfile = run.inputProfile();
         this.rangeTimer = run.rangeMergeTimer();
+        this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
         this.fanInPlanner = new MergeFanInPlanner(config, metrics, run.softFdLimitSupplier());
     }
 
@@ -141,6 +150,7 @@ public final class SortTransform {
         cleanStaleTmp(outputDir);
         cleanStaleMergeIntermediates(stagingDir);
         cleanStalePrangeTmp(stagingDir);
+        publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
         // memory, and fd gates, split the keyspace into
@@ -188,6 +198,7 @@ public final class SortTransform {
                             outputSequence),
                     true, progressCallback, metrics, equalKeyPolicy, comparator);
         }
+        publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.
         long mergePasses = merge.mergePasses();
@@ -199,13 +210,17 @@ public final class SortTransform {
         // set into place. This avoids destroying a recoverable published output when a segment has
         // magic-preserving body corruption that the O(1) trailer preflight cannot prove absent.
         cleanStaleFinals(outputDir);
+        publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
         for (int i = 0; i < finalFiles.size(); i++) {
             atomicRename(tmpFiles.get(i), finalFiles.get(i));
+            publicationStep(PublicationStep.AFTER_PART_RENAME, i);
         }
         Durability.directory(outputDir);
+        publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
 
         // Publish commit point (manifest.json is written here) — AFTER renames, BEFORE staging delete.
         publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
+        publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
 
         // Cascade intermediates are always disposable; original listing segments may be retained for
         // a diagnostic merge-only measurement run.
@@ -213,6 +228,7 @@ public final class SortTransform {
             Files.deleteIfExists(p);
         }
         completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
+        publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
     }
@@ -364,24 +380,30 @@ public final class SortTransform {
                     finalWriterFactory.forOutputSequence());
             writer.markFinal();
             writer.close();
-            cleanStaleFinals(outputDir);
-            atomicRename(tf.get(0), finalFiles.get(0));
+            tmpsInOrder.addAll(tf);
         } else {
-            cleanStaleFinals(outputDir);
-            int filenameIndex = 0;
-            for (Path tmp : tmpsInOrder) {
-                String name = StagingNames.finalPart(filenameIndex++);
-                Path finalPath = outputDir.resolve(name);
-                atomicRename(tmp, finalPath);
-                finalFiles.add(finalPath);
-            }
             for (ParallelRangeMerge.RangeResult rr : results) {
                 finalWriters.addAll(rr.writers());
             }
         }
+        publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
+        cleanStaleFinals(outputDir);
+        publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
+        if (finalFiles.isEmpty()) {
+            for (int i = 0; i < tmpsInOrder.size(); i++) {
+                finalFiles.add(outputDir.resolve(StagingNames.finalPart(i)));
+            }
+        }
+        for (int i = 0; i < tmpsInOrder.size(); i++) {
+            atomicRename(tmpsInOrder.get(i), finalFiles.get(i));
+            publicationStep(PublicationStep.AFTER_PART_RENAME, i);
+        }
         Durability.directory(outputDir);
+        publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
         publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
+        publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
         completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
+        publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, results.size());
     }
@@ -403,6 +425,14 @@ public final class SortTransform {
         // itself, not just its contents — but only if nothing unexpected is left in it (never a
         // recursive wipe of foreign content the sorter doesn't own).
         tryDeleteEmptyStagingDir(stagingDir);
+    }
+
+    private void publicationStep(PublicationStep step) throws IOException {
+        publicationStep(step, -1);
+    }
+
+    private void publicationStep(PublicationStep step, int ordinal) throws IOException {
+        publicationStepHook.reached(step, ordinal);
     }
 
     /** Resolve and validate diagnostic retention before any merge or publish mutation. */
