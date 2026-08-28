@@ -9,6 +9,7 @@ import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.function.LongConsumer;
 
@@ -54,7 +55,7 @@ final class RolledPartWriter {
      */
     static long drain(SortedCursor merged, long finalFileBytes, FileFactory fileFactory,
                       boolean markFinalOnLast, LongConsumer progressCallback, SortMetrics metrics,
-                      EqualKeyPolicy equalKeyPolicy)
+                      EqualKeyPolicy equalKeyPolicy, Comparator<ListEntry> comparator)
             throws IOException {
         List<SortedFileWriter> open = new ArrayList<>();
         try {
@@ -63,7 +64,7 @@ final class RolledPartWriter {
             // one writer, exactly as before this loop was shared with the parallel path.
             long totalRows =
                     drainOpen(merged, finalFileBytes, fileFactory, progressCallback, metrics,
-                            equalKeyPolicy, open, true);
+                            equalKeyPolicy, comparator, open, true);
             if (markFinalOnLast) {
                 if (open.isEmpty()) {
                     // Empty listing: still publish one valid, self-describing empty sorted file.
@@ -111,13 +112,15 @@ final class RolledPartWriter {
      */
     static long drainOpen(SortedCursor merged, long finalFileBytes, FileFactory fileFactory,
                           LongConsumer progressCallback, SortMetrics metrics,
-                          EqualKeyPolicy equalKeyPolicy, List<SortedFileWriter> out,
+                          EqualKeyPolicy equalKeyPolicy, Comparator<ListEntry> comparator,
+                          List<SortedFileWriter> out,
                           boolean closeRolledAway) throws IOException {
         long totalRows = 0;
         long batchRows = 0;
         try {
             SortedFileWriter writer = null;
             byte[] previousKey = null;
+            ListEntry previousEntry = null;
             boolean deferredForCurrentKey = false;
             while (merged.hasNext()) {
                 MergeCancellation.check();
@@ -132,7 +135,7 @@ final class RolledPartWriter {
                         && KeyBytes.compareUnsigned(previousKey, entryKey) == 0;
                 if (equalKeyPolicy == EqualKeyPolicy.REJECT && sameKey) {
                     metrics.recordStealReason("SORT", "equal_key_rejected");
-                    throw DuplicateKeyException.forEntry(entry);
+                    throw DuplicateKeyException.forAdjacentEntries(previousEntry, entry, comparator);
                 }
                 if (rollReady && sameKey) {
                     // A key is the future VERSIONS path's unsplittable atom. Record once for the
@@ -160,6 +163,7 @@ final class RolledPartWriter {
                 // KeyBytes treats this hot-path array as immutable. Retain one no-copy reference:
                 // final rolling uses O(1) extra state even for arbitrarily many versions of one key.
                 previousKey = entryKey;
+                previousEntry = entry;
                 totalRows++;
                 // §3.2: batched merge-progress feed (never per-row) — see KWayMerge.PROGRESS_BATCH_ROWS.
                 if (++batchRows >= KWayMerge.PROGRESS_BATCH_ROWS) {

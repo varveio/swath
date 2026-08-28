@@ -174,7 +174,7 @@ public final class SortTransform {
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
                     () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
                             outputSequence),
-                    true, progressCallback, metrics, equalKeyPolicy);
+                    true, progressCallback, metrics, equalKeyPolicy, comparator);
         }
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.

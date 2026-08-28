@@ -38,7 +38,7 @@ class RolledPartWriterTest {
                 RecordingWriter writer = new RecordingWriter();
                 files.add(writer);
                 return writer;
-            }, true, progress::add, metrics, EqualKeyPolicy.ALLOW);
+            }, true, progress::add, metrics, EqualKeyPolicy.ALLOW, comparator);
         }
 
         assertThat(rows).isEqualTo(entries.size());
@@ -68,9 +68,10 @@ class RolledPartWriterTest {
                 RecordingWriter writer = new RecordingWriter();
                 files.add(writer);
                 return writer;
-            }, true, ignored -> { }, metrics, EqualKeyPolicy.REJECT))
+            }, true, ignored -> { }, metrics, EqualKeyPolicy.REJECT, comparator))
                     .isInstanceOf(DuplicateKeyException.class)
-                    .hasMessage("sort-fixture found a duplicate key: 'a'");
+                    .hasMessage("sort-fixture found a duplicate key "
+                            + "(adjacent-equal under the sort order): 'a'");
         }
 
         assertThat(metrics.count("SORT.equal_key_rejected")).isEqualTo(1);

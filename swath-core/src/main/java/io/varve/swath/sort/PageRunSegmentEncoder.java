@@ -62,8 +62,8 @@ final class PageRunSegmentEncoder implements AutoCloseable {
 
     void append(PageBlock page) throws IOException {
         requireOpen();
-        byte[] pageMin = page.firstKey();
-        byte[] pageMax = page.lastKey();
+        byte[] pageMin = page.firstKeyUnsafe();
+        byte[] pageMax = page.lastKeyUnsafe();
         if (totalRecords == 0 || Arrays.compareUnsigned(pageMin, segmentMin) < 0) {
             segmentMin = pageMin;
         }

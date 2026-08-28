@@ -515,7 +515,7 @@ final class ParallelRangeMerge {
                 rows = RolledPartWriter.drainOpen(merged, config.finalFileBytes(),
                         () -> openRangePart(stagingDir, range, tmpParts, rangeWriterFactory,
                                 openPartCount, openPartLimit), safeProgress, metrics, equalKeyPolicy,
-                        parts, false);
+                        comparator, parts, false);
             } catch (IOException | RuntimeException e) {
                 // This range failed, so nothing it wrote will be published: release the open parts
                 // rather than strand their descriptors until the sweep. Never stamped -- an aborted

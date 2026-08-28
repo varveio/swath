@@ -135,7 +135,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).as("position-for-position equal to serial")
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -225,7 +225,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(rows).isSortedAccordingTo(cmp);
             assertThat(rows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -255,7 +255,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).containsExactlyInAnyOrderElementsOf(scenario.allEntries());
             assertThat(parallelRows).containsExactlyElementsOf(serialRows);
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -310,7 +310,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(parallelRows).as("position-for-position equal to serial")
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -365,7 +365,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
             detachTransformLog(appender);
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -395,7 +395,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(readAll(fellBack.finalFiles()))
                     .containsExactlyElementsOf(readAll(serial.finalFiles()));
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -487,7 +487,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(messages).anyMatch(message -> message.contains("reason=fd_limited"));
         } finally {
             detachTransformLog(appender);
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -526,7 +526,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .anyMatch(message -> message.contains("reason=would_cascade"));
         } finally {
             detachTransformLog(appender);
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -564,7 +564,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -593,7 +593,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(writers.openNow.get()).as("serial output channel closed on cancellation").isZero();
         } finally {
             Thread.interrupted();
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -629,7 +629,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -674,7 +674,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -732,7 +732,7 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(readAll(result.finalFiles())).as("still the exact input, in order")
                     .containsExactlyElementsOf(s.allEntries().stream().sorted(cmp).toList());
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -800,7 +800,7 @@ class SortTransformPageRunParallelMergePropTest {
                     .as("serial hook count equals every adjacent comparator-equal pair")
                     .isEqualTo(expectedPairs);
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -840,7 +840,7 @@ class SortTransformPageRunParallelMergePropTest {
                     units -> { }, FinalPassListener.NO_OP))
                     .isInstanceOf(IOException.class);
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 
@@ -906,6 +906,14 @@ class SortTransformPageRunParallelMergePropTest {
         return new Scenario(segments, all);
     }
 
+    private static void deleteTreeBestEffort(Path root) {
+        try {
+            Sweeps.deleteTree(root);
+        } catch (IOException ignored) {
+            // A test failure is more useful than a best-effort temporary-tree cleanup failure.
+        }
+    }
+
     private void assertParallelMatchesSerial(Scenario s, int ranges, long finalFileBytes,
                                              long mergeBudgetBytes) throws IOException {
         Path root = Files.createTempDirectory("prange-pagerun-");
@@ -936,7 +944,7 @@ class SortTransformPageRunParallelMergePropTest {
                 assertThat(names.get(i)).isEqualTo(String.format("part-%05d.parquet", i));
             }
         } finally {
-            Sweeps.deleteTree(root);
+            deleteTreeBestEffort(root);
         }
     }
 

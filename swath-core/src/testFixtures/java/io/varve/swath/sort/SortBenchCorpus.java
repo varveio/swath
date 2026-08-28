@@ -74,7 +74,7 @@ public final class SortBenchCorpus {
     }
 
     /** Best-effort removal of a measurement temporary tree. */
-    public static void deleteTree(Path root) throws IOException {
+    public static void deleteTree(Path root) {
         try {
             Sweeps.deleteTree(root);
         } catch (IOException ignored) {

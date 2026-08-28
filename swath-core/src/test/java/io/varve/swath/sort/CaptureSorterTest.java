@@ -165,7 +165,8 @@ class CaptureSorterTest {
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of()), metrics)
                 .sort(captureDir, outputDir))
                 .isInstanceOf(DuplicateKeyException.class)
-                .hasMessage("sort-fixture found a duplicate key: 'b'");
+                .hasMessage("sort-fixture found a duplicate key "
+                        + "(adjacent-equal under the sort order): 'b'");
         assertThat(metrics.count("SORT.equal_key_rejected"))
                 .as("one rejection signal for the failing final drain")
                 .isEqualTo(1);
@@ -204,7 +205,8 @@ class CaptureSorterTest {
 
         assertThatThrownBy(() -> new CaptureSorter(config(Map.of())).sort(captureDir, outputDir))
                 .isInstanceOf(DuplicateKeyException.class)
-                .hasMessageContaining("'a'");
+                .hasMessage("sort-fixture found a duplicate key across row types "
+                        + "(adjacent-equal key bytes regardless of row_type): 'a'");
     }
 
     /**

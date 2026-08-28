@@ -51,7 +51,9 @@ class ResIdxCrashFallbackTest {
         Path outputDir = Files.createDirectories(dir.resolve("out"));
 
         assertThatThrownBy(() -> new CaptureSorter(config()).sort(duplicateCapture, outputDir))
-                .isInstanceOf(DuplicateKeyException.class);
+                .isInstanceOf(DuplicateKeyException.class)
+                .hasMessage("sort-fixture found a duplicate key "
+                        + "(adjacent-equal under the sort order): 'b'");
 
         // No final file appeared before completeness — the whole point of the tmp-then-rename publish.
         assertThat(finalSortedFiles(outputDir)).isEmpty();
