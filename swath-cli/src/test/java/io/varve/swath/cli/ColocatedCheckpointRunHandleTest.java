@@ -23,6 +23,7 @@ import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.output.parquet.Manifest;
 import io.varve.swath.runtime.ListRunner;
+import io.varve.swath.sort.BenchmarkCheckpointCatalog;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
@@ -169,6 +170,28 @@ final class ColocatedCheckpointRunHandleTest {
                     });
         }
         assertThat(stagingNames(staging)).containsExactlyInAnyOrderElementsOf(finalizedNames);
+    }
+
+    @Test
+    void retainedSortedRunIsOrganicBenchmarkCatalogAuthority(@TempDir Path root) throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+
+        assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
+
+        Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+        Manifest.Identity identity = Manifest.readIdentity(outputDir).orElseThrow();
+        BenchmarkCheckpointCatalog.Authority authority =
+                BenchmarkCheckpointCatalog.read(outputDir, staging, identity);
+
+        assertThat(checkpoint).exists();
+        assertThat(DatasetLayout.of(outputDir).success()).exists();
+        assertThat(authority.runId()).isEqualTo(identity.runId());
+        assertThat(authority.argsHash()).isEqualTo(identity.argsHash());
+        assertThat(authority.segments()).isNotEmpty()
+                .allSatisfy(segment -> assertThat(segment.path().getParent()).isEqualTo(staging));
+        assertThat(authority.segments().stream().mapToLong(BenchmarkCheckpointCatalog.TrackedSegment::rows).sum())
+                .isEqualTo(50);
     }
 
     @Test

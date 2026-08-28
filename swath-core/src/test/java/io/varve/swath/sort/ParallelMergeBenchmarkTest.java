@@ -21,10 +21,10 @@ import io.varve.swath.model.ListingMode;
 import io.varve.swath.model.ObjectEntry;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.Manifest;
-import io.varve.swath.runtime.ListRunner;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -85,6 +85,48 @@ class ParallelMergeBenchmarkTest {
         Retained merge = completedRetained(root.resolve("merge"), "hash", "merge");
         assertThatIllegalArgumentException().isThrownBy(() -> external(merge.staging()))
                 .withMessageContaining("non-original sort segment row");
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void foreignSchemaVersionsModesAndHotJournalsAreRejected(@TempDir Path root) throws Exception {
+        Retained schema = completedRetained(root.resolve("schema"), "hash", "seg");
+        executeSql(schema.checkpoint(), "PRAGMA user_version=999");
+        assertThatIllegalArgumentException().isThrownBy(() -> external(schema.staging()))
+                .withMessageContaining("schema version");
+
+        Retained mode = completedRetained(root.resolve("mode"), "hash", "seg");
+        executeSql(mode.checkpoint(), "UPDATE run_meta SET mode='VERSIONS' WHERE id=" + mode.runId());
+        assertThatIllegalArgumentException().isThrownBy(() -> external(mode.staging()))
+                .withMessageContaining("mode=VERSIONS");
+
+        for (String suffix : List.of("-journal", "-wal", "-shm")) {
+            Retained journal = completedRetained(root.resolve("journal" + suffix), "hash", "seg");
+            Files.createFile(journal.checkpoint().resolveSibling(
+                    journal.checkpoint().getFileName() + suffix));
+            assertThatIllegalArgumentException().isThrownBy(() -> external(journal.staging()))
+                    .withMessageContaining("live SQLite companion");
+        }
+    }
+
+    @Test
+    @ResourceLock("SYSTEM_PROPERTIES")
+    void symlinkedAuthorityDirectoriesAreRejected(@TempDir Path root) throws Exception {
+        Retained stagingLink = completedRetained(root.resolve("staging-link"), "hash", "seg");
+        Path externalStaging = root.resolve("external-staging");
+        Files.move(stagingLink.staging(), externalStaging);
+        Files.createSymbolicLink(stagingLink.staging(), externalStaging);
+        assertThatIllegalArgumentException().isThrownBy(() -> external(stagingLink.staging()))
+                .withMessageContaining("non-symlink directory");
+
+        Retained checkpointLink = completedRetained(root.resolve("checkpoint-link"), "hash", "seg");
+        Path checkpointDir = checkpointLink.output().resolve(".swath");
+        Path externalCheckpointDir = root.resolve("external-checkpoint");
+        Files.move(checkpointDir, externalCheckpointDir);
+        Files.createSymbolicLink(checkpointDir, externalCheckpointDir);
+        assertThatIllegalArgumentException().isThrownBy(() -> external(checkpointLink.staging()))
+                .withMessageContaining("checkpoint directory")
+                .withMessageContaining("non-symlink");
     }
 
     @Test
@@ -153,6 +195,21 @@ class ParallelMergeBenchmarkTest {
                 List.of(first, second), oracle, CMP)).hasMessageContaining("input oracle");
         assertThatThrownBy(() -> BenchmarkRowOracle.validateEntriesForTesting(
                 List.of(first, second, third, third), oracle, CMP)).hasMessageContaining("input oracle");
+    }
+
+    @Test
+    void masterSnapshotHashesEveryRegularFileEvenWhenMetadataIsRestored(@TempDir Path output)
+            throws Exception {
+        Path finalPart = Files.writeString(output.resolve("part.parquet"), "first");
+        var modified = Files.getLastModifiedTime(finalPart);
+        BenchmarkMasterSnapshot snapshot = BenchmarkMasterSnapshot.capture(output);
+
+        Files.writeString(finalPart, "other");
+        Files.setLastModifiedTime(finalPart, modified);
+
+        assertThatThrownBy(snapshot::verifyUnchanged)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("modified retained master tree");
     }
 
     @Test
@@ -244,7 +301,9 @@ class ParallelMergeBenchmarkTest {
                     : "merge-1.pageseg";
             segment = writeSegment(staging, name);
             store.partFinalized(new PartFinalize(runId, 0, name,
-                    ListRunner.SORT_SEGMENT_FORMAT, 2, Files.size(segment), List.of()));
+                    new PageRunFormat(PageRunFormat.CURRENT_FORMAT_VERSION,
+                            PageRunFormat.ABSENT_EXTENSION),
+                    2, Files.size(segment), List.of()));
             if (completeRun) {
                 store.setSortPhase(runId, SortPhase.PUBLISHED);
                 store.markRunFinished(runId, RunStatus.COMPLETED);
@@ -271,6 +330,13 @@ class ParallelMergeBenchmarkTest {
     private static void assertNoSqliteCompanions(Path checkpoint) {
         assertThat(Files.exists(checkpoint.resolveSibling(checkpoint.getFileName() + "-wal"))).isFalse();
         assertThat(Files.exists(checkpoint.resolveSibling(checkpoint.getFileName() + "-shm"))).isFalse();
+    }
+
+    private static void executeSql(Path checkpoint, String sql) throws Exception {
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + checkpoint.toAbsolutePath());
+             var statement = connection.createStatement()) {
+            statement.execute(sql);
+        }
     }
 
     private static void restoreProperty(String key, String value) {

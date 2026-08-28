@@ -68,6 +68,11 @@ public final class SqliteCheckpointStore implements CheckpointStore {
         this.queue = new CheckpointWriteQueue(conn, queueCapacity, daemonWriter, metrics);
     }
 
+    /** Schema stamp required by immutable diagnostic readers that must never run migrations. */
+    public static int supportedSchemaVersion() {
+        return CheckpointSchema.SCHEMA_VERSION;
+    }
+
     /** Open (creating if absent) the checkpoint DB at {@code path}, applying PRAGMAs + DDL. */
     public static SqliteCheckpointStore open(Path path) throws CheckpointException {
         return open(path, CheckpointWriteQueue.DEFAULT_QUEUE_CAPACITY, false, null);

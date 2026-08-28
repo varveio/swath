@@ -109,12 +109,22 @@ or moves a seed cut count should assume the default build cannot see it.
 is labelled `arm=MERGE_BENCH_PAGE_RUN` and records zero listing fetches. It is never evidence for
 live `swath list --sort` listing throughput.
 
-By default it generates and validates a non-empty corpus. External staging must be a completed
-retained sorted run's `<out>/_staging`: the harness reads `<out>/.swath/checkpoint.sqlite` and
+By default it generates and validates a non-empty corpus. Create external staging through the
+organic diagnostic lifecycle (never by editing SQLite):
+
+```
+swath list s3://<bucket>/<prefix> --format parquet -o /path/to/out --sort \
+  --tune sort.keep-staging=on
+```
+
+The resulting `<out>/_staging` is accepted only alongside its retained co-located checkpoint:
+the harness reads `<out>/.swath/checkpoint.sqlite` and
 the run identity through an immutable read-only SQLite connection, requiring matching
-`args_hash`/`run_id`, completed/PUBLISHED state, and `_SUCCESS`, to snapshot exactly the
-checkpoint-tracked original listing segments. It refuses untracked `*.pageseg` files, including
-stale cascade or fixture debris, and verifies the retained tree is byte-identical after every arm.
+`args_hash`/`run_id`, the current checkpoint schema, OBJECTS mode, completed/PUBLISHED state, and
+`_SUCCESS`, to snapshot exactly the checkpoint-tracked original listing segments. It rejects live
+SQLite journal/WAL companions, symlinked authority directories, and untracked `*.pageseg` files
+(including stale cascade or fixture debris), and hashes every regular file to verify the retained
+tree is byte-identical after every arm.
 
 ```
 ./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \

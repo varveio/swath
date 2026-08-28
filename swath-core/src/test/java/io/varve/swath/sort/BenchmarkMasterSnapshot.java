@@ -50,8 +50,7 @@ final class BenchmarkMasterSnapshot {
                 Kind kind = attributes.isDirectory() ? Kind.DIRECTORY
                         : attributes.isRegularFile() ? Kind.FILE : Kind.OTHER;
                 String relativeText = relative.toString();
-                String digest = kind == Kind.FILE && contentLoadBearing(relativeText)
-                        ? sha256(path) : "";
+                String digest = kind == Kind.FILE ? sha256(path) : "";
                 result.add(new Entry(relativeText, kind,
                         kind == Kind.FILE ? attributes.size() : 0,
                         kind == Kind.FILE ? attributes.lastModifiedTime().toString() : "",
@@ -59,11 +58,6 @@ final class BenchmarkMasterSnapshot {
             }
         }
         return List.copyOf(result);
-    }
-
-    private static boolean contentLoadBearing(String relative) {
-        return relative.equals(".swath-state.json") || relative.equals("_SUCCESS")
-                || relative.startsWith(".swath" + java.io.File.separator + "checkpoint.sqlite");
     }
 
     private static String sha256(Path path) throws IOException {
