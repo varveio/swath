@@ -111,8 +111,10 @@ live `swath list --sort` listing throughput.
 
 By default it generates and validates a non-empty corpus. External staging must be a completed
 retained sorted run's `<out>/_staging`: the harness reads `<out>/.swath/checkpoint.sqlite` and
-the run identity to snapshot exactly the checkpoint-tracked original listing segments. It refuses
-untracked `*.pageseg` files, including stale cascade or fixture debris.
+the run identity through an immutable read-only SQLite connection, requiring matching
+`args_hash`/`run_id`, completed/PUBLISHED state, and `_SUCCESS`, to snapshot exactly the
+checkpoint-tracked original listing segments. It refuses untracked `*.pageseg` files, including
+stale cascade or fixture debris, and verifies the retained tree is byte-identical after every arm.
 
 ```
 ./gradlew :swath-core:test --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
@@ -121,12 +123,14 @@ untracked `*.pageseg` files, including stale cascade or fixture debris.
 
 The harness snapshots and validates the catalog once, then materializes every arm with
 same-filesystem hard links; it refuses physical-copy fallback so a cold-storage result cannot
-measure copying instead of merging. Source inputs remain untouched. It also opens every input for
-the per-stream heap probe before the arms, so its own results are **warm/primed**, never cold.
-The harness does not drop caches; cold brackets require a separately controlled runner that drops
-caches after all preparation/materialization and before each measured arm (for example, on Linux:
-`sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`). Record the cache state, `git_sha`,
-`corpus_id`, and logical output fingerprint from every `BENCH_*` line.
+measure copying instead of merging. Before timing, it fully reads and CRC-validates the source into
+a constant-memory row-count/multiset oracle, then opens every input for the per-stream heap probe.
+Every arm is therefore explicitly `cache_state=warm_primed`; this harness cannot produce a cold
+result. A true cold bracket needs a separate fresh-process protocol that prepares first, drops
+caches under external control, and launches exactly one measured arm without the oracle/heap probe
+in that process. Every output must be physically sorted and match the independent source oracle.
+Every `BENCH_*` line carries cache state, retained run identity (or generated sentinels), `git_sha`,
+`corpus_id`, and the stable ordered logical-output fingerprint when output exists.
 
 ## JMH micro-benchmarks
 
