@@ -12,9 +12,11 @@ import java.nio.file.Path;
  * Decode-free {@link PageFrontierStream} over one {@link PageRunSegmentWriter} page-run segment.
  * Reads one framed {@link PageBlock} record at a time and exposes the current page's
  * {@code [minKey, maxKey]} and {@code count} by structurally validating the body without decoding
- * rows. {@link #decodeCurrentPage()} runs the deferred {@link PageBlock#deserialize} on the retained
- * body bytes when (and only when) the merger emits the page; its cursor verifies payload exhaustion
- * and decoded first/last keys as it emits rows, without a second decode pass.
+ * rows. The IO layer parses the retained body exactly once. {@link #decodeCurrentPage()} transfers
+ * that same immutable body/header pair into a slice-backed {@link PageBlock} when (and only when)
+ * the merger emits the page; its cursor verifies payload exhaustion and decoded first/last keys as
+ * it emits rows, without a second header parse or stored-payload copy. A decoded block owns its body
+ * reference independently, so it remains valid after this frontier advances or closes.
  *
  * <p>Shares {@link PageRunSegmentReader}'s physical-integrity guarantees, single-sourced in
  * {@link PageRunSegmentIo}: header/trailer magic validated on open, every framed record's length
@@ -46,10 +48,8 @@ final class PageFrontierReader implements PageFrontierStream {
     private long recordsLeft;
     private long seenEntries;
 
-    private byte[] currentBody;
-    private byte[] currentMin;
-    private byte[] currentMax;
-    private int currentCount;
+    /** Current immutable body/header owner; decoded blocks retain it across advance/close. */
+    private PageRunSegmentIo.Page currentPage;
     private long indexBytesRead;
 
     /**
@@ -91,31 +91,31 @@ final class PageFrontierReader implements PageFrontierStream {
 
     @Override
     public boolean hasPage() {
-        return currentBody != null;
+        return currentPage != null;
     }
 
     @Override
     public byte[] minKey() {
-        return currentMin;
+        return currentPage.header().minKey();
     }
 
     @Override
     public byte[] maxKey() {
-        return currentMax;
+        return currentPage.header().maxKey();
     }
 
     @Override
     public int count() {
-        return currentCount;
+        return currentPage.header().count();
     }
 
     @Override
     public PageBlock decodeCurrentPage() throws IOException {
-        if (currentBody == null) {
+        if (currentPage == null) {
             throw io.fail("decodeCurrentPage() with no current page");
         }
         try {
-            return PageBlock.deserialize(currentBody, io.path());
+            return currentPage.decode(io.path());
         } catch (RuntimeException e) {
             throw io.corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body", e);
@@ -130,10 +130,7 @@ final class PageFrontierReader implements PageFrontierStream {
             if (!deferCompletenessToZoneProof) {
                 io.checkComplete(seenEntries);
             }
-            currentBody = null;
-            currentMin = null;
-            currentMax = null;
-            currentCount = 0;
+            currentPage = null;
             return;
         }
         recordsLeft--;
@@ -141,12 +138,8 @@ final class PageFrontierReader implements PageFrontierStream {
         // The min-monotonicity guard lives inside nextPage() (the shared IO layer), so this reader
         // and the entry-typed PageRunSegmentReader can never disagree about what a legal segment is.
         PageRunSegmentIo.Page page = io.nextPage();
-        PageRunSegmentIo.FrontierFields fields = page.fields();
-        this.currentBody = page.body();
-        this.currentMin = fields.minKey();
-        this.currentMax = fields.maxKey();
-        this.currentCount = fields.count();
-        this.seenEntries += fields.count();
+        this.currentPage = page;
+        this.seenEntries += page.header().count();
     }
 
     long currentPageOrdinal() {
@@ -196,6 +189,16 @@ final class PageFrontierReader implements PageFrontierStream {
         return io.proofTracking();
     }
 
+    /** Package-private lifetime probe: the body a decoded block must retain across advance/close. */
+    byte[] currentBodyOwner() {
+        return currentPage == null ? null : currentPage.body();
+    }
+
+    /** Package-private single-parse probe used by allocation characterization tests. */
+    PageBlockCodec.Header currentHeader() {
+        return currentPage == null ? null : currentPage.header();
+    }
+
     private void recordIndexBytes(long bytes) {
         indexBytesRead += bytes;
         metrics.recordRangeIndexBytes(bytes);
@@ -203,6 +206,7 @@ final class PageFrontierReader implements PageFrontierStream {
 
     @Override
     public void close() throws IOException {
+        currentPage = null;
         io.close();
     }
 }

@@ -905,6 +905,11 @@ dictionary counts and lengths, positive row count, codec, raw/stored payload len
 bytes, and `minKey <= maxKey` are bounded and validated before allocation. When a page is decoded,
 the decoded row count/payload exhaustion and first/last raw keys are checked against that header.
 Malformed bodies raise typed `page_run_body_corruption`; no replacement output is published.
+The read side owns one immutable CRC-validated record-body array for the required page lifetime and
+parses its header exactly once into a stored-payload offset/length. A decoded `PageBlock` retains
+that same body when the frontier advances or closes. `NONE` cursors read the slice directly;
+compressed codecs decompress from the slice into only the decoded payload. No second
+`storedPayloadLength` array is allocated, and serialization remains byte-exact.
 Each page's ordered flag records full-comparator order: comparator ties remain ordered, while a strict
 regression clears the flag. The writer repacks only pages whose flag is false, and every codec
 preserves the flag in the serialized header.

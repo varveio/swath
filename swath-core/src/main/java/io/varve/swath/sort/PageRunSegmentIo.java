@@ -28,7 +28,8 @@ import java.util.zip.CRC32C;
  * trailing-magic truncation check), the framed-record read ({@code [len u32][crc32c u32][body]} with
  * the {@code len<=0 || len>maxRecordLen} bound applied BEFORE allocation and a CRC32C body verify), the
  * end-of-stream completeness cross-check ({@code seenEntries == totalEntries}), the decode-free
- * bounded structural page-body validation/frontier parse, the <b>intra-segment min-monotonicity
+ * bounded single-pass page-header validation/frontier parse (with a zero-copy payload slice), the
+ * <b>intra-segment min-monotonicity
  * guard</b> ({@link #nextPage()}), and
  * the positional/sequential read primitives.
  *
@@ -167,12 +168,15 @@ final class PageRunSegmentIo implements AutoCloseable {
     record Record(byte[] body, int framedLen, boolean crcOk) {
     }
 
-    /** The decode-free leading fields of a page record body: {@code [minKeyLen u16][minKey][maxKeyLen u16][maxKey][count u32]}. */
-    record FrontierFields(byte[] minKey, byte[] maxKey, int count) {
-    }
-
-    /** One validated page record. Physical proof state stays primitive and opt-in. */
-    record Page(byte[] body, FrontierFields fields) {
+    /**
+     * One CRC-validated page record and its single parsed header. The body array is newly allocated
+     * by this IO instance and is thereafter immutable. A decoded {@link PageBlock} retains that body
+     * directly, so a frontier may advance or close without invalidating a previously returned block.
+     */
+    record Page(byte[] body, PageBlockCodec.Header header) {
+        PageBlock decode(Path sourcePath) {
+            return PageBlockCodec.deserialize(body, header, sourcePath);
+        }
     }
 
     private record SeekExpectation(long pageOrdinal, long frameOffset, long cumulativeEntries,
@@ -207,9 +211,9 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw fail("record CRC32C mismatch (torn or corrupt record)");
         }
         byte[] body = record.body();
-        FrontierFields fields;
+        PageBlockCodec.Header header;
         try {
-            fields = parseFrontierFields(body);
+            header = parsePageHeader(body);
         } catch (IllegalArgumentException e) {
             throw corruption(SegmentCorruptionException.PAGE_RUN_BODY_CORRUPTION,
                     "malformed page body: " + e.getMessage(), e);
@@ -218,11 +222,11 @@ final class PageRunSegmentIo implements AutoCloseable {
                 ? frameOffset - PageRunSegmentWriter.HEADER_BYTES : 0;
         if (seekExpectation != null) {
             verifySeekExpectation(ordinal, frameOffset, cumulativeEntries,
-                    cumulativeFramedBytes, fields.minKey());
+                    cumulativeFramedBytes, header.minKey());
         }
         pagesRead++;
-        checkMinMonotonic(fields.minKey());
-        previousMin = fields.minKey();
+        checkMinMonotonic(header.minKey());
+        previousMin = header.minKey();
         if (proofTracking) {
             int framedBytes = Math.addExact(8, record.framedLen());
             lastPageOrdinal = ordinal;
@@ -231,9 +235,9 @@ final class PageRunSegmentIo implements AutoCloseable {
             lastCumulativeFramedBytes = cumulativeFramedBytes;
             lastFramedBytes = framedBytes;
             framedBytesRead += framedBytes;
-            cumulativeEntries += fields.count();
+            cumulativeEntries += header.count();
         }
-        return new Page(body, fields);
+        return new Page(body, header);
     }
 
     /**
@@ -354,19 +358,19 @@ final class PageRunSegmentIo implements AutoCloseable {
         }
     }
 
-    /** Structurally validate a body and return its frontier fields without decoding rows. */
-    static FrontierFields parseFrontierFields(byte[] body) {
-        PageBlockCodec.SerializedFields fields = PageBlockCodec.parseSerializedFields(body);
-        if (Arrays.compareUnsigned(fields.minKey(), fields.maxKey()) > 0) {
+    /** Structurally validate a body once and return its zero-copy persisted-page header. */
+    static PageBlockCodec.Header parsePageHeader(byte[] body) {
+        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+        if (Arrays.compareUnsigned(header.minKey(), header.maxKey()) > 0) {
             throw new IllegalArgumentException(
                     "malformed PageBlock: minKey exceeds maxKey under unsigned byte order");
         }
-        if (fields.codec() == PageCodec.NONE
-                && fields.storedPayload().length != fields.rawPayloadLength()) {
+        if (header.codec() == PageCodec.NONE
+                && header.payloadLength() != header.rawPayloadLength()) {
             throw new IllegalArgumentException("malformed PageBlock: NONE payload lengths differ: raw="
-                    + fields.rawPayloadLength() + " stored=" + fields.storedPayload().length);
+                    + header.rawPayloadLength() + " stored=" + header.payloadLength());
         }
-        return new FrontierFields(fields.minKey(), fields.maxKey(), fields.count());
+        return header;
     }
 
     /** Positional read of exactly {@code n} bytes (does not move the channel position). */

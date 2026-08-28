@@ -18,7 +18,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Self-contained persisted page layout, structural parser, and front-coded payload writer. */
+/**
+ * Self-contained persisted page layout, one-pass structural header parser, and front-coded payload
+ * writer. Parsed headers retain offsets into their immutable owning record body; they never copy
+ * the stored payload.
+ */
 final class PageBlockCodec {
 
     static final byte TAG_OBJECT = 0;
@@ -66,9 +70,11 @@ final class PageBlockCodec {
 
         byte[] firstKey = block.firstKeyUnsafe();
         byte[] lastKey = block.lastKeyUnsafe();
-        byte[] storedPayload = block.storedPayloadUnsafe();
+        byte[] payloadOwner = block.payloadOwnerUnsafe();
+        int payloadOffset = block.payloadOffset();
+        int payloadLength = block.payloadLength();
         int total = 2 + firstKey.length + 2 + lastKey.length
-                + 4 + 1 + dictTablesSize + 1 + 1 + 4 + 4 + storedPayload.length;
+                + 4 + 1 + dictTablesSize + 1 + 1 + 4 + 4 + payloadLength;
         ByteBuffer buffer = ByteBuffer.allocate(total);
         putLenBytes(buffer, firstKey);
         putLenBytes(buffer, lastKey);
@@ -90,29 +96,33 @@ final class PageBlockCodec {
         buffer.put((byte) packedUseDict);
         buffer.put(block.codec().code());
         buffer.putInt(block.rawPayloadLength());
-        buffer.putInt(storedPayload.length);
-        buffer.put(storedPayload);
+        buffer.putInt(payloadLength);
+        buffer.put(payloadOwner, payloadOffset, payloadLength);
         return buffer.array();
     }
 
     static PageBlock deserialize(byte[] record, Path sourcePath) {
-        SerializedFields fields = parseSerializedFields(record);
-        return new PageBlock(fields.storedPayload(), fields.rawPayloadLength(), fields.codec(),
-                fields.dicts(), fields.useDict(), fields.count(), fields.minKey(), fields.maxKey(),
-                null, null, fields.storedPayload().length, fields.ordered(), sourcePath);
+        return deserialize(record, parseHeader(record), sourcePath);
     }
 
-    /** Structurally validated fields used by the decode-free frontier and full deserializer. */
-    record SerializedFields(byte[] minKey, byte[] maxKey, int count, boolean ordered,
-                            String[][] dicts, boolean[] useDict, PageCodec codec,
-                            int rawPayloadLength, byte[] storedPayload) {
+    /** Build a persisted block from the already-parsed header and its owning record body. */
+    static PageBlock deserialize(byte[] record, Header header, Path sourcePath) {
+        return new PageBlock(header, record, null, null, header.payloadLength(), sourcePath);
     }
 
     /**
-     * Validate every length, count, and mode before allocating from it. The stored payload copy is
-     * intentionally preserved here; WP2.4 replaces it with a slice-aware header representation.
+     * Structurally validated page metadata plus a slice into the owning serialized record body.
+     * The header owns only the small decoded key/dictionary metadata; it never copies the stored
+     * payload. {@code payloadOffset}/{@code payloadLength} remain valid for as long as the caller
+     * retains the body passed to {@link #parseHeader(byte[])}.
      */
-    static SerializedFields parseSerializedFields(byte[] record) {
+    record Header(byte[] minKey, byte[] maxKey, int count, boolean ordered,
+                  String[][] dicts, boolean[] useDict, PageCodec codec,
+                  int rawPayloadLength, int payloadOffset, int payloadLength) {
+    }
+
+    /** Validate every header length, count, and mode and return a zero-copy payload slice. */
+    static Header parseHeader(byte[] record) {
         ByteBuffer buffer = ByteBuffer.wrap(record);
         byte[] minKey = getBoundedLenBytes(buffer, "minKey");
         byte[] maxKey = getBoundedLenBytes(buffer, "maxKey");
@@ -171,10 +181,8 @@ final class PageBlockCodec {
             throw malformed("stored payload length " + storedPayloadLength
                     + " does not equal remaining body bytes " + buffer.remaining());
         }
-        byte[] storedPayload = new byte[storedPayloadLength];
-        buffer.get(storedPayload);
-        return new SerializedFields(minKey, maxKey, count, orderedByte == 1, dicts, useDict,
-                codec, rawPayloadLength, storedPayload);
+        return new Header(minKey, maxKey, count, orderedByte == 1, dicts, useDict,
+                codec, rawPayloadLength, buffer.position(), storedPayloadLength);
     }
 
     static IllegalArgumentException malformed(String message) {

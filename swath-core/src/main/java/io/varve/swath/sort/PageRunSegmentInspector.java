@@ -19,9 +19,9 @@ import java.util.List;
  *
  * <p><b>Reuses the shared read contract.</b> The trailer is read via {@link PageRunTrailer} (O(1), no
  * record walk); the framing/len-bound/CRC read and
- * the decode-free structural/min/max/count parse are the single-sourced {@link PageRunSegmentIo} primitives the
- * streaming readers use (no row materialization); the codec is read from a {@link PageBlock#deserialize}
- * of the (verified) body. Unlike the streaming readers this inspector does <b>not</b> throw on a
+ * the decode-free structural/min/max/count/codec parse are the single-sourced {@link
+ * PageRunSegmentIo} primitives the streaming readers use (no row materialization and one header
+ * parse). Unlike the streaming readers this inspector does <b>not</b> throw on a
  * per-record CRC mismatch — it records {@code crcOk=false} and keeps walking (via
  * {@link PageRunSegmentIo#nextRecord()}), so a debug dump can show exactly which record is torn. It
  * never mutates the file.
@@ -71,12 +71,12 @@ public final class PageRunSegmentInspector {
                 int count = -1;
                 String codec = "?";
                 try {
-                    PageRunSegmentIo.FrontierFields f = PageRunSegmentIo.parseFrontierFields(body);
-                    min = f.minKey();
-                    max = f.maxKey();
-                    count = f.count();
+                    PageBlockCodec.Header header = PageRunSegmentIo.parsePageHeader(body);
+                    min = header.minKey();
+                    max = header.maxKey();
+                    count = header.count();
                     if (crcOk) {
-                        codec = PageBlock.deserialize(body).codec().name();
+                        codec = header.codec().name();
                     }
                 } catch (RuntimeException parseFailed) {
                     // A CRC-bad body stays diagnosable with placeholder fields; a CRC-valid malformed

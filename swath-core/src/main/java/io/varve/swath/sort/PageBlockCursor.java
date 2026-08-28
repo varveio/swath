@@ -21,14 +21,17 @@ final class PageBlockCursor {
 
     private final PageBlock block;
     private final byte[] payload;
+    private final int payloadEnd;
     private int position;
     private int emitted;
     private byte[] previousKey = EMPTY_KEY;
     private byte[] decodedFirstKey;
 
-    PageBlockCursor(PageBlock block, byte[] payload) {
+    PageBlockCursor(PageBlock block, byte[] payload, int offset, int length) {
         this.block = block;
         this.payload = payload;
+        this.position = offset;
+        this.payloadEnd = Math.addExact(offset, length);
     }
 
     boolean hasNext() {
@@ -86,9 +89,9 @@ final class PageBlockCursor {
     }
 
     private void validateEnd(ListEntry lastEntry) {
-        if (position != payload.length) {
+        if (position != payloadEnd) {
             throw PageBlockCodec.malformed("decoded " + block.count() + " rows with "
-                    + (payload.length - position) + " trailing payload bytes");
+                    + (payloadEnd - position) + " trailing payload bytes");
         }
         if (!Arrays.equals(decodedFirstKey, block.firstKeyUnsafe())
                 || !Arrays.equals(lastEntry.key().rawUnsafe(), block.lastKeyUnsafe())) {

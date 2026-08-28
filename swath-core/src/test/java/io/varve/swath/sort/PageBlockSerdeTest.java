@@ -168,6 +168,75 @@ class PageBlockSerdeTest {
         assertThat(r1).containsExactly(r2);
     }
 
+    @ParameterizedTest
+    @EnumSource(PageCodec.class)
+    void persistedBlockRetainsOneBodyAndPayloadSliceWithoutCopy(PageCodec codec) {
+        List<ListEntry> rows = List.of(object("aaa"), object("mmm"), object("zzz"));
+        byte[] body = PageBlock.pack(rows, CMP, codec).serialize();
+        PageBlockCodec.Header header = PageBlockCodec.parseHeader(body);
+        PageBlock persisted = PageBlockCodec.deserialize(body, header, Path.of("owned.pageseg"));
+
+        assertThat(persisted.payloadOwnerUnsafe())
+                .as("the CRC-validated record body is the persisted block's payload owner")
+                .isSameAs(body);
+        assertThat(persisted.parsedHeaderUnsafe())
+                .as("decode reuses the frontier's one header parse")
+                .isSameAs(header);
+        assertThat(persisted.payloadOffset()).isEqualTo(header.payloadOffset()).isPositive();
+        assertThat(persisted.payloadLength()).isEqualTo(header.payloadLength())
+                .isEqualTo(body.length - header.payloadOffset());
+        assertThat(persisted.serialize()).containsExactly(body);
+        assertThat(decodeAll(persisted)).containsExactlyElementsOf(rows);
+    }
+
+    @Test
+    void decodedPageOwnsBodyAcrossFrontierAdvanceAndClose(@TempDir Path dir) throws IOException {
+        SortBuffer buffer = new SortBuffer(configWithCodec(PageCodec.NONE), CMP);
+        buffer.admit(1L, List.of(object("alpha"), object("bravo")));
+        buffer.admit(1L, List.of(object("charlie"), object("delta")));
+        Path path = dir.resolve("owned-lifetime.pageseg");
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
+
+        PageBlock first;
+        PageBlock second;
+        byte[] firstOwner;
+        PageFrontierReader reader = new PageFrontierReader(path, SortMetrics.NO_OP);
+        try {
+            firstOwner = reader.currentBodyOwner();
+            PageBlockCodec.Header firstHeader = reader.currentHeader();
+            first = reader.decodeCurrentPage();
+            assertThat(first.payloadOwnerUnsafe()).isSameAs(firstOwner);
+            assertThat(first.parsedHeaderUnsafe()).isSameAs(firstHeader);
+
+            reader.advance();
+            assertThat(reader.currentBodyOwner())
+                    .as("each frame owns a distinct immutable body")
+                    .isNotSameAs(firstOwner);
+            second = reader.decodeCurrentPage();
+            assertThat(second.payloadOwnerUnsafe()).isSameAs(reader.currentBodyOwner());
+        } finally {
+            reader.close();
+        }
+
+        assertThat(reader.currentBodyOwner()).isNull();
+        assertThat(reader.currentHeader()).isNull();
+        assertThat(decodeAll(first)).containsExactly(object("alpha"), object("bravo"));
+        assertThat(decodeAll(second)).containsExactly(object("charlie"), object("delta"));
+    }
+
+    @Test
+    void malformedStoredPayloadLengthIsRejectedBeforeABlockCanOwnTheBody() {
+        byte[] body = PageBlock.pack(List.of(object("only")), CMP, PageCodec.NONE).serialize();
+        int payloadLengthOffset = rawPayloadLenOffset(body) + Integer.BYTES;
+        ByteBuffer.wrap(body).putInt(payloadLengthOffset,
+                ByteBuffer.wrap(body).getInt(payloadLengthOffset) - 1);
+
+        assertThatThrownBy(() -> PageBlockCodec.parseHeader(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not equal remaining body bytes");
+    }
+
     // ------------------------------------------------------------------
     // Compress-at-pack: every adversarial shape above round-trips identically under
     // EVERY codec, a corrupt/mismatched declared length fails fast, and PageFrontierReader keeps

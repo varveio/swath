@@ -130,6 +130,21 @@ class PageRunSegmentTest {
     }
 
     @Test
+    void crcFailurePrecedesPersistedPageOwnershipHandoff(@TempDir Path dir) throws IOException {
+        Path path = dir.resolve("crc-before-owner.pageseg");
+        writeSimpleSegment(path, 4);
+        byte[] raw = Files.readAllBytes(path);
+        raw[PageRunSegmentWriter.HEADER_BYTES + 8] ^= 0x40;
+        Files.write(path, raw);
+
+        try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
+            assertThatThrownBy(io::nextPage)
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("CRC32C mismatch");
+        }
+    }
+
+    @Test
     void truncationBeforeTrailerFailsFastOnOpen(@TempDir Path dir) throws IOException {
         Path path = dir.resolve("seg.pgr");
         writeSimpleSegment(path, 200);

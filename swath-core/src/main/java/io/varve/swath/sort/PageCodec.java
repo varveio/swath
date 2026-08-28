@@ -18,7 +18,7 @@ import java.util.Arrays;
  * Centralizes the on-disk codec byte mapping ({@link #code()} / {@link #fromCode(byte)}) and every
  * codec's compress/decompress implementation in one place.
  *
- * <p><b>Thread-safety.</b> {@link #compress} and {@link #decompress} allocate a fresh codec
+ * <p><b>Thread-safety.</b> {@link #compress} and slice-aware {@link #decompress} allocate a fresh codec
  * instance (LZ4) or call stateless static methods (NONE, ZSTD1) on every invocation — no shared
  * mutable state, so concurrent calls from different threads (e.g. a future pack-on-fetch-thread
  * caller) never interfere with each other. Each call is otherwise a simple, one-shot,
@@ -34,13 +34,14 @@ enum PageCodec {
         }
 
         @Override
-        byte[] decompress(byte[] stored, int rawLen) {
-            if (stored.length != rawLen) {
+        byte[] decompress(byte[] stored, int offset, int length, int rawLen) {
+            if (length != rawLen) {
                 throw new IllegalStateException(
                         "PageBlock NONE codec length mismatch: expected " + rawLen + " but stored is "
-                                + stored.length);
+                                + length);
             }
-            return stored;
+            return offset == 0 && length == stored.length
+                    ? stored : Arrays.copyOfRange(stored, offset, offset + length);
         }
     },
 
@@ -55,11 +56,11 @@ enum PageCodec {
         }
 
         @Override
-        byte[] decompress(byte[] stored, int rawLen) {
+        byte[] decompress(byte[] stored, int offset, int length, int rawLen) {
             byte[] out = new byte[rawLen];
             int n;
             try {
-                n = new Lz4Decompressor().decompress(stored, 0, stored.length, out, 0, rawLen);
+                n = new Lz4Decompressor().decompress(stored, offset, length, out, 0, rawLen);
             } catch (MalformedInputException e) {
                 throw new IllegalStateException("corrupt LZ4 PageBlock payload", e);
             }
@@ -85,9 +86,9 @@ enum PageCodec {
         }
 
         @Override
-        byte[] decompress(byte[] stored, int rawLen) {
+        byte[] decompress(byte[] stored, int offset, int length, int rawLen) {
             byte[] out = new byte[rawLen];
-            long n = Zstd.decompressByteArray(out, 0, rawLen, stored, 0, stored.length);
+            long n = Zstd.decompressByteArray(out, 0, rawLen, stored, offset, length);
             if (Zstd.isError(n)) {
                 throw new IllegalStateException("ZSTD PageBlock decompress failed: " + Zstd.getErrorName(n));
             }
@@ -119,11 +120,12 @@ enum PageCodec {
     abstract byte[] compress(byte[] raw);
 
     /**
-     * Decompress {@code stored} (this codec's {@link #compress} output) back to the original
-     * {@code rawLen} bytes. Fails fast ({@link IllegalStateException}) on any length mismatch or
-     * corrupt input, rather than silently returning a truncated/garbled buffer.
+     * Decompress the {@code [offset, offset + length)} slice of {@code stored} (this codec's {@link
+     * #compress} output) back to the original {@code rawLen} bytes. Fails fast ({@link
+     * IllegalStateException}) on any length mismatch or corrupt input, rather than silently
+     * returning a truncated/garbled buffer.
      */
-    abstract byte[] decompress(byte[] stored, int rawLen);
+    abstract byte[] decompress(byte[] stored, int offset, int length, int rawLen);
 
     /** The codec whose {@link #code()} is {@code code}, or throws if none matches (corrupt record). */
     static PageCodec fromCode(byte code) {
