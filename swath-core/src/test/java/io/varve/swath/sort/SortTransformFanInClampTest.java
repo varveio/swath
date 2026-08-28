@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.IntSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -105,7 +106,8 @@ class SortTransformFanInClampTest {
         bytes[bytes.length - 1] ^= 0x01;
         Files.write(segment, bytes);
 
-        assertThatThrownBy(() -> PageRunSegmentDescriptor.readAll(List.of(segment)))
+        assertThatThrownBy(() -> PageRunSegmentDescriptor.readAll(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty()))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("bad or missing page-run trailer");
     }

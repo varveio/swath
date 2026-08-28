@@ -375,7 +375,8 @@ class PageRunSegmentTest {
         assertThat(readBack(path)).containsExactlyElementsOf(sorted);
         assertThat(PageRunTrailer.read(path).totalRecords()).isEqualTo(3);   // 1000+1000+500
         try (PageRunSegmentIo io = PageRunSegmentIo.open(path, SortMetrics.NO_OP)) {
-            assertThat(PageRunBoundarySample.read(io, PageRunTrailer.read(io)).status())
+            assertThat(PageRunBoundarySample.read(
+                    io, PageRunTrailer.read(io), ignored -> { }).status())
                     .isEqualTo(PageRunBoundarySample.Status.ABSENT);
         }
     }

@@ -10,30 +10,37 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
  * One kickoff-opened page-run segment and its retained file, trailer, and boundary-sample metadata.
  * Reading all descriptors before cleanup makes an unreadable internal input a preflight failure
  * rather than an optional fan-in refinement that silently falls back and fails later after working
- * files were removed.
+ * files were removed. Embedded sample keys flow into the merge-wide bounded candidate set while the
+ * segment is open; a descriptor never retains those keys.
  */
 record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunTrailer.Trailer trailer,
                                 PageRunBoundarySample.ReadResult sample) {
 
-    static List<PageRunSegmentDescriptor> readAll(List<Path> paths) throws IOException {
-        return readAll(paths, path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
-    }
-
-    /** Test seam for asserting the descriptor kickoff's open lifetime. */
-    static List<PageRunSegmentDescriptor> readAll(List<Path> paths, Opener opener) throws IOException {
+    /**
+     * Open every segment once for its trailer and, when {@code boundaryKeySink} is present, its
+     * optional boundary extension. An empty sink is the serial/arbitrary-run policy: the extension
+     * is not read at all.
+     */
+    static List<PageRunSegmentDescriptor> readAll(List<Path> paths, Opener opener,
+            Optional<Consumer<byte[]>> boundaryKeySink) throws IOException {
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(paths.size());
         for (Path path : paths) {
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
+                PageRunBoundarySample.ReadResult sample = boundaryKeySink.isPresent()
+                        ? PageRunBoundarySample.read(io, trailer, boundaryKeySink.orElseThrow())
+                        : PageRunBoundarySample.skipped(trailer.totalRecords());
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, PageRunBoundarySample.read(io, trailer)));
+                        trailer, sample));
             }
         }
         return List.copyOf(descriptors);

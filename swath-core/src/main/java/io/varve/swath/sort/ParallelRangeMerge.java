@@ -194,12 +194,14 @@ final class ParallelRangeMerge {
      * Sample evenly-spaced key boundaries partitioning {@code segments} into up to {@code desiredRanges}
      * contiguous ranges. Returns the {@code R-1} boundary keys (so the range count is
      * {@code boundaries.size() + 1}), or {@code null} when the keyspace has fewer than two distinct
-     * sample keys and so cannot be split (the caller then uses the serial path).
+     * sample keys and so cannot be split (the caller then uses the serial path). {@code distinct}
+     * already contains every validated embedded key streamed during descriptor kickoff; legacy or
+     * invalid descriptors add their scan samples here.
      */
     static List<byte[]> boundaries(List<PageRunSegmentDescriptor> segments,
-                                   int desiredRanges, SortMetrics metrics)
+                                   BoundaryCandidates distinct, int desiredRanges,
+                                   SortMetrics metrics)
             throws IOException {
-        BoundaryCandidates distinct = new BoundaryCandidates();
         boolean embedded = false;
         boolean scanned = false;
         for (PageRunSegmentDescriptor segment : segments) {
@@ -238,9 +240,9 @@ final class ParallelRangeMerge {
     }
 
     /**
-     * Add one page-run segment's page-minimum boundary candidates. The bounded trailer extension is
-     * preferred; absent, unknown, or invalid extensions fall back transactionally to a frontier scan
-     * without exposing provisional keys to the global set.
+     * Account for one page-run segment's page-minimum boundary candidates. A validated extension was
+     * already streamed into {@code distinct} during the descriptor's open; absent, unknown, or invalid
+     * extensions open the same frontier fallback and add its samples here.
      */
     private static SampleSource sampleKeys(PageRunSegmentDescriptor descriptor,
                                            BoundaryCandidates distinct,
@@ -248,13 +250,10 @@ final class ParallelRangeMerge {
             throws IOException {
         PageRunBoundarySample.ReadResult embedded = descriptor.sample();
         if (embedded.valid()) {
-            for (byte[] key : embedded.keys()) {
-                distinct.add(key);
-            }
             if (embedded.totalRecords() > PageRunBoundarySample.MAX_ENTRIES) {
                 metrics.recordStealReason("SORT", "merge_range_sample_capped");
             }
-            metrics.recordBoundaryIo(embedded.keys().size(), embedded.bytesRead(), 0);
+            metrics.recordBoundaryIo(embedded.entryCount(), embedded.bytesRead(), 0);
             metrics.markProgress();
             return SampleSource.EMBEDDED;
         }
@@ -376,6 +375,7 @@ final class ParallelRangeMerge {
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_order");
             case INVALID_BOUNDS ->
                     metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_bounds");
+            case SKIPPED -> throw new AssertionError("parallel boundary sampling was skipped");
             case EMBEDDED -> throw new AssertionError("valid sample cannot fall back");
         }
     }

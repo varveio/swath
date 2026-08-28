@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,11 +118,21 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         requirePageRunSegments(stagingSegments);
+        boolean parallelKickoff = config.mergeParallelism() > 1
+                && inputProfile.parallelRangesAllowed();
+        ParallelRangeMerge.BoundaryCandidates boundaryCandidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        Optional<Consumer<byte[]>> boundaryKeySink = parallelKickoff
+                ? Optional.of(boundaryCandidates::add)
+                : Optional.empty();
         // Validate and retain every trailer before deleting any disposable working file. Fan-in and
-        // range planning consume these descriptors; an unreadable segment is not an optional memory
-        // refinement and must fail at kickoff while the prior output and working evidence are intact.
+        // range planning consume these descriptors; parallel candidates also stream their embedded
+        // sample keys into one globally bounded set during this same open. An unreadable segment is
+        // not an optional memory refinement and must fail at kickoff while the prior output and
+        // working evidence are intact. Explicit serial and arbitrary-run merges skip extensions.
         List<PageRunSegmentDescriptor> segmentDescriptors =
-                PageRunSegmentDescriptor.readAll(stagingSegments);
+                PageRunSegmentDescriptor.readAll(stagingSegments,
+                        path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), boundaryKeySink);
         // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
         // below for what each sweep removes and why. Disposable working files are cleared before
         // work; prior published finals remain until their complete replacements are ready.
@@ -138,9 +150,9 @@ public final class SortTransform {
         // Parallel ranges consume the same page-run frontier as the serial path. The default is
         // core-derived and capped; effectiveRanges() may still route an ordinary run to the serial
         // path, and the completeness stamp makes multi-file parallel output self-describing.
-        if (config.mergeParallelism() > 1 && inputProfile.parallelRangesAllowed()) {
+        if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(segmentDescriptors, outputDir, stagingDir,
-                    publishListener, progressCallback, onFinalPassStarting);
+                    publishListener, progressCallback, onFinalPassStarting, boundaryCandidates);
             if (parallel != null) {
                 return parallel;
             }
@@ -223,7 +235,8 @@ public final class SortTransform {
     private SortTransformResult tryTransformParallel(List<PageRunSegmentDescriptor> segmentDescriptors,
             Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
-            FinalPassListener onFinalPassStarting) throws IOException {
+            FinalPassListener onFinalPassStarting,
+            ParallelRangeMerge.BoundaryCandidates boundaryCandidates) throws IOException {
         List<Path> stagingSegments = PageRunSegmentDescriptor.paths(segmentDescriptors);
         ParallelRangeMerge rangeMerge =
                 new ParallelRangeMerge(run);
@@ -267,7 +280,7 @@ public final class SortTransform {
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                segmentDescriptors, desiredRanges, metrics);
+                segmentDescriptors, boundaryCandidates, desiredRanges, metrics);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
         log.info("sort_merge_boundaries segments={} ranges={} duration_ms={}",

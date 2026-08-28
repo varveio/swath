@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -159,9 +160,10 @@ class SortTransformPageRunParallelMergePropTest {
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
         ParallelRangeMerge merge = new ParallelRangeMerge(run);
-        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segs);
+        ParallelKickoff kickoff = parallelKickoff(segs);
+        List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
         List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                descriptors, ranges, SortMetrics.NO_OP);
+                descriptors, kickoff.candidates(), ranges, SortMetrics.NO_OP);
         if (boundaries == null) {
             return null;
         }
@@ -186,6 +188,25 @@ class SortTransformPageRunParallelMergePropTest {
         }
         RolledPartWriter.closeInOrder(writers);
         return new CascadeRun(parts, rows, cascaded);
+    }
+
+    private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
+        ParallelRangeMerge.BoundaryCandidates candidates =
+                new ParallelRangeMerge.BoundaryCandidates();
+        List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(candidates::add));
+        return new ParallelKickoff(descriptors, candidates);
+    }
+
+    private static List<PageRunSegmentDescriptor> descriptorTrailers(List<Path> paths)
+            throws IOException {
+        return PageRunSegmentDescriptor.readAll(paths,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+    }
+
+    private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
+                                   ParallelRangeMerge.BoundaryCandidates candidates) {
     }
 
     private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
@@ -337,7 +358,7 @@ class SortTransformPageRunParallelMergePropTest {
             // working-set estimate and the trailer's encoded maxRecordLen.
             Path probeDir = Files.createDirectories(root.resolve("probe"));
             long perStream = PageRunSegmentDescriptor.maxRecordLen(
-                    PageRunSegmentDescriptor.readAll(stage(probeDir, s.segments())));
+                    descriptorTrailers(stage(probeDir, s.segments())));
             perStream = Math.max(perStream, SortConfigs.base().mergePerStreamBytes());
             long budget = perStream * segmentCount * allowed;
 
@@ -551,9 +572,10 @@ class SortTransformPageRunParallelMergePropTest {
                             SortMetrics.NO_OP, writers,
                             MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                             () -> softLimit, StaleFinalSweep.OWN_PARTS_ONLY));
-            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                    descriptors, 2, SortMetrics.NO_OP);
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
@@ -613,9 +635,10 @@ class SortTransformPageRunParallelMergePropTest {
                             SortMetrics.NO_OP, writers,
                             MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                             () -> -1, StaleFinalSweep.OWN_PARTS_ONLY));
-            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                    descriptors, 2, SortMetrics.NO_OP);
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
                     assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
@@ -648,9 +671,10 @@ class SortTransformPageRunParallelMergePropTest {
                             SortMetrics.NO_OP, writers,
                             MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                             () -> -1, StaleFinalSweep.OWN_PARTS_ONLY));
-            List<PageRunSegmentDescriptor> descriptors = PageRunSegmentDescriptor.readAll(segments);
+            ParallelKickoff kickoff = parallelKickoff(segments);
+            List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                    descriptors, 2, SortMetrics.NO_OP);
+                    descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             AtomicBoolean interruptRestored = new AtomicBoolean();
             Thread caller = new Thread(() -> {

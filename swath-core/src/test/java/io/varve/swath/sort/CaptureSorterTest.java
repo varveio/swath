@@ -130,10 +130,10 @@ class CaptureSorterTest {
         assertThat(Files.exists(segment)).isTrue();
         try (PageRunSegmentIo io = PageRunSegmentIo.open(segment, SortMetrics.NO_OP)) {
             PageRunBoundarySample.ReadResult sample =
-                    PageRunBoundarySample.read(io, PageRunTrailer.read(io));
+                    PageRunBoundarySample.read(io, PageRunTrailer.read(io), ignored -> { });
             assertThat(sample.status()).isEqualTo(PageRunBoundarySample.Status.ABSENT);
             assertThat(sample.totalRecords()).isEqualTo(3);
-            assertThat(sample.keys()).isEmpty();
+            assertThat(sample.entryCount()).isZero();
         }
     }
 

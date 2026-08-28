@@ -875,8 +875,13 @@ full-page scan. Mixed legacy/new input therefore selects the same boundaries as 
 
 Both sides use fixed 64 KiB chunk buffers: the writer batches header, prefixes, and keys instead of
 issuing per-key writes; the reader streams the bounded extension with O(extension bytes / 64 KiB)
-positioned reads. Reader peak storage is the retained sample-key arrays plus one 64 KiB scratch
-buffer, never a second full-extension copy.
+positioned reads. At a structured parallel kickoff, each segment's trailer and extension are read
+during the descriptor's single open. The reader validates one segment's sample transactionally,
+then feeds its keys into the merge-wide capped candidate set before closing that descriptor;
+descriptors retain only status, count, and byte metadata. Explicit `R=1` and arbitrary-sorted-run
+merges do not read the extension. Reader peak boundary state is the global candidate cap plus at
+most one segment's 4,096-key validation sample and one 64 KiB scratch buffer, never
+O(segments × samples).
 
 Across all segments, boundary selection deduplicates candidates and retains the deterministic
 bottom-hash 16,384 keys (1,024 per range at the supported 16-range maximum). This whole-run cap makes
