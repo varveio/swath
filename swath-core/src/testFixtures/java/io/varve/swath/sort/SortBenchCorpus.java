@@ -44,6 +44,9 @@ public final class SortBenchCorpus {
      */
     public static SortedCursor generatedCursor(int segment, int numSegments, int blockRows, long totalRows,
                                                long rowsPerDay, LocalDate base) {
+        if (blockRows <= 0) {
+            throw new IllegalArgumentException("blockRows must be positive, got " + blockRows);
+        }
         return new GeneratedCursor(segment, numSegments, blockRows, totalRows, rowsPerDay, base);
     }
 

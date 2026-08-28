@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.IntSupplier;
 import net.jqwik.api.Example;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
@@ -154,11 +155,8 @@ class SortTransformPageRunParallelMergePropTest {
                 .withFinalFileBytes(Long.MAX_VALUE)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(ranges);
-        SortRun run = new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                SortMetrics.NO_OP,
-                SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        SortRun run = sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT);
         ParallelRangeMerge merge = new ParallelRangeMerge(run);
         ParallelKickoff kickoff = parallelKickoff(segs);
         List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
@@ -435,11 +433,8 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig belowConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes + 1);
-            new SortTransform(new SortRun(belowConfig, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, belowMetrics,
-                    SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    () -> -1, StaleFinalSweep.OWN_PARTS_ONLY))
+            new SortTransform(sortRun(belowConfig, DuplicateHook.NO_OP, belowMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> -1))
                     .transform(belowSegments, belowOut, belowStaging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
 
@@ -453,11 +448,8 @@ class SortTransformPageRunParallelMergePropTest {
             SortConfig exactConfig = SortConfigs.base()
                     .withMergeParallelism(2)
                     .withMinParallelStagedBytes(stagedBytes(exactSegments));
-            new SortTransform(new SortRun(exactConfig, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, exactMetrics,
-                    SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    () -> -1, StaleFinalSweep.OWN_PARTS_ONLY))
+            new SortTransform(sortRun(exactConfig, DuplicateHook.NO_OP, exactMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> -1))
                     .transform(exactSegments, exactOut, exactStaging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
 
@@ -472,11 +464,8 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics fdMetrics = new CountingMetrics();
             SortConfig fdConfig = SortConfigs.base().withMergeParallelism(2);
             int exhaustedLimit = MergeFdBudget.FD_HEADROOM + 2;
-            new SortTransform(new SortRun(fdConfig, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, fdMetrics,
-                    SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    () -> exhaustedLimit, StaleFinalSweep.OWN_PARTS_ONLY))
+            new SortTransform(sortRun(fdConfig, DuplicateHook.NO_OP, fdMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> exhaustedLimit))
                     .transform(fdSegments, fdOut, fdStaging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
 
@@ -489,11 +478,8 @@ class SortTransformPageRunParallelMergePropTest {
             CountingMetrics limitedMetrics = new CountingMetrics();
             SortConfig limitedConfig = SortConfigs.base().withMergeParallelism(4);
             int limitedFdLimit = MergeFdBudget.FD_HEADROOM + 8;
-            new SortTransform(new SortRun(limitedConfig, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, limitedMetrics,
-                    SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    () -> limitedFdLimit, StaleFinalSweep.OWN_PARTS_ONLY))
+            new SortTransform(sortRun(limitedConfig, DuplicateHook.NO_OP, limitedMetrics,
+                    SortedFileWriterFactory.DEFAULT, () -> limitedFdLimit))
                     .transform(limitedSegments, limitedOut, limitedStaging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
 
@@ -531,11 +517,8 @@ class SortTransformPageRunParallelMergePropTest {
             // however, and is therefore the constraint that ultimately declines parallel merge.
             int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM + 8;
 
-            new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, metrics,
-                    SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    () -> partiallyLimitedFd, StaleFinalSweep.OWN_PARTS_ONLY))
+            new SortTransform(sortRun(config, DuplicateHook.NO_OP, metrics,
+                    SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd))
                     .transform(segments, output, staging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
 
@@ -568,10 +551,8 @@ class SortTransformPageRunParallelMergePropTest {
             // a third writer/descriptor is opened.
             int softLimit = MergeFdBudget.FD_HEADROOM + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                            SortMetrics.NO_OP, writers,
-                            MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                            () -> softLimit, StaleFinalSweep.OWN_PARTS_ONLY));
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
+                            () -> softLimit));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
@@ -600,10 +581,8 @@ class SortTransformPageRunParallelMergePropTest {
             Path staging = Files.createDirectories(output.resolve("_staging"));
             List<Path> segments = stage(staging, scenario.segments());
             SortConfig config = SortConfigs.base().withMergeParallelism(1);
-            SortTransform transform = new SortTransform(new SortRun(config, cmp,
-                    DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, writers,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, SortRun.PROCESS_SOFT_FD_LIMIT));
 
             assertThatThrownBy(() -> transform.transform(
                     segments, output, staging, PublishListener.NO_OP,
@@ -631,10 +610,7 @@ class SortTransformPageRunParallelMergePropTest {
                     new TrackingWriterFactory(earlierRangeWriting, new CountDownLatch(1));
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                            SortMetrics.NO_OP, writers,
-                            MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                            () -> -1, StaleFinalSweep.OWN_PARTS_ONLY));
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
@@ -667,10 +643,7 @@ class SortTransformPageRunParallelMergePropTest {
             TrackingWriterFactory writers = new TrackingWriterFactory(bothWriting);
             SortConfig config = SortConfigs.base().withMergeParallelism(2);
             ParallelRangeMerge merge = new ParallelRangeMerge(
-                    new SortRun(config, cmp, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                            SortMetrics.NO_OP, writers,
-                            MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                            () -> -1, StaleFinalSweep.OWN_PARTS_ONLY));
+                    sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
             List<byte[]> boundaries = ParallelRangeMerge.boundaries(
@@ -722,11 +695,9 @@ class SortTransformPageRunParallelMergePropTest {
             Path output = Files.createDirectories(root.resolve("out"));
             Path staging = Files.createDirectories(output.resolve("_staging"));
             List<Path> segs = stage(staging, s.segments());
-            SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
-                    new SortedParquetWriterFactory(config, SortMode.OBJECTS),
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, new SortedParquetWriterFactory(config, SortMode.OBJECTS),
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
             SortTransformResult result =
                     transform.transform(segs, output, staging, PublishListener.NO_OP,
                             units -> { }, FinalPassListener.NO_OP);
@@ -855,10 +826,9 @@ class SortTransformPageRunParallelMergePropTest {
             corruptTotalEntries(segs.get(0));
 
             SortConfig config = SortConfigs.base().withMergeParallelism(4);
-            SortTransform transform = new SortTransform(new SortRun(config, cmp, DuplicateHook.NO_OP,
-                    EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                    MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                    SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+            SortTransform transform = new SortTransform(sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                    SortRun.PROCESS_SOFT_FD_LIMIT));
             assertThatThrownBy(() -> transform.transform(segs, Files.createDirectories(
                     root.resolve("parallel").resolve("data")), staging, PublishListener.NO_OP,
                     units -> { }, FinalPassListener.NO_OP))
@@ -988,13 +958,17 @@ class SortTransformPageRunParallelMergePropTest {
                 .withFinalFileBytes(finalFileBytes)
                 .withMergeBudgetBytes(mergeBudgetBytes)
                 .withMergeParallelism(parallelism);
-        SortTransform transform = new SortTransform(
-                new SortRun(config, cmp, hook, EqualKeyPolicy.ALLOW, metrics,
-                        SortedFileWriterFactory.DEFAULT,
-                        MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                        SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+        SortTransform transform = new SortTransform(sortRun(config, hook, metrics,
+                SortedFileWriterFactory.DEFAULT, SortRun.PROCESS_SOFT_FD_LIMIT));
         return transform.transform(segs, output, staging, PublishListener.NO_OP,
                 units -> { }, FinalPassListener.NO_OP);
+    }
+
+    private SortRun sortRun(SortConfig config, DuplicateHook hook, SortMetrics metrics,
+                            SortedFileWriterFactory writerFactory, IntSupplier softFdLimitSupplier) {
+        return new SortRun(config, cmp, hook, EqualKeyPolicy.ALLOW, metrics, writerFactory,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                softFdLimitSupplier, StaleFinalSweep.OWN_PARTS_ONLY);
     }
 
     /** Stage each pre-sorted segment as a page-run {@code .pageseg} file — the LIVE listing format. */

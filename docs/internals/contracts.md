@@ -863,6 +863,9 @@ dictionary counts and lengths, positive row count, codec, raw/stored payload len
 bytes, and `minKey <= maxKey` are bounded and validated before allocation. When a page is decoded,
 the decoded row count/payload exhaustion and first/last raw keys are checked against that header.
 Malformed bodies raise typed `page_run_body_corruption`; no replacement output is published.
+Each page's ordered flag records full-comparator order: comparator ties remain ordered, while a strict
+regression clears the flag. The writer repacks only pages whose flag is false, and every codec
+preserves the flag in the serialized header.
 
 For `P` pages the sample stride is `max(1, ceil(P / 4096))`; minima at physical page ordinals
 `0, stride, 2*stride, ...` are retained, including repeats. The block CRC covers its complete header
