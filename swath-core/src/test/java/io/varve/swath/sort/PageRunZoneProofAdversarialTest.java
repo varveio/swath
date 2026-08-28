@@ -374,7 +374,7 @@ class PageRunZoneProofAdversarialTest {
         });
 
         try {
-            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { }))
                     .isInstanceOf(MergeCancellation.Cancelled.class);
         } finally {
             Thread.interrupted();

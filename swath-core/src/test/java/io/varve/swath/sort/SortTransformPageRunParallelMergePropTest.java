@@ -178,7 +178,7 @@ class SortTransformPageRunParallelMergePropTest {
             return null;
         }
         List<ParallelRangeWorker.Result> results =
-                merge.run(descriptors, staging, boundaries, units -> { });
+                merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { });
 
         List<Path> parts = new ArrayList<>();
         List<SortedFileWriter> writers = new ArrayList<>();
@@ -592,7 +592,7 @@ class SortTransformPageRunParallelMergePropTest {
             List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
-            assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("output-part fd budget exhausted");
             assertThat(writers.opened.get()).isEqualTo(2);
@@ -642,7 +642,7 @@ class SortTransformPageRunParallelMergePropTest {
                     - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);
-            assertThatThrownBy(() -> merge.run(kickoff.descriptors(), staging, boundaries, units -> { }))
+            assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(kickoff.descriptors()), staging, boundaries, units -> { }))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
                             + ", attempted=" + (outputAllowance + 1));
@@ -699,7 +699,7 @@ class SortTransformPageRunParallelMergePropTest {
             HeapSampler sampler = HeapSampler.start(settledBaseline);
             long sampledPeak;
             try {
-                assertThatThrownBy(() -> merge.run(wide.kickoff().descriptors(), staging,
+                assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(wide.kickoff().descriptors()), staging,
                         wide.boundaries(), units -> { }))
                         .isInstanceOf(IOException.class)
                         .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
@@ -775,7 +775,7 @@ class SortTransformPageRunParallelMergePropTest {
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
-                    assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
+                    assertThatThrownBy(() -> merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { }))
                             .isInstanceOf(IOException.class)
                             .hasMessageContaining("injected later range failure"));
             assertThat(writers.cooperativelyCancelled.get())
@@ -810,7 +810,7 @@ class SortTransformPageRunParallelMergePropTest {
             AtomicBoolean interruptRestored = new AtomicBoolean();
             Thread caller = new Thread(() -> {
                 try {
-                    merge.run(descriptors, staging, boundaries, units -> { });
+                    merge.run(PageRunCatalog.fromDescriptors(descriptors), staging, boundaries, units -> { });
                 } catch (Throwable t) {
                     failure.set(t);
                     interruptRestored.set(Thread.currentThread().isInterrupted());

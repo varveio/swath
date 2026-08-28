@@ -92,7 +92,7 @@ import org.slf4j.LoggerFactory;
  * reader can tell a complete file set from a truncated one without trusting a sidecar. It is assigned
  * late by necessity: a part's index is its position in the GLOBAL roll sequence, which depends on how
  * many parts every lower range produced, and no range knows that while it is writing. Each range
- * therefore hands its parts back OPEN ({@link ParallelRangeWorker.Result#writers}), and {@link SortTransform} — which
+ * therefore hands its parts back OPEN ({@link ParallelRangeWorker.Result#writers}), and {@link DatasetPublisher} — which
  * collects the results in range order — assigns the indices, marks the last part final, and closes.
  * Deferring the footer rather than the data keeps the cost small: a drained-but-unclosed writer has
  * already flushed its row groups and retains only their metadata plus at most one buffered row group.
@@ -145,7 +145,7 @@ final class ParallelRangeMerge {
      * <p>The writers are open because the completeness stamp cannot be written yet. A part's
      * {@code file_index} is its position in the output's GLOBAL roll sequence, which depends on how
      * many parts every lower range produced, and that is unknown until they all finish.
-     * {@link SortTransform} collects these results in range order, assigns the indices, marks the very
+     * {@link DatasetPublisher} collects these results in range order, assigns the indices, marks the very
      * last part final, and closes. {@code writers} is index-aligned with {@code tmpParts}.
      */
     private record IndexedRangeResult(int range, ParallelRangeWorker.Result result) {
@@ -162,13 +162,6 @@ final class ParallelRangeMerge {
      * immediately even while an earlier range is still draining. Siblings are interrupted, joined to
      * proven quiescence, and only afterwards are writers closed and owned files swept.
      */
-    List<ParallelRangeWorker.Result> run(List<PageRunSegmentDescriptor> segmentDescriptors, Path stagingDir,
-                          List<byte[]> boundaries,
-                          LongConsumer progressCallback) throws IOException {
-        return run(PageRunCatalog.fromDescriptors(segmentDescriptors), stagingDir, boundaries,
-                progressCallback);
-    }
-
     List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
@@ -285,7 +278,7 @@ final class ParallelRangeMerge {
             SortedFileWriterFactory rangeWriterFactory, AtomicInteger openPartCount,
             int openPartLimit) throws IOException {
         // Range-local ordinal: it names the tmp file, and is only a PLACEHOLDER index. The real
-        // file_index is assigned by SortTransform once every range has drained and the global roll
+        // file_index is assigned by DatasetPublisher once every range has drained and the global roll
         // sequence is known; the footer is not written until then (see setFileIndex).
         int localIndex = tmpParts.size() + 1;
         Path tmp = stagingDir.resolve(StagingNames.rangeTmp(range, localIndex));

@@ -13,7 +13,7 @@ package io.varve.swath.sort;
  *
  * <p>Null-safe by construction: the {@link #NO_OP} null object is the default whenever no recorder is
  * injected (the serial path, and nearly every unit test). {@code nanos} is the per-range merge wall
- * time measured in {@link ParallelRangeMerge}, so no Micrometer {@code Timer.Sample} crosses this seam.
+ * time measured in {@link ParallelRangeWorker}, so no Micrometer {@code Timer.Sample} crosses this seam.
  */
 @FunctionalInterface
 public interface RangeMergeTimer {

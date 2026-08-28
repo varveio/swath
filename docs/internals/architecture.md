@@ -123,6 +123,16 @@ with its own strict seal-order durability protocol; any periodic writeback there
 the shared cadence policy, admitted only by measurement, not a reason to route page-run bytes
 through the Parquet writer abstraction.
 
+The sorted merge keeps one public façade, `SortTransform(SortRun)`, over package-private owners:
+`PageRunCatalog` validates names and performs the one-open trailer/index preflight without retaining
+sample arrays; `MergePlanner` owns all serial fan-in, parallel boundary-policy, heap, staged-size,
+and FD arithmetic (including the shared proof-spool reservation); `ParallelRangeMerge` owns the
+executor, seek-plan construction, global proof, cancellation/quiescence, writer registry, and
+failure sweep, while `ParallelRangeWorker` executes exactly one range; and `DatasetPublisher` owns
+sorted tmp/stamp/close, stale-final replacement, rename/fsync/listener ordering, and staging
+completion. `DatasetPublisher` deliberately stops at the listener seam—`ListRunner` remains the
+owner of consumer `manifest.json`, state, symlink, and last-written `_SUCCESS`.
+
 The terminal output stage is observed first so broken pipes, full disks, and writer failures
 cancel producers promptly. On shutdown, downstream receivers close before producer joins;
 executors receive `shutdownNow()` before `close()` (I8).

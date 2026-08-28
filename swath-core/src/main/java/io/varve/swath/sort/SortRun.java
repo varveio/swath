@@ -11,7 +11,7 @@ import java.util.function.IntSupplier;
 
 /**
  * The immutable inputs defining one sort/merge run — the inputs threaded whole through
- * {@link SortTransform} and, from there, {@link ParallelRangeMerge}: the {@link SortConfig knobs},
+ * {@link SortTransform} and its package-private planner/worker/publisher owners: the {@link SortConfig knobs},
  * the §0.3 key {@code comparator}, the {@link DuplicateHook dedup hook}, the final-output
  * {@link EqualKeyPolicy}, the {@link SortMetrics} sink, the {@link SortedFileWriterFactory} for the
  * final output, merge input provenance, timing/fd seams, and the stale-final ownership scope.

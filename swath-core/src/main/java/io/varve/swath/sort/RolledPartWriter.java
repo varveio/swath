@@ -31,7 +31,7 @@ import java.util.function.LongConsumer;
  *       path ({@code true}) knows its own last file, so it force-publishes one valid empty file for an
  *       empty listing and marks the last file final. A parallel range does not: its parts' positions in
  *       the output depend on the other ranges, so it uses {@link #drainOpen} instead and
- *       {@link SortTransform} stamps once every range has drained.</li>
+ *       {@link DatasetPublisher} stamps once every range has drained.</li>
  * </ul>
  */
 final class RolledPartWriter {
