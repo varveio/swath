@@ -66,8 +66,8 @@ class PageRunBoundarySampleTest {
                 writePages(dir.resolve("descriptor-1.pageseg"), 4, 100),
                 writePages(dir.resolve("descriptor-2.pageseg"), 4, 200));
         Map<Path, AtomicInteger> opens = new ConcurrentHashMap<>();
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 segments, path -> {
                     opens.computeIfAbsent(path, ignored -> new AtomicInteger()).incrementAndGet();
@@ -88,7 +88,7 @@ class PageRunBoundarySampleTest {
         }
         CountingMetrics metrics = new CountingMetrics();
 
-        assertThat(hex(ParallelRangeMerge.boundaries(descriptors, candidates, 3, metrics)))
+        assertThat(hex(MergePlanner.boundaries(descriptors, candidates, 3, metrics)))
                 .hasSize(2);
         assertThat(metrics.count("SORT.merge_boundary_source_embedded")).isEqualTo(1);
         assertThat(metrics.embeddedEntries.sum()).isEqualTo(12);
@@ -327,10 +327,10 @@ class PageRunBoundarySampleTest {
 
     @Test
     void wholeRunBoundaryCandidatesStayBoundedAndDistributionRepresentative() {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
-        ParallelRangeMerge.BoundaryCandidates cloneGuard =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates cloneGuard =
+                new MergePlanner.BoundaryCandidates();
         byte[] mutable = KeyBytes.ofUtf8("k999999").rawUnsafe().clone();
         cloneGuard.add(mutable);
         mutable[0] = 'x';
@@ -342,7 +342,7 @@ class PageRunBoundarySampleTest {
 
         List<byte[]> retained = candidates.sortedKeys();
         assertThat(candidates.capped()).isTrue();
-        assertThat(retained).hasSize(ParallelRangeMerge.MAX_BOUNDARY_CANDIDATES);
+        assertThat(retained).hasSize(MergePlanner.MAX_BOUNDARY_CANDIDATES);
         for (int i = 1; i < retained.size(); i++) {
             assertThat(KeyBytes.compareUnsigned(retained.get(i - 1), retained.get(i))).isNegative();
         }
@@ -365,10 +365,10 @@ class PageRunBoundarySampleTest {
             longKeys.add(key);
         }
 
-        ParallelRangeMerge.BoundaryCandidates ascending =
-                new ParallelRangeMerge.BoundaryCandidates(retainedLimit);
-        ParallelRangeMerge.BoundaryCandidates descending =
-                new ParallelRangeMerge.BoundaryCandidates(retainedLimit);
+        MergePlanner.BoundaryCandidates ascending =
+                new MergePlanner.BoundaryCandidates(retainedLimit);
+        MergePlanner.BoundaryCandidates descending =
+                new MergePlanner.BoundaryCandidates(retainedLimit);
         longKeys.forEach(ascending::add);
         Collections.reverse(longKeys);
         longKeys.forEach(descending::add);
@@ -382,7 +382,7 @@ class PageRunBoundarySampleTest {
     @Test
     void boundarySelectionReportsWholeRunCapEngagement(@TempDir Path dir) throws IOException {
         List<Path> segments = new ArrayList<>();
-        int segmentCount = ParallelRangeMerge.MAX_BOUNDARY_CANDIDATES
+        int segmentCount = MergePlanner.MAX_BOUNDARY_CANDIDATES
                 / PageRunBoundarySample.MAX_ENTRIES + 1;
         for (int segment = 0; segment < segmentCount; segment++) {
             List<byte[]> minima = new ArrayList<>();
@@ -396,7 +396,7 @@ class PageRunBoundarySampleTest {
         PreparedDescriptors prepared = descriptors(segments);
         assertThat(boundaries(prepared, 8, metrics)).hasSize(7);
         assertThat(prepared.candidates().size())
-                .isEqualTo(ParallelRangeMerge.MAX_BOUNDARY_CANDIDATES);
+                .isEqualTo(MergePlanner.MAX_BOUNDARY_CANDIDATES);
         assertThat(prepared.descriptors())
                 .allMatch(descriptor -> descriptor.sample().entryCount()
                         == PageRunBoundarySample.MAX_ENTRIES);
@@ -544,8 +544,8 @@ class PageRunBoundarySampleTest {
     }
 
     private static PreparedDescriptors descriptors(List<Path> paths) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(paths,
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
@@ -554,18 +554,18 @@ class PageRunBoundarySampleTest {
 
     private static List<byte[]> boundaries(PreparedDescriptors prepared, int desiredRanges,
                                            SortMetrics metrics) throws IOException {
-        return ParallelRangeMerge.boundaries(prepared.descriptors(), prepared.candidates(),
+        return MergePlanner.boundaries(prepared.descriptors(), prepared.candidates(),
                 desiredRanges, metrics);
     }
 
     private static void assertRowsFallback(List<Path> paths, String reason) throws IOException {
         PreparedDescriptors expected = descriptors(paths);
-        List<byte[]> distinct = ParallelRangeMerge.boundaries(
+        List<byte[]> distinct = MergePlanner.boundaries(
                 expected.descriptors(), expected.candidates(), 4,
                 MergeBoundaryPolicy.DISTINCT, SortMetrics.NO_OP);
         PreparedDescriptors actual = descriptors(paths);
         CountingMetrics metrics = new CountingMetrics();
-        List<byte[]> rows = ParallelRangeMerge.boundaries(
+        List<byte[]> rows = MergePlanner.boundaries(
                 actual.descriptors(), actual.candidates(), 4,
                 MergeBoundaryPolicy.ROWS, metrics);
 
@@ -575,7 +575,7 @@ class PageRunBoundarySampleTest {
     }
 
     private record PreparedDescriptors(List<PageRunSegmentDescriptor> descriptors,
-                                       ParallelRangeMerge.BoundaryCandidates candidates) {
+                                       MergePlanner.BoundaryCandidates candidates) {
     }
 
     private record SampleRead(PageRunBoundarySample.ReadResult result, List<byte[]> keys) {

@@ -172,7 +172,7 @@ class SortTransformPageRunParallelMergePropTest {
         ParallelRangeMerge merge = new ParallelRangeMerge(run);
         ParallelKickoff kickoff = parallelKickoff(segs);
         List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+        List<byte[]> boundaries = MergePlanner.boundaries(
                 descriptors, kickoff.candidates(), ranges, SortMetrics.NO_OP);
         if (boundaries == null) {
             return null;
@@ -201,8 +201,8 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     private static ParallelKickoff parallelKickoff(List<Path> paths) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(paths,
                 path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
@@ -217,7 +217,7 @@ class SortTransformPageRunParallelMergePropTest {
     }
 
     private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
-                                   ParallelRangeMerge.BoundaryCandidates candidates) {
+                                   MergePlanner.BoundaryCandidates candidates) {
     }
 
     private record WideStressStaging(ParallelKickoff kickoff, List<byte[]> boundaries,
@@ -535,20 +535,21 @@ class SortTransformPageRunParallelMergePropTest {
             // R=4 to R=2. The configured fan-in of two cannot carry all three segments at any R,
             // however, and is therefore the constraint that ultimately declines parallel merge.
             int partiallyLimitedFd = MergeFdBudget.FD_HEADROOM
-                    + ParallelRangeMerge.PROOF_SPOOL_FDS + 8;
+                    + MergePlanner.PROOF_SPOOL_FDS + 8;
             List<PageRunSegmentDescriptor> descriptors = parallelKickoff(segments).descriptors();
-            ParallelRangeMerge fdOnly = new ParallelRangeMerge(sortRun(
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(descriptors);
+            MergePlanner fdOnly = new MergePlanner(sortRun(
                     config.withFanIn(3), DuplicateHook.NO_OP, SortMetrics.NO_OP,
                     SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
-            assertThat(fdOnly.effectiveRanges(4, descriptors))
-                    .isEqualTo(new ParallelRangeMerge.EffectiveRanges(
-                            2, ParallelRangeMerge.ClampReason.FD_LIMITED));
-            ParallelRangeMerge combined = new ParallelRangeMerge(sortRun(
+            assertThat(fdOnly.effectiveRanges(4, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            2, MergePlanner.ClampReason.FD_LIMITED));
+            MergePlanner combined = new MergePlanner(sortRun(
                     config, DuplicateHook.NO_OP, SortMetrics.NO_OP,
                     SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd));
-            assertThat(combined.effectiveRanges(4, descriptors))
-                    .isEqualTo(new ParallelRangeMerge.EffectiveRanges(
-                            1, ParallelRangeMerge.ClampReason.WOULD_CASCADE));
+            assertThat(combined.effectiveRanges(4, catalog))
+                    .isEqualTo(new MergePlanner.EffectiveRanges(
+                            1, MergePlanner.ClampReason.WOULD_CASCADE));
 
             new SortTransform(sortRun(config, DuplicateHook.NO_OP, metrics,
                     SortedFileWriterFactory.DEFAULT, () -> partiallyLimitedFd))
@@ -582,13 +583,13 @@ class SortTransformPageRunParallelMergePropTest {
             // usable=6: four input readers (2 ranges x 2 segments) leave exactly two output
             // writers. Each range can open its first part; the first attempted roll must fail before
             // a third writer/descriptor is opened.
-            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS + 6;
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS + 6;
             ParallelRangeMerge merge = new ParallelRangeMerge(
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers,
                             () -> softLimit));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertThatThrownBy(() -> merge.run(descriptors, staging, boundaries, units -> { }))
@@ -619,22 +620,25 @@ class SortTransformPageRunParallelMergePropTest {
             int ranges = 8;
             int perRangeFanIn = 8;
             int outputAllowance = 40;
-            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS
                     + ranges * perRangeFanIn + outputAllowance;
-            ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, writers, () -> softLimit));
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
+            SortRun run = sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit);
+            MergePlanner planner = new MergePlanner(run);
+            ParallelRangeMerge merge = new ParallelRangeMerge(run);
+            List<byte[]> boundaries = MergePlanner.boundaries(kickoff.descriptors(),
                     kickoff.candidates(), ranges, SortMetrics.NO_OP);
 
             assertThat(boundaries).hasSize(ranges - 1);
-            assertThat(merge.effectiveRanges(ranges, kickoff.descriptors()).ranges())
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(kickoff.descriptors());
+            assertThat(planner.effectiveRanges(ranges, catalog).ranges())
                     .as("the production planner admits all requested ranges")
                     .isEqualTo(ranges);
-            assertThat(merge.perRangeFanIn(ranges, kickoff.descriptors())).isEqualTo(perRangeFanIn);
+            assertThat(planner.perRangeFanIn(ranges, catalog)).isEqualTo(perRangeFanIn);
             assertThat(rangeRows(scenario.allEntries(), boundaries))
                     .as("page-minimum boundaries leave one row in each early range")
                     .containsExactly(1, 1, 1, 1, 1, 1, 1, 313);
-            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - ParallelRangeMerge.PROOF_SPOOL_FDS
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - MergePlanner.PROOF_SPOOL_FDS
                     - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);
@@ -665,21 +669,24 @@ class SortTransformPageRunParallelMergePropTest {
             int ranges = 8;
             int perRangeFanIn = 8;
             int outputAllowance = 40;
-            int softLimit = MergeFdBudget.FD_HEADROOM + ParallelRangeMerge.PROOF_SPOOL_FDS
+            int softLimit = MergeFdBudget.FD_HEADROOM + MergePlanner.PROOF_SPOOL_FDS
                     + ranges * perRangeFanIn + outputAllowance;
             WideStressStaging wide = stageWideWriterStress(staging, ranges);
             CountingWriterFactory writers = new CountingWriterFactory(
                     new SortedParquetWriterFactory(config, SortMode.OBJECTS));
-            ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
-                    SortMetrics.NO_OP, writers, () -> softLimit));
+            SortRun run = sortRun(config, DuplicateHook.NO_OP,
+                    SortMetrics.NO_OP, writers, () -> softLimit);
+            MergePlanner planner = new MergePlanner(run);
+            ParallelRangeMerge merge = new ParallelRangeMerge(run);
 
             assertThat(wide.boundaries()).hasSize(ranges - 1);
-            assertThat(merge.effectiveRanges(ranges, wide.kickoff().descriptors()).ranges())
+            PageRunCatalog catalog = PageRunCatalog.fromDescriptors(wide.kickoff().descriptors());
+            assertThat(planner.effectiveRanges(ranges, catalog).ranges())
                     .as("the production planner admits all requested ranges")
                     .isEqualTo(ranges);
-            assertThat(merge.perRangeFanIn(ranges, wide.kickoff().descriptors()))
+            assertThat(planner.perRangeFanIn(ranges, catalog))
                     .isEqualTo(perRangeFanIn);
-            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - ParallelRangeMerge.PROOF_SPOOL_FDS
+            assertThat(softLimit - MergeFdBudget.FD_HEADROOM - MergePlanner.PROOF_SPOOL_FDS
                     - ranges * Math.min(perRangeFanIn, wide.kickoff().descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);
@@ -764,7 +771,7 @@ class SortTransformPageRunParallelMergePropTest {
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
 
             assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
@@ -797,7 +804,7 @@ class SortTransformPageRunParallelMergePropTest {
                     sortRun(config, DuplicateHook.NO_OP, SortMetrics.NO_OP, writers, () -> -1));
             ParallelKickoff kickoff = parallelKickoff(segments);
             List<PageRunSegmentDescriptor> descriptors = kickoff.descriptors();
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+            List<byte[]> boundaries = MergePlanner.boundaries(
                     descriptors, kickoff.candidates(), 2, SortMetrics.NO_OP);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             AtomicBoolean interruptRestored = new AtomicBoolean();
@@ -1062,7 +1069,7 @@ class SortTransformPageRunParallelMergePropTest {
         Scenario scenario = wideOwnerScenario(ranges, 14_000, 2 * 1024);
         WeakReference<Scenario> fixture = new WeakReference<>(scenario);
         ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
+        List<byte[]> boundaries = MergePlanner.boundaries(kickoff.descriptors(),
                 kickoff.candidates(), ranges, SortMetrics.NO_OP);
         assertThat(boundaries).hasSize(ranges - 1);
         assertThat(rangeRows(scenario.allEntries(), boundaries))

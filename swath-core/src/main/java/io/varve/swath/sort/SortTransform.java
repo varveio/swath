@@ -37,7 +37,7 @@ import org.slf4j.LoggerFactory;
  * {@code docs/internals/contracts.md} §7).
  *
  * <p>The {@link KWayMerge} pass width is a runtime-clamped fan-in
- * ({@link MergeFanInPlanner#clampedMergeFanIn}), never the raw {@code fan-in} knob: the MIN of the
+ * ({@link MergePlanner#serialFanIn}), never the raw {@code fan-in} knob: the MIN of the
  * static budget ({@link SortConfig#effectiveFanIn()}), the process fd budget
  * ({@link MergeFdBudget}), and, for page-run input, a record-size refinement read from each
  * segment's trailer. The merge's active structures remain functions of configured segment/fan-in
@@ -70,8 +70,8 @@ public final class SortTransform {
     private final PublicationStepHook publicationStepHook;
     private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
-    // runtime clamps + their observability) lives in MergeFanInPlanner, not here.
-    private final MergeFanInPlanner fanInPlanner;
+    // runtime clamps + their observability) lives in MergePlanner, not here.
+    private final MergePlanner mergePlanner;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
@@ -95,7 +95,7 @@ public final class SortTransform {
         this.rangeTimer = run.rangeMergeTimer();
         this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
         this.proofReaderFactory = Objects.requireNonNull(proofReaderFactory, "proofReaderFactory");
-        this.fanInPlanner = new MergeFanInPlanner(config, metrics, run.softFdLimitSupplier());
+        this.mergePlanner = new MergePlanner(run);
     }
 
     /**
@@ -137,8 +137,8 @@ public final class SortTransform {
         StagingReconciliation retainedOriginals = retainedOriginals(stagingSegments, stagingDir);
         boolean parallelKickoff = config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
-        ParallelRangeMerge.BoundaryCandidates boundaryCandidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates boundaryCandidates =
+                new MergePlanner.BoundaryCandidates();
         Optional<Consumer<byte[]>> boundaryKeySink = parallelKickoff
                 ? Optional.of(boundaryCandidates::add)
                 : Optional.empty();
@@ -185,7 +185,7 @@ public final class SortTransform {
                 "merge-", null, Map.of(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
-        int runtimeFanIn = fanInPlanner.plan(catalog);
+        int runtimeFanIn = mergePlanner.serialFanIn(catalog);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);
 
         List<Path> finalFiles = new ArrayList<>();
@@ -255,22 +255,22 @@ public final class SortTransform {
             Path outputDir,
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting,
-            ParallelRangeMerge.BoundaryCandidates boundaryCandidates,
+            MergePlanner.BoundaryCandidates boundaryCandidates,
             StagingReconciliation retainedOriginals) throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
         List<Path> stagingSegments = catalog.paths();
         ParallelRangeMerge rangeMerge =
-                new ParallelRangeMerge(run, proofReaderFactory);
+                new ParallelRangeMerge(run, mergePlanner, proofReaderFactory);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
         // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
         // -- silently, since the engagement counter still fires once per range. See
-        // ParallelRangeMerge#effectiveRanges.
+        // MergePlanner#effectiveRanges.
         int requestedRanges = config.mergeParallelism();
-        ParallelRangeMerge.EffectiveRanges rangePlan =
-                rangeMerge.effectiveRanges(requestedRanges, segmentDescriptors);
+        MergePlanner.EffectiveRanges rangePlan =
+                mergePlanner.effectiveRanges(requestedRanges, catalog);
         int desiredRanges = rangePlan.ranges();
-        if (rangePlan.reason() != ParallelRangeMerge.ClampReason.NONE) {
+        if (rangePlan.reason() != MergePlanner.ClampReason.NONE) {
             // WARN, not debug: the operator asked for something the run could not give them. Keep
             // the typed reason in both the log and metrics so a size-floor decline is never reported
             // as an unsplittable keyspace (and an fd failure is not mistaken for a memory cascade).
@@ -300,9 +300,7 @@ public final class SortTransform {
         // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
         // term is invisible, and it is the one that does NOT shrink as R rises.
         long boundariesStartNanos = System.nanoTime();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
-                segmentDescriptors, boundaryCandidates, desiredRanges,
-                config.mergeBoundaryPolicy(), metrics);
+        List<byte[]> boundaries = mergePlanner.boundaries(catalog, boundaryCandidates, desiredRanges);
         long boundariesNanos = System.nanoTime() - boundariesStartNanos;
         rangeTimer.recordBoundarySampling(boundariesNanos);
         log.info("sort_merge_boundaries segments={} ranges={} boundary_policy_requested={} duration_ms={}",
@@ -316,7 +314,7 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_unsplittable");
             return null;   // keyspace unsplittable — use the serial path
         }
-        fanInPlanner.warnIfCascadePredicted(stagingSegments.size(), config.effectiveFanIn());
+        mergePlanner.warnIfCascadePredicted(stagingSegments.size(), config.effectiveFanIn());
         // The whole parallel phase is merge-and-write; mark Phase.WRITING reachable once up front.
         // Unlike the serial path, the cascade passes are NOT behind us here: every range k-way-merges
         // all the staged segments and cascades whenever they outnumber its own fan-in, rewriting its
@@ -325,7 +323,7 @@ public final class SortTransform {
         // cascade does.
         onFinalPassStarting.onFinalPassStarting(
                 segmentDescriptors.size()
-                        <= rangeMerge.perRangeFanIn(boundaries.size() + 1, segmentDescriptors));
+                        <= mergePlanner.perRangeFanIn(boundaries.size() + 1, catalog));
         List<ParallelRangeMerge.RangeResult> results =
                 rangeMerge.run(catalog, stagingDir, boundaries, progressCallback);
 

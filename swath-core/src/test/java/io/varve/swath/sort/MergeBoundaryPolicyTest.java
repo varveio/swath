@@ -62,12 +62,12 @@ class MergeBoundaryPolicyTest {
                 root.resolve("skew.pageseg"), skewedPages());
         Prepared distinctPrepared = prepared(List.of(segment), 16_384);
         SortTestSupport.CountingMetrics distinctMetrics = new SortTestSupport.CountingMetrics();
-        List<byte[]> distinct = ParallelRangeMerge.boundaries(
+        List<byte[]> distinct = MergePlanner.boundaries(
                 distinctPrepared.descriptors(), distinctPrepared.candidates(), 4,
                 MergeBoundaryPolicy.DISTINCT, distinctMetrics);
         Prepared rowsPrepared = prepared(List.of(segment), 16_384);
         SortTestSupport.CountingMetrics rowsMetrics = new SortTestSupport.CountingMetrics();
-        List<byte[]> rows = ParallelRangeMerge.boundaries(
+        List<byte[]> rows = MergePlanner.boundaries(
                 rowsPrepared.descriptors(), rowsPrepared.candidates(), 4,
                 MergeBoundaryPolicy.ROWS, rowsMetrics);
         List<ListEntry> all = skewedPages().stream().flatMap(List::stream).toList();
@@ -114,7 +114,7 @@ class MergeBoundaryPolicyTest {
         assertThat(cancelled.candidates().capped()).isTrue();
         try {
             Thread.currentThread().interrupt();
-            assertThatThrownBy(() -> ParallelRangeMerge.boundaries(
+            assertThatThrownBy(() -> MergePlanner.boundaries(
                     cancelled.descriptors(), cancelled.candidates(), 4,
                     MergeBoundaryPolicy.ROWS, SortMetrics.NO_OP))
                     .isInstanceOf(MergeCancellation.Cancelled.class);
@@ -124,7 +124,7 @@ class MergeBoundaryPolicyTest {
 
         Prepared prepared = prepared(List.of(segment), 8);
         List<byte[]> retained = prepared.candidates().sortedKeys();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+        List<byte[]> boundaries = MergePlanner.boundaries(
                 prepared.descriptors(), prepared.candidates(), 4,
                 MergeBoundaryPolicy.ROWS, SortMetrics.NO_OP);
         assertThat(boundaries).hasSize(3).allSatisfy(boundary ->
@@ -228,8 +228,8 @@ class MergeBoundaryPolicyTest {
     }
 
     private static Prepared prepared(List<Path> paths, int candidateCap) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates(candidateCap);
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates(candidateCap);
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 paths, path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
@@ -290,7 +290,7 @@ class MergeBoundaryPolicyTest {
     }
 
     private record Prepared(List<PageRunSegmentDescriptor> descriptors,
-                            ParallelRangeMerge.BoundaryCandidates candidates) {
+                            MergePlanner.BoundaryCandidates candidates) {
     }
 
     private record RunResult(List<ListEntry> rows, List<Path> files) {

@@ -482,20 +482,20 @@ class PageRunZoneProofAdversarialTest {
     }
 
     private static List<PageRunSegmentDescriptor> descriptors(Path path) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         return PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
     }
 
     private static EntrySelection entrySelection(Path path, int ranges) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+        List<byte[]> boundaries = MergePlanner.boundaries(
                 descriptors, candidates, ranges, SortMetrics.NO_OP);
         assertThat(boundaries).isNotNull();
         PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(
@@ -521,12 +521,12 @@ class PageRunZoneProofAdversarialTest {
     }
 
     private static long middleOwnedOrdinal(Path path, int ranges) throws IOException {
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(path), candidate -> PageRunSegmentIo.open(candidate, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
-        List<byte[]> boundaries = ParallelRangeMerge.boundaries(
+        List<byte[]> boundaries = MergePlanner.boundaries(
                 descriptors, candidates, ranges, SortMetrics.NO_OP);
         PageRunSeekPlan.SegmentPlan segment = PageRunSeekPlan.plan(
                 descriptors, boundaries, SortMetrics.NO_OP).segments().getFirst();

@@ -16,7 +16,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
@@ -27,7 +26,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.IntSupplier;
 import java.util.function.LongConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,7 +73,7 @@ import org.slf4j.LoggerFactory;
  * <p><b>Cascading ranges are unreachable in normal operation, and probably unnecessary at all.</b>
  * A cascade is a multi-pass merge: when a range's fan-in is narrower than the staged-segment count it
  * merges in several passes, rewriting every one of its rows each time. {@link
- * SortTransform} clamps {@code R} so that cannot happen ({@link #effectiveRanges}) and falls back to
+ * SortTransform} clamps {@code R} so that cannot happen ({@link MergePlanner#effectiveRanges}) and falls back to
  * the serial merge when not even one range fits, so no production run reaches the cascade branches
  * below.
  *
@@ -108,11 +106,6 @@ final class ParallelRangeMerge {
     private static final Logger log = LoggerFactory.getLogger(ParallelRangeMerge.class);
 
     private static final AtomicLong MERGE_SEQUENCE = new AtomicLong();
-    /** At the supported 16-range maximum this retains 1,024 candidates per range. */
-    static final int MAX_BOUNDARY_CANDIDATES = 16_384;
-    /** One shared temporary proof spool descriptor, independent of the range count. */
-    static final int PROOF_SPOOL_FDS = 1;
-
     private final SortRun run;
     private final SortConfig config;
     private final Comparator<ListEntry> comparator;
@@ -121,14 +114,9 @@ final class ParallelRangeMerge {
     private final SortMetrics metrics;
     private final SortedFileWriterFactory finalWriterFactory;
     private final RangeMergeTimer rangeTimer;
-    private final IntSupplier softFdLimitSupplier;
+    private final MergePlanner planner;
     private final String workerThreadPrefix;
     private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
-
-    private enum SampleSource {
-        EMBEDDED,
-        SCAN
-    }
 
     /**
      * Every final-output part this merge has opened, across all ranges — the failure path's handle on
@@ -138,10 +126,15 @@ final class ParallelRangeMerge {
     private final List<SortedFileWriter> openParts = Collections.synchronizedList(new ArrayList<>());
 
     ParallelRangeMerge(SortRun run) {
-        this(run, PageRunProofSpool.Reader::new);
+        this(run, new MergePlanner(run), PageRunProofSpool.Reader::new);
     }
 
     ParallelRangeMerge(SortRun run, PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
+        this(run, new MergePlanner(run), proofReaderFactory);
+    }
+
+    ParallelRangeMerge(SortRun run, MergePlanner planner,
+            PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -150,7 +143,7 @@ final class ParallelRangeMerge {
         this.metrics = run.metrics();
         this.finalWriterFactory = run.finalWriterFactory();
         this.rangeTimer = run.rangeMergeTimer();
-        this.softFdLimitSupplier = run.softFdLimitSupplier();
+        this.planner = planner;
         this.workerThreadPrefix = "swath-sort-range-" + MERGE_SEQUENCE.incrementAndGet() + "-";
         this.proofReaderFactory = proofReaderFactory;
     }
@@ -174,247 +167,9 @@ final class ParallelRangeMerge {
                        PageRunZoneVerifier.RangeSummary zoneSummary) {
     }
 
-    enum ClampReason {
-        NONE("none"),
-        BELOW_STAGED_FLOOR("below_staged_floor"),
-        FD_EXHAUSTED("fd_exhausted"),
-        FD_LIMITED("fd_limited"),
-        WOULD_CASCADE("would_cascade");
-
-        private final String logValue;
-
-        ClampReason(String logValue) {
-            this.logValue = logValue;
-        }
-
-        String logValue() {
-            return logValue;
-        }
-    }
-
-    record EffectiveRanges(int ranges, ClampReason reason) {
-        EffectiveRanges {
-            if (ranges < 1) {
-                throw new IllegalArgumentException("ranges must be >= 1");
-            }
-        }
-    }
-
     private record IndexedRangeResult(int range, RangeResult result) {
     }
 
-    /**
-     * Sample evenly-spaced key boundaries partitioning {@code segments} into up to {@code desiredRanges}
-     * contiguous ranges. Returns the {@code R-1} boundary keys (so the range count is
-     * {@code boundaries.size() + 1}), or {@code null} when the keyspace has fewer than two distinct
-     * sample keys and so cannot be split (the caller then uses the serial path). {@code distinct}
-     * already contains every validated embedded key streamed during descriptor kickoff; legacy or
-     * invalid descriptors add their scan samples here.
-     */
-    static List<byte[]> boundaries(List<PageRunSegmentDescriptor> segments,
-                                   BoundaryCandidates distinct, int desiredRanges,
-                                   SortMetrics metrics)
-            throws IOException {
-        return boundaries(segments, distinct, desiredRanges, MergeBoundaryPolicy.DISTINCT, metrics);
-    }
-
-    static List<byte[]> boundaries(List<PageRunSegmentDescriptor> segments,
-                                   BoundaryCandidates distinct, int desiredRanges,
-                                   MergeBoundaryPolicy policy, SortMetrics metrics)
-            throws IOException {
-        boolean embedded = false;
-        boolean scanned = false;
-        for (PageRunSegmentDescriptor segment : segments) {
-            SampleSource source = sampleKeys(segment, distinct, metrics);
-            embedded |= source == SampleSource.EMBEDDED;
-            scanned |= source == SampleSource.SCAN;
-        }
-        if (distinct.capped()) {
-            metrics.recordStealReason("SORT", "merge_boundary_global_capped");
-        }
-        if (embedded && scanned) {
-            metrics.recordStealReason("SORT", "merge_boundary_source_mixed");
-        } else if (embedded) {
-            metrics.recordStealReason("SORT", "merge_boundary_source_embedded");
-        } else {
-            metrics.recordStealReason("SORT", "merge_boundary_source_scan");
-        }
-        if (distinct.size() < 2) {
-            return null;   // cannot split — degenerate, fall back to serial
-        }
-        List<byte[]> candidates = distinct.sortedKeys();
-        if (policy == MergeBoundaryPolicy.ROWS) {
-            List<byte[]> weighted = RowWeightedBoundaries.select(
-                    segments, candidates, desiredRanges, metrics);
-            if (weighted != null) {
-                return weighted;
-            }
-        }
-        return distinctBoundaries(candidates, desiredRanges);
-    }
-
-    private static List<byte[]> distinctBoundaries(List<byte[]> candidates, int desiredRanges) {
-        int ranges = Math.min(desiredRanges, candidates.size());
-        // Pick R-1 interior split points, evenly spaced through the sorted distinct sample. Range 0
-        // starts at -inf (index 0 is never a boundary); dedup keeps boundaries strictly increasing.
-        List<byte[]> boundaries = new ArrayList<>();
-        byte[] last = null;
-        for (int j = 1; j < ranges; j++) {
-            int idx = (int) ((long) j * candidates.size() / ranges);
-            byte[] key = candidates.get(idx);
-            if (last == null || KeyBytes.compareUnsigned(key, last) > 0) {
-                boundaries.add(key);
-                last = key;
-            }
-        }
-        return boundaries.isEmpty() ? null : boundaries;
-    }
-
-    /**
-     * Account for one page-run segment's page-minimum boundary candidates. A validated extension was
-     * already streamed into {@code distinct} during the descriptor's open; absent, unknown, or invalid
-     * extensions open the same frontier fallback and add its samples here.
-     */
-    private static SampleSource sampleKeys(PageRunSegmentDescriptor descriptor,
-                                           BoundaryCandidates distinct,
-                                           SortMetrics metrics)
-            throws IOException {
-        PageRunBoundarySample.ReadResult embedded = descriptor.sample();
-        if (embedded.valid()) {
-            if (embedded.totalRecords() > PageRunBoundarySample.MAX_ENTRIES) {
-                metrics.recordStealReason("SORT", "merge_range_sample_capped");
-            }
-            metrics.recordBoundaryIo(embedded.entryCount(), embedded.bytesRead(), 0);
-            metrics.markProgress();
-            return SampleSource.EMBEDDED;
-        }
-        recordFallback(descriptor.extension().status(), metrics);
-
-        // Boundary choice affects balance only, so cap retained samples independently of row count.
-        long stride = PageRunBoundarySample.stride(embedded.totalRecords());
-        if (stride > 1) {
-            metrics.recordStealReason("SORT", "merge_range_sample_capped");
-        }
-        try (PageFrontierReader frontier = new PageFrontierReader(descriptor.path(), metrics)) {
-            for (long page = 0; frontier.hasPage(); page++) {
-                if (page % stride == 0) {
-                    distinct.add(frontier.minKey().clone());
-                }
-                metrics.markProgress();
-                frontier.advance();
-            }
-        }
-        long fixedTailStart = descriptor.fileSize()
-                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-        long framedRecordBytes = descriptor.trailerStart() >= PageRunSegmentWriter.HEADER_BYTES
-                        && descriptor.trailerStart() <= fixedTailStart
-                ? descriptor.trailerStart() - PageRunSegmentWriter.HEADER_BYTES
-                : 0;
-        metrics.recordBoundaryIo(0, embedded.bytesRead(), framedRecordBytes);
-        return SampleSource.SCAN;
-    }
-
-    /**
-     * Deterministic bottom-hash sample over distinct page minima. The per-segment trailer cap alone
-     * still allowed sampler heap to grow with segment count; this second cap keeps the whole boundary
-     * phase bounded while retaining a uniform sample large enough for at most 16 output ranges.
-     */
-    static final class BoundaryCandidates {
-        private static final Comparator<ScoredKey> BY_SCORE = (a, b) -> {
-            int byHash = Long.compareUnsigned(a.score(), b.score());
-            return byHash != 0 ? byHash : KeyBytes.compareUnsigned(a.key(), b.key());
-        };
-
-        private final TreeSet<byte[]> byKey = new TreeSet<>(KeyBytes::compareUnsigned);
-        private final TreeSet<ScoredKey> byScore = new TreeSet<>(BY_SCORE);
-        private final int maxCandidates;
-        private boolean capped;
-
-        BoundaryCandidates() {
-            this(MAX_BOUNDARY_CANDIDATES);
-        }
-
-        /** Smaller cap seam for long-key and order-independence tests without production-size heap. */
-        BoundaryCandidates(int maxCandidates) {
-            if (maxCandidates < 1) {
-                throw new IllegalArgumentException("maxCandidates must be >= 1");
-            }
-            this.maxCandidates = maxCandidates;
-        }
-
-        void add(byte[] key) {
-            if (byKey.contains(key)) {
-                return;
-            }
-            ScoredKey candidate = new ScoredKey(score(key), key);
-            if (byScore.size() == maxCandidates
-                    && BY_SCORE.compare(candidate, byScore.last()) >= 0) {
-                capped = true;
-                return;
-            }
-
-            byte[] retained = key.clone();
-            byKey.add(retained);
-            byScore.add(new ScoredKey(candidate.score(), retained));
-            if (byScore.size() > maxCandidates) {
-                ScoredKey removed = byScore.pollLast();
-                byKey.remove(removed.key());
-                capped = true;
-            }
-        }
-
-        int size() {
-            return byKey.size();
-        }
-
-        boolean capped() {
-            return capped;
-        }
-
-        List<byte[]> sortedKeys() {
-            return new ArrayList<>(byKey);
-        }
-
-        private static long score(byte[] key) {
-            long hash = 0xcbf29ce484222325L;
-            for (byte b : key) {
-                hash = (hash ^ (b & 0xFFL)) * 0x100000001b3L;
-            }
-            // Avalanche the prefix-heavy FNV state before unsigned bottom-k selection.
-            hash ^= hash >>> 33;
-            hash *= 0xff51afd7ed558ccdL;
-            hash ^= hash >>> 33;
-            hash *= 0xc4ceb9fe1a85ec53L;
-            return hash ^ (hash >>> 33);
-        }
-
-        private record ScoredKey(long score, byte[] key) {
-        }
-    }
-
-    private static void recordFallback(PageRunPageIndex.Status status, SortMetrics metrics) {
-        switch (status) {
-            case ABSENT -> metrics.recordStealReason("SORT", "merge_boundary_fallback_absent");
-            case UNKNOWN -> metrics.recordStealReason("SORT", "merge_boundary_fallback_unknown");
-            case INVALID_LENGTH ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_length");
-            case INVALID_COUNT ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_count");
-            case INVALID_CRC ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_crc");
-            case INVALID_ORDER ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_order");
-            case INVALID_BOUNDS ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_bounds");
-            case INVALID_OFFSET ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_offset");
-            case INVALID_CUMULATIVE ->
-                    metrics.recordStealReason("SORT", "merge_boundary_fallback_invalid_cumulative");
-            case SKIPPED -> throw new AssertionError("parallel boundary sampling was skipped");
-            case EMBEDDED, EMBEDDED_MINIMA_ONLY ->
-                    throw new AssertionError("valid sample cannot fall back");
-        }
-    }
 
     /**
      * Merge each range concurrently, returning the ordered per-range results (range 0 first). Fails
@@ -440,7 +195,7 @@ final class ParallelRangeMerge {
         List<Path> stagingSegments = catalog.paths();
         Map<Path, PageRunSegmentDescriptor> descriptorsByPath = catalog.byPath();
         int ranges = boundaries.size() + 1;
-        int perRangeFanIn = perRangeFanIn(ranges, segmentDescriptors);
+        int perRangeFanIn = planner.perRangeFanIn(ranges, catalog);
         // Position every range before worker launch. The plan retains O(segments*R) primitives,
         // never sampled-key lists; type-2 values remain hints until the post-worker physical-zone
         // proof below chains them from the fixed header to the trailer.
@@ -470,7 +225,7 @@ final class ParallelRangeMerge {
         CompletionService<IndexedRangeResult> completions = new ExecutorCompletionService<>(pool);
         List<Future<?>> futures = new ArrayList<>(ranges);
         AtomicInteger openPartCount = new AtomicInteger();
-        int openPartLimit = openOutputPartLimit(ranges,
+        int openPartLimit = planner.openOutputPartLimit(ranges,
                 Math.min(perRangeFanIn, stagingSegments.size()));
         try {
             for (int r = 0; r < ranges; r++) {
@@ -497,7 +252,7 @@ final class ParallelRangeMerge {
             PageRunZoneVerifier.verify(seekPlan, proof, metrics, proofReaderFactory);
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={} "
                             + "proof_spool_fds={}",
-                    ranges, threads, perRangeFanIn, PROOF_SPOOL_FDS);
+                    ranges, threads, perRangeFanIn, MergePlanner.PROOF_SPOOL_FDS);
             return results;
         } catch (InterruptedException e) {
             abortAndCleanUp(pool, futures, stagingDir, proofSpool);
@@ -673,178 +428,7 @@ final class ParallelRangeMerge {
         return writer;
     }
 
-    /**
-     * Per-range merge budget = total / R, expressed as a {@link KWayMerge} pass width. Package-private
-     * because {@link SortTransform} asks the same question before the merge starts: staged segments
-     * beyond this width mean the ranges cascade, and a cascading merge has no completion denominator.
-     */
-    int perRangeFanIn(int ranges, List<PageRunSegmentDescriptor> segmentDescriptors) {
-        return perRangeFanIn(ranges, perStreamBytes(segmentDescriptors), ranges);
-    }
 
-    /**
-     * As {@link #perRangeFanIn(int, List)}, over prices the caller already computed. The seam exists
-     * for {@link #effectiveRanges}, which evaluates this at more than one candidate range count and
-     * must not re-read every segment's trailer (or re-stat every segment) once per candidate.
-     */
-    private int perRangeFanIn(int ranges, long perStreamBytes, long openPartBudget) {
-        long perRangeBudget = config.mergeBudgetBytes() / ranges;
-        long budgetBound = perRangeBudget / perStreamBytes;
-        // Descriptors are a WHOLE-PROCESS budget and the ranges hold their streams open at the same
-        // time, so the fd bound divides across them too. The serial path clamps once against the full
-        // budget (MergeFanInPlanner); a parallel merge that reused that bound unchanged would open R
-        // times as many descriptors as the process is allowed.
-        //
-        // The max(2, ...) floor below is a floor, not a guarantee: a merge needs 2 streams to merge
-        // anything, so at an extreme R (where a range's share falls below 2) the ranges together can
-        // still exceed the process share -- 2 x R descriptors. That regime is unreachable through the
-        // supported entry point, because effectiveRanges() clamps R long before a range's share falls
-        // that far; it stays possible only for a direct caller of this class.
-        long fdBound = streamFdBudget(openPartBudget) / (long) ranges;
-        return (int) Math.min(config.fanIn(), Math.max(2L, Math.min(budgetBound, fdBound)));
-    }
-
-    /**
-     * Descriptors left for merge INPUT streams once the output parts have taken theirs.
-     *
-     * <p>The parts are the term the budget used to ignore. Every range's parts stay open until the
-     * whole merge finishes — that is what makes the global completeness stamp possible — so the
-     * process holds one descriptor per OUTPUT part on top of {@code R × fanIn} input streams, and the
-     * part count is set by {@code final-file-bytes} rather than by {@code R}. On a large listing with
-     * a small roll threshold the parts alone can exhaust the budget, which would surface as an EMFILE
-     * partway through a merge the clamp had already declared safe.
-     */
-    private long usableFdBudget() {
-        int softLimit = softFdLimitSupplier.getAsInt();
-        if (softLimit < 0) {
-            return Long.MAX_VALUE;
-        }
-        return Math.max(0L, (long) softLimit - MergeFdBudget.FD_HEADROOM);
-    }
-
-    /**
-     * Descriptors available to merge inputs after reserving {@code openPartBudget} output writers.
-     * No staged-byte estimate appears here: page-run compression and Parquet encoding are unrelated,
-     * so physical staging bytes cannot conservatively predict how many final files will roll.
-     */
-    private long streamFdBudget(long openPartBudget) {
-        long usable = usableFdBudget();
-        return usable == Long.MAX_VALUE ? Long.MAX_VALUE
-                : Math.max(0L, usable - openPartBudget - PROOF_SPOOL_FDS);
-    }
-
-    /**
-     * Maximum final-output writers the range fleet may actually open while all final-pass input
-     * streams are live. The guard is enforced atomically in {@link #openRangePart}; exceeding it
-     * fails and cancels the merge before another descriptor is opened.
-     */
-    private int openOutputPartLimit(int ranges, int perRangeFanIn) {
-        long usable = usableFdBudget();
-        if (usable == Long.MAX_VALUE) {
-            return Integer.MAX_VALUE;
-        }
-        long inputReservation = (long) ranges * perRangeFanIn + PROOF_SPOOL_FDS;
-        return (int) Math.max(0L, Math.min(Integer.MAX_VALUE, usable - inputReservation));
-    }
-
-    /** Total staged bytes, best-effort: an unreadable segment counts as zero and only shrinks R. */
-    private static long stagedBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
-        long total = 0;
-        for (PageRunSegmentDescriptor descriptor : segmentDescriptors) {
-            total += descriptor.fileSize();
-        }
-        return total;
-    }
-
-    /**
-     * The requested range count, reduced until no range would cascade over {@code stagingSegments}.
-     * {@link SortTransform} applies this to {@code merge-parallelism} before it splits anything; the
-     * result is the {@code R} the run actually uses.
-     *
-     * <p><b>Why the clamp is not optional.</b> {@link #perRangeFanIn} divides BOTH the merge memory
-     * budget and the process descriptor budget by the range count. Once a range's share falls below
-     * the staged-segment count, every range cascades — it merges in several passes, rewriting all of
-     * its rows each time — and the knob goes backwards: measured 5.69× → 3.80× at {@code R=32} on a
-     * 16 GB heap, and 41 % slower than the single-pass arm at IDENTICAL heap when only the budget was
-     * pinned. Without this clamp the pessimisation is also SILENT: {@code merge_range_parallel} still
-     * fires once per range, so a run that was made slower by its own tuning is indistinguishable in
-     * the metrics from one that was made faster.
-     *
-     * <p>The bound tightens as a listing grows, which is exactly when an operator is least likely to
-     * re-derive it by hand: segment count rises with the object count, so an {@code R} that is
-     * single-pass on a 10 M-object bucket can cascade on a billion-object one at the same heap.
-     *
-     * <p>Returns at least 1 plus a typed reason whenever the requested count was not honoured. A 1
-     * can mean the staged-size floor declined the work, descriptors were exhausted, or the memory
-     * budget/configured fan-in would force a cascade; none means the keyspace was unsplittable (that
-     * is known only after boundary sampling). With combined constraints, the reason names the one
-     * that determines the final range count: descriptor exhaustion applies only when descriptors
-     * alone force one range, while a binding descriptor reduction above one is descriptor-limited.
-     * The search starts from a closed-form estimate and steps down only to absorb constraints not
-     * represented in that estimate, so it evaluates {@link #perRangeFanIn} a couple of times, not
-     * {@code R} times.
-     */
-    EffectiveRanges effectiveRanges(int requested,
-                                    List<PageRunSegmentDescriptor> segmentDescriptors) {
-        int segments = segmentDescriptors.size();
-        if (requested <= 1 || segments <= 0) {
-            return new EffectiveRanges(Math.max(1, requested), ClampReason.NONE);
-        }
-        // Too small to be worth splitting: the speedup would be seconds and the cost is a permanent
-        // change to the published file count. Checked before anything else, because it is the cheapest
-        // test and the most common answer on ordinary runs.
-        if (stagedBytes(segmentDescriptors) < config.minParallelStagedBytes()) {
-            return new EffectiveRanges(1, ClampReason.BELOW_STAGED_FLOOR);
-        }
-        long perStream = perStreamBytes(segmentDescriptors);
-        // Reserve one output writer per candidate range. Additional rolls are not estimated from
-        // staging bytes (that is not a valid upper bound); openRangePart enforces the remaining
-        // output-writer allowance dynamically. If even one output plus a two-way merge cannot fit,
-        // this is specifically fd exhaustion, not an unsplittable keyspace.
-        if (streamFdBudget(1) < 2) {
-            return new EffectiveRanges(1, ClampReason.FD_EXHAUSTED);
-        }
-        // Closed form: the largest R with (budget/R)/perStream >= segments, and with the per-range
-        // share of what the parts left over still spanning the segments. Both are the inequalities
-        // perRangeFanIn tests.
-        long byBudget = config.mergeBudgetBytes() / perStream / segments;
-        long usableFds = usableFdBudget();
-        long byFd = usableFds == Long.MAX_VALUE
-                ? Long.MAX_VALUE
-                : Math.max(0L, usableFds - PROOF_SPOOL_FDS)
-                        / (segments + 1L);   // proof spool + R*(segments inputs + initial output)
-        int candidate = (int) Math.max(1L, Math.min(requested, Math.min(byBudget, byFd)));
-        // Floor division in several places means the closed form can land one step high; step down
-        // until the predicate SortTransform reports on is actually true, so the clamp cannot be off by
-        // one. Re-evaluate the exact predicate per candidate because the integer divisions floor.
-        while (candidate > 1
-                && perRangeFanIn(candidate, perStream, candidate)
-                        < segments) {
-            candidate--;
-        }
-        ClampReason reason = ClampReason.NONE;
-        if (candidate < requested) {
-            // Name the constraint that determines the final range count. In particular, a partial
-            // descriptor reduction may expose an independent configured-fan-in or heap limit that
-            // then forces the search all the way to one range. That is a cascade decline, not fd
-            // exhaustion: descriptors alone would still have permitted parallel work.
-            boolean nonFdForcesSerial = config.fanIn() < segments || byBudget < 2;
-            boolean fdBinding = byFd < requested && byFd <= byBudget;
-            reason = candidate == 1
-                    ? (nonFdForcesSerial ? ClampReason.WOULD_CASCADE : ClampReason.FD_EXHAUSTED)
-                    : (fdBinding ? ClampReason.FD_LIMITED : ClampReason.WOULD_CASCADE);
-        }
-        return new EffectiveRanges(candidate, reason);
-    }
-
-    private long perStreamBytes(List<PageRunSegmentDescriptor> segmentDescriptors) {
-        long pageRun = PageRunCatalog.fromDescriptors(segmentDescriptors).maxRecordLen();
-        return pageRun > 0
-                ? Math.max(config.mergePerStreamBytes(), pageRun)
-                : config.mergePerStreamBytes();
-    }
-
-    /** {@code lo <= key < hi}, either bound {@code null} meaning unbounded — the range's ownership test. */
     private static boolean inRange(byte[] key, byte[] lo, byte[] hi) {
         return (lo == null || KeyBytes.compareUnsigned(key, lo) >= 0)
                 && (hi == null || KeyBytes.compareUnsigned(key, hi) < 0);

@@ -156,7 +156,7 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
      * is the ceiling and half the cores is the ramp for smaller machines. Defaulting to
      * {@code availableProcessors()} would land on the worst point of the curve on a large box.
      *
-     * <p>{@link ParallelRangeMerge#effectiveRanges} clamps this further per run — down to 1, meaning
+     * <p>{@link MergePlanner#effectiveRanges} clamps this further per run — down to 1, meaning
      * the untouched serial path — whenever the merge budget, the staged-segment count or the
      * descriptor budget cannot carry it. So this value is a ceiling, never a promise.
      */

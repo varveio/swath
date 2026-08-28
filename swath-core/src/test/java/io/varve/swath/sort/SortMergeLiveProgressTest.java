@@ -92,7 +92,7 @@ class SortMergeLiveProgressTest {
         List<ProgressEvent> samples = Collections.synchronizedList(new ArrayList<>());
 
         // Fan-in 2 against five staged segments: NO range count can merge these in one pass, so the
-        // clamp (ParallelRangeMerge#effectiveRanges) declines the parallel path outright rather than
+        // clamp (MergePlanner#effectiveRanges) declines the parallel path outright rather than
         // let every range cascade — a cascading range merge is slower than the serial one it would
         // replace. What runs is therefore the SERIAL cascade, and the guard is that it still reports
         // work without claiming a percentage it cannot honestly compute.

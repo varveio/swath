@@ -287,13 +287,13 @@ class PageRunPageIndexTest {
         writePages(segment, 3);
         mutate(segment, mutation);
         SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
-        ParallelRangeMerge.BoundaryCandidates candidates =
-                new ParallelRangeMerge.BoundaryCandidates();
+        MergePlanner.BoundaryCandidates candidates =
+                new MergePlanner.BoundaryCandidates();
         List<PageRunSegmentDescriptor> descriptors = PageRunCatalog.preflight(
                 List.of(segment), path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
                 Optional.of(candidates::add)).descriptors();
 
-        ParallelRangeMerge.boundaries(descriptors, candidates, 2, metrics);
+        MergePlanner.boundaries(descriptors, candidates, 2, metrics);
 
         assertThat(metrics.count(reason)).isEqualTo(1);
     }
