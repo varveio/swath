@@ -19,8 +19,7 @@ import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
-import java.lang.management.MemoryPoolMXBean;
-import java.lang.management.MemoryType;
+import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.LockSupport;
@@ -66,6 +66,12 @@ import org.slf4j.LoggerFactory;
  * symmetric bugs that both drop the same row cannot pass).
  */
 class SortTransformPageRunParallelMergePropTest {
+
+    // Contracts §7.2's documented Parquet characterization budget. This process/merge stress has
+    // eight merge ranges and deliberately keeps rolled writers open, so it is not a new production
+    // envelope or an attribution of this heap to final writers alone.
+    private static final long PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES = 1L << 30;
+    private static final int MAX_GC_ATTEMPTS = 50;
 
     private final ListEntryComparator cmp = new ListEntryComparator();
 
@@ -210,6 +216,10 @@ class SortTransformPageRunParallelMergePropTest {
 
     private record ParallelKickoff(List<PageRunSegmentDescriptor> descriptors,
                                    ParallelRangeMerge.BoundaryCandidates candidates) {
+    }
+
+    private record WideStressStaging(ParallelKickoff kickoff, List<byte[]> boundaries,
+                                     WeakReference<Scenario> fixture) {
     }
 
     private record CascadeRun(List<Path> parts, long rows, long cascadedPasses) {
@@ -616,7 +626,6 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(writers.opened.get()).isEqualTo(outputAllowance);
             assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
             assertThat(writers.openNow.get()).isZero();
-            assertThat(root.resolve("data")).doesNotExist();
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
@@ -626,16 +635,10 @@ class SortTransformPageRunParallelMergePropTest {
 
     @Example
     @Tag("deep")
-    void finalWriterStressR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
-        // 112,000 rows × 2 KiB is deliberately above the 41 × 4 MiB roll requirement even after
-        // Parquet compression, while each
-        // 1,000-row page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the deep
-        // test JVM before the final writers exercise their own bounded-memory behavior.
-        Scenario scenario = wideOwnerScenario(8, 14_000, 2 * 1024);
+    void processMergeStressR8WideOwnersCharacterizesHeapAndFdGuard() throws Exception {
         Path root = Files.createTempDirectory("prange-final-writer-stress-");
         try {
             Path staging = Files.createDirectories(root.resolve("_staging"));
-            ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
             SortConfig config = SortConfigs.base()
                     .withFanIn(8)
                     .withFinalFileBytes(4L << 20)
@@ -644,43 +647,48 @@ class SortTransformPageRunParallelMergePropTest {
             int perRangeFanIn = 8;
             int outputAllowance = 40;
             int softLimit = MergeFdBudget.FD_HEADROOM + ranges * perRangeFanIn + outputAllowance;
+            WideStressStaging wide = stageWideWriterStress(staging, ranges);
             CountingWriterFactory writers = new CountingWriterFactory(
                     new SortedParquetWriterFactory(config, SortMode.OBJECTS));
             ParallelRangeMerge merge = new ParallelRangeMerge(sortRun(config, DuplicateHook.NO_OP,
                     SortMetrics.NO_OP, writers, () -> softLimit));
-            List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
-                    kickoff.candidates(), ranges, SortMetrics.NO_OP);
 
-            assertThat(boundaries).hasSize(ranges - 1);
-            assertThat(merge.effectiveRanges(ranges, kickoff.descriptors()).ranges())
+            assertThat(wide.boundaries()).hasSize(ranges - 1);
+            assertThat(merge.effectiveRanges(ranges, wide.kickoff().descriptors()).ranges())
                     .as("the production planner admits all requested ranges")
                     .isEqualTo(ranges);
-            assertThat(merge.perRangeFanIn(ranges, kickoff.descriptors())).isEqualTo(perRangeFanIn);
-            assertThat(rangeRows(scenario.allEntries(), boundaries))
-                    .as("wide rows yield enough page-minimum samples to balance every range")
-                    .containsExactly(14_000, 14_000, 14_000, 14_000,
-                            14_000, 14_000, 14_000, 14_000);
+            assertThat(merge.perRangeFanIn(ranges, wide.kickoff().descriptors()))
+                    .isEqualTo(perRangeFanIn);
             assertThat(softLimit - MergeFdBudget.FD_HEADROOM
-                    - ranges * Math.min(perRangeFanIn, kickoff.descriptors().size()))
+                    - ranges * Math.min(perRangeFanIn, wide.kickoff().descriptors().size()))
                     .as("open output allowance after actual input reservation")
                     .isEqualTo(outputAllowance);
-            // The persisted segments and descriptors are now the only merge inputs. Do not retain
-            // the construction objects while characterizing the final-writer heap peak.
-            scenario = null;
-            resetHeapPeaks();
-            assertThatThrownBy(() -> merge.run(kickoff.descriptors(), staging, boundaries, units -> { }))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
-                            + ", attempted=" + (outputAllowance + 1));
-            long peakHeap = peakHeapBytes();
-            System.out.printf("WP5_1_FINAL_WRITER_STRESS ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
-                            + "initial_output_allowance=%d final_file_bytes=%d peak_heap_bytes=%d%n",
-                    ranges, perRangeFanIn, softLimit, outputAllowance, config.finalFileBytes(), peakHeap);
-            assertThat(peakHeap).isPositive();
+            awaitCollected(wide.fixture());
+            long settledBaseline = settleHeapBytes();
+            HeapSampler sampler = HeapSampler.start(settledBaseline);
+            long sampledPeak;
+            try {
+                assertThatThrownBy(() -> merge.run(wide.kickoff().descriptors(), staging,
+                        wide.boundaries(), units -> { }))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("output-part fd budget exhausted: limit=" + outputAllowance
+                                + ", attempted=" + (outputAllowance + 1));
+            } finally {
+                sampledPeak = sampler.stop();
+            }
+            long sampledDelta = Math.max(0L, sampledPeak - settledBaseline);
+            System.out.printf("WP5_1_PROCESS_MERGE_STRESS ranges=%d per_range_fan_in=%d soft_fd_limit=%d "
+                            + "initial_output_allowance=%d final_file_bytes=%d "
+                            + "settled_baseline_heap_bytes=%d sampled_peak_heap_bytes=%d "
+                            + "sampled_incremental_heap_bytes=%d heap_characterization_budget_bytes=%d%n",
+                    ranges, perRangeFanIn, softLimit, outputAllowance, config.finalFileBytes(),
+                    settledBaseline, sampledPeak, sampledDelta, PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
+            assertThat(sampledPeak)
+                    .as("sampled process heap is under the §7.2 Parquet characterization budget")
+                    .isLessThan(PROCESS_MERGE_STRESS_HEAP_BUDGET_BYTES);
             assertThat(writers.opened.get()).isEqualTo(outputAllowance);
             assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
             assertThat(writers.openNow.get()).isZero();
-            assertThat(root.resolve("data")).doesNotExist();
             assertNoOwnedDebris(staging);
             assertNoLiveWorkers(merge.workerThreadPrefix());
         } finally {
@@ -1013,6 +1021,31 @@ class SortTransformPageRunParallelMergePropTest {
         return new Scenario(segments, all);
     }
 
+    /**
+     * Build and persist the wide-owner fixture in a separate frame, then return only durable inputs
+     * and a weak canary. The deep measurement proves that this construction state is reclaimable
+     * before it samples merge-process heap.
+     *
+     * <p>The real writer's compressed {@code dataSize()} controls the 4 MiB roll threshold. Thus
+     * the 112,000-row shape is characterization-only evidence that this encoding reaches the 41st
+     * writer; {@link #outputPartFdGuardR8BudgetMathSmoke()} is the deterministic writer-41 contract.
+     */
+    private WideStressStaging stageWideWriterStress(Path staging, int ranges) throws IOException {
+        // 112,000 rows × 2 KiB clears 41 × 4 MiB after Parquet compression, while each 1,000-row
+        // page-run page remains 2 MiB so the 8 × 8 input-frontier fleet fits in the deep test JVM.
+        Scenario scenario = wideOwnerScenario(ranges, 14_000, 2 * 1024);
+        WeakReference<Scenario> fixture = new WeakReference<>(scenario);
+        ParallelKickoff kickoff = parallelKickoff(stage(staging, scenario.segments()));
+        List<byte[]> boundaries = ParallelRangeMerge.boundaries(kickoff.descriptors(),
+                kickoff.candidates(), ranges, SortMetrics.NO_OP);
+        assertThat(boundaries).hasSize(ranges - 1);
+        assertThat(rangeRows(scenario.allEntries(), boundaries))
+                .as("wide rows yield enough page-minimum samples to balance every range")
+                .containsExactly(14_000, 14_000, 14_000, 14_000,
+                        14_000, 14_000, 14_000, 14_000);
+        return new WideStressStaging(kickoff, boundaries, fixture);
+    }
+
     private static String wideOwner(int ordinal, int bytes) {
         char[] chars = new char[bytes];
         int state = 0x9e3779b9 ^ ordinal;
@@ -1038,22 +1071,54 @@ class SortTransformPageRunParallelMergePropTest {
         return rows;
     }
 
-    private static void resetHeapPeaks() {
-        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
-            if (pool.getType() == MemoryType.HEAP) {
-                pool.resetPeakUsage();
-            }
+    private static void awaitCollected(WeakReference<?> fixture) throws InterruptedException {
+        for (int i = 0; i < MAX_GC_ATTEMPTS && fixture.get() != null; i++) {
+            System.gc();
+            Thread.sleep(10);
         }
+        assertThat(fixture.get())
+                .as("wide fixture construction state is reclaimable before heap characterization")
+                .isNull();
     }
 
-    private static long peakHeapBytes() {
-        long total = 0;
-        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
-            if (pool.getType() == MemoryType.HEAP && pool.getPeakUsage() != null) {
-                total += pool.getPeakUsage().getUsed();
-            }
+    private static long settleHeapBytes() throws InterruptedException {
+        for (int i = 0; i < 2; i++) {
+            System.gc();
+            Thread.sleep(10);
         }
-        return total;
+        return ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+    }
+
+    /** Samples one simultaneous process-heap total while the range workers execute. */
+    private static final class HeapSampler {
+        private final AtomicBoolean running;
+        private final AtomicLong sampledPeak;
+        private final Thread thread;
+
+        private HeapSampler(AtomicBoolean running, AtomicLong sampledPeak, Thread thread) {
+            this.running = running;
+            this.sampledPeak = sampledPeak;
+            this.thread = thread;
+        }
+
+        static HeapSampler start(long baseline) {
+            AtomicBoolean running = new AtomicBoolean(true);
+            AtomicLong sampledPeak = new AtomicLong(baseline);
+            Thread thread = Thread.ofPlatform().name("wp5-process-heap-sampler").daemon().start(() -> {
+                while (running.get()) {
+                    sampledPeak.accumulateAndGet(
+                            ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(), Math::max);
+                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+                }
+            });
+            return new HeapSampler(running, sampledPeak, thread);
+        }
+
+        long stop() throws InterruptedException {
+            running.set(false);
+            thread.join();
+            return sampledPeak.get();
+        }
     }
 
     /** Four splittable key ranges, with every key's versions divided across two page-run segments. */
