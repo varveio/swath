@@ -1148,7 +1148,7 @@ public final class ListCommand implements Callable<Integer>, GlobalOptions.Carri
             cleanExit = false;   // a partial/refused/failed exit keeps the checkpoint resumable
             throw e;
         } finally {
-            if (cleanExit) {
+            if (cleanExit && !(sorting.sort && sorting.resolveConfig().stagingRetention().retainsOriginals())) {
                 DatasetDirGuard.deleteColocatedRunHandleCheckpointIfComplete(
                         dbPath, output.resolvedKind, output.destination);
             }

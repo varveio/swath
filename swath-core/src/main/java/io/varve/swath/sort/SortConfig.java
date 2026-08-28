@@ -57,6 +57,9 @@ import java.util.function.UnaryOperator;
  *       tables, {@code useDict}, count, ordered-bit) is never compressed, so
  *       {@link PageFrontierReader} keeps parsing it without decompressing. Threaded to
  *       {@link PageBlock#pack} at the one seal call site ({@link SortBuffer#admit}).</li>
+ *   <li>{@code stagingRetention} — whether a successful live sorted publish keeps its original
+ *       checkpoint-tracked page-run inputs for diagnostics. Cascade intermediates and temporary
+ *       files remain disposable in either mode.</li>
  * </ul>
  */
 public record SortConfig(long segmentBytes, long segmentEntries, double heapFraction,
@@ -64,7 +67,8 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
                          int finalPageRows,
                          long mergeBudgetBytes, int mergeParallelism,
                          long mergePerStreamBytes, PageCodec segmentCodec,
-                         long minParallelStagedBytes) {
+                         long minParallelStagedBytes,
+                         StagingRetention stagingRetention) {
 
     /** Floor for the heap-adaptive segment gate (§7). */
     public static final long SEGMENT_BYTES_FLOOR = 64L * 1024 * 1024;
@@ -102,6 +106,12 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
     public static final int DEFAULT_FINAL_PAGE_ROWS = 1024;
 
     private static final String PREFIX = "swath.sort.";
+
+    /** The shared CLI tune suffix for retaining original page-run staging after publish. */
+    public static final String KEEP_STAGING_TUNE_KEY = "sort.keep-staging";
+
+    /** JVM-property form of {@link #KEEP_STAGING_TUNE_KEY}. */
+    public static final String KEEP_STAGING_PROPERTY = "swath." + KEEP_STAGING_TUNE_KEY;
 
     /**
      * Default for {@code minParallelStagedBytes}: staged bytes below which the merge stays serial no
@@ -166,7 +176,8 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
             DEFAULT_MERGE_PARALLELISM,
             DEFAULT_MERGE_PER_STREAM_BYTES,
             DEFAULT_SEGMENT_CODEC,
-            DEFAULT_MIN_PARALLEL_STAGED_BYTES);
+            DEFAULT_MIN_PARALLEL_STAGED_BYTES,
+            StagingRetention.DELETE_AFTER_PUBLISH);
 
     public SortConfig {
         if (segmentBytes <= 0) {
@@ -216,66 +227,81 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
             throw new IllegalArgumentException(
                     "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes);
         }
+        if (stagingRetention == null) {
+            throw new IllegalArgumentException("staging-retention must not be null");
+        }
     }
 
     public SortConfig withSegmentBytes(long segmentBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withSegmentEntries(long segmentEntries) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withHeapFraction(double heapFraction) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withBuffers(int buffers) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withFanIn(int fanIn) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withFinalRowGroupBytes(long finalRowGroupBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withFinalPageRows(int finalPageRows) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     /** Read the knobs from system properties once, applying the documented defaults. */
@@ -309,15 +335,25 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         PageCodec segmentCodec = segmentCodecProp == null
                 ? DEFAULT.segmentCodec()
                 : parseSegmentCodec(segmentCodecProp);
+        String keepStagingProp = lookup.apply(KEEP_STAGING_PROPERTY);
+        StagingRetention stagingRetention = keepStagingProp == null
+                ? DEFAULT.stagingRetention()
+                : StagingRetention.fromProperty(KEEP_STAGING_PROPERTY, keepStagingProp);
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn,
                 finalFileBytes, finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism,
-                mergePerStreamBytes, segmentCodec, minParallelStagedBytes);
+                mergePerStreamBytes, segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
         return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
                 finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes);
+                segmentCodec, minParallelStagedBytes, stagingRetention);
+    }
+
+    public SortConfig withStagingRetention(StagingRetention stagingRetention) {
+        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
+                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                segmentCodec, minParallelStagedBytes, stagingRetention);
     }
 
     private static PageCodec parseSegmentCodec(String raw) {

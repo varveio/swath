@@ -145,6 +145,37 @@ class SortTransformTest {
     }
 
     @Test
+    void retainedStagingKeepsOnlyOriginalSegmentsAndSignalsItsEngagement(@TempDir Path root)
+            throws IOException {
+        Dirs dirs = dirs(root);
+        List<Path> originals = new ArrayList<>();
+        for (String key : List.of("e", "b", "d", "a", "c")) {
+            originals.add(writeSegment(dirs.staging, "seg-" + originals.size() + ".parquet", objects(key)));
+        }
+        // These model the leftovers that can coexist with retained originals after a prior crash.
+        Path staleCascade = Files.createFile(dirs.staging.resolve("merge-99.pageseg"));
+        Path staleRangeTmp = Files.createFile(dirs.staging.resolve("prange-0-99.parquet.tmp"));
+        Path staleFinalTmp = Files.createFile(dirs.staging.resolve("part-99.parquet.tmp"));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        SortConfig retained = SortConfigs.base().withFanIn(2)
+                .withStagingRetention(StagingRetention.RETAIN_ORIGINALS);
+        SortTransformResult result = transformWithMetrics(retained, metrics)
+                .transform(originals, dirs.output, dirs.staging, PublishListener.NO_OP,
+                        units -> { }, FinalPassListener.NO_OP);
+
+        assertThat(result.cascadedPasses()).isPositive();
+        assertThat(originals).allMatch(Files::exists);
+        assertThat(staleCascade).doesNotExist();
+        assertThat(staleRangeTmp).doesNotExist();
+        assertThat(staleFinalTmp).doesNotExist();
+        try (var entries = Files.list(dirs.staging)) {
+            assertThat(entries.toList()).containsExactlyInAnyOrderElementsOf(originals);
+        }
+        assertThat(metrics.count("SORT.staging_retained")).isEqualTo(1);
+    }
+
+    @Test
     void publishCallbackFiresAfterRenamesButBeforeStagingDelete(@TempDir Path root) throws IOException {
         Dirs dirs = dirs(root);
         List<Path> staging = List.of(writeSegment(dirs.staging, "seg-0.parquet", objects("a", "b")));

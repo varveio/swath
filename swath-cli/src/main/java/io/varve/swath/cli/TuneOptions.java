@@ -8,6 +8,7 @@ package io.varve.swath.cli;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.sort.SortConfig;
+import io.varve.swath.sort.StagingRetention;
 import java.io.PrintWriter;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,6 +35,9 @@ final class TuneOptions {
                     SortOptions.MIN_MERGE_PARALLELISM + ".."
                             + SortOptions.MAX_MERGE_PARALLELISM,
                     Integer.toString(SortConfig.DEFAULT.mergeParallelism()), "stable", ResumeClass.FREE,
+                    "fresh list and resume"),
+            new KeySpec(SortConfig.KEEP_STAGING_TUNE_KEY, "boolean", "on|off",
+                    SortConfig.DEFAULT.stagingRetention().tuneValue(), "diagnostic", ResumeClass.FREE,
                     "fresh list and resume"),
             new KeySpec("sort.ignore-disk-check", "boolean", "on|off", "off",
                     "diagnostic", ResumeClass.FREE, "fresh list and resume"));
@@ -94,6 +98,9 @@ final class TuneOptions {
             } else if ("sort.merge-parallelism".equals(key)) {
                 sorting.mergeParallelism = parseMergeParallelism(key, setting.getValue());
                 effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
+            } else if (SortConfig.KEEP_STAGING_TUNE_KEY.equals(key)) {
+                sorting.stagingRetention = StagingRetention.fromEnabled(parseOnOff(key, setting.getValue()));
+                effectiveValues.put(key, sorting.stagingRetention.tuneValue());
             } else {
                 throw new AssertionError("resume-applicable tune key has no implementation: " + key);
             }
@@ -109,6 +116,8 @@ final class TuneOptions {
                                 ? resolvedSummaryInterval
                                 : "sort.merge-parallelism".equals(spec.key())
                                         ? Integer.toString(resolvedMergeParallelism)
+                                        : SortConfig.KEEP_STAGING_TUNE_KEY.equals(spec.key())
+                                                ? SortConfig.fromSystemProperties().stagingRetention().tuneValue()
                                         : spec.defaultValue()))
                 .collect(Collectors.joining(", "));
     }
@@ -209,6 +218,10 @@ final class TuneOptions {
                 case "sort.merge-parallelism" -> {
                     sorting.mergeParallelism = parseMergeParallelism(key, value);
                     effectiveValues.put(key, Integer.toString(sorting.mergeParallelism));
+                }
+                case SortConfig.KEEP_STAGING_TUNE_KEY -> {
+                    sorting.stagingRetention = StagingRetention.fromEnabled(parseOnOff(key, value));
+                    effectiveValues.put(key, sorting.stagingRetention.tuneValue());
                 }
                 default -> throw new AssertionError("unregistered tune key " + key);
         }

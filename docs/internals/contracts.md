@@ -808,8 +808,12 @@ which owns the at-most-once-text durability questions it would reopen):
   and re-run the merge idempotently (rewriting manifest/state/symlink/`_SUCCESS`);
   a crash between the manifest write and staging deletion leaves double data,
   which the same re-entry path cleans up.
-- Staging dir cleaned on successful publish; **a crash mid-sort redoes only
-  the sort (the LIST work is checkpointed).**
+- By default the staging dir is cleaned on successful publish and a co-located
+  checkpoint is deleted; **a crash mid-sort redoes only the sort (the LIST work
+  is checkpointed).** Diagnostic `sort.keep-staging=on` retains only the
+  original checkpoint-tracked page-run segments plus that co-located checkpoint
+  after successful sorted publication. Cascade intermediates, range output, and
+  temporary files remain disposable, and retention alone makes no replay claim.
 - **Cascade-scale resume semantics**:
   every `SortTransform.transform` (the merge-pending re-entry, whether from a
   fresh-listing hand-off or a `runSortMergeOnly` redo) unconditionally sweeps

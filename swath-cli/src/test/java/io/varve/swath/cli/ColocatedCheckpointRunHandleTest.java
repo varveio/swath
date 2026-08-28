@@ -8,9 +8,13 @@ package io.varve.swath.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.checkpoint.SortPhase;
+import io.varve.swath.checkpoint.SqliteCheckpointStore;
 import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.output.OutputFormat;
 import io.varve.swath.output.parquet.DatasetLayout;
+import io.varve.swath.output.parquet.Manifest;
+import io.varve.swath.sort.SortConfig;
 import io.varve.swath.testkit.MockPageFetcher;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -52,6 +56,36 @@ final class ColocatedCheckpointRunHandleTest {
             keys.add(String.format("data/key-%05d", i).getBytes(StandardCharsets.UTF_8));
         }
         return MockPageFetcher.builder().keys(keys).build();
+    }
+
+    private static ListCommand retainedSortCommand(Path outputDir, MockPageFetcher fetcher) {
+        ListCommand cmd = autoCommand(outputDir, fetcher);
+        cmd.sorting.sort = true;
+        cmd.tune.entries = List.of(SortConfig.KEEP_STAGING_TUNE_KEY + "=on");
+        return cmd;
+    }
+
+    @Test
+    void retainedSortedRunKeepsCheckpointTrackedInputsForMergeOnlyDiagnostics(@TempDir Path root)
+            throws Exception {
+        Path outputDir = root.resolve("out");
+        Path checkpoint = CheckpointOptions.CheckpointMode.colocatedCheckpoint(outputDir);
+
+        assertThat(retainedSortCommand(outputDir, fetcher(50)).call()).isEqualTo(ExitCodes.SUCCESS);
+
+        Path staging = outputDir.resolve(ListCommand.SORT_STAGING_DIR);
+        assertThat(checkpoint).exists();
+        assertThat(staging).isDirectory();
+        long runId = Manifest.readIdentity(outputDir).orElseThrow().runId();
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(checkpoint)) {
+            assertThat(store.sortPhase(runId)).isEqualTo(SortPhase.PUBLISHED);
+            assertThat(store.finalizedParts(runId))
+                    .isNotEmpty()
+                    .allSatisfy(part -> {
+                        assertThat(part.format()).isEqualTo("page-run");
+                        assertThat(staging.resolve(part.path())).exists();
+                    });
+        }
     }
 
     /**

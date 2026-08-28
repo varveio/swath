@@ -205,17 +205,12 @@ public final class SortTransform {
         // Publish commit point (manifest.json is written here) — AFTER renames, BEFORE staging delete.
         publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
 
-        // Staging is internal working state — delete what we own (originals + any intermediates).
-        for (Path p : stagingSegments) {
-            Files.deleteIfExists(p);
-        }
+        // Cascade intermediates are always disposable; original listing segments may be retained for
+        // a diagnostic merge-only measurement run.
         for (Path p : io.intermediates()) {
             Files.deleteIfExists(p);
         }
-        // "Staging dir cleaned on successful publish": remove the now-empty staging dir
-        // itself, not just its contents — but only if nothing unexpected is left in it (never a
-        // recursive wipe of foreign content the sorter doesn't own).
-        tryDeleteEmptyStagingDir(stagingDir);
+        completeOriginalStaging(stagingSegments, stagingDir);
         return new SortTransformResult(List.copyOf(finalFiles), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
     }
@@ -381,12 +376,26 @@ public final class SortTransform {
         }
         Durability.directory(outputDir);
         publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
+        completeOriginalStaging(stagingSegments, stagingDir);
+        return new SortTransformResult(List.copyOf(finalFiles), totalRows,
+                mergePasses, cascadedPasses, fastPathEmissions, results.size());
+    }
+
+    /** Finish original staging ownership after every successful publish. */
+    private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir) throws IOException {
+        if (config.stagingRetention().retainsOriginals()
+                && inputProfile == MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
+            metrics.recordStealReason("SORT", "staging_retained");
+            log.info("sort_staging_retained path={}", stagingDir);
+            return;
+        }
         for (Path p : stagingSegments) {
             Files.deleteIfExists(p);
         }
+        // "Staging dir cleaned on successful publish": remove the now-empty staging dir
+        // itself, not just its contents — but only if nothing unexpected is left in it (never a
+        // recursive wipe of foreign content the sorter doesn't own).
         tryDeleteEmptyStagingDir(stagingDir);
-        return new SortTransformResult(List.copyOf(finalFiles), totalRows,
-                mergePasses, cascadedPasses, fastPathEmissions, results.size());
     }
 
     /** Delete {@code stagingDir} iff it is now empty; foreign content is logged and left in place. */

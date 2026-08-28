@@ -989,6 +989,7 @@ retired — its emitter was deleted in the same change that added the annotation
 | `STRUCTURE` | `toggle_disabled` | structure probe skipped because `structure_probes=off` (distinct from runtime zero-fanout suppression) | |
 | `SEED` | `radix_bands_toggle_disabled` | radix banding skipped because `radix_bands=off` (distinct from shape-based non-engagement) | |
 | `SORT` | `segment_flushed` | a sealed listing buffer or sort-fixture staging chunk was flushed as one sorted staging segment; cascade intermediates are excluded | |
+| `SORT` | `staging_retained` | successful sorted publication retained its original checkpoint-tracked page-run staging under `sort.keep-staging=on`; cascade intermediates and temporary/range files remain disposable. Fires once per retained merge and accompanies the `sort_staging_retained` log line | |
 | `SORT` | `buffer_byte_gated` | the byte gate (not the entry cap) forced the segment flush — the 1 KB-key signal | |
 | `SORT` | `merge_fastpath` | same-reader fast-path emissions in a merge/seal pass (how much the disjoint-range structure was exploited) | |
 | `SORT` | `buffer_sort_fallback` | **REMOVED 2026-08-27** — retired with the unused seal-time row-merge path; production page-run staging writes packed pages and resolves ordering in the external merge | |
