@@ -458,6 +458,12 @@ final class JsonRunSummaryWriterTest {
         metrics.recordSortPublication(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeTail(TimeUnit.SECONDS.toNanos(4));
         metrics.recordSortFinalizeParallelism(4);
+        metrics.recordStealReason("SORT", "pack_on_fetch");
+        metrics.recordStealReason("SORT", "backpressure_engaged");
+        metrics.recordSortBackpressureWait(TimeUnit.MILLISECONDS.toNanos(7));
+        metrics.recordSortStagingBytesLive(1234);
+        metrics.recordSortHandoffQueueDepth(5);
+        metrics.recordSortOffThreadBuffersLive(2);
         metrics.recordSortMergeOverlapCluster();
         metrics.recordSortMergeOverlapState(3, 12);
 
@@ -482,6 +488,13 @@ final class JsonRunSummaryWriterTest {
         assertThat(sort.get("finalize_close_p50_ms").asDouble()).isPositive();
         assertThat(sort.get("finalize_close_p90_ms").asDouble()).isPositive();
         assertThat(sort.get("finalize_close_p99_ms").asDouble()).isPositive();
+        assertThat(sort.get("pack_on_fetch_pages").asLong()).isEqualTo(1L);
+        assertThat(sort.get("backpressure_engaged").asLong()).isEqualTo(1L);
+        assertThat(sort.get("backpressure_wait_ms").asLong()).isEqualTo(7L);
+        assertThat(sort.get("backpressure_wait_max_ms").asLong()).isEqualTo(7L);
+        assertThat(sort.get("staging_bytes_peak").asLong()).isEqualTo(1234L);
+        assertThat(sort.get("handoff_queue_depth_peak").asLong()).isEqualTo(5L);
+        assertThat(sort.get("off_thread_buffers_peak").asLong()).isEqualTo(2L);
         assertThat(sort.get("manifest_md5_bytes").asLong()).isEqualTo(1234);
         assertThat(sort.get("manifest_md5_ms").asLong()).isEqualTo(250);
         assertThat(sort.get("manifest_bounds_rows").asLong()).isZero();

@@ -114,6 +114,15 @@ whole-page path, while nonzero identifies the bounded key-merge fallback and its
 decoded page/row state. `merge_disjoint_copyable` and `merge_interleaved_segment` remain separate
 source-run classifications, so they can be compared without conflating overlap with row ordering.
 
+For an alternating sort campaign, `sort.pack_on_fetch_pages`, `segment_bytes`, and `segments` are
+cumulative snapshots: their deltas across periodic reports describe packed arrival and segment
+production. `backpressure_engaged`, `backpressure_wait_ms`, and
+`backpressure_wait_max_ms` describe the sort-lane handoff only; `staging_bytes_peak`,
+`handoff_queue_depth_peak`, and `off_thread_buffers_peak` are high-water marks. The report does
+not currently echo the configured `sort.buffers` or `sort.segment-bytes` target, and it does not
+label generic `swath.queue.wait` as an upstream sort queue, so those must be recorded in the
+campaign command rather than inferred from this block.
+
 `sort.arm` identifies the typed entry path: `LIVE_LIST_SORT` means this process performed the
 listing, `MERGE_ONLY_PAGE_RUN` is a checkpoint-authorized zero-LIST merge re-entry, and
 `PUBLISHED_REENTRY` is a checkpoint-authorized no-op resume that found this run already published

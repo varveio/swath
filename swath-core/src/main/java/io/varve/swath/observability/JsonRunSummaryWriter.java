@@ -772,6 +772,16 @@ public final class JsonRunSummaryWriter implements AutoCloseable {
         sortNode.put("segments", (long) counterCount("swath.sort.segments.written"));
         sortNode.put("passes", (long) counterCount("swath.sort.merge.passes"));
         sortNode.put("segment_bytes", (long) counterCount("swath.sort.segment.bytes"));
+        // Cumulative, so two periodic snapshots yield segment-arrival and staging-throughput deltas.
+        sortNode.put("pack_on_fetch_pages", (long) stealReasonCount("SORT", "pack_on_fetch"));
+        sortNode.put("backpressure_engaged", (long) stealReasonCount("SORT", "backpressure_engaged"));
+        sortNode.put("backpressure_wait_ms", timerTotalMs("swath.sort.backpressure.wait"));
+        sortNode.put("backpressure_wait_max_ms", timerMaxMs("swath.sort.backpressure.wait"));
+        sortNode.put("staging_bytes_peak", (long) gaugeValue("swath.sort.staging.bytes.peak"));
+        sortNode.put("handoff_queue_depth_peak",
+                (long) gaugeValue("swath.sort.handoff.queue.depth.peak"));
+        sortNode.put("off_thread_buffers_peak",
+                (long) gaugeValue("swath.sort.off_thread.buffers.peak"));
         long mergeMs = timerTotalMs("swath.sort.merge.latency");
         long boundariesMs = timerTotalMs("swath.sort.merge.boundaries.latency");
         long finalizeMs = timerTotalMs("swath.sort.finalize.latency");
