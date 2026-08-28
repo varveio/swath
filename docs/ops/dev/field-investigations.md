@@ -297,8 +297,8 @@ portable throughput claim.
   checkpoint-authorized completed run and immutable staging set.
 - **Evidence output:** the Gradle XML report at
   `swath-core/build/test-results/test/TEST-io.varve.swath.sort.ParallelMergeBenchmark.xml`
-  (the benchmark prints `BENCH_*` lines to that report); the [benchmark harness source](../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmark.java)
-  and [oracle tests](../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmarkTest.java)
+  (the benchmark prints `BENCH_*` lines to that report); the [benchmark harness source](../../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmark.java)
+  and [oracle tests](../../../swath-core/src/test/java/io/varve/swath/sort/ParallelMergeBenchmarkTest.java)
   define the validation and output fields.
 
 ### Commands and configuration
@@ -318,11 +318,27 @@ swath list s3://<fixture-source>/ --format parquet -o "$RUN" --sort \
 ```
 
 The ROWS arm used the same retained-corpus procedure with
-`--tune sort.merge-boundary-policy=rows`; `sort.keep-staging=on`, Parquet output, and the
+`--tune sort.merge-boundary-policy=rows` at corpus creation; the measured benchmark policy is
+selected separately with the JVM property below. `sort.keep-staging=on`, Parquet output, and the
 checkpoint-authorized zero-LIST merge path were unchanged. The measured arms were `R=1`, `R=4`,
 `R=8`, and `R=16`; no listing concurrency or object-store request rate is implied by these
 merge-only runs. The harness first performed an untimed full-transform warm-up and then used its
 interleaved serial/candidate brackets.
+
+To measure the ROWS policy, the benchmark invocation explicitly included:
+
+```bash
+./gradlew :swath-core:test \
+  --tests 'io.varve.swath.sort.ParallelMergeBenchmark' \
+  -Dswath.bench=on -Pperf \
+  -Dswath.sort.merge-boundary-policy=rows \
+  -Dswath.bench.staging-dir="$RUN/_staging" \
+  -Dswath.bench.ranges=1,4,8,16
+```
+
+The `--tune` value prepares the retained corpus; `-Dswath.sort.merge-boundary-policy=rows`
+controls the measured Gradle benchmark JVM. Do not omit the latter when reproducing the ROWS
+timings.
 
 **Warm clock:** each value below is merge wall time for a measured retained-corpus transform,
 from merge-phase timing start through merge completion. JVM startup, corpus snapshot/oracle
