@@ -39,7 +39,7 @@ final class StagingNames {
     }
 
     static String rangeProofTmp() {
-        return "prange-proof.tmp";
+        return "prange-proof" + TMP_SUFFIX;
     }
 
     static String cascadeIntermediate(String prefix, int sequence) {

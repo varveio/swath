@@ -447,12 +447,14 @@ final class PageRunPageIndex {
 
     /** Streaming entry cursor used by later range planning without descriptor-level sample retention. */
     static final class Cursor {
+        private final PageRunSegmentIo io;
         private final PageRunBoundarySample.ChunkedReader in;
         private final CRC32C ignoredCrc = new CRC32C();
         private final long payloadStart;
         private int remaining;
 
         private Cursor(PageRunSegmentIo io, Locator locator) {
+            this.io = io;
             this.in = new PageRunBoundarySample.ChunkedReader(io, locator.payloadStart(),
                     locator.entriesEnd() - locator.payloadStart());
             this.payloadStart = locator.payloadStart();
@@ -473,7 +475,10 @@ final class PageRunPageIndex {
             long cumulativeEntries = in.readLong(ignoredCrc);
             long cumulativeFramedBytes = in.readLong(ignoredCrc);
             KeyRead min = readKey(in, ignoredCrc, Long.MAX_VALUE);
-            KeyRead prefix = readKey(in, ignoredCrc, Long.MAX_VALUE);
+            KeyRead prefix = min == null ? null : readKey(in, ignoredCrc, Long.MAX_VALUE);
+            if (min == null || prefix == null) {
+                throw io.indexMismatch("page-index cursor entry key exceeds the key limit", null);
+            }
             remaining--;
             IndexEntry entry = new IndexEntry(ordinal, offset, cumulativeEntries,
                     cumulativeFramedBytes, min.key(), prefix.key());

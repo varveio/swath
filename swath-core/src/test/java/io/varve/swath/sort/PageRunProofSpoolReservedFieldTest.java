@@ -10,12 +10,29 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class PageRunProofSpoolReservedFieldTest {
+
+    @Test
+    void emptyAndTruncatedSlotsFailWithTypedIoBeforeAddressing(@TempDir Path root)
+            throws Exception {
+        for (int length : new int[] {0, 1, PageRunProofSpool.slotBytes() - 1}) {
+            Path path = root.resolve("truncated-" + length + ".tmp");
+            Files.write(path, new byte[length]);
+
+            try (PageRunProofSpool.Reader reader = new PageRunProofSpool.Reader(path)) {
+                assertThatThrownBy(() -> reader.read(0, false, false))
+                        .as("mapped extent %s", length)
+                        .isExactlyInstanceOf(java.io.IOException.class)
+                        .hasMessageContaining("proof spool is truncated");
+            }
+        }
+    }
 
     @Test
     void coordinatorValidatesReservedZeroAndAccountsForAllFixedBytes(@TempDir Path root)

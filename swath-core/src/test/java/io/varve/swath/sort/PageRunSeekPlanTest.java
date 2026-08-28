@@ -9,8 +9,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -134,6 +138,30 @@ class PageRunSeekPlanTest {
                     .isEqualTo(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH);
         }
         assertThat(metrics.count("SORT.page_run_index_mismatch")).isEqualTo(2);
+    }
+
+    @Test
+    void planningRejectsSameSizeInPlaceIndexKeyRewriteWithTypedMismatch(@TempDir Path dir)
+            throws IOException {
+        Path path = SortTestSupport.writeIndexedPages(dir.resolve("rewritten.pageseg"), 4, 0);
+        Prepared prepared = prepared(path);
+        PageRunSegmentDescriptor descriptor = prepared.descriptors().getFirst();
+        long originalSize = Files.size(path);
+        long firstMinLength = descriptor.extension().locator().payloadStart() + 4L * Long.BYTES;
+        ByteBuffer overlong = ByteBuffer.allocate(Short.BYTES).putShort((short) 0xffff).flip();
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE)) {
+            while (overlong.hasRemaining()) {
+                firstMinLength += channel.write(overlong, firstMinLength);
+            }
+        }
+
+        assertThat(Files.size(path)).isEqualTo(originalSize);
+        assertThatThrownBy(() -> PageRunSeekPlan.plan(
+                prepared.descriptors(), List.of(bytes("k00002")), SortMetrics.NO_OP))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("page-index cursor entry key exceeds the key limit")
+                .extracting(error -> ((SegmentCorruptionException) error).errorClass())
+                .isEqualTo(SegmentCorruptionException.PAGE_RUN_INDEX_MISMATCH);
     }
 
     @Test

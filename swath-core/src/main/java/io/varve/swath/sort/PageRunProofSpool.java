@@ -25,7 +25,16 @@ final class PageRunProofSpool {
 
     private static final int OPEN = 1;
     private static final int FINISHED = 2;
-    private static final int FIXED_BYTES = 56;
+    private static final long STATE_OFFSET = 0;
+    private static final long SAMPLE_MISMATCH_OFFSET = STATE_OFFSET + Integer.BYTES;
+    private static final long PAGES_OFFSET = SAMPLE_MISMATCH_OFFSET + Integer.BYTES;
+    private static final long ENTRIES_OFFSET = PAGES_OFFSET + Long.BYTES;
+    private static final long FRAMED_BYTES_OFFSET = ENTRIES_OFFSET + Long.BYTES;
+    private static final long FIRST_FRAME_OFFSET = FRAMED_BYTES_OFFSET + Long.BYTES;
+    private static final long END_FRAME_OFFSET = FIRST_FRAME_OFFSET + Long.BYTES;
+    private static final long VERIFIED_SAMPLES_OFFSET = END_FRAME_OFFSET + Long.BYTES;
+    private static final long RESERVED_OFFSET = VERIFIED_SAMPLES_OFFSET + Integer.BYTES;
+    private static final int FIXED_BYTES = Math.toIntExact(RESERVED_OFFSET + Integer.BYTES);
     private static final int KEY_SLOT_BYTES = Short.BYTES + ByteMidpoint.MAX_KEY_LEN;
     private static final int SLOT_BYTES = FIXED_BYTES + KeyField.values().length * KEY_SLOT_BYTES;
     private static final int PREALLOCATE_BUFFER_BYTES = 64 * 1024;
@@ -255,7 +264,7 @@ final class PageRunProofSpool {
 
         void markOpen(int segment) {
             long started = System.nanoTime();
-            storage.set(INT, slotOffset(segment), OPEN);
+            storage.set(INT, slotOffset(segment) + STATE_OFFSET, OPEN);
             stats.recordMapped(1, Integer.BYTES, System.nanoTime() - started);
         }
 
@@ -293,17 +302,17 @@ final class PageRunProofSpool {
                     boolean sampleMismatch) {
             long started = System.nanoTime();
             long offset = slotOffset(segment);
-            storage.set(INT, offset + Integer.BYTES, sampleMismatch ? 1 : 0);
-            storage.set(LONG, offset + 8, pages);
-            storage.set(LONG, offset + 16, entries);
-            storage.set(LONG, offset + 24, framedBytes);
-            storage.set(LONG, offset + 32, firstFrameOffset);
-            storage.set(LONG, offset + 40, endFrameOffset);
-            storage.set(INT, offset + 48, verifiedSamples);
-            storage.set(INT, offset + 52, 0);
+            storage.set(INT, offset + SAMPLE_MISMATCH_OFFSET, sampleMismatch ? 1 : 0);
+            storage.set(LONG, offset + PAGES_OFFSET, pages);
+            storage.set(LONG, offset + ENTRIES_OFFSET, entries);
+            storage.set(LONG, offset + FRAMED_BYTES_OFFSET, framedBytes);
+            storage.set(LONG, offset + FIRST_FRAME_OFFSET, firstFrameOffset);
+            storage.set(LONG, offset + END_FRAME_OFFSET, endFrameOffset);
+            storage.set(INT, offset + VERIFIED_SAMPLES_OFFSET, verifiedSamples);
+            storage.set(INT, offset + RESERVED_OFFSET, 0);
             // Commit state last. Future completion supplies the happens-before edge before the
             // coordinator maps the same file read-only.
-            storage.set(INT, offset, FINISHED);
+            storage.set(INT, offset + STATE_OFFSET, FINISHED);
             stats.recordMapped(1, FIXED_BYTES, System.nanoTime() - started);
         }
 
@@ -396,21 +405,21 @@ final class PageRunProofSpool {
 
         Summary read(int segment, boolean hasPages, boolean hasSamples) throws IOException {
             long started = System.nanoTime();
-            long offset = slotOffset(segment);
-            int state = storage.get(INT, offset);
+            long offset = requireSlotExtent(segment);
+            int state = storage.get(INT, offset + STATE_OFFSET);
             if (state != FINISHED) {
                 stats.recordMapped(1, Integer.BYTES, System.nanoTime() - started);
                 throw new IOException("page-run proof spool has incomplete segment summary "
                         + segment + " in " + path);
             }
-            boolean mismatch = storage.get(INT, offset + Integer.BYTES) != 0;
-            long pages = storage.get(LONG, offset + 8);
-            long entries = storage.get(LONG, offset + 16);
-            long framedBytes = storage.get(LONG, offset + 24);
-            long firstFrameOffset = storage.get(LONG, offset + 32);
-            long endFrameOffset = storage.get(LONG, offset + 40);
-            int verifiedSamples = storage.get(INT, offset + 48);
-            int reserved = storage.get(INT, offset + 52);
+            boolean mismatch = storage.get(INT, offset + SAMPLE_MISMATCH_OFFSET) != 0;
+            long pages = storage.get(LONG, offset + PAGES_OFFSET);
+            long entries = storage.get(LONG, offset + ENTRIES_OFFSET);
+            long framedBytes = storage.get(LONG, offset + FRAMED_BYTES_OFFSET);
+            long firstFrameOffset = storage.get(LONG, offset + FIRST_FRAME_OFFSET);
+            long endFrameOffset = storage.get(LONG, offset + END_FRAME_OFFSET);
+            int verifiedSamples = storage.get(INT, offset + VERIFIED_SAMPLES_OFFSET);
+            int reserved = storage.get(INT, offset + RESERVED_OFFSET);
             stats.recordMapped(1, FIXED_BYTES, System.nanoTime() - started);
             if (reserved != 0) {
                 throw new IOException("page-run proof spool reserved field is non-zero in " + path);
@@ -425,6 +434,26 @@ final class PageRunProofSpool {
             return new Summary(pages, entries, framedBytes, firstFrameOffset, endFrameOffset,
                     verifiedSamples, mismatch, firstMin, lastMin, zoneMax,
                     firstSamplePrefix, firstSamplePageMax);
+        }
+
+        private long requireSlotExtent(int segment) throws IOException {
+            if (segment < 0) {
+                throw new IOException("page-run proof spool segment index is negative in " + path);
+            }
+            final long offset;
+            final long end;
+            try {
+                offset = slotOffset(segment);
+                end = Math.addExact(offset, SLOT_BYTES);
+            } catch (ArithmeticException e) {
+                throw new IOException("page-run proof spool segment index is out of bounds in "
+                        + path, e);
+            }
+            if (end > storage.byteSize()) {
+                throw new IOException("page-run proof spool is truncated at segment "
+                        + segment + " in " + path);
+            }
+            return offset;
         }
 
         private byte[] readKey(int segment, KeyField field) throws IOException {
@@ -575,7 +604,7 @@ final class PageRunProofSpool {
 
     /** Package-private corruption-fixture seam for the fixed reserved-zero field. */
     static long reservedFieldOffset(int segment) {
-        return slotOffset(segment) + 52;
+        return slotOffset(segment) + RESERVED_OFFSET;
     }
 
     private static long slotOffset(int segment) {
@@ -584,6 +613,6 @@ final class PageRunProofSpool {
 
     private static long keyOffset(int segment, KeyField field) {
         return Math.addExact(slotOffset(segment),
-                FIXED_BYTES + (long) field.ordinal() * KEY_SLOT_BYTES);
+                Math.addExact(FIXED_BYTES, (long) field.ordinal() * KEY_SLOT_BYTES));
     }
 }
