@@ -25,12 +25,15 @@ public interface RangeMergeTimer {
     void recordRangeMerge(long nanos);
 
     /**
-     * Record the boundary-sampling prologue's wall time in nanoseconds — the parallel path's own
-     * SERIAL fraction, run once before any range starts.
+     * Record the boundary-planning prologue's wall time in nanoseconds — the parallel path's own
+     * SERIAL fraction, run once before any range starts. The value is the sum of the structured
+     * catalog/index preflight and final distinct/rows policy spans, excluding the intervening
+     * resource-gate bookkeeping.
      *
      * <p>Reported separately because it is the term that does not parallelise: it reads bounded
-     * embedded metadata on current page-run staging and scans only legacy/fallback segments. Folded into
-     * {@code merge_ms} it is invisible, and an
+     * embedded metadata on current page-run staging, scans only legacy/fallback segments, and under
+     * the explicit rows policy includes its extra entry-region pass. Folded into {@code merge_ms}
+     * it is invisible, and an
      * A/B reading the run report cannot tell a merge that stopped scaling from one whose prologue grew
      * to dominate it — which is exactly the question tuning {@code R} turns on.
      *

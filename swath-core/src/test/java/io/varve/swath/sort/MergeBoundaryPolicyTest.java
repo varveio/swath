@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 import net.jqwik.api.ForAll;
 import net.jqwik.api.Property;
 import org.junit.jupiter.api.Test;
@@ -145,6 +146,22 @@ class MergeBoundaryPolicyTest {
         assertThat(prefix).isSameAs(histogram).containsExactly(0, 3, 10, 21);
     }
 
+    @Test
+    void boundaryTimerIncludesEmbeddedPreflightAndRowsExtraIndexPass(@TempDir Path root)
+            throws IOException {
+        long distinctNanos = timedBoundary(root.resolve("distinct-timed"),
+                MergeBoundaryPolicy.DISTINCT);
+        long rowsNanos = timedBoundary(root.resolve("rows-timed"),
+                MergeBoundaryPolicy.ROWS);
+
+        assertThat(distinctNanos)
+                .as("embedded catalog/index preflight is inside the DISTINCT boundary clock")
+                .isEqualTo(11);
+        assertThat(rowsNanos)
+                .as("ROWS adds its full entry-region histogram pass to the same boundary clock")
+                .isEqualTo(28);
+    }
+
     private static Scenario scenario(long seed) {
         Random random = new Random(seed);
         List<List<ListEntry>> segments = List.of(new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
@@ -167,6 +184,73 @@ class MergeBoundaryPolicyTest {
             pages.add(segmentPages);
         }
         return new Scenario(pages, List.copyOf(all));
+    }
+
+    private static long timedBoundary(Path root, MergeBoundaryPolicy policy) throws IOException {
+        Path output = Files.createDirectories(root.resolve("out"));
+        Path staging = Files.createDirectories(output.resolve("_staging"));
+        Path segment = SortTestSupport.writeIndexedPages(
+                staging.resolve("segment.pageseg"), 16, 0);
+        AtomicLong clock = new AtomicLong();
+        SortMetrics metrics = new SortMetrics() {
+            @Override
+            public void recordStealReason(String outcome, String reason) {
+            }
+
+            @Override
+            public void markProgress() {
+            }
+
+            @Override
+            public void recordBoundaryIo(long embeddedEntries, long embeddedBytes, long scanBytes) {
+            }
+
+            @Override
+            public void recordPageAwareOverlapCluster() {
+            }
+
+            @Override
+            public void recordPageAwareOverlapState(long activePages, long retainedRows) {
+            }
+
+            @Override
+            public void recordRangeIndexBytes(long bytes) {
+                clock.addAndGet(17);
+            }
+        };
+        CapturingRangeTimer timer = new CapturingRangeTimer();
+        SortConfig config = SortConfigs.base()
+                .withMergeParallelism(4)
+                .withMergeBudgetBytes(64L << 20)
+                .withMergeBoundaryPolicy(policy);
+        SortRun run = new SortRun(config, CMP, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                metrics, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, timer,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
+                PageRunProofSpool.Reader::new, clock::get,
+                path -> {
+                    clock.addAndGet(11);
+                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
+                });
+
+        SortTransformResult result = transform.transform(List.of(segment), output, staging,
+                PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP);
+        assertThat(result.totalRows()).isEqualTo(16);
+        return timer.boundaryNanos;
+    }
+
+    private static final class CapturingRangeTimer implements RangeMergeTimer {
+        private long boundaryNanos = -1;
+
+        @Override
+        public void recordRangeMerge(long nanos) {
+        }
+
+        @Override
+        public void recordBoundarySampling(long nanos) {
+            boundaryNanos = nanos;
+        }
     }
 
     private static List<List<ListEntry>> skewedPages() {

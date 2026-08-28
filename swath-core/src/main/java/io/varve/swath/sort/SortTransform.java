@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,6 +69,8 @@ public final class SortTransform {
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergePlanner, not here.
     private final MergePlanner mergePlanner;
+    private final LongSupplier boundaryNanoClock;
+    private final PageRunCatalog.Opener catalogOpener;
 
     /** Build one transform from the complete immutable run policy. */
     public SortTransform(SortRun run) {
@@ -81,6 +84,13 @@ public final class SortTransform {
 
     SortTransform(SortRun run, PublicationStepHook publicationStepHook,
             PageRunZoneVerifier.ProofReaderFactory proofReaderFactory) {
+        this(run, publicationStepHook, proofReaderFactory, System::nanoTime,
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP));
+    }
+
+    SortTransform(SortRun run, PublicationStepHook publicationStepHook,
+            PageRunZoneVerifier.ProofReaderFactory proofReaderFactory,
+            LongSupplier boundaryNanoClock, PageRunCatalog.Opener catalogOpener) {
         this.run = run;
         this.config = run.config();
         this.comparator = run.comparator();
@@ -92,6 +102,8 @@ public final class SortTransform {
         PublicationStepHook checkedPublicationHook =
                 Objects.requireNonNull(publicationStepHook, "publicationStepHook");
         this.proofReaderFactory = Objects.requireNonNull(proofReaderFactory, "proofReaderFactory");
+        this.boundaryNanoClock = Objects.requireNonNull(boundaryNanoClock, "boundaryNanoClock");
+        this.catalogOpener = Objects.requireNonNull(catalogOpener, "catalogOpener");
         this.datasetPublisher = new DatasetPublisher(run, checkedPublicationHook, log);
         this.mergePlanner = new MergePlanner(run);
     }
@@ -146,9 +158,11 @@ public final class SortTransform {
         // sample keys into one globally bounded set during this same open. An unreadable segment is
         // not an optional memory refinement and must fail at kickoff while the prior output and
         // working evidence are intact. Explicit serial and arbitrary-run merges skip extensions.
-        PageRunCatalog catalog =
-                PageRunCatalog.preflight(stagingSegments,
-                        path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), boundaryKeySink);
+        long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
+        PageRunCatalog catalog = PageRunCatalog.preflight(
+                stagingSegments, catalogOpener, boundaryKeySink);
+        long boundaryPreflightNanos = parallelKickoff
+                ? elapsed(boundaryPreflightStarted, boundaryNanoClock.getAsLong()) : 0;
         // Disposable working files are cleared before work; prior finals remain until their complete
         // replacements are durable. DatasetPublisher owns this and every later physical mutation.
         datasetPublisher.sweepWorking(outputDir, stagingDir);
@@ -165,7 +179,7 @@ public final class SortTransform {
         if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(catalog, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting, boundaryCandidates,
-                    retainedOriginals);
+                    retainedOriginals, boundaryPreflightNanos);
             if (parallel != null) {
                 return parallel;
             }
@@ -227,13 +241,15 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting,
             MergePlanner.BoundaryCandidates boundaryCandidates,
-            StagingReconciliation retainedOriginals) throws IOException {
+            StagingReconciliation retainedOriginals, long boundaryPreflightNanos)
+            throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
         List<Path> stagingSegments = catalog.paths();
         ParallelRangeMerge rangeMerge =
                 new ParallelRangeMerge(run, mergePlanner, proofReaderFactory);
         // Clamp R to what the merge budget and the descriptor budget can actually carry over THIS many
-        // staged segments, BEFORE sampling boundaries for a range count we would not honour. Past that
+        // staged segments, before final policy selection for a range count we would not honour. The
+        // structured descriptor/sample preflight has already run and is timed separately above. Past that
         // bound every range cascades and the parallel merge is slower than the serial one it replaced
         // -- silently, since the engagement counter still fires once per range. See
         // MergePlanner#effectiveRanges.
@@ -262,21 +278,22 @@ public final class SortTransform {
             }
         }
         if (desiredRanges <= 1) {
+            recordBoundaryPlanning(stagingSegments.size(), 1, boundaryPreflightNanos, 0, false);
             // A size/budget/fd policy decline is not an unsplittable keyspace. That signal belongs
             // exclusively to the boundary sampler below.
             return null;
         }
-        // Boundary sampling is this path's SERIAL fraction: new page-run staging reads its bounded
-        // trailer samples; legacy or invalid extensions scan only the affected segments. Recorded to its own timer as well as
-        // logged, because the run report is what an A/B actually reads -- folded into merge_ms this
+        // Boundary planning is this path's SERIAL fraction: preflight already read the bounded
+        // trailer samples; final policy selection scans only legacy/invalid segments and the rows
+        // arm's extra index pass. The two non-overlapping spans share one timer and log because the
+        // run report is what an A/B actually reads -- folded into merge_ms this
         // term is invisible, and it is the one that does NOT shrink as R rises.
-        long boundariesStartNanos = System.nanoTime();
+        long boundariesStartNanos = boundaryNanoClock.getAsLong();
         List<byte[]> boundaries = mergePlanner.boundaries(catalog, boundaryCandidates, desiredRanges);
-        long boundariesNanos = System.nanoTime() - boundariesStartNanos;
-        rangeTimer.recordBoundarySampling(boundariesNanos);
-        log.info("sort_merge_boundaries segments={} ranges={} boundary_policy_requested={} duration_ms={}",
-                stagingSegments.size(), boundaries == null ? 1 : boundaries.size() + 1,
-                config.mergeBoundaryPolicy().configValue(), boundariesNanos / 1_000_000L);
+        long boundaryPolicyNanos = elapsed(boundariesStartNanos, boundaryNanoClock.getAsLong());
+        recordBoundaryPlanning(stagingSegments.size(),
+                boundaries == null ? 1 : boundaries.size() + 1,
+                boundaryPreflightNanos, boundaryPolicyNanos, true);
         if (boundaries == null) {
             // Instrumentation (AGENTS.md "instrument every new algo path"): without this, a run that
             // ASKED for a parallel merge and silently got the serial one is indistinguishable in the
@@ -328,6 +345,25 @@ public final class SortTransform {
             throw e.withPublishedResult(result);
         }
         return result;
+    }
+
+    private void recordBoundaryPlanning(int segments, int ranges, long preflightNanos,
+                                        long policyNanos, boolean policyEngaged) {
+        long totalNanos = saturatedAdd(preflightNanos, policyNanos);
+        rangeTimer.recordBoundarySampling(totalNanos);
+        log.info("sort_merge_boundaries segments={} ranges={} boundary_policy_requested={} "
+                        + "boundary_policy_engaged={} preflight_ms={} policy_ms={} duration_ms={}",
+                segments, ranges, config.mergeBoundaryPolicy().configValue(), policyEngaged,
+                preflightNanos / 1_000_000L, policyNanos / 1_000_000L,
+                totalNanos / 1_000_000L);
+    }
+
+    private static long elapsed(long started, long finished) {
+        return Math.max(0L, finished - started);
+    }
+
+    private static long saturatedAdd(long first, long second) {
+        return first > Long.MAX_VALUE - second ? Long.MAX_VALUE : first + second;
     }
 
 }

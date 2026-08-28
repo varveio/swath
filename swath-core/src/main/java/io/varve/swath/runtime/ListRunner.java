@@ -1010,7 +1010,7 @@ public final class ListRunner {
         // SortTransform caller (e.g. CaptureSorter's sort-fixture path) has no such guard and must NOT
         // opt in.
         // Not a method reference any more: the parallel path reports TWO wall times -- each range's own
-        // merge, and the serial boundary-sampling prologue that runs once before all of them.
+        // merge, and the serial boundary-planning prologue that runs once before all of them.
         RangeMergeTimer rangeTimer = new RangeMergeTimer() {
             @Override
             public void recordRangeMerge(long nanos) {
