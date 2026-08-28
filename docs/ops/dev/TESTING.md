@@ -56,6 +56,19 @@ parallel/batched, and the populated volume **snapshotted and reused** — not re
     -Dswath.bench=on`, filtered to that class). It prints `WRITER_BENCH_RESULT` rows for an encode/dispatch arm and a
     row-rotation arm, including submit/HOL blocking plus digest/manifest time. Results are host and
     workload evidence, never a relative-throughput assertion in CI.
+  - `PageBlockAllocationCharacterizationTest` is the exact opt-in guard for persisted page-body
+    copy removal. It forks a small interpreted child JVM with `-XX:-UseTLAB`, verifies that VM flag,
+    requires a named 8 KiB positive-control `byte[]` allocation to appear in JFR, and only then
+    accepts zero >=2 KiB byte arrays under legacy/current PageBlock parse/decode stacks. Run it as:
+
+    ```bash
+    JAVA_TOOL_OPTIONS='-Dswath.profile.allocations=exact' ./gradlew \
+      :swath-core:test \
+      --tests 'io.varve.swath.sort.PageBlockAllocationCharacterizationTest'
+    ```
+
+    The default build skips it; a zero target count without the positive control is a failure, not
+    evidence.
 - **`-Pdeep`** `./gradlew test -Pdeep` — runs **only** the `@Tag("deep")` tier:
   schedule-sensitive probe-budget tests + latency-injecting retry/AIMD/throttle/timeout
   timing tests, demoted off the per-commit gate because they are slow (real `Thread.sleep`)

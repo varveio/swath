@@ -8,16 +8,12 @@ package io.varve.swath.sort;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
-import jdk.jfr.consumer.RecordedEvent;
-import jdk.jfr.consumer.RecordedFrame;
-import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -42,11 +38,9 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
  * <p>Run: {@code JAVA_TOOL_OPTIONS="-Dswath.profile=on -Dswath.profile.jfr=<path>" ./gradlew
  * :swath-core:test --tests 'io.varve.swath.sort.MergeCpuProfileHarness' -Pperf} — {@code -D} on the
  * {@code ./gradlew} command line does not reach the forked test-worker JVM;
- * {@code JAVA_TOOL_OPTIONS} does.
- * Add {@code -Dswath.profile.allocations=exact} to enable both exact allocation events and fail the
- * harness if a payload-sized {@code byte[]} allocation is attributed to {@code
- * PageBlockCodec.parseHeader}; the persisted-page slice design should report zero. The threshold is
- * configurable with {@code swath.profile.payloadCopyFloorBytes} (default 4096).
+ * {@code JAVA_TOOL_OPTIONS} does. Persisted-page copy allocation has its separate exact,
+ * no-TLAB characterization in {@link PageBlockAllocationCharacterizationTest}; this CPU harness
+ * deliberately retains ordinary profile settings.
  */
 @EnabledIfSystemProperty(named = "swath.profile", matches = "on")
 class MergeCpuProfileHarness {
@@ -98,14 +92,6 @@ class MergeCpuProfileHarness {
 
             Configuration jfrConfig = Configuration.getConfiguration("profile");
             Recording recording = new Recording(jfrConfig);
-            boolean exactAllocations = "exact".equals(
-                    System.getProperty("swath.profile.allocations", ""));
-            if (exactAllocations) {
-                recording.enable("jdk.ObjectAllocationInNewTLAB")
-                        .withThreshold(Duration.ZERO).withStackTrace();
-                recording.enable("jdk.ObjectAllocationOutsideTLAB")
-                        .withThreshold(Duration.ZERO).withStackTrace();
-            }
 
             long cpuStartNanos = SortBenchCorpus.processCpuTimeNanos();
             long wallStartNanos = System.nanoTime();
@@ -121,18 +107,6 @@ class MergeCpuProfileHarness {
             long cpuEndNanos = SortBenchCorpus.processCpuTimeNanos();
             recording.dump(jfrOut);
             recording.close();
-
-            if (exactAllocations) {
-                long floor = Long.getLong("swath.profile.payloadCopyFloorBytes", 4_096L);
-                long duplicatePayloadArrays = largeHeaderByteArrayAllocations(jfrOut, floor);
-                System.out.printf("PROFILE_ALLOCATION_EVIDENCE payload_copy_floor_bytes=%d "
-                                + "large_parse_header_byte_arrays=%d%n",
-                        floor, duplicatePayloadArrays);
-                if (duplicatePayloadArrays != 0) {
-                    throw new AssertionError("persisted PageBlock header parsing allocated "
-                            + duplicatePayloadArrays + " payload-sized byte arrays");
-                }
-            }
 
             long mergeMs = (wallEndNanos - wallStartNanos) / 1_000_000;
             double avgCoresBusy = (cpuStartNanos < 0 || cpuEndNanos < 0)
@@ -168,34 +142,4 @@ class MergeCpuProfileHarness {
         return new SortBenchCorpus.Stats(NUM_SEGMENTS, totalRows, totalBytes);
     }
 
-    private static long largeHeaderByteArrayAllocations(Path recording, long floor)
-            throws IOException {
-        long matches = 0;
-        try (RecordingFile events = new RecordingFile(recording)) {
-            while (events.hasMoreEvents()) {
-                RecordedEvent event = events.readEvent();
-                String name = event.getEventType().getName();
-                if (!("jdk.ObjectAllocationInNewTLAB".equals(name)
-                        || "jdk.ObjectAllocationOutsideTLAB".equals(name))
-                        || event.getLong("allocationSize") < floor
-                        || !isByteArray(event)) {
-                    continue;
-                }
-                if (event.getStackTrace() != null
-                        && event.getStackTrace().getFrames().stream()
-                        .map(RecordedFrame::getMethod)
-                        .anyMatch(method -> PageBlockCodec.class.getName().equals(
-                                method.getType().getName())
-                                && "parseHeader".equals(method.getName()))) {
-                    matches++;
-                }
-            }
-        }
-        return matches;
-    }
-
-    private static boolean isByteArray(RecordedEvent event) {
-        String type = event.getClass("objectClass").getName();
-        return "[B".equals(type) || "byte[]".equals(type);
-    }
 }
