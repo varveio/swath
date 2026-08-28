@@ -20,8 +20,23 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class PageRunSeekPlanTest {
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(PageRunPageIndex.Status.class)
+    void unusableIndexStatusRegistryEmitsOneStableClassification(
+            PageRunPageIndex.Status status) {
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
+
+        PageRunSeekPlan.recordUnusableIndex(status, metrics);
+
+        assertThat(metrics.count("SORT.merge_seek_plan_index_unusable")).isEqualTo(1);
+        assertThat(metrics.counts).containsEntry(
+                "SORT." + expectedUnusableStatusReason(status), 1).hasSize(2);
+    }
 
     @Test
     void planningRetainsOnlyPrimitiveRangeSeamsAndPositionsAtChosenPage(@TempDir Path dir)
@@ -43,6 +58,7 @@ class PageRunSeekPlanTest {
                 .allMatch(type -> type.isPrimitive() || type.isArray()
                         || type == PageRunSegmentDescriptor.class);
         assertThat(metrics.rangeIndexBytes.sum()).isEqualTo(8L * 48L);
+        assertThat(metrics.count("SORT.merge_seek_plan_index_unusable")).isZero();
 
         try (PageFrontierReader frontier = new PageFrontierReader(
                 path, SortMetrics.NO_OP, segment, 1)) {
@@ -173,8 +189,9 @@ class PageRunSeekPlanTest {
                 new ListEntryComparator());
         Prepared prepared = prepared(List.of(indexed, legacy));
 
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         PageRunSeekPlan plan = PageRunSeekPlan.plan(prepared.descriptors(),
-                List.of(bytes("k00000"), bytes("k00001")), SortMetrics.NO_OP);
+                List.of(bytes("k00000"), bytes("k00001")), metrics);
         PageRunSeekPlan.SegmentPlan indexedPlan = plan.segment(indexed);
         PageRunSeekPlan.SegmentPlan legacyPlan = plan.segment(legacy);
 
@@ -191,6 +208,8 @@ class PageRunSeekPlanTest {
         assertThat(legacyPlan.zone(0).empty()).isTrue();
         assertThat(legacyPlan.zone(1).empty()).isTrue();
         assertThat(legacyPlan.zone(2).end().pageOrdinal()).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_seek_plan_index_unusable")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_seek_plan_index_status_absent")).isEqualTo(1);
     }
 
     private static Prepared prepared(Path path) throws IOException {
@@ -208,6 +227,23 @@ class PageRunSeekPlanTest {
 
     private static byte[] bytes(String key) {
         return key.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String expectedUnusableStatusReason(PageRunPageIndex.Status status) {
+        return switch (status) {
+            case EMBEDDED -> "merge_seek_plan_index_status_empty";
+            case EMBEDDED_MINIMA_ONLY -> "merge_seek_plan_index_status_minima_only";
+            case SKIPPED -> "merge_seek_plan_index_status_skipped";
+            case ABSENT -> "merge_seek_plan_index_status_absent";
+            case UNKNOWN -> "merge_seek_plan_index_status_unknown";
+            case INVALID_LENGTH -> "merge_seek_plan_index_status_invalid_length";
+            case INVALID_COUNT -> "merge_seek_plan_index_status_invalid_count";
+            case INVALID_CRC -> "merge_seek_plan_index_status_invalid_crc";
+            case INVALID_ORDER -> "merge_seek_plan_index_status_invalid_order";
+            case INVALID_BOUNDS -> "merge_seek_plan_index_status_invalid_bounds";
+            case INVALID_OFFSET -> "merge_seek_plan_index_status_invalid_offset";
+            case INVALID_CUMULATIVE -> "merge_seek_plan_index_status_invalid_cumulative";
+        };
     }
 
     private record Prepared(List<PageRunSegmentDescriptor> descriptors,

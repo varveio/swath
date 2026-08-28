@@ -1072,6 +1072,7 @@ public final class ListRunner {
                 store.setSortPhase(runId, SortPhase.PUBLISHED);
             } catch (CheckpointException phaseFailure) {
                 e.addSuppressed(phaseFailure);
+                ctx.metrics().recordStealReason("SORT", "post_publish_phase_latch_failed");
                 log.warn("sort_post_publish_phase_latch_failed publication_committed=true "
                                 + "cleanup_pending=true run_id={} stage={} message={}",
                         runId, e.stage().logValue(), phaseFailure.getMessage());

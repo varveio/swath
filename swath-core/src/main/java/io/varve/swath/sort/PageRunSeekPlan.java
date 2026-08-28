@@ -151,10 +151,42 @@ final class PageRunSeekPlan {
             SegmentPlan segment = new SegmentPlan(descriptor, segmentIndex, ranges);
             if (descriptor.extension().valid() && descriptor.extension().entryCount() > 0) {
                 scanType2(segment, boundaries, metrics);
+            } else {
+                recordUnusableIndex(descriptor.extension().status(), metrics);
             }
             planned.add(segment);
         }
         return new PageRunSeekPlan(planned, ranges);
+    }
+
+    static void recordUnusableIndex(PageRunPageIndex.Status status, SortMetrics metrics) {
+        metrics.recordStealReason("SORT", "merge_seek_plan_index_unusable");
+        switch (status) {
+            case EMBEDDED -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_empty");
+            case EMBEDDED_MINIMA_ONLY -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_minima_only");
+            case SKIPPED -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_skipped");
+            case ABSENT -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_absent");
+            case UNKNOWN -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_unknown");
+            case INVALID_LENGTH -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_length");
+            case INVALID_COUNT -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_count");
+            case INVALID_CRC -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_crc");
+            case INVALID_ORDER -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_order");
+            case INVALID_BOUNDS -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_bounds");
+            case INVALID_OFFSET -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_offset");
+            case INVALID_CUMULATIVE -> metrics.recordStealReason(
+                    "SORT", "merge_seek_plan_index_status_invalid_cumulative");
+        }
     }
 
     private static void scanType2(SegmentPlan segment, List<byte[]> boundaries,
