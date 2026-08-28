@@ -29,6 +29,9 @@ import java.nio.file.Path;
  * guard rather than each enforcing it separately, so neither can silently misorder a segment whose
  * pages regress. Page-range OVERLAP stays perfectly legal (the merger's key-merge fallback handles
  * it): only min REGRESSION is rejected.
+ * A parallel original positioned from {@link PageRunSeekPlan} defers its single-reader tail check
+ * to the stronger cross-range {@link PageRunZoneVerifier}; serial and intermediate readers keep the
+ * existing local check unchanged.
  *
  * <p>This is a sibling of {@link PageRunSegmentReader}, not a replacement: the entry-typed
  * {@link EntryStream} reader still serves the Parquet-equivalence path and any direct entry consumer.

@@ -23,38 +23,28 @@ import java.io.IOException;
  * layer: being too generous costs time, and the only thing that would cost correctness — skipping a
  * page that could hold an in-range key — is exactly what the test above cannot do.
  *
- * <p><b>Why the tail can be abandoned but the head cannot.</b> Pages are stored in non-decreasing
+ * <p><b>Why both sides can now be bounded.</b> Pages are stored in non-decreasing
  * {@code minKey} order ({@link PageRunSegmentWriter}), so once {@code min >= hi} every later page
  * also has {@code min >= hi}: the scan stops there and the rest of the segment is never read at all.
- * {@code maxKey}, by contrast, is NOT monotone — a wide early page can overlap a late range — so the
- * head cannot be skipped by seeking: each page's frontier must be read to learn its {@code max}.
- * A range therefore reads a PREFIX of each segment ending at its own {@code hi}, and range {@code r}
- * of {@code R} reads roughly {@code (r+1)/R} of it. Summed over the ranges that is ~{@code (R+1)/2}×
- * the bytes a serial merge reads — real read amplification, traded for decoding ~{@code 1/R} of the
- * rows. Measured on a 9.9 M-key page-run fixture at {@code R=8}: 4.50× the bytes, against ~1/8
- * of the rows decoded per range.
+ * {@code maxKey}, by contrast, is NOT monotone, so a safe head seek uses the type-2 index's
+ * monotone {@code prefixMax}, never a sampled page max or minimum. The selected entry remains an
+ * untrusted hint: the reader verifies its next frame and the coordinator proves the complete
+ * header-to-trailer physical-zone chain before publication. Legacy/type-1 inputs retain the header
+ * start and therefore the former prefix walk.
  *
- * <p>The framed body is still read and CRC-verified for every page the scan steps over, because
- * {@link PageRunSegmentIo#nextPage()} is the single page-advance primitive and it validates as it
- * goes. Skipping the payload bytes outright would need either a per-page offset index in the trailer
- * (a format change) or reading only each record's leading frontier fields and seeking past the rest
- * (which forfeits per-RANGE CRC of skipped payloads, though not whole-merge coverage: the last range
- * reads every page of every segment, which is exactly the serial path's once-per-merge coverage).
- * Both are follow-ups, deliberately not taken here: this class keeps the shipped integrity
- * guarantees exactly as they are, and the bytes-read measurement decides whether they are needed.
+ * <p>The framed body is still read and CRC-verified for every page this range owns or steps over.
+ * Pages physically bypassed by a seek belong to an earlier range's proof zone and are verified
+ * there, so the optimization removes duplicate range reads without adding a separate integrity pass.
  *
- * <p><b>Completeness cross-check.</b> {@link PageFrontierReader#advance()} runs
- * {@code io.checkComplete} only when it walks off the end of a segment, and a range that abandons
- * its tail never does. The check is nevertheless still run once per segment per merge, by
- * the LAST range ({@code hi == null}): it cannot set {@code pastRange} ({@link #beyondRange()}
- * requires a non-null {@code hi}) and therefore drains every original segment. That range is the
- * authoritative whole-input CRC/order/count proof now that valid embedded boundary samples avoid
- * the old redundant full scan. The parallel coordinator does not publish until every range succeeds;
- * a late corruption cancels siblings and sweeps their temporary output.
+ * <p><b>Whole-input proof.</b> Pre-worker planning supplies every zone bound, including repeated
+ * starts as explicit empty zones. This frontier reports the actual pages, entries, framed bytes,
+ * minima, maxima, and index samples in its owned interval. The coordinator checks all ranges tile
+ * each segment exactly and match its trailer before returning their still-open writers; a mismatch
+ * closes writers and sweeps temporary output through the ordinary failure path.
  */
 final class RangeScopedPageFrontier implements PageFrontierStream {
 
-    private final PageFrontierStream inner;
+    private final PageFrontierReader inner;
     private final byte[] lo;   // inclusive, or null for -inf
     private final byte[] hi;   // exclusive, or null for +inf
 
@@ -72,6 +62,8 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
 
     /** Pages in the whole segment (trailer {@code totalRecords}) — the denominator for the signal. */
     private final long totalPages;
+    private final long startOrdinal;
+    private final PageRunZoneVerifier.Tracker zoneTracker;
 
     /** Pages whose rows this range may decode, and pages read-then-stepped-over. */
     private long pagesKept;
@@ -80,14 +72,18 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
     /** True once the scan has passed {@code hi}; the underlying stream is left un-drained. */
     private boolean pastRange;
 
-    RangeScopedPageFrontier(PageFrontierStream inner, byte[] lo, byte[] hi, long totalPages,
-                            SortMetrics metrics) throws IOException {
+    RangeScopedPageFrontier(PageFrontierReader inner, byte[] lo, byte[] hi, long totalPages,
+                            long startOrdinal, SortMetrics metrics,
+                            PageRunZoneVerifier.Tracker zoneTracker) throws IOException {
         this.inner = inner;
         this.lo = lo;
         this.hi = hi;
         this.totalPages = totalPages;
+        this.startOrdinal = startOrdinal;
         this.metrics = metrics;
+        this.zoneTracker = zoneTracker;
         try {
+            observeLoadedPage();
             skipToOverlapping();
         } catch (IOException | RuntimeException e) {
             // The constructor does IO (it walks the prefix), so a corrupt/truncated segment throws
@@ -135,6 +131,18 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
             // that cancel cooperative -- the constructor already closes the stream on the way out.
             MergeCancellation.check();
             inner.advance();
+            observeLoadedPage();
+        }
+    }
+
+    private void observeLoadedPage() throws IOException {
+        if (zoneTracker == null) {
+            return;
+        }
+        if (inner.hasPage()) {
+            zoneTracker.observe(inner.currentPosition(), inner.minKey(), inner.maxKey(), inner.count());
+        } else {
+            zoneTracker.exhausted(inner.nextFrameOffset());
         }
     }
 
@@ -179,12 +187,25 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
             return;
         }
         inner.advance();
+        observeLoadedPage();
         skipToOverlapping();
     }
 
     @Override
     public void close() throws IOException {
-        inner.close();
+        IOException failure = null;
+        try {
+            inner.close();
+        } catch (IOException e) {
+            failure = e;
+        } finally {
+            if (zoneTracker != null) {
+                zoneTracker.finish();
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     long pagesKept() {
@@ -204,6 +225,14 @@ final class RangeScopedPageFrontier implements PageFrontierStream {
      * roughly {@code 1/R} of each segment, and post-analysis could not tell whether the skip helped.
      */
     long pagesUnread() {
-        return Math.max(0, totalPages - pagesKept - pagesSkipped);
+        return Math.max(0, totalPages - startOrdinal - pagesKept - pagesSkipped);
+    }
+
+    long pagesSeekedOver() {
+        return startOrdinal;
+    }
+
+    long bytesRead() {
+        return inner.framedBytesRead();
     }
 }

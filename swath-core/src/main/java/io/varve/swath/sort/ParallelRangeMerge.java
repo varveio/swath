@@ -53,6 +53,10 @@ import org.slf4j.LoggerFactory;
  * decode-free page-whole fast path inside each range, so a range runs the same merge algorithm the
  * serial path would; the {@code [lo, hi)} trim therefore sits ABOVE the merge
  * ({@link RangeFilteredCursor}) rather than around each input.
+ * Type-2 page-index entries are positioning hints, not trusted metadata: planning streams them into
+ * primitive per-range seams before worker launch, and the coordinator verifies every sampled claim
+ * while chaining disjoint physical zones from the fixed header to each segment's trailer. Writers
+ * remain open and unpublished until that whole-input proof succeeds.
  *
  * <p><b>Peak heap and descriptors, both divided across the ranges.</b> Each range's merge budget is
  * {@code mergeBudgetBytes / R} and its {@link KWayMerge} pass width is that divided by the page-run
@@ -158,7 +162,8 @@ final class ParallelRangeMerge {
      * last part final, and closes. {@code writers} is index-aligned with {@code tmpParts}.
      */
     record RangeResult(List<Path> tmpParts, List<SortedFileWriter> writers, long rows, long mergePasses,
-                       long cascadedPasses, long fastPathEmissions) {
+                       long cascadedPasses, long fastPathEmissions,
+                       PageRunZoneVerifier.RangeSummary zoneSummary) {
     }
 
     enum ClampReason {
@@ -403,6 +408,10 @@ final class ParallelRangeMerge {
                 PageRunSegmentDescriptor.byPath(segmentDescriptors);
         int ranges = boundaries.size() + 1;
         int perRangeFanIn = perRangeFanIn(ranges, segmentDescriptors);
+        // Position every range before worker launch. The plan retains O(segments*R) primitives,
+        // never sampled-key lists; type-2 values remain hints until the post-worker physical-zone
+        // proof below chains them from the fixed header to the trailer.
+        PageRunSeekPlan seekPlan = PageRunSeekPlan.plan(segmentDescriptors, boundaries, metrics);
         Object progressLock = new Object();
         LongConsumer safeProgress = units -> {
             synchronized (progressLock) {
@@ -435,7 +444,7 @@ final class ParallelRangeMerge {
                 byte[] hi = range == ranges - 1 ? null : boundaries.get(range);
                 Callable<RangeResult> task = mergeRange(range, lo, hi, stagingSegments, stagingDir,
                         perRangeFanIn, safeProgress, safeHook, openPartCount, openPartLimit,
-                        descriptorsByPath);
+                        descriptorsByPath, seekPlan);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
             List<RangeResult> results = new ArrayList<>(Collections.nCopies(ranges, null));
@@ -446,6 +455,10 @@ final class ParallelRangeMerge {
             if (shutdownAndAwait(pool, false)) {
                 Thread.currentThread().interrupt();
             }
+            List<PageRunZoneVerifier.RangeSummary> proof = results.stream()
+                    .map(RangeResult::zoneSummary)
+                    .toList();
+            PageRunZoneVerifier.verify(seekPlan, proof, metrics);
             log.info("sort_merge_range_parallel ranges={} threads={} per_range_fan_in={}",
                     ranges, threads, perRangeFanIn);
             return results;
@@ -468,6 +481,11 @@ final class ParallelRangeMerge {
                 throw runtime;
             }
             throw new IOException("parallel range merge failed", cause);
+        } catch (IOException e) {
+            // Coordinator-side zone proof failures happen after every worker returned its writers.
+            // They are still pre-publication failures: close all writers and sweep owned debris.
+            abortAndCleanUp(pool, futures, stagingDir);
+            throw e;
         } catch (RuntimeException e) {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
@@ -483,7 +501,8 @@ final class ParallelRangeMerge {
                                              Path stagingDir, int perRangeFanIn, LongConsumer safeProgress,
                                              DuplicateHook safeHook, AtomicInteger openPartCount,
                                              int openPartLimit,
-                                             Map<Path, PageRunSegmentDescriptor> descriptorsByPath) {
+                                             Map<Path, PageRunSegmentDescriptor> descriptorsByPath,
+                                             PageRunSeekPlan seekPlan) {
         return () -> {
             SortedFileWriterFactory rangeWriterFactory =
                     finalWriterFactory.forOutputSequence();
@@ -491,6 +510,8 @@ final class ParallelRangeMerge {
             // Page-skip counters live on the frontier wrappers this range opened (one per page-run
             // input); collected after the merge drains, for the same read-vs-skipped signal.
             List<RangeScopedPageFrontier> pageFrontiers = new ArrayList<>();
+            PageRunZoneVerifier.RangeBuilder proofBuilder =
+                    new PageRunZoneVerifier.RangeBuilder(range, seekPlan.segments().size());
             // Page-run ranges see whole straddling boundary pages, so a duplicate pair lying OUTSIDE
             // this range would be reported by both adjacent ranges. Scope the hook to [lo, hi) so the
             // run's duplicate counts match the serial merge's exactly.
@@ -503,7 +524,7 @@ final class ParallelRangeMerge {
                     new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
             PageRunMergeIo io = new PageRunMergeIo(run, pageRunWriter, stagingDir,
                     "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
-                    pageFrontiers::add);
+                    pageFrontiers::add, range, seekPlan, proofBuilder);
             KWayMerge<Path> merge = new KWayMerge<>(comparator, perRangeFanIn, io, rangeHook, metrics);
 
             List<Path> tmpParts = new ArrayList<>();
@@ -544,25 +565,29 @@ final class ParallelRangeMerge {
             long pagesKept = 0;
             long pagesSkipped = 0;
             long pagesUnread = 0;
+            long pagesSeekedOver = 0;
+            long bytesRead = 0;
             for (RangeScopedPageFrontier f : pageFrontiers) {
                 pagesKept += f.pagesKept();
                 pagesSkipped += f.pagesSkipped();
                 pagesUnread += f.pagesUnread();
+                pagesSeekedOver += f.pagesSeekedOver();
+                bytesRead += f.bytesRead();
             }
-            // Page skip signal (§5a), the page-run twin of the row-group one above: fire once per
-            // range that stepped over >=1 page, so the run total is "how many ranges the page skip
-            // engaged on", and kept-vs-skipped in the log is the skip-fraction (did it help) signal.
-            if (pagesSkipped + pagesUnread > 0) {
+            // Page skip signal (§5a): fire once per range that avoided decoding at least one page,
+            // whether by an indexed seek, a frontier step, or the bounded tail stop.
+            if (pagesSeekedOver + pagesSkipped + pagesUnread > 0) {
                 metrics.recordStealReason("SORT", "merge_range_page_skipped");
             }
             long rangeNanos = System.nanoTime() - startNanos;
             rangeTimer.recordRangeMerge(rangeNanos);
             log.info("sort_merge_range range={} rows={} pages_kept={} pages_skipped={} "
-                            + "pages_unread={} duration_ms={}",
-                    range, rows, pagesKept, pagesSkipped, pagesUnread,
+                            + "pages_unread={} pages_seeked_over={} bytes_read={} duration_ms={}",
+                    range, rows, pagesKept, pagesSkipped, pagesUnread, pagesSeekedOver, bytesRead,
                     rangeNanos / 1_000_000L);
+            PageRunZoneVerifier.RangeSummary zoneSummary = proofBuilder.finish();
             return new RangeResult(tmpParts, parts, rows, merge.mergePasses(), merge.cascadedPasses(),
-                    merge.fastPathEmissions());
+                    merge.fastPathEmissions(), zoneSummary);
         };
     }
 

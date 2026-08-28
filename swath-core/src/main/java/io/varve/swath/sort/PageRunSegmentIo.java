@@ -198,7 +198,12 @@ final class PageRunSegmentIo implements AutoCloseable {
             throw indexMismatch("indexed page offset reached the trailer before page ordinal "
                     + ordinal + " of " + totalRecords, null);
         }
-        Record record = nextRecord();
+        Record record;
+        try {
+            record = nextRecord();
+        } catch (IOException e) {
+            throw seekFailureOr(e, "indexed seek did not land on a complete page frame");
+        }
         if (!record.crcOk()) {
             throw fail("record CRC32C mismatch (torn or corrupt record)");
         }
