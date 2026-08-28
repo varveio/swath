@@ -1143,7 +1143,8 @@ class SortTransformPageRunParallelMergePropTest {
             assertThat(success).doesNotExist();
             assertThat(corrupt).exists();
             assertThat(healthy).exists();
-            assertThat(writers.opened.get()).as("the lower range started its output").isPositive();
+            // Failure may win before any range opens its first final writer; either schedule is
+            // correct as long as every writer that did open is closed and none remains live.
             assertThat(writers.closed.get()).isEqualTo(writers.opened.get());
             assertThat(writers.openNow.get()).as("all temporary writers closed").isZero();
             assertNoOwnedDebris(staging);
