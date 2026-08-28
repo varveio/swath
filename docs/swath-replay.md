@@ -373,7 +373,7 @@ Replay meters use the `swath.replay.*` namespace. Important groups are:
 
 | Meters | Meaning |
 | --- | --- |
-| `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}`, `sort.progress`, `sort.merge.boundaries.embedded.entries` / `.embedded.bytes` / `.scan.bytes` | Legacy-fixture sort work, engagement, progress, and boundary-selection I/O. |
+| `sortfixture.build.latency`, `sortfixture.output.bytes`, `sort.steal_reason{outcome,reason}`, `sort.progress`, `sort.merge.boundaries.embedded.entries` / `.embedded.bytes` / `.scan.bytes` | Legacy-fixture sort work, engagement, progress, and complete boundary-I/O adapter counters. The three boundary counters are structurally zero for the current `sort-fixture` path: `ARBITRARY_SORTED_RUNS` disables range boundaries. They remain registered to keep the adapter complete and future-safe. |
 | `index.load.latency{source=derived}`, `index.entries` | Sorted routing-index construction. |
 | `serving.path{mode}`, `serving.fallback{reason}`, `serving.refused{reason}` | Selected path, startup decline, or request-time safety refusal. |
 | `delimiter.path{path}`, `delimiter.skipscan.row_group_opens`, `delimiter.skipscan.whole_group_shortcuts`, `delimiter.reader_pool.open.latency` | Rollup vs walk, skip-scan I/O, routing-index-only whole-group engagements, and lazy per-file delimiter-pool first touch (timer count = files opened). |

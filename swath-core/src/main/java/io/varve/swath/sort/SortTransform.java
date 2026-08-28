@@ -162,10 +162,8 @@ public final class SortTransform {
 
         SortedFileWriterFactory outputSequence = finalWriterFactory.forOutputSequence();
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
-        Map<Path, PageRunSegmentDescriptor> descriptorsByPath =
-                PageRunSegmentDescriptor.byPath(segmentDescriptors);
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
-                "merge-", null, descriptorsByPath, frontier -> { });
+                "merge-", null, Map.of(), frontier -> { });
         // Fan-in: see the class javadoc for the runtime-clamp policy. plan() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
         int runtimeFanIn = fanInPlanner.plan(segmentDescriptors);

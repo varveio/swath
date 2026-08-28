@@ -89,6 +89,27 @@ class SortedFixturesTest {
     }
 
     @Test
+    void fixtureRunKeepsBoundaryIoMetersAtZeroWhenFrontiersAreDisabled(@TempDir Path dir)
+            throws IOException {
+        Path capture = Files.createDirectories(dir.resolve("capture"));
+        writeUnsortedPart(capture.resolve("part-0.parquet"), "c", "a", "b");
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        FixtureMetrics metrics = new FixtureMetrics(registry);
+
+        new CaptureSorter(config().withMergeParallelism(2), metrics)
+                .sort(capture, Files.createDirectories(dir.resolve("out")));
+
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.entries").counter().count())
+                .isZero();
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.embedded.bytes").counter().count())
+                .isZero();
+        assertThat(registry.find("swath.replay.sort.merge.boundaries.scan.bytes").counter().count()).isZero();
+        assertThat(registry.find("swath.replay.sort.steal_reason")
+                .tags("outcome", "SORT", "reason", "merge_range_frontier_disabled")
+                .counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
     void loadIndexAcrossASingleFileIsAscendingAndRecordsMetrics(@TempDir Path dir) throws IOException {
         Path capture = Files.createDirectories(dir.resolve("capture"));
         writeUnsortedPart(capture.resolve("part-0.parquet"), "e", "b", "d", "a", "c");

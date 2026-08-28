@@ -74,6 +74,8 @@ class SortTransformFanInClampTest {
 
         assertThat(r.result.cascadedPasses()).isGreaterThan(0);
         assertThat(metrics.count("SORT.merge_pass_cascaded")).isGreaterThan(0);
+        assertThat(metrics.count("SORT.merge_scoped_frontier_validated_trailer")).isZero();
+        assertThat(metrics.count("SORT.merge_scoped_frontier_trailer_reread")).isZero();
         assertThat(r.keys).isSorted();
         assertThat(r.keys).containsExactlyElementsOf(r.expected);
     }
