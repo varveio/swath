@@ -7,11 +7,7 @@ package io.varve.swath.sort;
 
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -29,7 +25,7 @@ import org.slf4j.LoggerFactory;
  * staging deleted or exactly reconciled only after the {@link PublishListener} fires. The full publish/resume state
  * machine (manifest-last commit, idempotent re-entry, stale-tmp/stale-final cleanup) is
  * {@code docs/internals/contracts.md} §6; this class's own re-entry sweep-scope safety proof lives at
- * {@link #cleanStaleFinals}, not here.
+ * {@link DatasetPublisher#cleanStaleFinals}, not here.
  *
  * <p>Multi-file output rolls the sorted stream into range-disjoint files named {@code
  * part-00000.parquet}, {@code part-00001.parquet}, … (lexical order == key order), starting a
@@ -61,14 +57,14 @@ public final class SortTransform {
     private final DuplicateHook hook;
     private final EqualKeyPolicy equalKeyPolicy;
     private final SortMetrics metrics;
-    private final SortedFileWriterFactory finalWriterFactory;
     private final MergeInputProfile inputProfile;
     // Per-range merge-latency seam for the parallel path (NO_OP off that path).
     private final RangeMergeTimer rangeTimer;
-    // Deterministic package-private crash-matrix seam. Production installs NO_OP, so each
-    // publication boundary costs one non-allocating no-op call and carries no global state.
-    private final PublicationStepHook publicationStepHook;
+    // Package-private post-worker proof failure seam for the parallel coordinator.
     private final PageRunZoneVerifier.ProofReaderFactory proofReaderFactory;
+    // Owns the package-private crash hook; production installs NO_OP, so each boundary costs one
+    // non-allocating no-op call and carries no global state.
+    private final DatasetPublisher datasetPublisher;
     // The "how wide can this merge pass be" cluster (static budget estimate + fd/record-size
     // runtime clamps + their observability) lives in MergePlanner, not here.
     private final MergePlanner mergePlanner;
@@ -90,11 +86,12 @@ public final class SortTransform {
         this.hook = run.hook();
         this.equalKeyPolicy = run.equalKeyPolicy();
         this.metrics = run.metrics();
-        this.finalWriterFactory = run.finalWriterFactory();
         this.inputProfile = run.inputProfile();
         this.rangeTimer = run.rangeMergeTimer();
-        this.publicationStepHook = Objects.requireNonNull(publicationStepHook, "publicationStepHook");
+        PublicationStepHook checkedPublicationHook =
+                Objects.requireNonNull(publicationStepHook, "publicationStepHook");
         this.proofReaderFactory = Objects.requireNonNull(proofReaderFactory, "proofReaderFactory");
+        this.datasetPublisher = new DatasetPublisher(run, checkedPublicationHook, log);
         this.mergePlanner = new MergePlanner(run);
     }
 
@@ -134,7 +131,8 @@ public final class SortTransform {
             Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         PageRunCatalog.requirePageRunNames(stagingSegments);
-        StagingReconciliation retainedOriginals = retainedOriginals(stagingSegments, stagingDir);
+        StagingReconciliation retainedOriginals =
+                datasetPublisher.retainedOriginals(stagingSegments, stagingDir);
         boolean parallelKickoff = config.mergeParallelism() > 1
                 && inputProfile.parallelRangesAllowed();
         MergePlanner.BoundaryCandidates boundaryCandidates =
@@ -150,14 +148,9 @@ public final class SortTransform {
         PageRunCatalog catalog =
                 PageRunCatalog.preflight(stagingSegments,
                         path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), boundaryKeySink);
-        // See cleanStaleTmp/cleanStaleFinals/cleanStaleMergeIntermediates/cleanStalePrangeTmp
-        // below for what each sweep removes and why. Disposable working files are cleared before
-        // work; prior published finals remain until their complete replacements are ready.
-        cleanStaleTmp(stagingDir);
-        cleanStaleTmp(outputDir);
-        cleanStaleMergeIntermediates(stagingDir);
-        cleanStalePrangeTmp(stagingDir);
-        publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
+        // Disposable working files are cleared before work; prior finals remain until their complete
+        // replacements are durable. DatasetPublisher owns this and every later physical mutation.
+        datasetPublisher.sweepWorking(outputDir, stagingDir);
 
         // When the configured/default swath.sort.merge-parallelism survives the staged-size,
         // memory, and fd gates, split the keyspace into
@@ -179,7 +172,7 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_frontier_disabled");
         }
 
-        SortedFileWriterFactory outputSequence = finalWriterFactory.forOutputSequence();
+        DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(outputDir, stagingDir);
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
         PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
                 "merge-", null, Map.of(), frontier -> { }, -1, null, null);
@@ -188,12 +181,6 @@ public final class SortTransform {
         int runtimeFanIn = mergePlanner.serialFanIn(catalog);
         KWayMerge<Path> merge = new KWayMerge<>(comparator, runtimeFanIn, io, hook, metrics);
 
-        List<Path> finalFiles = new ArrayList<>();
-        List<Path> tmpFiles = new ArrayList<>();
-        // Every writer ever opened, including rolled writers already closed by drain's private
-        // bounded open-writer list. Retain these objects because close() publishes immutable
-        // FinalPartMetadata that finalParts() hands to the manifest listener after all renames.
-        List<SortedFileWriter> finalWriters = new ArrayList<>();
         long totalRows;
         try (SortedCursor merged = merge.merge(stagingSegments, progressCallback)) {
             // merge() above already ran every cascade pass to completion before returning this
@@ -201,42 +188,19 @@ public final class SortTransform {
             // and it drains exactly the staged rows once: an honest completion denominator.
             onFinalPassStarting.onFinalPassStarting(true);
             totalRows = RolledPartWriter.drain(merged, config.finalFileBytes(),
-                    () -> openNextFile(outputDir, stagingDir, finalFiles, tmpFiles, finalWriters,
-                            outputSequence),
+                    pending::openNext,
                     true, progressCallback, metrics, equalKeyPolicy, comparator);
         }
-        publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
+        datasetPublisher.allTmpPartsDurable();
         // Merge engagement counts (read after the cursor is fully drained + closed above, so the
         // final streaming pass's fast-path total has accumulated) — surfaced for the run's meters/summary.
         long mergePasses = merge.mergePasses();
         long cascadedPasses = merge.cascadedPasses();
         long fastPathEmissions = merge.fastPathEmissions();
 
-        // The complete replacement is now durable under tmp names. Keep prior finals intact through
-        // every staging read and output close; only now remove stale/excess parts and rename the new
-        // set into place. This avoids destroying a recoverable published output when a segment has
-        // magic-preserving body corruption that the O(1) trailer preflight cannot prove absent.
-        cleanStaleFinals(outputDir);
-        publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
-        for (int i = 0; i < finalFiles.size(); i++) {
-            atomicRename(tmpFiles.get(i), finalFiles.get(i));
-            publicationStep(PublicationStep.AFTER_PART_RENAME, i);
-        }
-        Durability.directory(outputDir);
-        publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
-
-        // Publish commit point (manifest.json is written here) — AFTER renames, BEFORE staging delete.
-        publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
-        publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
-
-        // Cascade intermediates are always disposable; original listing segments may be retained for
-        // a diagnostic merge-only measurement run.
-        for (Path p : io.intermediates()) {
-            Files.deleteIfExists(p);
-        }
-        completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
-        publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
-        return new SortTransformResult(List.copyOf(finalFiles), totalRows,
+        datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
+                retainedOriginals, io.intermediates());
+        return new SortTransformResult(pending.finalFiles(), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, 1);
     }
 
@@ -345,242 +309,12 @@ public final class SortTransform {
             fastPathEmissions += rr.fastPathEmissions();
         }
 
-        // THE COMPLETENESS STAMP. Every part is still open precisely so this can happen: only here is
-        // the full ordered part list known, so only here can a part be told its 1-based position in the
-        // global sequence and the last one be marked final. Closing is what writes the footer, so the
-        // assignment must precede it -- and it must precede the rename too, since a renamed file is
-        // published.
-        //
-        // What protects a FAILED publish is not the stamp but the rename: these are `.tmp` files in
-        // stagingDir, and nothing here is visible to a reader until the rename loop below moves it to
-        // outputDir. So a part abandoned mid-close may well carry a full stamp, including file_final --
-        // it is simply never published, and the next run's cleanStalePrangeTmp sweeps it. The
-        // guarantee is "never renamed => never seen", not "never stamped".
-        try {
-            for (int i = 0; i < partsInOrder.size(); i++) {
-                partsInOrder.get(i).setFileIndex(i + 1);
-            }
-            if (!partsInOrder.isEmpty()) {
-                partsInOrder.get(partsInOrder.size() - 1).markFinal();
-            }
-            RolledPartWriter.closeInOrder(partsInOrder);
-            partsInOrder.clear();
-        } catch (IOException | RuntimeException e) {
-            // Release the rest without letting a second failure replace the first: the original close
-            // error is what says why the publish failed.
-            try {
-                RolledPartWriter.closeQuietly(partsInOrder);
-            } catch (IOException | RuntimeException releaseFailure) {
-                e.addSuppressed(releaseFailure);
-            }
-            throw e;
-        }
-
-        List<Path> finalFiles = new ArrayList<>();
-        List<SortedFileWriter> finalWriters = new ArrayList<>();
-        if (tmpsInOrder.isEmpty()) {
-            // Empty listing: publish one valid, self-describing empty sorted file (matches the serial
-            // path). This single file legitimately carries the completeness stamp.
-            List<Path> tf = new ArrayList<>();
-            SortedFileWriter writer = openNextFile(outputDir, stagingDir, finalFiles, tf, finalWriters,
-                    finalWriterFactory.forOutputSequence());
-            writer.markFinal();
-            writer.close();
-            tmpsInOrder.addAll(tf);
-        } else {
-            for (ParallelRangeMerge.RangeResult rr : results) {
-                finalWriters.addAll(rr.writers());
-            }
-        }
-        publicationStep(PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE);
-        cleanStaleFinals(outputDir);
-        publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
-        if (finalFiles.isEmpty()) {
-            for (int i = 0; i < tmpsInOrder.size(); i++) {
-                finalFiles.add(outputDir.resolve(StagingNames.finalPart(i)));
-            }
-        }
-        for (int i = 0; i < tmpsInOrder.size(); i++) {
-            atomicRename(tmpsInOrder.get(i), finalFiles.get(i));
-            publicationStep(PublicationStep.AFTER_PART_RENAME, i);
-        }
-        Durability.directory(outputDir);
-        publicationStep(PublicationStep.AFTER_OUTPUT_DIRECTORY_SYNC);
-        publishListener.onPublished(finalParts(finalFiles, finalWriters), totalRows);
-        publicationStep(PublicationStep.AFTER_PUBLISH_LISTENER);
-        completeOriginalStaging(stagingSegments, stagingDir, retainedOriginals);
-        publicationStep(PublicationStep.AFTER_STAGING_COMPLETION);
-        return new SortTransformResult(List.copyOf(finalFiles), totalRows,
+        DatasetPublisher.PendingParts pending = datasetPublisher.parallelParts(
+                outputDir, stagingDir, tmpsInOrder, partsInOrder);
+        datasetPublisher.publish(pending, totalRows, publishListener, stagingSegments,
+                retainedOriginals, List.of());
+        return new SortTransformResult(pending.finalFiles(), totalRows,
                 mergePasses, cascadedPasses, fastPathEmissions, results.size());
     }
 
-    /** Finish original staging ownership after every successful publish. */
-    private void completeOriginalStaging(List<Path> stagingSegments, Path stagingDir,
-            StagingReconciliation retainedOriginals) throws IOException {
-        if (retainedOriginals != null) {
-            StagingReconciliation.Result result = retainedOriginals.reconcile(stagingDir);
-            metrics.recordStealReason("SORT", "staging_retained");
-            log.info("sort_staging_retained source=merge path={} retained_segments={} removed_entries={}",
-                    stagingDir, result.retainedEntries(), result.removedEntries());
-            return;
-        }
-        for (Path p : stagingSegments) {
-            Files.deleteIfExists(p);
-        }
-        // "Staging dir cleaned on successful publish": remove the now-empty staging dir
-        // itself, not just its contents — but only if nothing unexpected is left in it (never a
-        // recursive wipe of foreign content the sorter doesn't own).
-        tryDeleteEmptyStagingDir(stagingDir);
-    }
-
-    private void publicationStep(PublicationStep step) throws IOException {
-        publicationStep(step, -1);
-    }
-
-    private void publicationStep(PublicationStep step, int ordinal) throws IOException {
-        publicationStepHook.reached(step, ordinal);
-    }
-
-    /** Resolve and validate diagnostic retention before any merge or publish mutation. */
-    private StagingReconciliation retainedOriginals(List<Path> stagingSegments, Path stagingDir)
-            throws IOException {
-        if (!config.stagingRetention().retainsOriginals()
-                || inputProfile != MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES) {
-            return null;
-        }
-        return StagingReconciliation.fromPaths(stagingDir, stagingSegments);
-    }
-
-    /** Delete {@code stagingDir} iff it is now empty; foreign content is logged and left in place. */
-    private static void tryDeleteEmptyStagingDir(Path stagingDir) {
-        if (!Files.isDirectory(stagingDir)) {
-            return;
-        }
-        try (DirectoryStream<Path> remaining = Files.newDirectoryStream(stagingDir)) {
-            if (remaining.iterator().hasNext()) {
-                log.info("sort staging dir left in place: unexpected content remains in {}", stagingDir);
-                return;
-            }
-        } catch (IOException e) {
-            log.debug("failed to list sort staging dir {} before removal; leaving it in place", stagingDir, e);
-            return;
-        }
-        try {
-            Files.delete(stagingDir);
-        } catch (IOException e) {
-            log.debug("failed to remove empty sort staging dir {}", stagingDir, e);
-        }
-    }
-
-    private SortedFileWriter openNextFile(Path outputDir, Path stagingDir, List<Path> finalFiles,
-                                          List<Path> tmpFiles, List<SortedFileWriter> finalWriters,
-                                          SortedFileWriterFactory outputSequence) throws IOException {
-        int filenameIndex = finalFiles.size();
-        String name = StagingNames.finalPart(filenameIndex);
-        Path finalPath = outputDir.resolve(name);
-        // Write the tmp OUTSIDE data/ — into the sibling staging dir on the same
-        // filesystem — and atomically rename it INTO data/ (see transform()). data/ (outputDir) thus
-        // only ever holds finalized *.parquet; a crash never strands a *.tmp inside the pure-parquet dir.
-        Path tmpPath = stagingDir.resolve(StagingNames.finalTmp(filenameIndex));
-        // The public filename follows Spark/Hadoop's zero-based part ordinal. The footer's
-        // file_index remains a 1-based position so existing sorted fixtures retain their stamp
-        // semantics and replay's completeness check remains backward-compatible.
-        SortedFileWriter writer = outputSequence.create(tmpPath, filenameIndex + 1);
-        finalFiles.add(finalPath);
-        tmpFiles.add(tmpPath);
-        finalWriters.add(writer);
-        return writer;
-    }
-
-    private static List<FinalPart> finalParts(List<Path> paths, List<SortedFileWriter> writers) {
-        if (paths.size() != writers.size()) {
-            throw new IllegalStateException("final part path/writer count mismatch: paths="
-                    + paths.size() + " writers=" + writers.size());
-        }
-        List<FinalPart> parts = new ArrayList<>(paths.size());
-        for (int i = 0; i < paths.size(); i++) {
-            // This handoff runs only after all closes and renames succeeded. A partial close never
-            // reaches the publish listener and therefore cannot make its metadata trustworthy.
-            parts.add(new FinalPart(paths.get(i), writers.get(i).finalMetadata()));
-        }
-        return List.copyOf(parts);
-    }
-
-    private static void atomicRename(Path from, Path to) throws IOException {
-        try {
-            Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-
-    /**
-     * Remove any {@code part-*.parquet.tmp} left by a crash mid-publish, so a re-run is clean.
-     * Called for BOTH the staging dir (the tmp's home) and {@code data/} (in case an existing dataset
-     * written under an older layout stranded a tmp there), so a leftover {@code *.tmp} never survives
-     * into published {@code data/}.
-     */
-    private static void cleanStaleTmp(Path dir) throws IOException {
-        StagingReconciliation.sweepFinalTemporaries(dir);
-    }
-
-    /**
-     * Remove any {@code prange-*.parquet.tmp} left by a crashed prior {@link ParallelRangeMerge}
-     * attempt — those range-local tmp parts live only in {@code
-     * stagingDir} (never {@code outputDir}; see {@link ParallelRangeMerge#openRangePart}), so unlike
-     * {@link #cleanStaleTmp} this only needs to sweep the one directory. Without this, a crash after
-     * the parallel path produced tmp range parts but before publish would strand them forever — {@link
-     * #cleanStaleTmp} does not match the {@code prange-} naming, and a subsequent SUCCESSFUL run
-     * would then find {@code stagingDir} non-empty and skip {@link #tryDeleteEmptyStagingDir},
-     * violating {@code docs/internals/contracts.md} §6 ("staging dir cleaned on successful publish").
-     */
-    private static void cleanStalePrangeTmp(Path stagingDir) throws IOException {
-        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB,
-                StagingNames.RANGE_PROOF_TMP_GLOB);
-    }
-
-    /**
-     * Remove stale FINAL files already in {@code outputDir}, after the complete replacement has been
-     * generated and closed under tmp names. These are an abandoned prior merge attempt's finals,
-     * orphaned outside any manifest. Without this, a retry that produces FEWER final files
-     * than the abandoned attempt (a changed roll knob, or a different segment mix after a partial
-     * resume) would leave the extras lying around outside the new manifest.
-     *
-     * <p><b>Sweep scope</b>, set by {@link SortRun#staleFinalSweep()} per caller:
-     * <ul>
-     *   <li>{@link StaleFinalSweep#ALL_PARQUET} sweeps all {@code data/*.parquet}. Safe only because the caller
-     *       ({@code ListCommand#isPublishedByThisRun}, via {@link Manifest#readIdentity}) has
-     *       already refused to treat a foreign dataset's manifest as this run's own before reaching
-     *       the merge-pending branch that calls {@link #transform} — so by the time this sweep
-     *       runs, {@code outputDir} can only hold this run's own abandoned prior attempt or
-     *       nothing.</li>
-     *   <li>{@link StaleFinalSweep#OWN_PARTS_ONLY} sweeps only this transform's own {@code part-*.parquet}
-     *       naming. {@link CaptureSorter}'s sort-fixture path has no such ownership guard (a
-     *       user-supplied {@code --output} dir may hold unrelated {@code *.parquet} this engine
-     *       never created), so a wide sweep there would unrecoverably delete foreign content;
-     *       narrowing to the engine's own naming still removes every abandoned final, which is
-     *       always {@code part-*}.</li>
-     * </ul>
-     */
-    private void cleanStaleFinals(Path outputDir) throws IOException {
-        String glob = switch (run.staleFinalSweep()) {
-            case ALL_PARQUET -> StagingNames.ALL_PARQUET_GLOB;
-            case OWN_PARTS_ONLY -> StagingNames.OWN_FINAL_GLOB;
-        };
-        Sweeps.sweep(outputDir,
-                stale -> log.info("sweeping stale sorted output before replacement publish: {}", stale),
-                glob);
-    }
-
-    /**
-     * Remove any {@code merge-*} cascade intermediates left by a crashed prior merge. Sweeps BOTH
-     * the page-run {@code merge-*.pageseg} this transform writes and legacy/planted
-     * {@code merge-*.parquet} debris (older datasets and the SORT-RESUME tests plant the latter).
-     */
-    private static void cleanStaleMergeIntermediates(Path stagingDir) throws IOException {
-        // "merge-*" covers the serial path's own intermediates AND the parallel path's per-range
-        // "merge-r<range>-<n>" ones, in both staging formats.
-        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.CASCADE_PAGE_RUN_GLOB,
-                StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
-    }
 }
