@@ -1464,7 +1464,7 @@ class SortTransformPageRunParallelMergePropTest {
         }
     }
 
-    /** Counts the real final writers used by the deep fixture without changing their roll behavior. */
+    /** Counts the real final writers used by the perf fixture without changing their roll behavior. */
     private static final class CountingWriterFactory implements SortedFileWriterFactory {
         private final SortedFileWriterFactory delegate;
         private final AtomicInteger opened = new AtomicInteger();
