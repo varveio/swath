@@ -65,14 +65,7 @@ import java.util.function.UnaryOperator;
  *       partitioning; {@link MergeBoundaryPolicy#ROWS} is an explicit measurement arm.</li>
  * </ul>
  */
-public record SortConfig(long segmentBytes, long segmentEntries, double heapFraction,
-                         int buffers, int fanIn, long finalFileBytes, long finalRowGroupBytes,
-                         int finalPageRows,
-                         long mergeBudgetBytes, int mergeParallelism,
-                         long mergePerStreamBytes, PageCodec segmentCodec,
-                         long minParallelStagedBytes,
-                         StagingRetention stagingRetention,
-                         MergeBoundaryPolicy mergeBoundaryPolicy) {
+public final class SortConfig {
 
     /** Floor for the heap-adaptive segment gate (§7). */
     public static final long SEGMENT_BYTES_FLOOR = 64L * 1024 * 1024;
@@ -173,150 +166,136 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
      * #fromProperties} reads its per-knob defaults from here, so the defaults live in exactly one place.
      */
     public static final SortConfig DEFAULT = new SortConfig(
-            adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // heap-adaptive segment gate (§7), 64 MB floor
-            Long.MAX_VALUE,                               // segment-entries: the bytes gate governs by default
-            DEFAULT_HEAP_FRACTION,
-            2,                                            // buffers: fill + 1 off-thread (the minimum corridor)
-            // A high fan-in keeps a billion-scale run single-pass; the runtime clamp (SortTransform) bounds
-            // it by the real fd limit and per-segment page size, so this generous ceiling never over-opens.
-            10000,
-            1L << 30,                                     // final-file-bytes: rolls sorted output into ~1 GiB parts
-            8L * 1024 * 1024,                             // final-row-group-bytes: served-file seek granularity
-            DEFAULT_FINAL_PAGE_ROWS,                      // final-page-rows: seek granularity WITHIN a row group
-            adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION),  // merge-budget: same heap-adaptive shape as segmentBytes
-            DEFAULT_MERGE_PARALLELISM,
-            DEFAULT_MERGE_PER_STREAM_BYTES,
-            DEFAULT_SEGMENT_CODEC,
-            DEFAULT_MIN_PARALLEL_STAGED_BYTES,
-            StagingRetention.DELETE_AFTER_PUBLISH,
-            MergeBoundaryPolicy.DISTINCT);
+            new StagingBuffering(
+                    adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION), Long.MAX_VALUE, DEFAULT_HEAP_FRACTION, 2,
+                    DEFAULT_SEGMENT_CODEC),
+            new Merge(
+                    10000, adaptiveSegmentBytes(DEFAULT_HEAP_FRACTION), DEFAULT_MERGE_PARALLELISM,
+                    DEFAULT_MERGE_PER_STREAM_BYTES, DEFAULT_MIN_PARALLEL_STAGED_BYTES,
+                    MergeBoundaryPolicy.DISTINCT),
+            new FinalOutput(1L << 30, 8L * 1024 * 1024, DEFAULT_FINAL_PAGE_ROWS),
+            new Retention(StagingRetention.DELETE_AFTER_PUBLISH));
 
-    public SortConfig {
-        if (segmentBytes <= 0) {
-            throw new IllegalArgumentException("segment-bytes must be > 0, got " + segmentBytes);
+    private final StagingBuffering stagingBuffering;
+    private final Merge merge;
+    private final FinalOutput finalOutput;
+    private final Retention retention;
+
+    private SortConfig(StagingBuffering stagingBuffering, Merge merge, FinalOutput finalOutput,
+                       Retention retention) {
+        this.stagingBuffering = stagingBuffering;
+        this.merge = merge;
+        this.finalOutput = finalOutput;
+        this.retention = retention;
+        validate();
+    }
+
+    private void validate() {
+        if (segmentBytes() <= 0) {
+            throw new IllegalArgumentException("segment-bytes must be > 0, got " + segmentBytes());
         }
-        if (segmentEntries <= 0) {
-            throw new IllegalArgumentException("segment-entries must be > 0, got " + segmentEntries);
+        if (segmentEntries() <= 0) {
+            throw new IllegalArgumentException("segment-entries must be > 0, got " + segmentEntries());
         }
-        if (!(heapFraction > 0.0)) {
-            throw new IllegalArgumentException("heap-fraction must be > 0, got " + heapFraction);
+        if (!(heapFraction() > 0.0)) {
+            throw new IllegalArgumentException("heap-fraction must be > 0, got " + heapFraction());
         }
-        if (buffers < 2) {
+        if (buffers() < 2) {
             // SortLane's off-thread capacity is buffers()-1 (the fill buffer is the
             // +1) — buffers=1 would leave 0 off-thread slots (a deadlock, every seal would block
             // forever) unless floored, and any floor would silently violate the documented live<=
             // buffers() corridor invariant (fill + 1 off-thread = 2 live > the requested 1). Rejected
-            // here, consistent with every other knob in this canonical constructor.
-            throw new IllegalArgumentException("buffers must be >= 2, got " + buffers);
+            // here, consistent with every other knob in this configuration.
+            throw new IllegalArgumentException("buffers must be >= 2, got " + buffers());
         }
-        if (fanIn < 2) {
-            throw new IllegalArgumentException("fan-in must be >= 2, got " + fanIn);
+        if (fanIn() < 2) {
+            throw new IllegalArgumentException("fan-in must be >= 2, got " + fanIn());
         }
-        if (finalFileBytes <= 0) {
-            throw new IllegalArgumentException("final-file-bytes must be > 0, got " + finalFileBytes);
+        if (finalFileBytes() <= 0) {
+            throw new IllegalArgumentException("final-file-bytes must be > 0, got " + finalFileBytes());
         }
-        if (finalRowGroupBytes <= 0) {
-            throw new IllegalArgumentException("final-row-group-bytes must be > 0, got " + finalRowGroupBytes);
+        if (finalRowGroupBytes() <= 0) {
+            throw new IllegalArgumentException("final-row-group-bytes must be > 0, got " + finalRowGroupBytes());
         }
-        if (finalPageRows <= 0) {
-            throw new IllegalArgumentException("final-page-rows must be > 0, got " + finalPageRows);
+        if (finalPageRows() <= 0) {
+            throw new IllegalArgumentException("final-page-rows must be > 0, got " + finalPageRows());
         }
-        if (mergeBudgetBytes <= 0) {
-            throw new IllegalArgumentException("merge-budget-bytes must be > 0, got " + mergeBudgetBytes);
+        if (mergeBudgetBytes() <= 0) {
+            throw new IllegalArgumentException("merge-budget-bytes must be > 0, got " + mergeBudgetBytes());
         }
-        if (mergePerStreamBytes <= 0) {
-            throw new IllegalArgumentException("merge-per-stream-bytes must be > 0, got " + mergePerStreamBytes);
+        if (mergePerStreamBytes() <= 0) {
+            throw new IllegalArgumentException("merge-per-stream-bytes must be > 0, got " + mergePerStreamBytes());
         }
-        if (mergeParallelism < 1) {
+        if (mergeParallelism() < 1) {
             // 1 == serial (the shipped default); the knob only ever ADDS ranges. A
             // value < 1 is meaningless — rejected here, consistent with every other knob.
-            throw new IllegalArgumentException("merge-parallelism must be >= 1, got " + mergeParallelism);
+            throw new IllegalArgumentException("merge-parallelism must be >= 1, got " + mergeParallelism());
         }
-        if (segmentCodec == null) {
+        if (segmentCodec() == null) {
             throw new IllegalArgumentException("segment-codec must not be null");
         }
-        if (minParallelStagedBytes < 0) {
+        if (minParallelStagedBytes() < 0) {
             throw new IllegalArgumentException(
-                    "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes);
+                    "min-parallel-staged-bytes must be >= 0, got " + minParallelStagedBytes());
         }
-        if (stagingRetention == null) {
+        if (stagingRetention() == null) {
             throw new IllegalArgumentException("staging-retention must not be null");
         }
-        if (mergeBoundaryPolicy == null) {
+        if (mergeBoundaryPolicy() == null) {
             throw new IllegalArgumentException("merge-boundary-policy must not be null");
         }
     }
 
     public SortConfig withSegmentBytes(long segmentBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new StagingBuffering(segmentBytes, segmentEntries(), heapFraction(), buffers(), segmentCodec()));
     }
 
     public SortConfig withSegmentEntries(long segmentEntries) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new StagingBuffering(segmentBytes(), segmentEntries, heapFraction(), buffers(), segmentCodec()));
     }
 
     public SortConfig withHeapFraction(double heapFraction) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new StagingBuffering(segmentBytes(), segmentEntries(), heapFraction, buffers(), segmentCodec()));
     }
 
     public SortConfig withBuffers(int buffers) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new StagingBuffering(segmentBytes(), segmentEntries(), heapFraction(), buffers, segmentCodec()));
     }
 
     public SortConfig withFanIn(int fanIn) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn, mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
+                minParallelStagedBytes(), mergeBoundaryPolicy()));
     }
 
     public SortConfig withFinalFileBytes(long finalFileBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new FinalOutput(finalFileBytes, finalRowGroupBytes(), finalPageRows()));
     }
 
     public SortConfig withFinalRowGroupBytes(long finalRowGroupBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new FinalOutput(finalFileBytes(), finalRowGroupBytes, finalPageRows()));
     }
 
     public SortConfig withFinalPageRows(int finalPageRows) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new FinalOutput(finalFileBytes(), finalRowGroupBytes(), finalPageRows));
     }
 
     public SortConfig withMergeBudgetBytes(long mergeBudgetBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn(), mergeBudgetBytes, mergeParallelism(), mergePerStreamBytes(),
+                minParallelStagedBytes(), mergeBoundaryPolicy()));
     }
 
     public SortConfig withMergeParallelism(int mergeParallelism) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism, mergePerStreamBytes(),
+                minParallelStagedBytes(), mergeBoundaryPolicy()));
     }
 
     public SortConfig withMergePerStreamBytes(long mergePerStreamBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes,
+                minParallelStagedBytes(), mergeBoundaryPolicy()));
     }
 
     public SortConfig withSegmentCodec(PageCodec segmentCodec) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new StagingBuffering(segmentBytes(), segmentEntries(), heapFraction(), buffers(), segmentCodec));
     }
 
     /** Read the knobs from system properties once, applying the documented defaults. */
@@ -359,28 +338,102 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
                 ? DEFAULT.mergeBoundaryPolicy()
                 : MergeBoundaryPolicy.fromConfigValue(
                         MERGE_BOUNDARY_POLICY_PROPERTY, boundaryPolicyProp);
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn,
-                finalFileBytes, finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism,
-                mergePerStreamBytes, segmentCodec, minParallelStagedBytes, stagingRetention,
-                mergeBoundaryPolicy);
+        return new SortConfig(
+                new StagingBuffering(segmentBytes, segmentEntries, heapFraction, buffers, segmentCodec),
+                new Merge(fanIn, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
+                        minParallelStagedBytes, mergeBoundaryPolicy),
+                new FinalOutput(finalFileBytes, finalRowGroupBytes, finalPageRows),
+                new Retention(stagingRetention));
     }
 
     public SortConfig withMinParallelStagedBytes(long minParallelStagedBytes) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
+                minParallelStagedBytes, mergeBoundaryPolicy()));
     }
 
     public SortConfig withStagingRetention(StagingRetention stagingRetention) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Retention(stagingRetention));
     }
 
     public SortConfig withMergeBoundaryPolicy(MergeBoundaryPolicy mergeBoundaryPolicy) {
-        return new SortConfig(segmentBytes, segmentEntries, heapFraction, buffers, fanIn, finalFileBytes,
-                finalRowGroupBytes, finalPageRows, mergeBudgetBytes, mergeParallelism, mergePerStreamBytes,
-                segmentCodec, minParallelStagedBytes, stagingRetention, mergeBoundaryPolicy);
+        return copy(new Merge(fanIn(), mergeBudgetBytes(), mergeParallelism(), mergePerStreamBytes(),
+                minParallelStagedBytes(), mergeBoundaryPolicy));
+    }
+
+    private SortConfig copy(StagingBuffering updated) {
+        return new SortConfig(updated, merge, finalOutput, retention);
+    }
+
+    private SortConfig copy(Merge updated) {
+        return new SortConfig(stagingBuffering, updated, finalOutput, retention);
+    }
+
+    private SortConfig copy(FinalOutput updated) {
+        return new SortConfig(stagingBuffering, merge, updated, retention);
+    }
+
+    private SortConfig copy(Retention updated) {
+        return new SortConfig(stagingBuffering, merge, finalOutput, updated);
+    }
+
+    public long segmentBytes() {
+        return stagingBuffering.segmentBytes();
+    }
+
+    public long segmentEntries() {
+        return stagingBuffering.segmentEntries();
+    }
+
+    public double heapFraction() {
+        return stagingBuffering.heapFraction();
+    }
+
+    public int buffers() {
+        return stagingBuffering.buffers();
+    }
+
+    public int fanIn() {
+        return merge.fanIn();
+    }
+
+    public long finalFileBytes() {
+        return finalOutput.fileBytes();
+    }
+
+    public long finalRowGroupBytes() {
+        return finalOutput.rowGroupBytes();
+    }
+
+    public int finalPageRows() {
+        return finalOutput.pageRows();
+    }
+
+    public long mergeBudgetBytes() {
+        return merge.budgetBytes();
+    }
+
+    public int mergeParallelism() {
+        return merge.parallelism();
+    }
+
+    public long mergePerStreamBytes() {
+        return merge.perStreamBytes();
+    }
+
+    public PageCodec segmentCodec() {
+        return stagingBuffering.codec();
+    }
+
+    public long minParallelStagedBytes() {
+        return merge.minParallelStagedBytes();
+    }
+
+    public StagingRetention stagingRetention() {
+        return retention.staging();
+    }
+
+    public MergeBoundaryPolicy mergeBoundaryPolicy() {
+        return merge.boundaryPolicy();
     }
 
     private static PageCodec parseSegmentCodec(String raw) {
@@ -410,8 +463,8 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
      * intentionally exceeds the requested budget; it does not imply an exact resident-memory peak.
      */
     public int effectiveFanIn() {
-        long budgetBound = mergeBudgetBytes / mergePerStreamBytes;
-        return (int) Math.min(fanIn, Math.max(2L, budgetBound));
+        long budgetBound = mergeBudgetBytes() / mergePerStreamBytes();
+        return (int) Math.min(fanIn(), Math.max(2L, budgetBound));
     }
 
     /** {@code max(floor, heapFraction × maxMemory)} — the §7 heap-adaptive default. */
@@ -434,4 +487,67 @@ public record SortConfig(long segmentBytes, long segmentEntries, double heapFrac
         String v = lookup.apply(PREFIX + name);
         return v == null ? dflt : Double.parseDouble(v.trim());
     }
+
+    @Override
+    public boolean equals(Object object) {
+        if (this == object) {
+            return true;
+        }
+        if (!(object instanceof SortConfig that)) {
+            return false;
+        }
+        return stagingBuffering.equals(that.stagingBuffering)
+                && merge.equals(that.merge)
+                && finalOutput.equals(that.finalOutput)
+                && retention.equals(that.retention);
+    }
+
+    @Override
+    public int hashCode() {
+        int hash = 0;
+        hash = 31 * hash + Long.hashCode(segmentBytes());
+        hash = 31 * hash + Long.hashCode(segmentEntries());
+        hash = 31 * hash + Double.hashCode(heapFraction());
+        hash = 31 * hash + Integer.hashCode(buffers());
+        hash = 31 * hash + Integer.hashCode(fanIn());
+        hash = 31 * hash + Long.hashCode(finalFileBytes());
+        hash = 31 * hash + Long.hashCode(finalRowGroupBytes());
+        hash = 31 * hash + Integer.hashCode(finalPageRows());
+        hash = 31 * hash + Long.hashCode(mergeBudgetBytes());
+        hash = 31 * hash + Integer.hashCode(mergeParallelism());
+        hash = 31 * hash + Long.hashCode(mergePerStreamBytes());
+        hash = 31 * hash + segmentCodec().hashCode();
+        hash = 31 * hash + Long.hashCode(minParallelStagedBytes());
+        hash = 31 * hash + stagingRetention().hashCode();
+        return 31 * hash + mergeBoundaryPolicy().hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "SortConfig[segmentBytes=" + segmentBytes()
+                + ", segmentEntries=" + segmentEntries()
+                + ", heapFraction=" + heapFraction()
+                + ", buffers=" + buffers()
+                + ", fanIn=" + fanIn()
+                + ", finalFileBytes=" + finalFileBytes()
+                + ", finalRowGroupBytes=" + finalRowGroupBytes()
+                + ", finalPageRows=" + finalPageRows()
+                + ", mergeBudgetBytes=" + mergeBudgetBytes()
+                + ", mergeParallelism=" + mergeParallelism()
+                + ", mergePerStreamBytes=" + mergePerStreamBytes()
+                + ", segmentCodec=" + segmentCodec()
+                + ", minParallelStagedBytes=" + minParallelStagedBytes()
+                + ", stagingRetention=" + stagingRetention()
+                + ", mergeBoundaryPolicy=" + mergeBoundaryPolicy() + ']';
+    }
+
+    private record StagingBuffering(long segmentBytes, long segmentEntries, double heapFraction,
+                                    int buffers, PageCodec codec) { }
+
+    private record Merge(int fanIn, long budgetBytes, int parallelism, long perStreamBytes,
+                         long minParallelStagedBytes, MergeBoundaryPolicy boundaryPolicy) { }
+
+    private record FinalOutput(long fileBytes, long rowGroupBytes, int pageRows) { }
+
+    private record Retention(StagingRetention staging) { }
 }
