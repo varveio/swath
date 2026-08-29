@@ -1,0 +1,68 @@
+# Accepted findings for the nightly supply-chain scan (scripts/ci/osv-scan.sh).
+#
+# The scan fails on anything not listed here, so every entry is an argued exception with an
+# expiry rather than a mute: past `ignoreUntil` the finding comes back and has to be argued
+# again. Nothing is listed because it is inconvenient — everything reachable by a version
+# constraint is pinned in gradle/libs.versions.toml instead.
+#
+# ---------------------------------------------------------------------------------------
+# parquet-jackson 1.15.1 (9 advisories against jackson-core / jackson-databind 2.18.1)
+#
+# parquet-jackson is not a Jackson dependency; it is Parquet's own repackaging of Jackson,
+# relocated wholesale under `shaded/parquet/com/fasterxml/` inside the jar. A dependency
+# constraint cannot reach it: it is not a resolved module, it is bytes inside an artifact.
+# swath's own Jackson is pinned current and is the copy every swath and AWS SDK code path
+# resolves; the shaded copy is reachable only through Parquet's internal footer-metadata
+# parsing, on files the tool itself just wrote.
+#
+# The fix is upstream: parquet-hadoop 1.16+ carries a newer bundled Jackson. That is a
+# deliberate upgrade, not a pin — the Parquet writer version participates in the written
+# output, and the compatibility contract holds that output byte-identical, so it needs its
+# own change with a Parquet round-trip and a byte comparison against the current writer.
+# Revisit at the date below regardless of whether that upgrade has landed.
+# ---------------------------------------------------------------------------------------
+
+[[IgnoredVulns]]
+id = "GHSA-72hv-8253-57qq"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-r7wm-3cxj-wff9"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-3pjw-73gf-8qr5"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-5gvw-p9qm-jgwh"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-5jmj-h7xm-6q6v"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-hgj6-7826-r7m5"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-j3rv-43j4-c7qm"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-mhm7-754m-9p8w"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."
+
+[[IgnoredVulns]]
+id = "GHSA-rmj7-2vxq-3g9f"
+ignoreUntil = 2026-11-30
+reason = "Shaded inside parquet-jackson 1.15.1; needs a Parquet upgrade, not a constraint."

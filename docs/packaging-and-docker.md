@@ -129,8 +129,29 @@ Gradle plugin (`build-logic/src/main/kotlin/swath.java-conventions.gradle.kts`)
 excludes those modules at the `configurations.all { exclude(...) }` level, so
 the exclusion applies to the whole resolved dependency graph regardless of
 which transitive edge would otherwise reintroduce it. This keeps unused service
-stacks out of every distribution. `hadoop-common` still brings some runtime
-transitives; inspect the current distribution if artifact size matters to you.
+stacks out of every distribution.
+
+Netty is excluded on the same grounds and for both of its entry points: Hadoop's
+IPC/HDFS paths, and the AWS SDK's `netty-nio-client`, which exists to serve
+`S3AsyncClient` — swath builds only the synchronous client, over `apache-client`.
+The SDK's adapter jar is excluded alongside `io.netty` itself, so no async HTTP
+provider ships half-present.
+
+What `hadoop-common` does still bring, it brings at the versions its own POM
+names, which run years behind: Jackson 2.12, Guava 27, Avro 1.9. Those are
+raised by a `constraints` block in the same convention plugin, with the floors
+themselves in `gradle/libs.versions.toml` so Dependabot maintains them. A
+constraint raises a floor without capping anything that legitimately needs
+newer.
+
+Two guards keep this honest. Every application distribution is checked to ship
+at most one version of each module (`verifyNoDuplicateModuleVersions`, part of
+`check`) — the replay distribution packs a second dependency closure for its
+conformance launcher into the same `lib/`, and before the floors were pinned it
+shipped two complete Jackson generations at once. And a nightly job scans both
+distributions and both runtime images against the OSV database
+(`scripts/ci/osv-scan.sh`); accepted findings live in
+`config/osv/osv-scanner.toml`, each with an argument and an expiry date.
 
 ## 5. Docker images
 

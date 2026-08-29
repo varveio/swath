@@ -143,6 +143,17 @@ distributions {
             into("lib") {
                 from(conformanceJar)
                 from(configurations.named(conformanceSourceSet.runtimeClasspathConfigurationName))
+                // The application plugin already puts `runtimeClasspath` here, and the conformance
+                // closure is largely the same libraries, so the two overlap by design — `lib/` is
+                // their union, not their concatenation. Gradle resolves each configuration
+                // separately, so before the shipped-closure floors were pinned the overlap arrived
+                // as *different* versions under different names and both were copied: this
+                // directory carried jackson-{core,databind,annotations} at 2.12.7 AND 2.22 at once,
+                // with the start script's classpath order deciding which one won. Now the two
+                // closures agree, the overlap is the same file twice, and taking the first is
+                // correct. verifyNoDuplicateModuleVersions (swath.java-conventions) is what keeps
+                // a future divergence from silently going back to shipping both.
+                duplicatesStrategy = DuplicatesStrategy.EXCLUDE
             }
             into("bin") {
                 from(conformanceScriptsDir)

@@ -1,7 +1,7 @@
 [versions]
 picocli = "4.7.6"
 slf4j = "2.0.16"
-logback = "1.5.18"
+logback = "1.5.38"
 micrometer = "1.17.0"
 awssdk = "2.31.78"
 parquet = "1.15.1"
@@ -9,9 +9,20 @@ hadoop = "3.4.1"
 woodstox = "7.2.2"
 zstdjni = "1.5.6-9"
 # Pinned explicitly rather than relying on the transitive version pulled in by
-# parquet-hadoop/hadoop-mapreduce-client-core (currently the same 2.0.2) — see swath-core's
+# parquet-hadoop/hadoop-mapreduce-client-core (which is still on 2.0.2) — see swath-core's
 # PageCodec#LZ4, which references io.airlift.compress.lz4 classes directly.
-aircompressor = "2.0.2"
+aircompressor = "2.0.3"
+
+# Floors for libraries swath never declares: they arrive under hadoop-common /
+# hadoop-mapreduce-client-core, which pins versions years behind their fixed releases, and
+# they ship in every distribution. See the `constraints` block in swath.java-conventions.
+guava = "33.7.1-jre"
+avro = "1.11.5"
+commonscompress = "1.28.0"
+commonsbeanutils = "1.11.0"
+commonsconfiguration2 = "2.15.1"
+commonslang3 = "3.20.0"
+
 junit = "5.11.4"
 assertj = "3.27.3"
 jqwik = "1.9.2"
@@ -22,7 +33,7 @@ jetty = "12.1.10"
 duckdbjdbc = "1.5.4.0"
 jmh = "1.37"
 jmhplugin = "0.7.3"
-jackson = "2.22.0"
+jackson = "2.22.2"
 # Terminal geometry for the live progress display's in-place redraw, and nothing else — see
 # TerminalGeometry. The 3.x line is not the superseded one: 3.30.16 postdates 4.3.1, and it is what
 # the ecosystem's shaded consumers ship against.
@@ -32,6 +43,7 @@ commonscodec = "1.16.1"
 shadowplugin = "8.3.9"
 licensereport = "3.1.4"
 spotless = "7.0.2"
+dependencyanalysis = "3.19.1"
 otelproto = "1.10.0-alpha"
 
 [libraries]
@@ -67,6 +79,16 @@ jline-terminal-ffm = { module = "org.jline:jline-terminal-ffm", version.ref = "j
 bucket4j-core = { module = "com.bucket4j:bucket4j-core", version.ref = "bucket4j" }
 commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonscodec" }
 
+# Never declared as dependencies — only constrained, so the shipped closure carries a
+# supported version of each. Keeping them here (rather than as literals in the convention
+# plugin) is what lets Dependabot raise the floors.
+guava = { module = "com.google.guava:guava", version.ref = "guava" }
+avro = { module = "org.apache.avro:avro", version.ref = "avro" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonscompress" }
+commons-beanutils = { module = "commons-beanutils:commons-beanutils", version.ref = "commonsbeanutils" }
+commons-configuration2 = { module = "org.apache.commons:commons-configuration2", version.ref = "commonsconfiguration2" }
+commons-lang3 = { module = "org.apache.commons:commons-lang3", version.ref = "commonslang3" }
+
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 testcontainers-junit = { module = "org.testcontainers:junit-jupiter" }
 testcontainers-localstack = { module = "org.testcontainers:localstack" }
@@ -88,3 +110,4 @@ jmh = { id = "me.champeau.jmh", version.ref = "jmhplugin" }
 shadow = { id = "com.gradleup.shadow", version.ref = "shadowplugin" }
 license-report = { id = "com.github.jk1.dependency-license-report", version.ref = "licensereport" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+dependency-analysis = { id = "com.autonomousapps.dependency-analysis", version.ref = "dependencyanalysis" }

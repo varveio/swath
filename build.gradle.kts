@@ -11,6 +11,9 @@ import com.github.jk1.license.render.ReportRenderer
 import org.gradle.api.tasks.Exec
 
 plugins {
+    // On-demand dependency audit: `./gradlew buildHealth` aggregates every module's report.
+    // Deliberately NOT wired into `check` — see the note in swath.java-conventions.
+    alias(libs.plugins.dependency.analysis)
     // Dependency-license compliance gate (jk1). Kept off the root's own classpath
     // (`apply false`) and applied per-subproject below: jk1's root-aggregation mode
     // resolves each subproject's `runtimeClasspath` from a root task, which Gradle 9

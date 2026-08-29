@@ -9,6 +9,17 @@ import java.time.Duration
 plugins {
     java
     id("com.diffplug.spotless")
+    // Dependency audit, aggregated by the root's `buildHealth` task and run on demand. It is
+    // the tool that answers "does this module still need that?", which is worth having as the
+    // shipped closure gets pruned — but it is NOT wired into `check`, and should not be. Its
+    // model is that a module declares everything it touches and exposes as `api` everything
+    // that reaches its own signatures, and this build deliberately does the opposite in
+    // places: swath-core keeps parquet-hadoop and hadoop-common `implementation`-scoped
+    // precisely so no consumer can import those types, a boundary swath-replay enforces with
+    // its own verifyNoParquetOrHadoopOnCompileClasspath task. Taken as a gate, the plugin
+    // would demand that swath-core promote both to `api` and undo it. Read the report, apply
+    // judgement.
+    id("com.autonomousapps.dependency-analysis")
 }
 
 group = "io.varve.swath"
@@ -50,6 +61,97 @@ configurations.all {
     exclude(group = "org.apache.curator", module = "curator-recipes")
     exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
     exclude(group = "org.apache.commons", module = "commons-math3")
+    // Netty arrives twice and is used neither time. hadoop-common wants it for the IPC and
+    // HDFS-client paths already excluded above; the AWS SDK ships `netty-nio-client` for
+    // `S3AsyncClient`, and swath builds only the synchronous client over `apache-client`
+    // (S3ClientFactory) — no source in any module names an async client or a netty type.
+    // It was not free: eleven jars, and 40 of the 62 advisories an OSV scan of the CLI
+    // distribution reported, including a `netty-transport-native-epoll` left at 4.1.100
+    // beside `netty-transport-classes-epoll` at 4.1.118 — a native/classes version skew
+    // that would have failed at runtime had anything actually loaded epoll.
+    //
+    // The SDK's own adapter jar goes with it: dropping only `io.netty` would leave
+    // netty-nio-client shipping with nothing behind it, which is strictly worse than either
+    // state — an async HTTP provider that fails on use rather than being absent.
+    exclude(group = "io.netty")
+    exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+}
+
+// Floors for libraries no swath module declares. They arrive under hadoop-common and
+// hadoop-mapreduce-client-core, whose POMs pin versions years behind their fixed releases
+// (jackson 2.12.7, guava 27.0, avro 1.9.2 with a 9.8 RCE), and every one of them ships in
+// the CLI and replay distributions. Constraints rather than `force`: a constraint raises a
+// floor and still loses to anything that legitimately needs newer, where `force` would
+// silently pin a future dependency DOWN to this line.
+//
+// The versions live in the version catalog, so Dependabot raises them like any other
+// dependency. Applied per source set rather than to `implementation` alone so that a
+// distribution assembled from a source set of its own — swath-replay's `conformance`
+// launcher — is pinned by the same list.
+//
+// Not listed, and deliberately: commons-collections 3.2.2 is the release that removed the
+// InvokerTransformer deserialization gadget, it is the last 3.x, and OSV reports nothing
+// against it. It stays as hadoop-common resolves it.
+val versionCatalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
+val shippedTransitiveFloors = listOf(
+    "jackson-databind",
+    "guava",
+    "avro",
+    "commons-compress",
+    "commons-beanutils",
+    "commons-configuration2",
+    "commons-lang3",
+).map { alias ->
+    versionCatalog.findLibrary(alias).orElseThrow {
+        IllegalStateException("libs.versions.toml has no library '$alias' to constrain")
+    }
+}
+
+sourceSets.configureEach {
+    val declarableConfiguration = implementationConfigurationName
+    shippedTransitiveFloors.forEach { floor ->
+        dependencies.constraints.add(declarableConfiguration, floor)
+    }
+}
+
+// Gradle resolves a version conflict within one configuration, so a distribution built from a
+// single runtime classpath cannot ship a module twice. A distribution that packs a SECOND
+// closure into the same `lib/` can, and swath-replay does exactly that for its conformance
+// launcher: it shipped jackson-core, -databind and -annotations at both 2.12.7 and 2.22, with
+// nothing but start-script classpath order deciding which generation ran. Nothing failed, and
+// nothing reported it. Assert on the shipped directory itself, which is the only place the
+// union of the closures actually exists.
+plugins.withId("application") {
+    val verifyNoDuplicateModuleVersions by tasks.registering {
+        group = "verification"
+        description = "Checks the application distribution ships at most one version of each module."
+        val installTask = tasks.named<Sync>("installDist")
+        dependsOn(installTask)
+        doLast {
+            val libraryDirectory = installTask.get().destinationDir.resolve("lib")
+            // Maven artifact names are `<module>-<version>[-<classifier>].jar`, and the version
+            // always starts with a digit — so the split point is the last hyphen followed by one.
+            val moduleAndVersion = Regex("""^(.+)-(\d[^-]*(?:-.+)?)\.jar$""")
+            val versionsByModule = (libraryDirectory.listFiles() ?: emptyArray())
+                .mapNotNull { moduleAndVersion.matchEntire(it.name)?.destructured }
+                .groupBy({ (module, _) -> module }, { (_, version) -> version })
+            // A trailing classifier is indistinguishable from a version qualifier by shape alone
+            // (`0.2.5-SNAPSHOT-conformance` against `0.2.5-SNAPSHOT`), and a classified sibling is
+            // a second ARTIFACT of one version, not a second version. Treat a group as one version
+            // when its shortest member is a hyphen-bounded prefix of every other — which
+            // `2.12.7` is not of `2.22.0`, the case this exists to catch.
+            val duplicated = versionsByModule.filterValues { versions ->
+                val shortest = versions.minBy { it.length }
+                versions.any { it != shortest && !it.startsWith("$shortest-") }
+            }
+            check(duplicated.isEmpty()) {
+                "${libraryDirectory} ships more than one version of: " +
+                    duplicated.entries.sortedBy { it.key }
+                        .joinToString("; ") { (module, versions) -> "$module ${versions.sorted()}" }
+            }
+        }
+    }
+    tasks.named("check") { dependsOn(verifyNoDuplicateModuleVersions) }
 }
 
 // Spotless enforces import hygiene and the SPDX license header on every first-party Java
