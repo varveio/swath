@@ -128,8 +128,10 @@ tasks.withType<Jar>().configureEach {
 tasks.withType<Test>().configureEach {
     timeout.set(Duration.ofMinutes(10))
     useJUnitPlatform {
-        // jqwik + jupiter both run on the platform.
-        includeEngines("junit-jupiter", "jqwik")
+        // jqwik + jupiter both run on the platform, self-registered via ServiceLoader --
+        // no includeEngines() needed, and naming both explicitly stopped working once the
+        // JUnit Platform launcher started failing the build when a named engine isn't on a
+        // given module's classpath (e.g. swath-sim, which has jupiter but no jqwik tests).
         // Keep the default suite fast. Heavy scale/throughput tests (the gated
         // <=50M-key PERF tier, future endpoint matrices) are @Tag("perf") and are
         // OPT-IN only:  ./gradlew test -Pperf
