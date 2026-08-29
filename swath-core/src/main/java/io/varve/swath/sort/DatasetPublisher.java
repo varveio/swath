@@ -160,6 +160,11 @@ final class DatasetPublisher {
     void publish(PendingParts pending, long totalRows, PublishListener publishListener,
             StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
             List<Path> disposableIntermediates) throws IOException {
+        // Validate both source and destination authorities before the first publication mutation.
+        // In particular, stale-final cleanup must never destroy the prior generation and only then
+        // discover that staging was redirected after its writers closed.
+        ownedInputs.requireOwnedStagingAuthority(pending.stagingDir);
+        pending.outputAuthority.requireSame(pending.outputDir);
         cleanStaleFinals(pending.outputDir, pending.outputAuthority);
         publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
         for (int i = 0; i < pending.tmpFiles.size(); i++) {

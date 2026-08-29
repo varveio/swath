@@ -8,7 +8,13 @@ package io.varve.swath.sort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class DatasetPublisherInvariantTest {
 
@@ -33,5 +39,46 @@ class DatasetPublisherInvariantTest {
         DatasetPublisher.requireExactCardinality(3, 3, 3, metrics);
 
         assertThat(metrics.count("SORT.sort_output_cardinality_mismatch")).isZero();
+    }
+
+    @Test
+    void stagingReplacementBeforePublishCannotDeletePriorFinal(@TempDir Path root)
+            throws IOException {
+        Path output = Files.createDirectories(root.resolve("data"));
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path segment = SortTestSupport.writePageRun(
+                staging.resolve("seg-0.pageseg"), List.of(SortTestSupport.object("a")),
+                new ListEntryComparator());
+        Path prior = Files.writeString(
+                output.resolve(StagingNames.finalPart(0)), "prior-good");
+        Path originalStaging = root.resolve("original-staging");
+        AtomicInteger publications = new AtomicInteger();
+        PublicationStepHook replaceAfterClose = (step, ignored) -> {
+            if (step == PublicationStep.AFTER_ALL_TMP_PARTS_DURABLE) {
+                Files.move(staging, originalStaging);
+                Files.createSymbolicLink(staging, originalStaging);
+            }
+        };
+        SortRun run = new SortRun(
+                SortConfigs.base().withMergeParallelism(1), new ListEntryComparator(),
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
+                MergeDiskPolicy.bypassed());
+
+        assertThatThrownBy(() -> new SortTransform(run, replaceAfterClose).transform(
+                List.of(segment), output, staging,
+                (parts, rows) -> publications.incrementAndGet(), ignored -> { },
+                FinalPassListener.NO_OP))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("sort staging directory identity changed");
+
+        assertThat(publications).hasValue(0);
+        assertThat(prior).hasContent("prior-good");
+        assertThat(originalStaging.resolve(segment.getFileName())).exists();
+        try (var finals = Files.newDirectoryStream(output, StagingNames.OWN_FINAL_GLOB)) {
+            assertThat(finals).containsExactly(prior);
+        }
     }
 }
