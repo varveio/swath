@@ -17,6 +17,14 @@ plugins {
     // forbids ("resolution without an exclusive lock"). Applying it in each module means
     // each `checkLicense` resolves only its OWN configuration — the supported pattern.
     alias(libs.plugins.license.report) apply false
+    // Spotless itself is applied per-subproject by the `swath.java-conventions` convention
+    // plugin (build-logic/), never here. Declaring it `apply false` at the root just makes
+    // Gradle resolve ONE copy of the plugin for the whole build instead of a separate copy
+    // per subproject classloader -- spotless-plugin-gradle 8.x's shared `SpotlessTaskService`
+    // build service otherwise fails with "loaded with InstrumentingVisitableURLClassLoader(...)
+    // using a provider ... loaded with InstrumentingVisitableURLClassLoader(...)" the moment a
+    // second subproject applies it. See diffplug/spotless#747.
+    alias(libs.plugins.spotless) apply false
 }
 
 val verifyReleaseVersion by tasks.registering {
