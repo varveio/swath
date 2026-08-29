@@ -306,8 +306,15 @@ final class PageAwareMerger implements SortedCursor, LogicalMergeCompletion {
      * body alongside that stream's successor frontier.
      */
     private long reserveDecoded(PageBlock page) throws MergeMemoryExhaustedException {
-        long decodedBytes = (long) page.retainedRecordBytes()
-                + (page.codec() == PageCodec.NONE ? 0L : page.rawPayloadLength());
+        long decodedBytes;
+        try {
+            decodedBytes = Math.addExact((long) page.retainedRecordBytes(),
+                    page.codec() == PageCodec.NONE ? 0L : page.rawPayloadLength());
+            decodedBytes = Math.addExact(decodedBytes, page.dictionaryCoordinateBytes());
+            decodedBytes = Math.addExact(decodedBytes, page.dictionaryCacheBudgetBytes());
+        } catch (ArithmeticException overflow) {
+            decodedBytes = Long.MAX_VALUE;
+        }
         long next;
         try {
             next = Math.addExact(residentDecodedBytes, decodedBytes);

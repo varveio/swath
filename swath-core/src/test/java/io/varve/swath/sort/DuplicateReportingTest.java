@@ -82,7 +82,8 @@ class DuplicateReportingTest {
         assertThat(reporting.next()).isEqualTo(object("a"));
         assertThat(reporting.next()).isEqualTo(object("z"));
         assertThatThrownBy(reporting::next)
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOfSatisfying(SortOrderException.class, failure ->
+                        assertThat(failure.errorClass()).isEqualTo(SortOrderException.ERROR_CLASS))
                 .hasMessageContaining("merged output order regressed")
                 .hasMessageContaining("z")
                 .hasMessageContaining("m");

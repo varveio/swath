@@ -11,7 +11,6 @@ import io.varve.swath.model.DeleteMarkerEntry;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import io.varve.swath.model.ObjectEntry;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.NoSuchElementException;
 
@@ -30,6 +29,7 @@ final class PageBlockCursor {
     private int currentRawOrder;
     private byte[] decodedFirstKey;
     private ListEntry previousEntry;
+    private String[][] dictionaryCache;
 
     PageBlockCursor(PageBlock block, byte[] payload, int offset, int length) {
         this.block = block;
@@ -197,7 +197,8 @@ final class PageBlockCursor {
         }
         int length = encodedLength - 1;
         requireRemaining(length, "nullable string");
-        String value = new String(payload, position, length, StandardCharsets.UTF_8);
+        String value = PageBlockCodec.decodeUtf8Strict(
+                payload, position, length, "nullable string");
         position += length;
         return value;
     }
@@ -216,7 +217,8 @@ final class PageBlockCursor {
             case PageBlockCodec.ETAG_RAW -> {
                 int length = varint("raw etag length");
                 requireRemaining(length, "raw etag");
-                String value = new String(payload, position, length, StandardCharsets.UTF_8);
+                String value = PageBlockCodec.decodeUtf8Strict(
+                        payload, position, length, "raw etag");
                 position += length;
                 yield value;
             }
@@ -230,18 +232,40 @@ final class PageBlockCursor {
             return null;
         }
         if (block.useDictUnsafe()[column.ordinal()]) {
-            String[] dictionary = block.dictsUnsafe()[column.ordinal()];
+            PageBlockCodec.Dictionaries dictionaries = block.dictionariesUnsafe();
             int index = encoded - 1;
-            if (index >= dictionary.length) {
+            if (index >= dictionaries.size(column.ordinal())) {
                 throw PageBlockCodec.malformed(column + " dictionary index " + index
-                        + " exceeds dictionary size " + dictionary.length);
+                        + " exceeds dictionary size " + dictionaries.size(column.ordinal()));
             }
-            return dictionary[index];
+            return dictionaryValue(dictionaries, column.ordinal(), index);
         }
         int length = encoded - 1;
         requireRemaining(length, column + " raw value");
-        String value = new String(payload, position, length, StandardCharsets.UTF_8);
+        String value = PageBlockCodec.decodeUtf8Strict(
+                payload, position, length, column + " raw value");
         position += length;
+        return value;
+    }
+
+    private String dictionaryValue(
+            PageBlockCodec.Dictionaries dictionaries, int column, int index) {
+        if (!dictionaries.byteBacked()) {
+            return dictionaries.value(column, index);
+        }
+        if (dictionaryCache == null) {
+            dictionaryCache = new String[PageBlockCodec.DICT_COLUMN_COUNT][];
+        }
+        String[] values = dictionaryCache[column];
+        if (values == null) {
+            values = new String[dictionaries.size(column)];
+            dictionaryCache[column] = values;
+        }
+        String value = values[index];
+        if (value == null) {
+            value = dictionaries.value(column, index);
+            values[index] = value;
+        }
         return value;
     }
 

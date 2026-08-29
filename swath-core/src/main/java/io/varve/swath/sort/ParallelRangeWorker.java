@@ -8,7 +8,6 @@ package io.varve.swath.sort;
 import io.varve.swath.model.KeyBytes;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -46,7 +45,7 @@ final class ParallelRangeWorker {
             DuplicateHook safeHook, PartOpener partOpener,
             Map<Path, PageRunSegmentDescriptor> descriptorsByPath,
             PageRunSeekPlan seekPlan, PageRunProofSpool.Writer proofSpool,
-            Path proofSpoolPath) {
+            Path proofSpoolPath, StagingReconciliation stagingAuthority) {
         return () -> {
             try (PageRunZoneVerifier.RangeBuilder proofBuilder =
                          new PageRunZoneVerifier.RangeBuilder(
@@ -62,7 +61,8 @@ final class ParallelRangeWorker {
                 };
                 PageRunSegmentWriter pageRunWriter =
                         new PageRunSegmentWriter(comparator, rangeHook, metrics, config.segmentCodec());
-                PageRunMergeIo io = new PageRunMergeIo(run, pageRunWriter, stagingDir,
+                PageRunMergeIo io = new PageRunMergeIo(
+                        run, pageRunWriter, stagingDir, stagingAuthority,
                         "merge-r" + range + "-", new KeyRange(lo, hi), descriptorsByPath,
                         pageFrontiers::add, range, seekPlan, proofBuilder);
                 KWayMerge<Path> merge =
@@ -85,7 +85,7 @@ final class ParallelRangeWorker {
                     throw e;
                 }
                 for (Path intermediate : io.intermediates()) {
-                    Files.deleteIfExists(intermediate);
+                    stagingAuthority.deleteDisposable(intermediate);
                 }
                 metrics.recordStealReason("SORT", "merge_range_parallel");
 

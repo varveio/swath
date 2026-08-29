@@ -6,7 +6,6 @@
 package io.varve.swath.sort;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +18,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     private final SortRun run;
     private final PageRunSegmentWriter segmentWriter;
     private final Path stagingDir;
+    private final StagingReconciliation stagingAuthority;
     private final String intermediatePrefix;
     private final KeyRange scope;
     private final Map<Path, PageRunSegmentDescriptor> descriptors;
@@ -33,6 +33,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     private int sequence;
 
     PageRunMergeIo(SortRun run, PageRunSegmentWriter segmentWriter, Path stagingDir,
+                   StagingReconciliation stagingAuthority,
                    String intermediatePrefix, KeyRange scope,
                    Map<Path, PageRunSegmentDescriptor> descriptors,
                    Consumer<RangeScopedPageFrontier> frontierRegistration,
@@ -41,6 +42,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
         this.run = run;
         this.segmentWriter = segmentWriter;
         this.stagingDir = stagingDir;
+        this.stagingAuthority = stagingAuthority;
         this.intermediatePrefix = intermediatePrefix;
         this.scope = scope;
         this.descriptors = descriptors;
@@ -87,6 +89,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
     public Path writeIntermediate(SortedCursor sorted) throws IOException {
         Path destination = stagingDir.resolve(
                 StagingNames.cascadeIntermediate(intermediatePrefix, sequence++));
+        stagingAuthority.requireOwnedStagingAuthority(stagingDir);
         segmentWriter.writeIntermediate(sorted, destination, maxRawPayloadLength);
         intermediates.add(destination);
         return destination;
@@ -94,7 +97,7 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
 
     @Override
     public void delete(Path segment) throws IOException {
-        Files.deleteIfExists(segment);
+        stagingAuthority.deleteDisposable(segment);
     }
 
     @Override
@@ -123,7 +126,9 @@ final class PageRunMergeIo implements KWayMerge.SegmentIo<Path> {
         }
         long encodedReservation;
         try {
-            encodedReservation = Math.multiplyExact(maxEncodedRecordBytes, segments.size());
+            long frontierPrice = Math.addExact(maxEncodedRecordBytes,
+                    PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES);
+            encodedReservation = Math.multiplyExact(frontierPrice, segments.size());
         } catch (ArithmeticException overflow) {
             encodedReservation = Long.MAX_VALUE;
         }

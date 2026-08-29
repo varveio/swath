@@ -20,12 +20,13 @@ import java.util.stream.Stream;
 /** Validated sorter-owned inputs and exact post-publish reconciliation of their staging directory. */
 public final class StagingReconciliation {
 
-    private final Path ownedStagingDir;
+    private final DirectoryAuthority ownedStagingAuthority;
     private final List<String> originalNamesInOrder;
     private final Set<String> originalNames;
 
-    private StagingReconciliation(Path ownedStagingDir, Collection<String> originalNames) {
-        this.ownedStagingDir = ownedStagingDir;
+    private StagingReconciliation(DirectoryAuthority ownedStagingAuthority,
+            Collection<String> originalNames) {
+        this.ownedStagingAuthority = ownedStagingAuthority;
         this.originalNamesInOrder = List.copyOf(originalNames);
         this.originalNames = Set.copyOf(originalNames);
     }
@@ -37,7 +38,16 @@ public final class StagingReconciliation {
      */
     public static StagingReconciliation fromPaths(Path stagingDir, List<Path> originals)
             throws IOException {
-        Path normalizedStaging = stagingDir.toAbsolutePath().normalize();
+        return fromPaths(stagingDir, originals, path -> Files.readAttributes(
+                path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS));
+    }
+
+    /** Deterministic attribute seam for physical-identity contract tests. */
+    static StagingReconciliation fromPaths(Path stagingDir, List<Path> originals,
+            AttributeReader attributeReader) throws IOException {
+        DirectoryAuthority stagingAuthority = DirectoryAuthority.capture(
+                stagingDir, "sort staging directory");
+        Path normalizedStaging = stagingAuthority.normalizedPath();
         LinkedHashSet<String> names = new LinkedHashSet<>();
         LinkedHashSet<Object> physicalIdentities = new LinkedHashSet<>();
         for (Path original : originals) {
@@ -51,18 +61,26 @@ public final class StagingReconciliation {
             if (!names.add(name)) {
                 throw new IOException("duplicate sort staging segment: " + name);
             }
-            BasicFileAttributes attributes = Files.readAttributes(
-                    normalized, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            BasicFileAttributes attributes = attributeReader.read(normalized);
             if (!attributes.isRegularFile()) {
                 throw new IOException(
                         "sort staging segment is missing or not an ordinary file: " + normalized);
             }
             Object physicalIdentity = attributes.fileKey();
-            if (physicalIdentity != null && !physicalIdentities.add(physicalIdentity)) {
+            if (physicalIdentity == null) {
+                throw new IOException("cannot establish physical identity for sort staging segment "
+                        + "because the filesystem did not provide a file key: " + normalized);
+            }
+            if (!physicalIdentities.add(physicalIdentity)) {
                 throw new IOException("duplicate physical sort staging segment: " + normalized);
             }
+            Path realParent = normalized.toRealPath().getParent();
+            if (!stagingAuthority.realPath().equals(realParent)) {
+                throw new IOException("sort staging segment resolves outside the owned staging "
+                        + "directory: " + normalized);
+            }
         }
-        StagingReconciliation reconciliation = new StagingReconciliation(normalizedStaging, names);
+        StagingReconciliation reconciliation = new StagingReconciliation(stagingAuthority, names);
         reconciliation.requireOriginalFiles(normalizedStaging);
         return reconciliation;
     }
@@ -90,16 +108,19 @@ public final class StagingReconciliation {
      * a path-backed reconciliation.
      */
     List<Path> ownedPaths() {
-        if (ownedStagingDir == null) {
+        if (ownedStagingAuthority == null) {
             throw new IllegalStateException(
                     "checkpoint-name reconciliation has no owned path authority");
         }
-        return originalNamesInOrder.stream().map(ownedStagingDir::resolve).toList();
+        return originalNamesInOrder.stream()
+                .map(ownedStagingAuthority.normalizedPath()::resolve).toList();
     }
 
     /** Delete only the normalized originals validated by {@link #fromPaths}. */
     void deleteOwnedOriginals() throws IOException {
+        requireAuthority(ownedStagingAuthority.normalizedPath());
         for (Path path : ownedPaths()) {
+            requireAuthority(ownedStagingAuthority.normalizedPath());
             Files.deleteIfExists(path);
         }
     }
@@ -123,6 +144,9 @@ public final class StagingReconciliation {
             throw new IOException(
                     "sort staging path is not an ordinary directory: " + normalizedStaging);
         }
+        DirectoryAuthority phaseAuthority = ownedStagingAuthority != null
+                ? ownedStagingAuthority
+                : DirectoryAuthority.capture(normalizedStaging, "sort staging directory");
         requireOriginalFiles(normalizedStaging);
 
         int removed = 0;
@@ -131,6 +155,7 @@ public final class StagingReconciliation {
                 if (originalNames.contains(entry.getFileName().toString())) {
                     continue;
                 }
+                phaseAuthority.requireSame(normalizedStaging);
                 Sweeps.deleteTree(entry);
                 removed++;
             }
@@ -140,11 +165,62 @@ public final class StagingReconciliation {
 
     private Path requireAuthority(Path stagingDir) throws IOException {
         Path normalized = stagingDir.toAbsolutePath().normalize();
-        if (ownedStagingDir != null && !ownedStagingDir.equals(normalized)) {
-            throw new IOException("sort staging authority changed after input validation: expected "
-                    + ownedStagingDir + " but was " + normalized);
+        if (ownedStagingAuthority != null) {
+            ownedStagingAuthority.requireSame(normalized);
         }
         return normalized;
+    }
+
+    /** Revalidate the retained staging directory immediately before a destructive phase. */
+    void requireOwnedStagingAuthority(Path stagingDir) throws IOException {
+        if (ownedStagingAuthority == null) {
+            throw new IOException("checkpoint-name reconciliation has no owned staging authority");
+        }
+        requireAuthority(stagingDir);
+    }
+
+    /** Whether an immediate child belongs to the exact original input set. */
+    boolean ownsImmediateChild(Path path) {
+        if (ownedStagingAuthority == null) {
+            return false;
+        }
+        Path normalized = path.toAbsolutePath().normalize();
+        return ownedStagingAuthority.normalizedPath().equals(normalized.getParent())
+                && originalNames.contains(normalized.getFileName().toString());
+    }
+
+    /** Delete one validated immediate-child working file, never an original input. */
+    void deleteDisposable(Path path) throws IOException {
+        if (ownedStagingAuthority == null) {
+            throw new IOException("checkpoint-name reconciliation has no owned staging authority");
+        }
+        requireOwnedStagingAuthority(ownedStagingAuthority.normalizedPath());
+        Path normalized = path.toAbsolutePath().normalize();
+        if (!ownedStagingAuthority.normalizedPath().equals(normalized.getParent())) {
+            throw new IOException("disposable sort path is outside the owned staging directory: "
+                    + normalized);
+        }
+        if (originalNames.contains(normalized.getFileName().toString())) {
+            throw new IOException("refusing to delete original sort staging segment as disposable: "
+                    + normalized);
+        }
+        Files.deleteIfExists(normalized);
+    }
+
+    /** Sweep one owned working namespace after revalidating its directory authority. */
+    void sweepDisposables(String glob) throws IOException {
+        if (ownedStagingAuthority == null) {
+            throw new IOException("checkpoint-name reconciliation has no owned staging authority");
+        }
+        requireOwnedStagingAuthority(ownedStagingAuthority.normalizedPath());
+        try (var entries = Files.newDirectoryStream(ownedStagingAuthority.normalizedPath(), glob)) {
+            for (Path entry : entries) {
+                if (!ownsImmediateChild(entry)) {
+                    requireOwnedStagingAuthority(ownedStagingAuthority.normalizedPath());
+                    Files.deleteIfExists(entry);
+                }
+            }
+        }
     }
 
     /** Sweep the sorter-owned final temporary namespace through its canonical glob. */
@@ -176,6 +252,85 @@ public final class StagingReconciliation {
                 || !name.equals(parsed.getFileName().toString())
                 || !name.endsWith(StagingNames.PAGE_RUN_SUFFIX)) {
             throw new IOException("unsafe retained sort staging segment name: " + name);
+        }
+        if (name.startsWith("merge-")) {
+            throw new IOException("sort staging segment name collides with the disposable cascade "
+                    + "namespace: " + name);
+        }
+    }
+
+    @FunctionalInterface
+    interface AttributeReader {
+        BasicFileAttributes read(Path path) throws IOException;
+    }
+
+    /** Canonical physical identity retained for destructive directory authority checks. */
+    static final class DirectoryAuthority {
+        private final Path normalizedPath;
+        private final Path realPath;
+        private final Object fileKey;
+        private final String description;
+
+        private DirectoryAuthority(Path normalizedPath, Path realPath, Object fileKey,
+                String description) {
+            this.normalizedPath = normalizedPath;
+            this.realPath = realPath;
+            this.fileKey = fileKey;
+            this.description = description;
+        }
+
+        static DirectoryAuthority capture(Path path, String description) throws IOException {
+            Path normalized = path.toAbsolutePath().normalize();
+            BasicFileAttributes attributes = Files.readAttributes(
+                    normalized, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attributes.isDirectory()) {
+                throw new IOException(description + " is missing, not an ordinary directory, or "
+                        + "is a symbolic link: " + normalized);
+            }
+            Object fileKey = requireFileKey(attributes, normalized, description);
+            Path real = normalized.toRealPath();
+            BasicFileAttributes realAttributes = Files.readAttributes(
+                    real, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!realAttributes.isDirectory()
+                    || !fileKey.equals(requireFileKey(realAttributes, real, description))) {
+                throw new IOException(description + " changed while its authority was captured: "
+                        + normalized);
+            }
+            return new DirectoryAuthority(normalized, real, fileKey, description);
+        }
+
+        void requireSame(Path path) throws IOException {
+            Path normalized = path.toAbsolutePath().normalize();
+            if (!normalizedPath.equals(normalized)) {
+                throw new IOException(description + " path changed after validation: expected "
+                        + normalizedPath + " but was " + normalized);
+            }
+            BasicFileAttributes attributes = Files.readAttributes(
+                    normalized, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attributes.isDirectory()
+                    || !fileKey.equals(requireFileKey(attributes, normalized, description))
+                    || !realPath.equals(normalized.toRealPath())) {
+                throw new IOException(description + " identity changed after validation: "
+                        + normalized);
+            }
+        }
+
+        Path normalizedPath() {
+            return normalizedPath;
+        }
+
+        Path realPath() {
+            return realPath;
+        }
+
+        private static Object requireFileKey(BasicFileAttributes attributes, Path path,
+                String description) throws IOException {
+            Object fileKey = attributes.fileKey();
+            if (fileKey == null) {
+                throw new IOException("cannot establish physical identity for " + description
+                        + " because the filesystem did not provide a file key: " + path);
+            }
+            return fileKey;
         }
     }
 

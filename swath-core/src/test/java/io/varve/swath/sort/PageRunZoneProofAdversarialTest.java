@@ -135,6 +135,8 @@ class PageRunZoneProofAdversarialTest {
         assertThat(result.totalRows()).isEqualTo(26);
         assertThat(readKeys(result.finalFiles())).hasSize(26).isSorted();
         assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_zone_proof_page_ranges_disjoint")
+                + metrics.count("SORT.merge_zone_proof_page_ranges_overlap")).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_range_index_seek")).isPositive();
         assertThat(metrics.count("SORT.merge_range_index_absent")).isPositive();
         assertThat(metrics.count("SORT.page_run_index_mismatch")).isZero();
@@ -174,6 +176,8 @@ class PageRunZoneProofAdversarialTest {
         assertThat(metrics.count(lie.reason)).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_range_index_absent")).isPositive();
         assertThat(metrics.count("SORT.merge_zone_proof_complete")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_zone_proof_page_ranges_disjoint")
+                + metrics.count("SORT.merge_zone_proof_page_ranges_overlap")).isEqualTo(1);
         assertThat(metrics.rangeIndexBytes.sum()).isZero();
     }
 

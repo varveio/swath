@@ -214,7 +214,8 @@ class SortTransformPageRunParallelMergePropTest {
             int actualRanges = boundaries.size() + 1;
             long streamPrice = Math.max(SortConfigs.base().mergePerStreamBytes(),
                     Math.addExact(Math.multiplyExact(2L, catalog.maxRecordLen()),
-                            catalog.maxRawPayloadLength()));
+                            catalog.maxRawPayloadLength()
+                                    + 2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES));
             mergeBudgetBytes = Math.addExact(
                     PageRunProofSpool.logicalBytes(actualRanges, descriptors.size()),
                     Math.multiplyExact(Math.multiplyExact((long) actualRanges, 2L), streamPrice));

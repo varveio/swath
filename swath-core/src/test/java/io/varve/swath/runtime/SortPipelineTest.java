@@ -29,6 +29,7 @@ import io.varve.swath.output.parquet.DatasetLayout;
 import io.varve.swath.sort.DuplicateHook;
 import io.varve.swath.sort.ListEntryComparator;
 import io.varve.swath.sort.PageRunFormat;
+import io.varve.swath.sort.PageRunRawFixtures;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortConfig;
@@ -41,7 +42,6 @@ import io.varve.swath.sort.SortStamp;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
 import io.varve.swath.testkit.ParquetReads;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,7 +49,6 @@ import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.zip.CRC32C;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -199,6 +198,46 @@ final class SortPipelineTest {
 
     @Test
     @Timeout(60)
+    void mergePendingResumeRejectsCheckpointFormatThatDisagreesWithPhysicalSegment(
+            @TempDir Path tmp) throws Exception {
+        Path outputDir = Files.createDirectories(tmp.resolve("out"));
+        Path stagingDir = Files.createDirectories(outputDir.resolve("_staging"));
+        Path db = tmp.resolve("c.sqlite");
+        RunContext ctx = RunContext.create();
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db, ctx.metrics())) {
+            RunMeta run = store.openRun(sortKey(), false, false);
+            long nodeId = store.insertNode(NodeSpec.rootRange(run.id()));
+            SegmentSink sink = result -> store.partFinalized(new PartFinalize(
+                    run.id(), 0, result.path().getFileName().toString(), PageRunFormat.NAME,
+                    PageRunFormat.CURRENT_FORMAT_VERSION,
+                    PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION,
+                    result.rows(), result.bytes(), result.perNodeMaxKeys().entrySet().stream()
+                    .map(entry -> new PartFinalize.DurableAdvance(
+                            entry.getKey(), entry.getValue())).toList()));
+            SortLane lane = new SortLane(SortConfigs.base(), new ListEntryComparator(),
+                    DuplicateHook.NO_OP, SortMetrics.NO_OP, SortLaneMeters.NO_OP,
+                    stagingDir, "seg-" + run.id() + "-format", sink);
+            lane.admit(nodeId, pages(Keyspaces.singlePrefixFlat(40), MAX_KEYS).getFirst());
+            lane.close();
+            PartRef tracked = store.finalizedParts(run.id()).getFirst();
+            Path segment = stagingDir.resolve(tracked.path());
+
+            assertThatThrownBy(() -> new ListRunner().runSortMergeOnly(
+                    ctx, outputDir, stagingDir, store, run.id(), SortConfigs.base(),
+                    SortMode.OBJECTS, spec()))
+                    .rootCause()
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .extracting(cause -> ((SegmentCorruptionException) cause).errorClass())
+                    .isEqualTo("page_run_format_mismatch");
+
+            assertThat(segment).exists();
+            assertThat(DatasetLayout.of(outputDir).manifest()).doesNotExist();
+            assertThat(store.sortPhase(run.id())).isEqualTo(SortPhase.MERGING);
+        }
+    }
+
+    @Test
+    @Timeout(60)
     /*
      * This is the production zero-LIST re-entry seam: the checkpoint-tracked segment is mutated only
      * after listing has finalized it. The fresh-run test above drives real type-2 emission through
@@ -239,7 +278,7 @@ final class SortPipelineTest {
                 assertThat(part.rows()).isEqualTo(keyspace.size());
             });
             Path segment = stagingDir.resolve(tracked.getFirst().path());
-            repairCrcAfterSecondEntryCumulativeLie(segment);
+            PageRunRawFixtures.repairCrcAfterSecondEntryCumulativeLie(segment);
 
             assertThatThrownBy(() -> new ListRunner().runSortMergeOnly(
                     ctx, outputDir, stagingDir, store, run.id(), proofConfig,
@@ -312,31 +351,4 @@ final class SortPipelineTest {
         }
     }
 
-    /** Raw test mutation, intentionally independent of the production sparse-index parser. */
-    private static void repairCrcAfterSecondEntryCumulativeLie(Path segment) throws Exception {
-        byte[] bytes = Files.readAllBytes(segment);
-        ByteBuffer data = ByteBuffer.wrap(bytes);
-        int fixedTailStart = bytes.length - 28;
-        int trailerStart = Math.toIntExact(data.getLong(fixedTailStart));
-        int position = trailerStart;
-        position += 2 + (data.getShort(position) & 0xffff);
-        position += 2 + (data.getShort(position) & 0xffff);
-        int extensionStart = position;
-        assertThat(data.getInt(extensionStart)).isEqualTo(0x53504758);
-        assertThat(data.getShort(extensionStart + 4))
-                .isEqualTo((short) PageRunFormat.PAGE_INDEX_EXTENSION);
-        assertThat(data.getInt(extensionStart + 12)).isGreaterThan(2);
-        int firstEntry = extensionStart + 16;
-        int firstMinLength = data.getShort(firstEntry + 32) & 0xffff;
-        int firstPrefixLengthPosition = firstEntry + 34 + firstMinLength;
-        int firstPrefixLength = data.getShort(firstPrefixLengthPosition) & 0xffff;
-        int secondEntry = firstPrefixLengthPosition + 2 + firstPrefixLength;
-        long cumulativeEntries = data.getLong(secondEntry + 16);
-        data.putLong(secondEntry + 16, cumulativeEntries + 1);
-        int crcPosition = fixedTailStart - Integer.BYTES;
-        CRC32C crc = new CRC32C();
-        crc.update(bytes, extensionStart, crcPosition - extensionStart);
-        data.putInt(crcPosition, (int) crc.getValue());
-        Files.write(segment, bytes);
-    }
 }

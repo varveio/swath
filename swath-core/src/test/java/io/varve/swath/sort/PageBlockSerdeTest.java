@@ -253,7 +253,7 @@ class PageBlockSerdeTest {
     @Test
     void malformedStoredPayloadLengthIsRejectedBeforeABlockCanOwnTheBody() {
         byte[] body = PageBlock.pack(List.of(object("only")), CMP, PageCodec.NONE).serialize();
-        int payloadLengthOffset = rawPayloadLenOffset(body) + Integer.BYTES;
+        int payloadLengthOffset = PageRunRawFixtures.pageHeaderLayout(body).storedLengthOffset();
         ByteBuffer.wrap(body).putInt(payloadLengthOffset,
                 ByteBuffer.wrap(body).getInt(payloadLengthOffset) - 1);
 
@@ -280,7 +280,7 @@ class PageBlockSerdeTest {
 
         for (PayloadMutation mutation : mutations) {
             byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCodec.NONE).serialize();
-            int payloadOffset = rawPayloadLenOffset(body) + 2 * Integer.BYTES;
+            int payloadOffset = PageRunRawFixtures.pageHeaderLayout(body).payloadOffset();
             byte[] payload = Arrays.copyOfRange(body, payloadOffset, body.length);
             mutation.mutator().accept(payload);
             System.arraycopy(payload, 0, body, payloadOffset, payload.length);
@@ -297,11 +297,11 @@ class PageBlockSerdeTest {
     @Test
     void reconstructedKeyLimitIsCheckedBeforeAllocation() {
         int keyLength = io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN + 1;
-        byte[] payload = new byte[1 + 1 + 2 + keyLength];
+        byte[] encodedSuffixLength = unsignedVarint(keyLength);
+        byte[] payload = new byte[1 + 1 + encodedSuffixLength.length + keyLength];
         payload[0] = PageBlockCodec.TAG_COMMON_PREFIX;
         payload[1] = 0;
-        payload[2] = (byte) 0x81;
-        payload[3] = 0x08;
+        System.arraycopy(encodedSuffixLength, 0, payload, 2, encodedSuffixLength.length);
         String[][] dicts = new String[PageBlockCodec.DICT_COLUMN_COUNT][];
         for (int i = 0; i < dicts.length; i++) {
             dicts[i] = new String[0];
@@ -313,13 +313,15 @@ class PageBlockSerdeTest {
         assertThatThrownBy(() -> malformed.cursor().next())
                 .isInstanceOf(java.io.UncheckedIOException.class)
                 .hasRootCauseInstanceOf(IllegalArgumentException.class)
-                .hasStackTraceContaining("reconstructed key length 1025 exceeds the S3 key limit");
+                .hasStackTraceContaining("reconstructed key length " + keyLength
+                        + " exceeds the S3 key limit");
     }
 
     @Test
     void headerRejectsDecodedPayloadClaimsAboveTheHardCeilingBeforeDecompression() {
         byte[] body = PageBlock.pack(List.of(object("a")), CMP, PageCodec.LZ4).serialize();
-        ByteBuffer.wrap(body).putInt(rawPayloadLenOffset(body),
+        ByteBuffer.wrap(body).putInt(
+                PageRunRawFixtures.pageHeaderLayout(body).rawLengthOffset(),
                 PageBlock.MAX_RAW_PAYLOAD_BYTES + 1);
 
         assertThatThrownBy(() -> PageBlockCodec.parseHeader(body))
@@ -383,7 +385,7 @@ class PageBlockSerdeTest {
         PageBlock block = PageBlock.pack(in, CMP, codec);
         byte[] record = block.serialize();
 
-        int offset = rawPayloadLenOffset(record);
+        int offset = PageRunRawFixtures.pageHeaderLayout(record).rawLengthOffset();
         ByteBuffer view = ByteBuffer.wrap(record);
         int declared = view.getInt(offset);
         view.putInt(offset, declared + 10_000);   // corrupt: no longer matches the real decompressed size
@@ -425,31 +427,16 @@ class PageBlockSerdeTest {
         }
     }
 
-    /**
-     * Locate the {@code rawPayloadLen u32} field within a {@link PageBlock#serialize()} record by
-     * replaying the exact same header parse {@link PageBlock#deserialize} performs, so the offset is
-     * correct regardless of key lengths / dict table contents.
-     */
-    private static int rawPayloadLenOffset(byte[] record) {
-        ByteBuffer buf = ByteBuffer.wrap(record);
-        skipLenBytes(buf);   // minKey
-        skipLenBytes(buf);   // maxKey
-        buf.getInt();        // count
-        buf.get();           // ordered-bit
-        for (int i = 0; i < 5; i++) {
-            int n = buf.getShort() & 0xFFFF;
-            for (int j = 0; j < n; j++) {
-                skipLenBytes(buf);
-            }
-        }
-        buf.get();   // packed useDict byte
-        buf.get();   // codec byte
-        return buf.position();
-    }
-
-    private static void skipLenBytes(ByteBuffer buf) {
-        int len = buf.getShort() & 0xFFFF;
-        buf.position(buf.position() + len);
+    private static byte[] unsignedVarint(int value) {
+        byte[] encoded = new byte[5];
+        int length = 0;
+        int remaining = value;
+        do {
+            int bits = remaining & 0x7f;
+            remaining >>>= 7;
+            encoded[length++] = (byte) (remaining == 0 ? bits : bits | 0x80);
+        } while (remaining != 0);
+        return Arrays.copyOf(encoded, length);
     }
 
     private static SortConfig configWithCodec(PageCodec codec) {

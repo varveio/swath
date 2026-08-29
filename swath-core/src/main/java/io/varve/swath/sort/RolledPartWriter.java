@@ -128,8 +128,8 @@ final class RolledPartWriter {
                 byte[] entryKey = entry.key().rawUnsafe();
                 boolean rollReady = writer != null && shouldRoll(writer, finalFileBytes);
                 // The equality check can scan a 1 KiB key. Keep it off the ordinary unique-key hot
-                // path for ALLOW runs until the soft byte target has actually been reached. REJECT
-                // is the fixture-only integrity policy and must inspect every adjacent pair.
+                // path for VERSIONS/ALLOW until the soft byte target has actually been reached.
+                // OBJECTS/REJECT is a key-uniqueness integrity policy and inspects every pair.
                 boolean sameKey = (equalKeyPolicy == EqualKeyPolicy.REJECT || rollReady)
                         && previousKey != null
                         && KeyBytes.compareUnsigned(previousKey, entryKey) == 0;

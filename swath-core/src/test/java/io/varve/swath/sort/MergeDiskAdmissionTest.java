@@ -5,12 +5,10 @@
  */
 package io.varve.swath.sort;
 
+import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.varve.swath.model.KeyBytes;
-import io.varve.swath.model.ListEntry;
-import io.varve.swath.model.ObjectEntry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -82,9 +80,10 @@ class MergeDiskAdmissionTest {
         Path staging = Files.createDirectories(root.resolve("_staging"));
         List<Path> segments = List.of(SortTestSupport.writePageRun(
                 staging.resolve("seg-0.pageseg"), List.of(object("a")), comparator));
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         SortTransform transform = new SortTransform(new SortRun(
-                SortConfigs.base(), comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                SortConfigs.base(), comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, metrics,
+                SortedFileWriterFactory.DEFAULT,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
                 MergeDiskPolicy.bypassed()));
@@ -93,6 +92,8 @@ class MergeDiskAdmissionTest {
                 PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.totalRows()).isOne();
+        assertThat(metrics.count("SORT.merge_disk_policy_bypassed")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_disk_policy_enforced")).isZero();
     }
 
     @Test
@@ -108,9 +109,10 @@ class MergeDiskAdmissionTest {
             assertThat(staleProof).doesNotExist();
             return new MergeDiskPolicy.Space(store, 2L * GIB);
         });
+        SortTestSupport.CountingMetrics metrics = new SortTestSupport.CountingMetrics();
         SortTransform transform = new SortTransform(new SortRun(
-                SortConfigs.base(), comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
-                SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                SortConfigs.base(), comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, metrics,
+                SortedFileWriterFactory.DEFAULT,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY, policy));
 
@@ -118,6 +120,8 @@ class MergeDiskAdmissionTest {
                 PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
 
         assertThat(result.totalRows()).isOne();
+        assertThat(metrics.count("SORT.merge_disk_policy_enforced")).isEqualTo(1);
+        assertThat(metrics.count("SORT.merge_disk_policy_bypassed")).isZero();
     }
 
     @Test
@@ -151,10 +155,5 @@ class MergeDiskAdmissionTest {
         assertThat(result.finalizationParallelism()).isEqualTo(2);
         assertThat(metrics.count("SORT.merge_range_fd_limited")).isEqualTo(1);
         assertThat(metrics.count("SORT.merge_range_disk_limited")).isEqualTo(1);
-    }
-
-    private static ListEntry object(String key) {
-        return new ObjectEntry(KeyBytes.ofUtf8(key), 1L, 0L,
-                null, null, null, false, null, null, null, null);
     }
 }

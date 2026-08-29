@@ -7,7 +7,10 @@ package io.varve.swath.sort;
 
 import static io.varve.swath.sort.SortTestSupport.object;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.varve.swath.model.CommonPrefixEntry;
+import io.varve.swath.model.KeyBytes;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -80,6 +83,78 @@ class PageRunPageIndexTest {
             assertThat(result.pageRunFormat()).isEqualTo(PageRunFormat.currentListing());
             assertThat(result.pageRunFormat().extensionType()).isEqualTo(index.extensionType());
         }
+    }
+
+    @Test
+    void serialPreflightReadsOnlyTheFixedHeaderOfAWorstShapeType3Index(@TempDir Path dir)
+            throws IOException {
+        Path segment = writeLongKeyPages(dir.resolve("long-index.pageseg"),
+                PageRunBoundarySample.MAX_ENTRIES);
+
+        PageRunSegmentDescriptor serial = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty())
+                .descriptors().getFirst();
+        long fixedTailStart = serial.fileSize()
+                - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        long extensionBytes = fixedTailStart - serial.trailer().extensionStart();
+
+        assertThat(extensionBytes).isGreaterThan(8L << 20);
+        assertThat(serial.extension().status()).isEqualTo(PageRunPageIndex.Status.SKIPPED);
+        assertThat(serial.extension().bytesRead())
+                .isEqualTo(PageRunBoundarySample.HEADER_BYTES);
+        assertThat(serial.hasDecodedPageMaximum()).isFalse();
+
+        PageRunSegmentDescriptor parallel = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { })).descriptors().getFirst();
+        assertThat(parallel.extension().status()).isEqualTo(PageRunPageIndex.Status.EMBEDDED);
+        assertThat(parallel.extension().bytesRead()).isGreaterThan(extensionBytes);
+        assertThat(parallel.hasDecodedPageMaximum()).isTrue();
+    }
+
+    @Test
+    void checkpointFormatMustMatchPhysicalExtensionAndHeaderVersion(@TempDir Path dir)
+            throws IOException {
+        Path segment = writePages(dir.resolve("format.pageseg"), 3);
+        PageRunFormat physical = PageRunFormat.currentListing();
+
+        assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
+                java.util.Map.of(segment, new PageRunFormat(
+                        PageRunFormat.CURRENT_FORMAT_VERSION,
+                        PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION))))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_format_mismatch");
+
+        PageRunCatalog legacyUnrecorded = PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+        assertThat(legacyUnrecorded.descriptors().getFirst().physicalFormat())
+                .isEqualTo(physical);
+
+        for (int extensionType : List.of(
+                PageRunFormat.LEGACY_PAGE_INDEX_EXTENSION, 99)) {
+            Path changedExtension = writePages(
+                    dir.resolve("physical-extension-" + extensionType + ".pageseg"), 3);
+            byte[] changed = Files.readAllBytes(changedExtension);
+            ByteBuffer.wrap(changed).putShort(
+                    layout(changed).extensionStart + Integer.BYTES, (short) extensionType);
+            Files.write(changedExtension, changed);
+            assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(changedExtension),
+                    path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
+                    java.util.Map.of(changedExtension, physical)))
+                    .isInstanceOf(SegmentCorruptionException.class)
+                    .hasMessageContaining("error_class=page_run_format_mismatch");
+        }
+
+        byte[] bytes = Files.readAllBytes(segment);
+        ByteBuffer.wrap(bytes).putShort(Integer.BYTES, (short) 2);
+        Files.write(segment, bytes);
+        assertThatThrownBy(() -> PageRunCatalog.preflight(List.of(segment),
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty(),
+                java.util.Map.of(segment, physical)))
+                .isInstanceOf(SegmentCorruptionException.class)
+                .hasMessageContaining("error_class=page_run_format_mismatch")
+                .hasMessageContaining("physical_format_version=2");
     }
 
     @Test
@@ -224,6 +299,19 @@ class PageRunPageIndexTest {
         SortBuffer buffer = new SortBuffer(SortConfigs.base(), CMP);
         for (int i = 0; i < pages; i++) {
             buffer.admit(i, List.of(object(String.format("k%05d", i))));
+        }
+        new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
+                .flush(buffer.seal(SealTrigger.DRAIN), path);
+        return path;
+    }
+
+    private static Path writeLongKeyPages(Path path, int pages) throws IOException {
+        SortBuffer buffer = new SortBuffer(SortConfigs.base(), CMP);
+        for (int page = 0; page < pages; page++) {
+            byte[] key = new byte[io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN];
+            key[0] = (byte) (page >>> 8);
+            key[1] = (byte) page;
+            buffer.admit(page, List.of(new CommonPrefixEntry(KeyBytes.of(key))));
         }
         new PageRunSegmentWriter(CMP, DuplicateHook.NO_OP, SortMetrics.NO_OP, PageCodec.NONE)
                 .flush(buffer.seal(SealTrigger.DRAIN), path);

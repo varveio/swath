@@ -78,27 +78,75 @@ final class PageRunCatalog {
     }
 
     /**
-     * Open every already-name-validated input once for its trailer and optional boundary extension.
-     * Current type-3 resource metadata is validated even with an empty serial/arbitrary boundary
-     * sink; only delivery of sampled minima and later boundary-planning metrics stays disabled.
+     * Open every already-name-validated input once for its trailer and optional-extension header.
+     * A present boundary sink requests full sparse-index validation; serial/arbitrary callers retain
+     * only the O(1) physical extension identity and rely on runtime decoded-page admission.
      */
     static PageRunCatalog preflight(List<Path> paths, Opener opener,
             Optional<Consumer<byte[]>> boundaryKeySink) throws IOException {
+        return preflight(paths, opener, boundaryKeySink, Map.of());
+    }
+
+    /**
+     * Preflight with checkpoint-declared formats keyed by input path. Missing entries are legacy
+     * unrecorded inputs; present entries must match the physical header and extension exactly.
+     */
+    static PageRunCatalog preflight(List<Path> paths, Opener opener,
+            Optional<Consumer<byte[]>> boundaryKeySink,
+            Map<Path, PageRunFormat> expectedFormats) throws IOException {
         List<Path> normalizedPaths = requireUniqueNormalizedPaths(paths);
+        Map<Path, PageRunFormat> normalizedExpected = normalizeExpectedFormats(expectedFormats);
         List<PageRunSegmentDescriptor> descriptors = new ArrayList<>(normalizedPaths.size());
         for (Path path : normalizedPaths) {
+            PageRunFormat expected = normalizedExpected.get(path);
+            if (expected != null) {
+                PageRunFormat.requirePhysicalHeader(path, expected);
+            }
             try (PageRunSegmentIo io = opener.open(path)) {
                 PageRunTrailer.Trailer trailer = PageRunTrailer.read(io);
-                PageRunPageIndex.ReadResult extension = PageRunPageIndex.read(
-                        io, trailer, boundaryKeySink.orElse(ignored -> { }));
+                PageRunPageIndex.Probe probe = PageRunPageIndex.probe(io, trailer);
+                PageRunFormat physicalFormat = new PageRunFormat(
+                        Short.toUnsignedInt(io.formatVersion()),
+                        Short.toUnsignedInt(probe.extensionType()));
+                requireExpectedFormat(path, expected, physicalFormat, probe);
+                PageRunPageIndex.ReadResult extension = boundaryKeySink.isPresent()
+                        ? PageRunPageIndex.read(io, trailer, boundaryKeySink.orElseThrow(), probe)
+                        : PageRunPageIndex.skipped(trailer.totalRecords(), probe);
                 int maxRawPayloadLength = extension.hasDecodedPageMaximum()
                         ? extension.maxRawPayloadLength()
                         : -1;
                 descriptors.add(new PageRunSegmentDescriptor(path, io.fileSize, io.trailerStart,
-                        trailer, extension, maxRawPayloadLength));
+                        trailer, extension, maxRawPayloadLength, physicalFormat));
             }
         }
         return new PageRunCatalog(descriptors);
+    }
+
+    private static Map<Path, PageRunFormat> normalizeExpectedFormats(
+            Map<Path, PageRunFormat> expectedFormats) throws IOException {
+        Map<Path, PageRunFormat> normalized = new LinkedHashMap<>();
+        for (Map.Entry<Path, PageRunFormat> entry : expectedFormats.entrySet()) {
+            Path path = normalizedIdentity(entry.getKey());
+            if (normalized.putIfAbsent(path, entry.getValue()) != null) {
+                throw new IOException("duplicate expected page-run format path: " + path);
+            }
+        }
+        return Map.copyOf(normalized);
+    }
+
+    private static void requireExpectedFormat(Path path, PageRunFormat expected,
+            PageRunFormat physical, PageRunPageIndex.Probe probe) throws IOException {
+        if (expected == null) {
+            return;
+        }
+        if (!probe.supportedPhysicalType() || !expected.equals(physical)) {
+            throw new SegmentCorruptionException(path,
+                    SegmentCorruptionException.PAGE_RUN_FORMAT_MISMATCH,
+                    "checkpoint format metadata disagrees with physical segment: recorded="
+                            + expected + ", physical=" + physical
+                            + ", extension_status="
+                            + (probe.status() == null ? "HEADER" : probe.status()));
+        }
     }
 
     private static List<Path> requireUniqueNormalizedPaths(List<Path> paths) throws IOException {

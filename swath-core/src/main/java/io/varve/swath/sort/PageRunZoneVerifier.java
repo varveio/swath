@@ -379,11 +379,16 @@ final class PageRunZoneVerifier {
             RangeSummary[] ranges = topology(plan, supplied);
             int expectedSlots = Math.multiplyExact(plan.ranges(), plan.segments().size());
             reader = readerFactory.open(ranges[0].spool(), expectedSlots, stats);
+            boolean pageRangeOverlap = false;
             for (PageRunSeekPlan.SegmentPlan segment : plan.segments()) {
                 MergeCancellation.check();
-                verifySegment(segment, plan.ranges(), plan.segments().size(), reader, metrics);
+                pageRangeOverlap |= verifySegment(
+                        segment, plan.ranges(), plan.segments().size(), reader, metrics);
             }
             metrics.recordStealReason("SORT", "merge_zone_proof_complete");
+            metrics.recordStealReason("SORT", pageRangeOverlap
+                    ? "merge_zone_proof_page_ranges_overlap"
+                    : "merge_zone_proof_page_ranges_disjoint");
             verified = true;
         } catch (IOException | RuntimeException e) {
             primary = e;
@@ -451,7 +456,7 @@ final class PageRunZoneVerifier {
         return ordered;
     }
 
-    private static void verifySegment(PageRunSeekPlan.SegmentPlan plan,
+    private static boolean verifySegment(PageRunSeekPlan.SegmentPlan plan,
                                       int ranges, int segmentCount, PageRunProofSpool.Reader reader,
                                       SortMetrics metrics) throws IOException {
         PageRunTrailer.Trailer trailer = plan.descriptor().trailer();
@@ -463,6 +468,7 @@ final class PageRunZoneVerifier {
         byte[] firstMin = null;
         byte[] previousLastMin = null;
         byte[] globalMax = null;
+        boolean pageRangeOverlap = false;
         for (int range = 0; range < ranges; range++) {
             MergeCancellation.check();
             PageRunSeekPlan.Zone zone = plan.zone(range);
@@ -488,6 +494,10 @@ final class PageRunZoneVerifier {
                         + " does not tile its planned physical zone", metrics);
             }
             if (zonePages > 0) {
+                if (globalMax != null
+                        && Arrays.compareUnsigned(summary.firstMin(), globalMax) <= 0) {
+                    pageRangeOverlap = true;
+                }
                 if (firstMin == null) {
                     firstMin = summary.firstMin();
                 }
@@ -529,6 +539,7 @@ final class PageRunZoneVerifier {
             throw indexMismatch(plan.path(), "physical zones verified " + verifiedSamples
                     + " of " + plan.descriptor().extension().entryCount() + " index samples", metrics);
         }
+        return pageRangeOverlap;
     }
 
     private static byte[] max(byte[] first, byte[] second) {

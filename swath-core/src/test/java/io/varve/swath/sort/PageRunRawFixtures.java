@@ -45,7 +45,7 @@ import java.util.zip.CRC32C;
  * (rather than trust) what is physically stored — or to reproduce a read path that does not enforce that
  * guard on either route — cannot go through them.
  */
-final class PageRunRawFixtures {
+public final class PageRunRawFixtures {
 
     private PageRunRawFixtures() {
     }
@@ -212,7 +212,7 @@ final class PageRunRawFixtures {
         int bodyLength = ByteBuffer.wrap(bytes).getInt(frameStart);
         int bodyStart = frameStart + 2 * Integer.BYTES;
         ByteBuffer body = ByteBuffer.wrap(bytes, bodyStart, bodyLength).slice();
-        int payloadStart = payloadOffset(body);
+        int payloadStart = pageHeaderLayout(body).payloadOffset();
         // CommonPrefix rows with one-byte keys each encode as [tag][shared=0][suffix=1][key].
         int secondKey = bodyStart + payloadStart + 7;
         int thirdKey = bodyStart + payloadStart + 11;
@@ -280,6 +280,42 @@ final class PageRunRawFixtures {
         return path;
     }
 
+    /** Raw test mutation, intentionally independent of the production sparse-index parser. */
+    public static void repairCrcAfterSecondEntryCumulativeLie(Path segment) throws IOException {
+        byte[] bytes = Files.readAllBytes(segment);
+        ByteBuffer data = ByteBuffer.wrap(bytes);
+        int fixedTailStart = bytes.length - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        int trailerStart = Math.toIntExact(data.getLong(fixedTailStart));
+        int position = trailerStart;
+        position += Short.BYTES + unsignedShort(bytes, position);
+        position += Short.BYTES + unsignedShort(bytes, position);
+        int extensionStart = position;
+        if (data.getInt(extensionStart) != PageRunBoundarySample.MAGIC) {
+            throw new IllegalStateException("fixture requires the page-index extension magic");
+        }
+        if (data.getShort(extensionStart + Integer.BYTES)
+                != (short) PageRunFormat.PAGE_INDEX_EXTENSION) {
+            throw new IllegalStateException("fixture requires the current page-index extension");
+        }
+        int entryCount = data.getInt(extensionStart + 3 * Integer.BYTES);
+        if (entryCount <= 2) {
+            throw new IllegalStateException("fixture requires more than two page-index entries");
+        }
+        int firstEntry = extensionStart + PageRunBoundarySample.HEADER_BYTES;
+        int firstMinLength = unsignedShort(bytes, firstEntry + 4 * Long.BYTES);
+        int firstPrefixLengthPosition = firstEntry + 4 * Long.BYTES + Short.BYTES
+                + firstMinLength;
+        int firstPrefixLength = unsignedShort(bytes, firstPrefixLengthPosition);
+        int secondEntry = firstPrefixLengthPosition + Short.BYTES + firstPrefixLength;
+        long cumulativeEntries = data.getLong(secondEntry + 2 * Long.BYTES);
+        data.putLong(secondEntry + 2 * Long.BYTES, cumulativeEntries + 1);
+        int crcPosition = fixedTailStart - PageRunBoundarySample.CRC_BYTES;
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, extensionStart, crcPosition - extensionStart);
+        data.putInt(crcPosition, (int) crc.getValue());
+        Files.write(segment, bytes);
+    }
+
     private static void rewriteRecordCrc(byte[] bytes, int frameStart, int bodyStart, int bodyLength) {
         CRC32C crc = new CRC32C();
         crc.update(bytes, bodyStart, bodyLength);
@@ -298,19 +334,37 @@ final class PageRunRawFixtures {
         return ByteBuffer.wrap(bytes).getShort(position) & 0xffff;
     }
 
-    private static int payloadOffset(ByteBuffer body) {
-        int position = Short.BYTES + unsignedShort(body, 0);
-        position += Short.BYTES + unsignedShort(body, position);
+    /** Shared corruption-fixture parser for offsets within one serialized page body. */
+    static PageHeaderLayout pageHeaderLayout(byte[] body) {
+        return pageHeaderLayout(ByteBuffer.wrap(body));
+    }
+
+    /** Shared corruption-fixture parser for offsets within one serialized page body. */
+    static PageHeaderLayout pageHeaderLayout(ByteBuffer body) {
+        ByteBuffer cursor = body.duplicate();
+        int position = Short.BYTES + unsignedShort(cursor, 0);
+        position += Short.BYTES + unsignedShort(cursor, position);
+        int countOffset = position;
         position += Integer.BYTES + 1; // count and ordered flag
         for (int dictionary = 0; dictionary < PageBlockCodec.DICT_COLUMN_COUNT; dictionary++) {
-            int values = unsignedShort(body, position);
+            int values = unsignedShort(cursor, position);
             position += Short.BYTES;
             for (int value = 0; value < values; value++) {
-                position += Short.BYTES + unsignedShort(body, position);
+                position += Short.BYTES + unsignedShort(cursor, position);
             }
         }
-        // dictionary-use mask, codec, raw payload length, stored payload length
-        return position + 2 + 2 * Integer.BYTES;
+        position++; // dictionary-use mask
+        int codecOffset = position++;
+        int rawLengthOffset = position;
+        position += Integer.BYTES;
+        int storedLengthOffset = position;
+        position += Integer.BYTES;
+        return new PageHeaderLayout(
+                countOffset, codecOffset, rawLengthOffset, storedLengthOffset, position);
+    }
+
+    record PageHeaderLayout(int countOffset, int codecOffset, int rawLengthOffset,
+                            int storedLengthOffset, int payloadOffset) {
     }
 
     private static int unsignedShort(ByteBuffer bytes, int position) {

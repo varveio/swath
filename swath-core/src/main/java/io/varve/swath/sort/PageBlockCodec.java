@@ -45,6 +45,12 @@ final class PageBlockCodec {
     }
 
     static final int DICT_COLUMN_COUNT = DictColumn.values().length;
+    /** Raw contents of the two fixed five-int arrays in a persisted dictionary header. */
+    static final int PERSISTED_DICTIONARY_COORDINATE_DATA_BYTES =
+            2 * DICT_COLUMN_COUNT * Integer.BYTES;
+    /** Conservative heap reservation including both array headers and the coordinate owner. */
+    static final int PERSISTED_DICTIONARY_COORDINATE_BYTES =
+            PERSISTED_DICTIONARY_COORDINATE_DATA_BYTES + 88;
     private static final byte[] EMPTY_KEY = new byte[0];
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -56,22 +62,29 @@ final class PageBlockCodec {
      * min/max keys, dictionary tables, mode bits, counts, and lengths remain plain.
      */
     static byte[] serialize(PageBlock block) {
-        String[][] dicts = block.dictsUnsafe();
-        byte[][][] dictValueBytes = new byte[DICT_COLUMN_COUNT][][];
+        Dictionaries dictionaries = block.dictionariesUnsafe();
+        byte[][][] packedDictionaryBytes = dictionaries.byteBacked()
+                ? null : new byte[DICT_COLUMN_COUNT][][];
         int dictTablesSize = 0;
         for (int i = 0; i < DICT_COLUMN_COUNT; i++) {
-            String[] values = dicts[i];
-            byte[][] valueBytes = new byte[values.length][];
             int size = 2;
-            for (int j = 0; j < values.length; j++) {
-                valueBytes[j] = values[j].getBytes(StandardCharsets.UTF_8);
-                if (valueBytes[j].length > 0xFFFF) {
+            if (packedDictionaryBytes != null) {
+                packedDictionaryBytes[i] = new byte[dictionaries.size(i)][];
+            }
+            for (int j = 0; j < dictionaries.size(i); j++) {
+                byte[] packedBytes = packedDictionaryBytes == null ? null
+                        : dictionaries.packedValue(i, j).getBytes(StandardCharsets.UTF_8);
+                if (packedDictionaryBytes != null) {
+                    packedDictionaryBytes[i][j] = packedBytes;
+                }
+                int length = packedBytes == null
+                        ? dictionaries.encodedLength(i, j) : packedBytes.length;
+                if (length > 0xFFFF) {
                     throw new IllegalArgumentException(
                             "dictionary value exceeds the persisted u16 length limit");
                 }
-                size += 2 + valueBytes[j].length;
+                size += 2 + length;
             }
-            dictValueBytes[i] = valueBytes;
             dictTablesSize += size;
         }
 
@@ -89,10 +102,14 @@ final class PageBlockCodec {
         putLenBytes(buffer, lastKey);
         buffer.putInt(block.count());
         buffer.put((byte) (block.orderedUnderFullComparator() ? 1 : 0));
-        for (byte[][] values : dictValueBytes) {
-            buffer.putShort((short) values.length);
-            for (byte[] value : values) {
-                putLenBytes(buffer, value);
+        for (int i = 0; i < DICT_COLUMN_COUNT; i++) {
+            buffer.putShort((short) dictionaries.size(i));
+            for (int j = 0; j < dictionaries.size(i); j++) {
+                if (packedDictionaryBytes == null) {
+                    dictionaries.writeEncoded(buffer, i, j);
+                } else {
+                    putLenBytes(buffer, packedDictionaryBytes[i][j]);
+                }
             }
         }
         int packedUseDict = 0;
@@ -121,12 +138,13 @@ final class PageBlockCodec {
 
     /**
      * Structurally validated page metadata plus a slice into the owning serialized record body.
-     * The header owns only the small decoded key/dictionary metadata; it never copies the stored
-     * payload. {@code payloadOffset}/{@code payloadLength} remain valid for as long as the caller
-     * retains the body passed to {@link #parseHeader(byte[])}.
+     * The header owns only decoded key bounds and fixed-size dictionary table coordinates. Persisted
+     * dictionary strings stay as validated byte slices in the immutable record body and are decoded
+     * only if a row references them. {@code payloadOffset}/{@code payloadLength} remain valid for as
+     * long as the caller retains the body passed to {@link #parseHeader(byte[])}.
      */
     record Header(byte[] minKey, byte[] maxKey, int count, boolean ordered,
-                  String[][] dicts, boolean[] useDict, PageCodec codec,
+                  Dictionaries dictionaries, boolean[] useDict, PageCodec codec,
                   int rawPayloadLength, int payloadOffset, int payloadLength) {
     }
 
@@ -145,7 +163,8 @@ final class PageBlockCodec {
             throw malformed("ordered flag must be 0 or 1, got " + (orderedByte & 0xFF));
         }
 
-        String[][] dicts = new String[DICT_COLUMN_COUNT][];
+        int[] dictionaryStarts = new int[DICT_COLUMN_COUNT];
+        int[] dictionaryCounts = new int[DICT_COLUMN_COUNT];
         for (int i = 0; i < DICT_COLUMN_COUNT; i++) {
             requireRemaining(buffer, 2, "dictionary count");
             int countValues = buffer.getShort() & 0xFFFF;
@@ -153,13 +172,18 @@ final class PageBlockCodec {
                 throw malformed("dictionary " + i + " count " + countValues + " exceeds "
                         + PageBlock.DICT_CAP);
             }
-            String[] values = new String[countValues];
+            dictionaryStarts[i] = buffer.position();
+            dictionaryCounts[i] = countValues;
             for (int j = 0; j < countValues; j++) {
-                values[j] = new String(getBoundedLenBytes(buffer, "dictionary value"),
-                        StandardCharsets.UTF_8);
+                requireRemaining(buffer, Short.BYTES, "dictionary value length");
+                int length = buffer.getShort() & 0xFFFF;
+                requireRemaining(buffer, length, "dictionary value");
+                validateUtf8(record, buffer.position(), length, "dictionary value");
+                buffer.position(buffer.position() + length);
             }
-            dicts[i] = values;
         }
+        Dictionaries dictionaries = Dictionaries.persisted(
+                record, dictionaryStarts, dictionaryCounts);
 
         requireRemaining(buffer, 10, "page modes and payload lengths");
         int packedUseDict = buffer.get() & 0xFF;
@@ -190,7 +214,7 @@ final class PageBlockCodec {
             throw malformed("stored payload length " + storedPayloadLength
                     + " does not equal remaining body bytes " + buffer.remaining());
         }
-        return new Header(minKey, maxKey, count, orderedByte == 1, dicts, useDict,
+        return new Header(minKey, maxKey, count, orderedByte == 1, dictionaries, useDict,
                 codec, rawPayloadLength, buffer.position(), storedPayloadLength);
     }
 
@@ -206,6 +230,176 @@ final class PageBlockCodec {
             hex[i * 2 + 1] = HEX[value & 0x0F];
         }
         return new String(hex);
+    }
+
+    /** Decode a persisted string only after strict, allocation-free UTF-8 validation. */
+    static String decodeUtf8Strict(byte[] bytes, int offset, int length, String field) {
+        if (offset < 0 || length < 0 || offset > bytes.length - length) {
+            throw malformed(field + " exceeds its owning byte array");
+        }
+        validateUtf8(bytes, offset, length, field);
+        return new String(bytes, offset, length, StandardCharsets.UTF_8);
+    }
+
+    /** Reject overlong forms, isolated continuations, surrogate encodings, and code points > U+10FFFF. */
+    private static void validateUtf8(byte[] bytes, int offset, int length, String field) {
+        int end = offset + length;
+        for (int p = offset; p < end; ) {
+            int first = bytes[p] & 0xFF;
+            int width;
+            int secondMin = 0x80;
+            int secondMax = 0xBF;
+            if (first <= 0x7F) {
+                p++;
+                continue;
+            } else if (first >= 0xC2 && first <= 0xDF) {
+                width = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                width = 3;
+                if (first == 0xE0) {
+                    secondMin = 0xA0;
+                } else if (first == 0xED) {
+                    secondMax = 0x9F;
+                }
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                width = 4;
+                if (first == 0xF0) {
+                    secondMin = 0x90;
+                } else if (first == 0xF4) {
+                    secondMax = 0x8F;
+                }
+            } else {
+                throw malformedUtf8(field, p - offset);
+            }
+            if (p > end - width) {
+                throw malformedUtf8(field, p - offset);
+            }
+            int second = bytes[p + 1] & 0xFF;
+            if (second < secondMin || second > secondMax) {
+                throw malformedUtf8(field, p - offset);
+            }
+            for (int i = 2; i < width; i++) {
+                int continuation = bytes[p + i] & 0xFF;
+                if (continuation < 0x80 || continuation > 0xBF) {
+                    throw malformedUtf8(field, p - offset);
+                }
+            }
+            p += width;
+        }
+    }
+
+    private static IllegalArgumentException malformedUtf8(String field, int relativeOffset) {
+        return malformed(field + " contains malformed UTF-8 at byte " + relativeOffset);
+    }
+
+    /** Packed Java dictionaries or byte-backed persisted dictionary-table coordinates. */
+    static final class Dictionaries {
+        private final String[][] packed;
+        private final byte[] owner;
+        private final int[] starts;
+        private final int[] counts;
+
+        private Dictionaries(String[][] packed, byte[] owner, int[] starts, int[] counts) {
+            this.packed = packed;
+            this.owner = owner;
+            this.starts = starts;
+            this.counts = counts;
+        }
+
+        static Dictionaries packed(String[][] values) {
+            return new Dictionaries(values, null, null, null);
+        }
+
+        static Dictionaries persisted(byte[] owner, int[] starts, int[] counts) {
+            return new Dictionaries(null, owner, starts, counts);
+        }
+
+        int size(int column) {
+            return packed != null ? packed[column].length : counts[column];
+        }
+
+        boolean byteBacked() {
+            return owner != null;
+        }
+
+        String packedValue(int column, int index) {
+            if (packed == null) {
+                throw new IllegalStateException("persisted dictionary has no packed String value");
+            }
+            return packed[column][index];
+        }
+
+        int coordinateBytes() {
+            return owner == null ? 0 : PERSISTED_DICTIONARY_COORDINATE_BYTES;
+        }
+
+        /** Conservative retained heap for lazily decoded persisted dictionary strings and caches. */
+        long decodedCacheBudgetBytes() {
+            if (owner == null) {
+                return 0;
+            }
+            int totalValues = 0;
+            for (int count : counts) {
+                totalValues += count;
+            }
+            if (totalValues == 0) {
+                return 0;
+            }
+            long bytes = 16L + (long) DICT_COLUMN_COUNT * Long.BYTES;
+            for (int column = 0; column < DICT_COLUMN_COUNT; column++) {
+                bytes += 16L + (long) size(column) * Long.BYTES;
+                for (int index = 0; index < size(column); index++) {
+                    // UTF-16 needs at most two bytes per validated UTF-8 input byte. The 64-byte
+                    // allowance covers the String and backing-array headers/alignment.
+                    bytes += 2L * encodedLength(column, index) + 64L;
+                }
+            }
+            return bytes;
+        }
+
+        String value(int column, int index) {
+            if (index < 0 || index >= size(column)) {
+                throw new IndexOutOfBoundsException(index);
+            }
+            if (packed != null) {
+                return packed[column][index];
+            }
+            Slice slice = locate(column, index);
+            return decodeUtf8Strict(owner, slice.offset(), slice.length(),
+                    "dictionary " + column + " value " + index);
+        }
+
+        int encodedLength(int column, int index) {
+            return packed != null
+                    ? packed[column][index].getBytes(StandardCharsets.UTF_8).length
+                    : locate(column, index).length();
+        }
+
+        void writeEncoded(ByteBuffer target, int column, int index) {
+            if (packed != null) {
+                putLenBytes(target, packed[column][index].getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+            Slice slice = locate(column, index);
+            target.putShort((short) slice.length());
+            target.put(owner, slice.offset(), slice.length());
+        }
+
+        private Slice locate(int column, int target) {
+            int position = starts[column];
+            for (int index = 0; index <= target; index++) {
+                int length = ((owner[position] & 0xFF) << 8) | (owner[position + 1] & 0xFF);
+                position += Short.BYTES;
+                if (index == target) {
+                    return new Slice(position, length);
+                }
+                position += length;
+            }
+            throw new AssertionError("dictionary target was bounds-checked");
+        }
+
+        private record Slice(int offset, int length) {
+        }
     }
 
     private static void putLenBytes(ByteBuffer buffer, byte[] bytes) {

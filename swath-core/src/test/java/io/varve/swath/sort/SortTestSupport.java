@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
@@ -101,6 +102,54 @@ final class SortTestSupport {
     static void writeFully(FileChannel channel, ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             channel.write(buffer);
+        }
+    }
+
+    /** Delegates every {@link SortedFileWriter} method unless a focused test overrides it. */
+    abstract static class DelegatingSortedFileWriter implements SortedFileWriter {
+        private final SortedFileWriter delegate;
+
+        DelegatingSortedFileWriter(SortedFileWriter delegate) {
+            this.delegate = delegate;
+        }
+
+        protected final SortedFileWriter delegate() {
+            return delegate;
+        }
+
+        @Override
+        public void write(ListEntry entry) throws IOException {
+            delegate.write(entry);
+        }
+
+        @Override
+        public long rows() {
+            return delegate.rows();
+        }
+
+        @Override
+        public long dataSize() {
+            return delegate.dataSize();
+        }
+
+        @Override
+        public void markFinal() {
+            delegate.markFinal();
+        }
+
+        @Override
+        public void setFileIndex(int fileIndex) {
+            delegate.setFileIndex(fileIndex);
+        }
+
+        @Override
+        public Optional<FinalPartMetadata> finalMetadata() {
+            return delegate.finalMetadata();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
         }
     }
 

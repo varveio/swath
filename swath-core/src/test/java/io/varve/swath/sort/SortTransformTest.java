@@ -212,15 +212,7 @@ class SortTransformTest {
         Path outside = writeSegment(root, "outside.parquet", objects("a"));
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         AtomicInteger opens = new AtomicInteger();
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
-                    opens.incrementAndGet();
-                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+        SortTransform transform = countingTransform(opens);
 
         assertThatThrownBy(() -> transform.transform(List.of(outside), dirs.output, dirs.staging,
                 PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -241,15 +233,7 @@ class SortTransformTest {
                 dirs.staging.resolve("linked" + StagingNames.PAGE_RUN_SUFFIX), outside);
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         AtomicInteger opens = new AtomicInteger();
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
-                    opens.incrementAndGet();
-                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+        SortTransform transform = countingTransform(opens);
 
         assertThatThrownBy(() -> transform.transform(List.of(link), dirs.output, dirs.staging,
                 PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -269,15 +253,7 @@ class SortTransformTest {
         Path segment = writeSegment(dirs.staging, "seg-0.parquet", objects("a"));
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         AtomicInteger opens = new AtomicInteger();
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
-                    opens.incrementAndGet();
-                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+        SortTransform transform = countingTransform(opens);
 
         assertThatThrownBy(() -> transform.transform(List.of(segment, segment), dirs.output,
                 dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -297,15 +273,7 @@ class SortTransformTest {
         Path hardLink = Files.createLink(dirs.staging.resolve("seg-1.pageseg"), segment);
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         AtomicInteger opens = new AtomicInteger();
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
-                    opens.incrementAndGet();
-                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+        SortTransform transform = countingTransform(opens);
 
         assertThatThrownBy(() -> transform.transform(List.of(segment, hardLink), dirs.output,
                 dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -326,15 +294,7 @@ class SortTransformTest {
         Path alias = dirs.staging.resolve(".").resolve(segment.getFileName());
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         AtomicInteger opens = new AtomicInteger();
-        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
-                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
-                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
-                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
-        SortTransform transform = new SortTransform(run, PublicationStepHook.NO_OP,
-                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
-                    opens.incrementAndGet();
-                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
-                });
+        SortTransform transform = countingTransform(opens);
 
         assertThatThrownBy(() -> transform.transform(List.of(segment, alias), dirs.output,
                 dirs.staging, PublishListener.NO_OP, units -> { }, FinalPassListener.NO_OP))
@@ -391,42 +351,12 @@ class SortTransformTest {
         Path priorFinal = Files.writeString(dirs.output.resolve("part-00000.parquet"), "prior");
         SortedFileWriterFactory dropsSecondRow = (path, fileIndex) -> {
             SortedFileWriter delegate = SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
-            return new SortedFileWriter() {
+            return new SortTestSupport.DelegatingSortedFileWriter(delegate) {
                 @Override
                 public void write(ListEntry entry) throws IOException {
                     if (!entry.key().asString().equals("b")) {
-                        delegate.write(entry);
+                        delegate().write(entry);
                     }
-                }
-
-                @Override
-                public long rows() {
-                    return delegate.rows();
-                }
-
-                @Override
-                public long dataSize() {
-                    return delegate.dataSize();
-                }
-
-                @Override
-                public void markFinal() {
-                    delegate.markFinal();
-                }
-
-                @Override
-                public void setFileIndex(int index) {
-                    delegate.setFileIndex(index);
-                }
-
-                @Override
-                public Optional<FinalPartMetadata> finalMetadata() {
-                    return delegate.finalMetadata();
-                }
-
-                @Override
-                public void close() throws IOException {
-                    delegate.close();
                 }
             };
         };
@@ -856,6 +786,18 @@ class SortTransformTest {
                 EqualKeyPolicy.ALLOW, metrics, SortedFileWriterFactory.DEFAULT,
                 MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
                 SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY));
+    }
+
+    private SortTransform countingTransform(AtomicInteger opens) {
+        SortRun run = new SortRun(SortConfigs.base(), cmp, DuplicateHook.NO_OP,
+                EqualKeyPolicy.ALLOW, SortMetrics.NO_OP, SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY);
+        return new SortTransform(run, PublicationStepHook.NO_OP,
+                PageRunProofSpool.Reader::new, System::nanoTime, path -> {
+                    opens.incrementAndGet();
+                    return PageRunSegmentIo.open(path, SortMetrics.NO_OP);
+                });
     }
 
     private record Dirs(Path output, Path staging) {

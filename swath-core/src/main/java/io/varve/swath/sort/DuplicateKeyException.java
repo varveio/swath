@@ -11,8 +11,14 @@ import java.util.Comparator;
 /** Thrown when a key-unique sort run encounters two adjacent rows with the same raw key. */
 public final class DuplicateKeyException extends RuntimeException {
 
+    public static final String ERROR_CLASS = "sort_duplicate_key";
+
     public DuplicateKeyException(String message) {
         super(message);
+    }
+
+    public String errorClass() {
+        return ERROR_CLASS;
     }
 
     static DuplicateKeyException forAdjacentEntries(ListEntry previous, ListEntry entry,

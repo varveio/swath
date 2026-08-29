@@ -93,6 +93,7 @@ final class PageRunSegmentWriter {
 
     PageRunSegmentWriter(Comparator<ListEntry> comparator, DuplicateHook hook, SortMetrics metrics,
                         PageCodec codec) {
+        PageRunFormat.requireCanonicalComparator(comparator);
         this.comparator = comparator;
         this.hook = hook;
         this.metrics = metrics;

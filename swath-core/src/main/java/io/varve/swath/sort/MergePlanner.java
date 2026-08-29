@@ -61,8 +61,10 @@ final class MergePlanner {
     EffectiveRanges admitDisk(EffectiveRanges resourcePlan, PageRunCatalog catalog,
             Path stagingDir, Path outputDir) throws MergeDiskExhaustedException {
         if (diskPolicy.bypassedByCaller()) {
+            metrics.recordStealReason("SORT", "merge_disk_policy_bypassed");
             return resourcePlan;
         }
+        metrics.recordStealReason("SORT", "merge_disk_policy_enforced");
         MergeDiskPolicy.Snapshot space = diskPolicy.snapshot(stagingDir, outputDir);
         MergeDiskPlan.Decision decision = MergeDiskPlan.decide(
                 resourcePlan.ranges(), catalog.descriptors().size(), stagedBytes(catalog), space);
@@ -403,6 +405,8 @@ final class MergePlanner {
             long twoEncoded = Math.multiplyExact(
                     2L, Math.max(0L, catalog.maxRecordLen()));
             encodedAndDecoded = Math.addExact(twoEncoded, catalog.maxRawPayloadLength());
+            encodedAndDecoded = Math.addExact(encodedAndDecoded,
+                    2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES);
         } catch (ArithmeticException overflow) {
             encodedAndDecoded = Long.MAX_VALUE;
         }

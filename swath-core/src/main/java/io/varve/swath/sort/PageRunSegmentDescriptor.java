@@ -16,7 +16,8 @@ import java.nio.file.Path;
 record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
                                 PageRunTrailer.Trailer trailer,
                                 PageRunPageIndex.ReadResult extension,
-                                int maxRawPayloadLength) {
+                                int maxRawPayloadLength,
+                                PageRunFormat physicalFormat) {
 
     /** Compatibility constructor for already validated descriptors assembled in focused tests. */
     PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
@@ -24,7 +25,9 @@ record PageRunSegmentDescriptor(Path path, long fileSize, long trailerStart,
         this(path, fileSize, trailerStart, trailer, extension,
                 extension.hasDecodedPageMaximum()
                         ? extension.maxRawPayloadLength()
-                        : -1);
+                        : -1,
+                new PageRunFormat(PageRunFormat.CURRENT_FORMAT_VERSION,
+                        Short.toUnsignedInt(extension.extensionType())));
     }
 
     boolean hasDecodedPageMaximum() {

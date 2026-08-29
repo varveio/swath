@@ -41,6 +41,10 @@ public record SortRun(
         StaleFinalSweep staleFinalSweep,
         MergeDiskPolicy mergeDiskPolicy) {
 
+    public SortRun {
+        PageRunFormat.requireCanonicalComparator(comparator);
+    }
+
     /** Compatibility constructor for library callers; merge-start disk admission remains enforced. */
     public SortRun(SortConfig config, Comparator<ListEntry> comparator, DuplicateHook hook,
             EqualKeyPolicy equalKeyPolicy, SortMetrics metrics,

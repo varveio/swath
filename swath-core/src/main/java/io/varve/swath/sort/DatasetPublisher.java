@@ -55,18 +55,27 @@ final class DatasetPublisher {
     }
 
     /** Sweep every disposable working namespace, then expose the post-sweep publication boundary. */
-    void sweepWorking(Path outputDir, Path stagingDir) throws IOException {
+    void sweepWorking(Path outputDir, Path stagingDir, StagingReconciliation ownedInputs,
+            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
+        ownedInputs.requireOwnedStagingAuthority(stagingDir);
+        outputAuthority.requireSame(outputDir);
         StagingReconciliation.sweepFinalTemporaries(stagingDir);
         StagingReconciliation.sweepFinalTemporaries(outputDir);
-        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.CASCADE_PAGE_RUN_GLOB,
-                StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
-        Sweeps.sweep(stagingDir, stale -> { }, StagingNames.RANGE_TMP_GLOB,
-                StagingNames.RANGE_PROOF_TMP_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.CASCADE_PAGE_RUN_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.LEGACY_CASCADE_PARQUET_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.RANGE_TMP_GLOB);
+        ownedInputs.sweepDisposables(StagingNames.RANGE_PROOF_TMP_GLOB);
         publicationStep(PublicationStep.AFTER_WORKING_SWEEP);
+        // The hook is the deterministic stand-in for a directory replacement between phases.
+        ownedInputs.requireOwnedStagingAuthority(stagingDir);
+        outputAuthority.requireSame(outputDir);
     }
 
-    PendingParts serialParts(Path outputDir, Path stagingDir) {
-        return new PendingParts(outputDir, stagingDir, finalWriterFactory.forOutputSequence());
+    PendingParts serialParts(Path outputDir, Path stagingDir,
+            StagingReconciliation ownedInputs,
+            StagingReconciliation.DirectoryAuthority outputAuthority) {
+        return new PendingParts(outputDir, stagingDir, finalWriterFactory.forOutputSequence(),
+                ownedInputs, outputAuthority);
     }
 
     /**
@@ -74,7 +83,8 @@ final class DatasetPublisher {
      * normalized to the same one-file empty dataset as the serial path.
      */
     PendingParts parallelParts(Path outputDir, Path stagingDir, List<Path> tmpFiles,
-            List<SortedFileWriter> writers) throws IOException {
+            List<SortedFileWriter> writers, StagingReconciliation ownedInputs,
+            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
         List<SortedFileWriter> open = new ArrayList<>(writers);
         try {
             for (int i = 0; i < open.size(); i++) {
@@ -95,7 +105,7 @@ final class DatasetPublisher {
         }
 
         PendingParts pending = new PendingParts(outputDir, stagingDir,
-                finalWriterFactory.forOutputSequence());
+                finalWriterFactory.forOutputSequence(), ownedInputs, outputAuthority);
         pending.tmpFiles.addAll(tmpFiles);
         pending.writers.addAll(writers);
         if (pending.tmpFiles.isEmpty()) {
@@ -127,13 +137,20 @@ final class DatasetPublisher {
         for (SortedFileWriter writer : pending.writers) {
             finalPartRows = Math.addExact(finalPartRows, writer.rows());
         }
-        requireExactCardinality(sourceRows, drainedRows, finalPartRows);
+        requireExactCardinality(sourceRows, drainedRows, finalPartRows, metrics);
     }
 
     static void requireExactCardinality(long sourceRows, long drainedRows, long finalPartRows)
             throws IOException {
+        requireExactCardinality(sourceRows, drainedRows, finalPartRows, SortMetrics.NO_OP);
+    }
+
+    static void requireExactCardinality(long sourceRows, long drainedRows, long finalPartRows,
+            SortMetrics metrics) throws IOException {
         if (sourceRows != drainedRows || sourceRows != finalPartRows) {
-            throw new IOException("sort output cardinality mismatch before publication: source_rows="
+            metrics.recordStealReason("SORT", "sort_output_cardinality_mismatch");
+            throw new SortCardinalityException(
+                    "sort output cardinality mismatch before publication: source_rows="
                     + sourceRows + " drained_rows=" + drainedRows
                     + " final_part_rows=" + finalPartRows);
         }
@@ -143,9 +160,11 @@ final class DatasetPublisher {
     void publish(PendingParts pending, long totalRows, PublishListener publishListener,
             StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
             List<Path> disposableIntermediates) throws IOException {
-        cleanStaleFinals(pending.outputDir);
+        cleanStaleFinals(pending.outputDir, pending.outputAuthority);
         publicationStep(PublicationStep.AFTER_STALE_FINAL_SWEEP);
         for (int i = 0; i < pending.tmpFiles.size(); i++) {
+            pending.outputAuthority.requireSame(pending.outputDir);
+            ownedInputs.requireOwnedStagingAuthority(pending.stagingDir);
             atomicRename(pending.tmpFiles.get(i), pending.finalFiles.get(i));
             publicationStep(PublicationStep.AFTER_PART_RENAME, i);
         }
@@ -161,6 +180,7 @@ final class DatasetPublisher {
             for (int i = 0; i < disposableIntermediates.size(); i++) {
                 Path intermediate = disposableIntermediates.get(i);
                 publicationStep(PublicationStep.BEFORE_DISPOSABLE_INTERMEDIATE_CLEANUP, i);
+                ownedInputs.requireOwnedStagingAuthority(pending.stagingDir);
                 Files.deleteIfExists(intermediate);
             }
             cleanupStage = CommittedPublicationCleanupException.Stage.ORIGINAL_STAGING_COMPLETION;
@@ -187,19 +207,19 @@ final class DatasetPublisher {
             return;
         }
         ownedInputs.deleteOwnedOriginals();
-        tryDeleteEmptyStagingDir(stagingDir);
+        tryDeleteEmptyStagingDir(stagingDir, ownedInputs);
     }
 
-    private void tryDeleteEmptyStagingDir(Path stagingDir) throws IOException {
-        if (!Files.isDirectory(stagingDir)) {
-            return;
-        }
+    private void tryDeleteEmptyStagingDir(Path stagingDir, StagingReconciliation ownedInputs)
+            throws IOException {
+        ownedInputs.requireOwnedStagingAuthority(stagingDir);
         try (DirectoryStream<Path> remaining = Files.newDirectoryStream(stagingDir)) {
             if (remaining.iterator().hasNext()) {
                 log.info("sort staging dir left in place: unexpected content remains in {}", stagingDir);
                 return;
             }
         }
+        ownedInputs.requireOwnedStagingAuthority(stagingDir);
         Files.delete(stagingDir);
     }
 
@@ -211,7 +231,9 @@ final class DatasetPublisher {
      * for library callers whose output directory may contain unrelated Parquet. The latter still
      * covers every abandoned final this publisher can create.
      */
-    void cleanStaleFinals(Path outputDir) throws IOException {
+    void cleanStaleFinals(Path outputDir,
+            StagingReconciliation.DirectoryAuthority outputAuthority) throws IOException {
+        outputAuthority.requireSame(outputDir);
         String glob = switch (run.staleFinalSweep()) {
             case ALL_PARQUET -> StagingNames.ALL_PARQUET_GLOB;
             case OWN_PARTS_ONLY -> StagingNames.OWN_FINAL_GLOB;
@@ -254,18 +276,25 @@ final class DatasetPublisher {
         private final Path outputDir;
         private final Path stagingDir;
         private final SortedFileWriterFactory outputSequence;
+        private final StagingReconciliation ownedInputs;
+        private final StagingReconciliation.DirectoryAuthority outputAuthority;
         private final List<Path> finalFiles = new ArrayList<>();
         private final List<Path> tmpFiles = new ArrayList<>();
         private final List<SortedFileWriter> writers = new ArrayList<>();
 
         private PendingParts(Path outputDir, Path stagingDir,
-                SortedFileWriterFactory outputSequence) {
+                SortedFileWriterFactory outputSequence, StagingReconciliation ownedInputs,
+                StagingReconciliation.DirectoryAuthority outputAuthority) {
             this.outputDir = outputDir;
             this.stagingDir = stagingDir;
             this.outputSequence = outputSequence;
+            this.ownedInputs = ownedInputs;
+            this.outputAuthority = outputAuthority;
         }
 
         SortedFileWriter openNext() throws IOException {
+            ownedInputs.requireOwnedStagingAuthority(stagingDir);
+            outputAuthority.requireSame(outputDir);
             int ordinal = finalFiles.size();
             Path finalPath = outputDir.resolve(StagingNames.finalPart(ordinal));
             Path tmpPath = stagingDir.resolve(StagingNames.finalTmp(ordinal));

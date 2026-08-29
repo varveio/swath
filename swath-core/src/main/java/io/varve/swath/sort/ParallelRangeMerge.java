@@ -168,12 +168,22 @@ final class ParallelRangeMerge {
     List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
-        return run(catalog, stagingDir, stagingDir, boundaries, progressCallback);
+        StagingReconciliation authority = StagingReconciliation.fromPaths(
+                stagingDir, catalog.paths());
+        return run(catalog, stagingDir, stagingDir, boundaries, progressCallback, authority);
     }
 
     List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir, Path outputDir,
                           List<byte[]> boundaries,
                           LongConsumer progressCallback) throws IOException {
+        StagingReconciliation authority = StagingReconciliation.fromPaths(
+                stagingDir, catalog.paths());
+        return run(catalog, stagingDir, outputDir, boundaries, progressCallback, authority);
+    }
+
+    List<ParallelRangeWorker.Result> run(PageRunCatalog catalog, Path stagingDir, Path outputDir,
+                          List<byte[]> boundaries, LongConsumer progressCallback,
+                          StagingReconciliation stagingAuthority) throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
         List<Path> stagingSegments = catalog.paths();
         Map<Path, PageRunSegmentDescriptor> descriptorsByPath = catalog.byPath();
@@ -184,11 +194,13 @@ final class ParallelRangeMerge {
         // proof below chains them from the fixed header to the trailer.
         PageRunSeekPlan seekPlan = PageRunSeekPlan.plan(segmentDescriptors, boundaries, metrics);
         Path proofSpoolPath = stagingDir.resolve(StagingNames.rangeProofTmp());
-        PageRunProofSpool.Stats proofSpoolStats = new PageRunProofSpool.Stats(metrics);
+        PageRunProofSpool.Stats proofSpoolStats =
+                new PageRunProofSpool.Stats(metrics, stagingAuthority);
         int proofSlots = Math.multiplyExact(ranges, seekPlan.segments().size());
         // Close the time-of-check/time-of-allocation window as far as practical. This second sample
         // happens after boundary/seek planning but before Writer can create or zero-fill the spool.
         planner.recheckDiskBeforeProof(ranges, catalog, stagingDir, outputDir);
+        stagingAuthority.requireOwnedStagingAuthority(stagingDir);
         PageRunProofSpool.Writer proofSpool =
                 new PageRunProofSpool.Writer(proofSpoolPath, proofSlots, proofSpoolStats);
         Object progressLock = new Object();
@@ -226,8 +238,10 @@ final class ParallelRangeMerge {
                         perRangeFanIn, safeProgress, safeHook,
                         (ownedStaging, ownedRange, tmpParts, rangeWriterFactory) ->
                                 openRangePart(ownedStaging, ownedRange, tmpParts,
-                                        rangeWriterFactory, openPartCount, openPartLimit),
-                        descriptorsByPath, seekPlan, proofSpool, proofSpoolPath);
+                                        rangeWriterFactory, openPartCount, openPartLimit,
+                                        stagingAuthority),
+                        descriptorsByPath, seekPlan, proofSpool, proofSpoolPath,
+                        stagingAuthority);
                 futures.add(completions.submit(() -> new IndexedRangeResult(range, task.call())));
             }
             List<ParallelRangeWorker.Result> results =
@@ -260,13 +274,13 @@ final class ParallelRangeMerge {
                     proofSpoolSnapshot.serviceNanos() / 1_000_000L);
             return results;
         } catch (InterruptedException e) {
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
-                    proofSpoolPath, proofSpoolStats);
+            abortAndCleanUp(pool, futures, proofSpool,
+                    proofSpoolPath, proofSpoolStats, stagingAuthority);
             Thread.currentThread().interrupt();
             throw new IOException("parallel range merge interrupted", e);
         } catch (ExecutionException e) {
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
-                    proofSpoolPath, proofSpoolStats);
+            abortAndCleanUp(pool, futures, proofSpool,
+                    proofSpoolPath, proofSpoolStats, stagingAuthority);
             Throwable cause = e.getCause();
             if (cause instanceof IOException io) {
                 throw io;
@@ -283,15 +297,15 @@ final class ParallelRangeMerge {
         } catch (IOException e) {
             // Coordinator-side zone proof failures happen after every worker returned its writers.
             // They are still pre-publication failures: close all writers and sweep owned debris.
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
-                    proofSpoolPath, proofSpoolStats);
+            abortAndCleanUp(pool, futures, proofSpool,
+                    proofSpoolPath, proofSpoolStats, stagingAuthority);
             throw e;
         } catch (RuntimeException e) {
             // Anything the two checked paths above do not name -- a RejectedExecutionException from
             // submit() being the realistic one, since it fires mid-loop with some ranges already
             // running. Without this the open parts and their files would survive the failure.
-            abortAndCleanUp(pool, futures, stagingDir, proofSpool,
-                    proofSpoolPath, proofSpoolStats);
+            abortAndCleanUp(pool, futures, proofSpool,
+                    proofSpoolPath, proofSpoolStats, stagingAuthority);
             throw e;
         } finally {
             pool.shutdownNow();
@@ -306,12 +320,13 @@ final class ParallelRangeMerge {
 
     private SortedFileWriter openRangePart(Path stagingDir, int range, List<Path> tmpParts,
             SortedFileWriterFactory rangeWriterFactory, AtomicInteger openPartCount,
-            int openPartLimit) throws IOException {
+            int openPartLimit, StagingReconciliation stagingAuthority) throws IOException {
         // Range-local ordinal: it names the tmp file, and is only a PLACEHOLDER index. The real
         // file_index is assigned by DatasetPublisher once every range has drained and the global roll
         // sequence is known; the footer is not written until then (see setFileIndex).
         int localIndex = tmpParts.size() + 1;
         Path tmp = stagingDir.resolve(StagingNames.rangeTmp(range, localIndex));
+        stagingAuthority.requireOwnedStagingAuthority(stagingDir);
         int open = openPartCount.incrementAndGet();
         if (open > openPartLimit) {
             openPartCount.decrementAndGet();
@@ -362,9 +377,10 @@ final class ParallelRangeMerge {
     }
 
     /** Cancel, prove worker quiescence, release writers, then sweep owned files. */
-    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures, Path stagingDir,
+    private void abortAndCleanUp(ExecutorService pool, List<Future<?>> futures,
                                  PageRunProofSpool.Writer proofSpool, Path proofSpoolPath,
-                                 PageRunProofSpool.Stats proofSpoolStats) {
+                                 PageRunProofSpool.Stats proofSpoolStats,
+                                 StagingReconciliation stagingAuthority) {
         futures.forEach(future -> future.cancel(true));
         boolean interruptedWhileJoining = shutdownAndAwait(pool, true);
         try {
@@ -381,7 +397,7 @@ final class ParallelRangeMerge {
                 // gets one best-effort chance at any proof spool that deletion could not remove.
             }
         }
-        sweepOwnFiles(stagingDir);
+        sweepOwnFiles(stagingAuthority);
         if (interruptedWhileJoining) {
             Thread.currentThread().interrupt();
         }
@@ -408,18 +424,18 @@ final class ParallelRangeMerge {
     }
 
     /** Best-effort sweep of THIS run's own tmp parts and cascade intermediates on the failure path. */
-    private static void sweepOwnFiles(Path stagingDir) {
-        sweep(stagingDir, StagingNames.RANGE_TMP_GLOB);
-        sweep(stagingDir, StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB);
-        sweep(stagingDir, StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB);
-        sweep(stagingDir, StagingNames.RANGE_PROOF_TMP_GLOB);
+    private static void sweepOwnFiles(StagingReconciliation stagingAuthority) {
+        sweep(stagingAuthority, StagingNames.RANGE_TMP_GLOB);
+        sweep(stagingAuthority, StagingNames.RANGE_LEGACY_CASCADE_PARQUET_GLOB);
+        sweep(stagingAuthority, StagingNames.RANGE_CASCADE_PAGE_RUN_GLOB);
+        sweep(stagingAuthority, StagingNames.RANGE_PROOF_TMP_GLOB);
     }
 
-    private static void sweep(Path stagingDir, String glob) {
+    private static void sweep(StagingReconciliation stagingAuthority, String glob) {
         try {
-            Sweeps.sweep(stagingDir, stale -> { }, glob);
+            stagingAuthority.sweepDisposables(glob);
         } catch (IOException e) {
-            log.debug("failed to sweep {} in {} after a parallel merge failure", glob, stagingDir, e);
+            log.debug("failed to sweep {} after a parallel merge failure", glob, e);
         }
     }
 }

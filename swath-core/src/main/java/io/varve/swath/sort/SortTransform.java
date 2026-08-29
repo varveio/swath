@@ -8,11 +8,11 @@ package io.varve.swath.sort;
 import io.varve.swath.model.ListEntry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -132,9 +132,18 @@ public final class SortTransform {
                                          PublishListener publishListener, LongConsumer progressCallback,
                                          FinalPassListener onFinalPassStarting)
             throws IOException {
+        return transform(stagingSegments, Map.of(), outputDir, stagingDir, publishListener,
+                progressCallback, onFinalPassStarting);
+    }
+
+    /** Merge with checkpoint-declared PageRun formats keyed by staging path. */
+    public SortTransformResult transform(List<Path> stagingSegments,
+            Map<Path, PageRunFormat> expectedFormats, Path outputDir, Path stagingDir,
+            PublishListener publishListener, LongConsumer progressCallback,
+            FinalPassListener onFinalPassStarting) throws IOException {
         try {
-            return transformInterruptibly(stagingSegments, outputDir, stagingDir, publishListener,
-                    progressCallback, onFinalPassStarting);
+            return transformInterruptibly(stagingSegments, expectedFormats, outputDir, stagingDir,
+                    publishListener, progressCallback, onFinalPassStarting);
         } catch (MergeCancellation.Cancelled cancelled) {
             // Internal cancellation must not leak through this public IOException API. All merge
             // resources unwind before this boundary; retain the caller's ordinary interrupt state.
@@ -147,12 +156,16 @@ public final class SortTransform {
         }
     }
 
-    private SortTransformResult transformInterruptibly(List<Path> stagingSegments, Path outputDir,
-            Path stagingDir, PublishListener publishListener, LongConsumer progressCallback,
+    private SortTransformResult transformInterruptibly(List<Path> stagingSegments,
+            Map<Path, PageRunFormat> expectedFormats, Path outputDir, Path stagingDir,
+            PublishListener publishListener, LongConsumer progressCallback,
             FinalPassListener onFinalPassStarting) throws IOException {
         PageRunCatalog.requirePageRunNames(stagingSegments);
         StagingReconciliation ownedInputs =
                 StagingReconciliation.fromPaths(stagingDir, stagingSegments);
+        StagingReconciliation.DirectoryAuthority outputAuthority =
+                StagingReconciliation.DirectoryAuthority.capture(
+                        outputDir, "sort output directory");
         stagingSegments = ownedInputs.ownedPaths();
         StagingReconciliation retainedOriginals =
                 datasetPublisher.retainedOriginals(ownedInputs);
@@ -167,11 +180,11 @@ public final class SortTransform {
         // range planning consume these descriptors; parallel candidates also stream their embedded
         // sample keys into one globally bounded set during this same open. An unreadable segment is
         // not an optional memory refinement and must fail at kickoff while the prior output and
-        // working evidence are intact. Serial/arbitrary merges do not engage boundary sampling,
-        // though current type-3 resource metadata is still validated for decoded-page planning.
+        // working evidence are intact. Serial/arbitrary merges read only the fixed extension header;
+        // they do not engage sparse boundary parsing and rely on runtime decoded-page admission.
         long boundaryPreflightStarted = parallelKickoff ? boundaryNanoClock.getAsLong() : 0;
         PageRunCatalog catalog = PageRunCatalog.preflight(
-                stagingSegments, catalogOpener, boundaryKeySink);
+                stagingSegments, catalogOpener, boundaryKeySink, expectedFormats);
         long boundaryPreflightNanos = parallelKickoff
                 ? elapsed(boundaryPreflightStarted, boundaryNanoClock.getAsLong()) : 0;
         // Disposable working files are cleared before work; prior finals remain until their complete
@@ -180,7 +193,8 @@ public final class SortTransform {
         // from a prior crashed attempt can consume the very headroom its safe deletion would recover,
         // permanently refusing resume. Ownership/catalog validation above has already succeeded;
         // originals and prior finals are not part of this narrowly-owned disposable sweep.
-        datasetPublisher.sweepWorking(outputDir, stagingDir);
+        datasetPublisher.sweepWorking(
+                outputDir, stagingDir, ownedInputs, outputAuthority);
         MergePlanner.EffectiveRanges resourcePlan = parallelKickoff
                 ? mergePlanner.effectiveRanges(config.mergeParallelism(), catalog)
                 : new MergePlanner.EffectiveRanges(1, MergePlanner.ClampReason.NONE);
@@ -204,7 +218,8 @@ public final class SortTransform {
         if (parallelKickoff) {
             SortTransformResult parallel = tryTransformParallel(catalog, outputDir, stagingDir,
                     publishListener, progressCallback, onFinalPassStarting, boundaryCandidates,
-                    ownedInputs, retainedOriginals, boundaryPreflightNanos, rangePlan);
+                    ownedInputs, retainedOriginals, outputAuthority,
+                    boundaryPreflightNanos, rangePlan);
             if (parallel != null) {
                 return parallel;
             }
@@ -212,9 +227,10 @@ public final class SortTransform {
             metrics.recordStealReason("SORT", "merge_range_frontier_disabled");
         }
 
-        DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(outputDir, stagingDir);
+        DatasetPublisher.PendingParts pending = datasetPublisher.serialParts(
+                outputDir, stagingDir, ownedInputs, outputAuthority);
         PageRunSegmentWriter segmentWriter = new PageRunSegmentWriter(comparator, hook, metrics, config.segmentCodec());
-        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir,
+        PageRunMergeIo io = new PageRunMergeIo(run, segmentWriter, stagingDir, ownedInputs,
                 "merge-", null, catalog.byPath(), frontier -> { }, -1, null, null);
         // Fan-in: see the class javadoc for the runtime-clamp policy. serialFanIn() computes it and,
         // as a side effect, fires the cascade-predicted warning + clamp metrics once at kickoff.
@@ -268,6 +284,7 @@ public final class SortTransform {
             FinalPassListener onFinalPassStarting,
             MergePlanner.BoundaryCandidates boundaryCandidates,
             StagingReconciliation ownedInputs, StagingReconciliation retainedOriginals,
+            StagingReconciliation.DirectoryAuthority outputAuthority,
             long boundaryPreflightNanos, MergePlanner.EffectiveRanges rangePlan)
             throws IOException {
         List<PageRunSegmentDescriptor> segmentDescriptors = catalog.descriptors();
@@ -316,8 +333,9 @@ public final class SortTransform {
         onFinalPassStarting.onFinalPassStarting(
                 segmentDescriptors.size()
                         <= mergePlanner.perRangeFanIn(boundaries.size() + 1, catalog));
-        List<ParallelRangeWorker.Result> results =
-                rangeMerge.run(catalog, stagingDir, outputDir, boundaries, progressCallback);
+            List<ParallelRangeWorker.Result> results =
+                rangeMerge.run(catalog, stagingDir, outputDir, boundaries, progressCallback,
+                        ownedInputs);
         Path verifiedProofSpool = stagingDir.resolve(StagingNames.rangeProofTmp());
         try {
             List<Path> tmpsInOrder = new ArrayList<>();
@@ -339,7 +357,8 @@ public final class SortTransform {
             }
 
             DatasetPublisher.PendingParts pending = datasetPublisher.parallelParts(
-                    outputDir, stagingDir, tmpsInOrder, partsInOrder);
+                    outputDir, stagingDir, tmpsInOrder, partsInOrder,
+                    ownedInputs, outputAuthority);
             datasetPublisher.verifyCardinality(pending, catalog.totalEntries(), totalRows);
             SortTransformResult result = new SortTransformResult(
                     pending.finalFiles(), pending.outputBytes(), totalRows,
@@ -356,7 +375,7 @@ public final class SortTransform {
             throw e;
         } catch (IOException | RuntimeException e) {
             try {
-                Files.deleteIfExists(verifiedProofSpool);
+                ownedInputs.deleteDisposable(verifiedProofSpool);
             } catch (IOException cleanupFailure) {
                 e.addSuppressed(cleanupFailure);
             }

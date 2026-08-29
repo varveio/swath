@@ -144,8 +144,9 @@ public class PageBlockAllocationCharacterizationTest {
     private static byte[] largeNoneBody() {
         List<ListEntry> rows = new ArrayList<>();
         for (int i = 0; i < 256; i++) {
+            String storageClass = "storage-" + (i % PageBlock.DICT_CAP) + "-" + "x".repeat(4_096);
             rows.add(new ObjectEntry(KeyBytes.ofUtf8(String.format("key-%05d-long-suffix", i)),
-                    i, i, null, "STANDARD", null, false,
+                    i, i, null, storageClass, null, false,
                     null, null, null, null));
         }
         return PageBlock.pack(rows, CMP, PageCodec.NONE).serialize();

@@ -57,6 +57,7 @@ import io.varve.swath.output.text.TextWriterPoolConfig;
 import io.varve.swath.pipeline.Pipeline;
 import io.varve.swath.sort.CommittedPublicationCleanupException;
 import io.varve.swath.sort.DuplicateHook;
+import io.varve.swath.sort.DuplicateKeyException;
 import io.varve.swath.sort.EqualKeyPolicy;
 import io.varve.swath.sort.FinalPart;
 import io.varve.swath.sort.FinalPartMetadata;
@@ -72,11 +73,13 @@ import io.varve.swath.sort.RangeMergeTimer;
 import io.varve.swath.sort.SegmentCorruptionException;
 import io.varve.swath.sort.SegmentSink;
 import io.varve.swath.sort.SortArm;
+import io.varve.swath.sort.SortCardinalityException;
 import io.varve.swath.sort.SortConfig;
 import io.varve.swath.sort.SortLane;
 import io.varve.swath.sort.SortLaneMeters;
 import io.varve.swath.sort.SortMetrics;
 import io.varve.swath.sort.SortMode;
+import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.sort.SortPagePacker;
 import io.varve.swath.sort.SortRun;
 import io.varve.swath.sort.SortTransform;
@@ -102,8 +105,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1018,6 +1023,18 @@ public final class ListRunner {
         ctx.metrics().recordSortStaged(stagedParts.size(),
                 stagedParts.stream().mapToLong(PartRef::rows).sum());
         List<Path> segments = stagedParts.stream().map(p -> stagingDir.resolve(p.path())).toList();
+        Map<Path, PageRunFormat> expectedPageRunFormats = new LinkedHashMap<>();
+        for (PartRef part : stagedParts) {
+            if (part.formatVersion() == null && part.extensionType() == null) {
+                continue; // pre-metadata checkpoint row: physical format remains authoritative
+            }
+            if (part.formatVersion() == null || part.extensionType() == null) {
+                throw new OutputException("checkpoint has incomplete page-run format metadata for "
+                        + part.path());
+            }
+            expectedPageRunFormats.put(stagingDir.resolve(part.path()),
+                    new PageRunFormat(part.formatVersion(), part.extensionType()));
+        }
         Comparator<ListEntry> comparator = new ListEntryComparator();
         SortMetrics sortMetrics = new RunSortMetrics(ctx.metrics());
         // Wrap the final-file writer factory so each row streamed into the merged output marks
@@ -1050,7 +1067,7 @@ public final class ListRunner {
             }
         };
         SortTransform transform = new SortTransform(
-                new SortRun(config, comparator, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
+                new SortRun(config, comparator, DuplicateHook.NO_OP, equalKeyPolicy(mode),
                         sortMetrics, writerFactory, MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES,
                         rangeTimer, SortRun.PROCESS_SOFT_FD_LIMIT,
                         staleFinalSweep, ignoreDiskCheck
@@ -1070,7 +1087,8 @@ public final class ListRunner {
         // exception path.
         try (RunProgressReporter progress = startProgress(ctx, progressInterval)) {
             Files.createDirectories(dataDir);
-            SortTransformResult result = transform.transform(segments, dataDir, stagingDir,
+            SortTransformResult result = transform.transform(
+                    segments, expectedPageRunFormats, dataDir, stagingDir,
                     (finalParts, totalRows) -> writeSortedManifest(outputDir, bucket, argsHash, runId,
                             finalParts, ctx.metrics(), finalizeClock),
                     ctx.metrics()::recordProgress,
@@ -1114,6 +1132,15 @@ public final class ListRunner {
             ctx.metrics().recordFatalErrorClass(e.errorClass());
             throw new MergePendingException("sort merge deferred because decoded pages do not fit "
                     + "the merge budget; raise swath.sort.merge-budget-bytes and resume", e);
+        } catch (SortOrderException e) {
+            // Re-running the same durable staging deterministically repeats this invariant failure;
+            // classify it and keep the ordinary fatal OutputException disposition rather than
+            // advertising a merge-only retry that cannot heal the inputs or implementation.
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new OutputException("sort merge emitted rows out of order", e);
+        } catch (DuplicateKeyException e) {
+            ctx.metrics().recordFatalErrorClass(e.errorClass());
+            throw new OutputException("current-object sort emitted a duplicate raw key", e);
         } catch (IOException | UncheckedIOException e) {
             // A CLASSIFIED merge failure (a staged page-run invariant or proof-spool allocation)
             // must
@@ -1156,8 +1183,22 @@ public final class ListRunner {
             if (c instanceof MergeMemoryExhaustedException exhausted) {
                 return exhausted.errorClass();
             }
+            if (c instanceof SortOrderException order) {
+                return order.errorClass();
+            }
+            if (c instanceof SortCardinalityException cardinality) {
+                return cardinality.errorClass();
+            }
+            if (c instanceof DuplicateKeyException duplicate) {
+                return duplicate.errorClass();
+            }
         }
         return null;
+    }
+
+    /** Current-object listings are key-unique; future all-versions listings are not. */
+    static EqualKeyPolicy equalKeyPolicy(SortMode mode) {
+        return mode == SortMode.OBJECTS ? EqualKeyPolicy.REJECT : EqualKeyPolicy.ALLOW;
     }
 
     private static SortTransformResult committedSortResult(PublicationPendingException pending) {

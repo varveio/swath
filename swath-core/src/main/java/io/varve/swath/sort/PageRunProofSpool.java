@@ -71,6 +71,7 @@ final class PageRunProofSpool {
     /** One merge-local aggregate shared by the writer, verifier reader, and delete step. */
     static final class Stats {
         private final SortMetrics metrics;
+        private final StagingReconciliation deletionAuthority;
         private final LongAdder logicalExtentBytes = new LongAdder();
         private final LongAdder preallocationOperations = new LongAdder();
         private final LongAdder preallocationAttemptedBytes = new LongAdder();
@@ -86,7 +87,12 @@ final class PageRunProofSpool {
         private long publishedServiceNanos;
 
         Stats(SortMetrics metrics) {
+            this(metrics, null);
+        }
+
+        Stats(SortMetrics metrics, StagingReconciliation deletionAuthority) {
             this.metrics = metrics;
+            this.deletionAuthority = deletionAuthority;
         }
 
         void recordLogicalExtent(long bytes) {
@@ -148,6 +154,14 @@ final class PageRunProofSpool {
             return new Snapshot(logicalExtentBytes.sum(), preallocationOperations.sum(),
                     preallocationAttemptedBytes.sum(), mappedOperations.sum(), mappedBytes.sum(),
                     serviceNanos.sum());
+        }
+
+        void deleteIfExists(Path path) throws IOException {
+            if (deletionAuthority == null) {
+                Files.deleteIfExists(path);
+            } else {
+                deletionAuthority.deleteDisposable(path);
+            }
         }
     }
 
@@ -531,7 +545,7 @@ final class PageRunProofSpool {
     static void delete(Path path, Stats stats) throws IOException {
         long started = System.nanoTime();
         try {
-            Files.deleteIfExists(path);
+            stats.deleteIfExists(path);
         } finally {
             stats.recordService(System.nanoTime() - started);
             stats.publish();
@@ -620,7 +634,7 @@ final class PageRunProofSpool {
             }
         }
         try {
-            Files.deleteIfExists(path);
+            stats.deleteIfExists(path);
         } catch (IOException deleteFailure) {
             primary.addSuppressed(deleteFailure);
         } finally {

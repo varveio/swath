@@ -41,8 +41,8 @@ import java.util.List;
  *       rows with the same raw key throw {@link DuplicateKeyException} naming the offending key.
  *       This catches both comparator-equal rows and same-key rows of different types, including a
  *       pair split across staging chunks or lying at a final-file roll threshold. The fixture sets
- *       {@link EqualKeyPolicy#REJECT}; live swath {@code --sort} sets {@link EqualKeyPolicy#ALLOW}
- *       and preserves every row.</li>
+ *       {@link EqualKeyPolicy#REJECT}; live current-object {@code --sort} now applies the same
+ *       raw-key uniqueness check, while the dormant versions mode permits equal-key groups.</li>
  * </ul>
  *
  * <p><b>Crash-safe and idempotent by re-run (like {@code --sort}'s own publish).</b> Each final file

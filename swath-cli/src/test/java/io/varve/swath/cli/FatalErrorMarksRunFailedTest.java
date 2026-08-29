@@ -28,6 +28,7 @@ import io.varve.swath.error.InvalidArgsException;
 import io.varve.swath.error.InvalidConfigException;
 import io.varve.swath.error.ListingException;
 import io.varve.swath.error.MergePendingException;
+import io.varve.swath.error.OutputException;
 import io.varve.swath.error.ProtocolViolationException;
 import io.varve.swath.error.PublicationPendingException;
 import io.varve.swath.filter.FilterChain;
@@ -37,6 +38,7 @@ import io.varve.swath.output.OutputFormat;
 import io.varve.swath.runtime.ArgsHashFields;
 import io.varve.swath.runtime.ListRunner;
 import io.varve.swath.runtime.RunContext;
+import io.varve.swath.sort.SortOrderException;
 import io.varve.swath.testkit.ForwardingCheckpointStore;
 import io.varve.swath.testkit.Keyspaces;
 import io.varve.swath.testkit.MockPageFetcher;
@@ -217,6 +219,25 @@ final class FatalErrorMarksRunFailedTest {
             assertThat(store.loadResumable(run.id(), false))
                     .as("all listing nodes remain complete, so retry can take merge-only")
                     .isEmpty();
+        }
+    }
+
+    /** A deterministic sorted-output invariant failure must poison retry, but remain classified. */
+    @Test
+    void sortedOutputOrderRegressionMarksTheRunFatal(@TempDir Path dir) throws Exception {
+        Path db = dir.resolve("c.sqlite");
+        try (SqliteCheckpointStore store = SqliteCheckpointStore.open(db)) {
+            RunMeta run = store.openRun(textKey(), false, false);
+            OutputException failure = new OutputException("sort merge emitted rows out of order",
+                    new SortOrderException("merged output order regressed"));
+
+            assertThatThrownBy(() -> ListCommand.runEngineGuarded(store, run.id(), () -> {
+                throw failure;
+            })).isSameAs(failure);
+
+            RunMeta reopened = store.openRun(textKey(), true, false);
+            assertThat(reopened.status()).isEqualTo(RunStatus.FAILED);
+            assertThat(reopened.fatalError()).isTrue();
         }
     }
 

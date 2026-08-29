@@ -54,7 +54,7 @@ final class PageBlock {
     private final int rawPayloadLength;
     private final PageCodec codec;
     private byte[] decodedPayloadCache;
-    private final String[][] dicts;
+    private final PageBlockCodec.Dictionaries dictionaries;
     private final boolean[] useDict;
     private final int count;
     private final byte[] firstKeyBytes;
@@ -77,7 +77,7 @@ final class PageBlock {
         this.payloadLength = storedPayload.length;
         this.rawPayloadLength = rawPayloadLength;
         this.codec = codec;
-        this.dicts = dicts;
+        this.dictionaries = PageBlockCodec.Dictionaries.packed(dicts);
         this.useDict = useDict;
         this.count = count;
         this.firstKeyBytes = firstKeyBytes;
@@ -98,7 +98,7 @@ final class PageBlock {
         this.payloadLength = header.payloadLength();
         this.rawPayloadLength = header.rawPayloadLength();
         this.codec = header.codec();
-        this.dicts = header.dicts();
+        this.dictionaries = header.dictionaries();
         this.useDict = header.useDict();
         this.count = header.count();
         this.firstKeyBytes = header.minKey();
@@ -325,8 +325,16 @@ final class PageBlock {
         return payloadOwner.length;
     }
 
-    String[][] dictsUnsafe() {
-        return dicts;
+    long dictionaryCacheBudgetBytes() {
+        return dictionaries.decodedCacheBudgetBytes();
+    }
+
+    int dictionaryCoordinateBytes() {
+        return dictionaries.coordinateBytes();
+    }
+
+    PageBlockCodec.Dictionaries dictionariesUnsafe() {
+        return dictionaries;
     }
 
     boolean[] useDictUnsafe() {

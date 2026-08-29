@@ -462,13 +462,18 @@ class PageRunSegmentTest {
     @Test
     void crcValidMalformedPageHeadersFailAsTypedCorruption(@TempDir Path dir) throws IOException {
         List<BodyMutation> mutations = List.of(
-                new BodyMutation("zero-count", body -> body.putInt(countOffset(body), 0)),
+                new BodyMutation("zero-count", body -> body.putInt(
+                        PageRunRawFixtures.pageHeaderLayout(body).countOffset(), 0)),
                 new BodyMutation("oversized-dictionary",
-                        body -> body.putShort(countOffset(body) + 5, (short) (PageBlock.DICT_CAP + 1))),
+                        body -> body.putShort(
+                                PageRunRawFixtures.pageHeaderLayout(body).countOffset() + 5,
+                                (short) (PageBlock.DICT_CAP + 1))),
                 new BodyMutation("unknown-codec",
-                        body -> body.put(payloadLayout(body).codecOffset(), (byte) 127)),
+                        body -> body.put(
+                                PageRunRawFixtures.pageHeaderLayout(body).codecOffset(), (byte) 127)),
                 new BodyMutation("negative-stored-length",
-                        body -> body.putInt(payloadLayout(body).storedLengthOffset(), -1)),
+                        body -> body.putInt(
+                                PageRunRawFixtures.pageHeaderLayout(body).storedLengthOffset(), -1)),
                 new BodyMutation("inverted-bounds", body -> {
                     int firstKeyByte = 2;
                     body.put(firstKeyByte, (byte) 'z');
@@ -506,15 +511,20 @@ class PageRunSegmentTest {
             throws IOException {
         List<BodyMutation> mutations = List.of(
                 new BodyMutation("declared-count-too-large",
-                        body -> body.putInt(countOffset(body), 3)),
+                        body -> body.putInt(
+                                PageRunRawFixtures.pageHeaderLayout(body).countOffset(), 3)),
                 new BodyMutation("decoded-first-key-mismatch", body -> {
-                    PayloadLayout layout = payloadLayout(body);
+                    PageRunRawFixtures.PageHeaderLayout layout =
+                            PageRunRawFixtures.pageHeaderLayout(body);
                     // NONE payload begins [object-tag][shared=0][suffixLen=7][first key bytes].
                     body.put(layout.payloadOffset() + 3, (byte) 'x');
                 }),
                 new BodyMutation("unexpected-trailing-payload",
-                        body -> body.putInt(payloadLayout(body).storedLengthOffset(),
-                                body.getInt(payloadLayout(body).storedLengthOffset()) - 1)));
+                        body -> {
+                            int offset = PageRunRawFixtures.pageHeaderLayout(body)
+                                    .storedLengthOffset();
+                            body.putInt(offset, body.getInt(offset) - 1);
+                        }));
 
         for (BodyMutation mutation : mutations) {
             Path path = dir.resolve(mutation.name() + ".pageseg");
@@ -531,17 +541,8 @@ class PageRunSegmentTest {
     @Test
     void crcValidInteriorRowRegressionFailsDuringEmissionAndCloseTimeDrain(@TempDir Path dir)
             throws IOException {
-        Path path = dir.resolve("interior-regression.pageseg");
-        SortBuffer buffer = new SortBuffer(config.withSegmentCodec(PageCodec.NONE), CMP);
-        buffer.admit(1L, List.of(prefix("a"), prefix("m"), prefix("z")));
-        writer().flush(buffer.seal(SealTrigger.DRAIN), path);
-        mutateFirstBodyAndRepairCrc(path, body -> {
-            PayloadLayout layout = payloadLayout(body);
-            // Three one-byte CommonPrefix rows encode as [tag][shared=0][suffix=1][key].
-            body.put(layout.payloadOffset() + 7, (byte) 'z');
-            body.put(layout.payloadOffset() + 11, (byte) 'm');
-        });
-        PageRunRawFixtures.understatePageMaxAndRepairIndex(path, 0, bytes("m"));
+        Path path = PageRunRawFixtures.writeIndexedInteriorRowRegression(
+                dir.resolve("interior-regression.pageseg"));
 
         assertThatThrownBy(() -> readBack(path))
                 .isInstanceOf(SegmentCorruptionException.class)
@@ -558,7 +559,7 @@ class PageRunSegmentTest {
     }
 
     @Test
-    void productionWriterRejectsAKeyThePersistedReaderWouldReject(@TempDir Path dir) {
+    void admissionRejectsAKeyThePersistedReaderWouldReject() {
         byte[] overlong = new byte[io.varve.swath.model.ByteMidpoint.MAX_KEY_LEN + 1];
         SortBuffer buffer = new SortBuffer(config, CMP);
 
@@ -566,11 +567,10 @@ class PageRunSegmentTest {
                 new CommonPrefixEntry(KeyBytes.of(overlong)))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exceeds the S3 key limit");
-        assertThat(dir).isEmptyDirectory();
     }
 
     @Test
-    void productionWriterRejectsADictionaryValueThatCannotFitItsPersistedLength(@TempDir Path dir) {
+    void admissionRejectsADictionaryValueThatCannotFitItsPersistedLength() {
         ObjectEntry overlongStorageClass = new ObjectEntry(KeyBytes.ofUtf8("a"), 1L, 0L, null,
                 "x".repeat(0x1_0000), null, false, null, null, null, null);
         SortBuffer buffer = new SortBuffer(config, CMP);
@@ -578,7 +578,6 @@ class PageRunSegmentTest {
         assertThatThrownBy(() -> buffer.admit(1L, List.of(overlongStorageClass)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("dictionary value exceeds the persisted u16 length limit");
-        assertThat(dir).isEmptyDirectory();
     }
 
     @Test
@@ -704,37 +703,7 @@ class PageRunSegmentTest {
         Files.write(path, file);
     }
 
-    private static int countOffset(ByteBuffer body) {
-        ByteBuffer cursor = body.duplicate();
-        cursor.position(2 + (cursor.getShort(0) & 0xFFFF));
-        int maxLength = cursor.getShort() & 0xFFFF;
-        cursor.position(cursor.position() + maxLength);
-        return cursor.position();
-    }
-
-    private static PayloadLayout payloadLayout(ByteBuffer body) {
-        ByteBuffer cursor = body.duplicate();
-        cursor.position(countOffset(cursor) + 5);
-        for (int i = 0; i < 5; i++) {
-            int values = cursor.getShort() & 0xFFFF;
-            for (int j = 0; j < values; j++) {
-                int length = cursor.getShort() & 0xFFFF;
-                cursor.position(cursor.position() + length);
-            }
-        }
-        cursor.get();   // useDict
-        int codecOffset = cursor.position();
-        cursor.get();
-        cursor.getInt();   // raw payload length
-        int storedLengthOffset = cursor.position();
-        cursor.getInt();
-        return new PayloadLayout(codecOffset, storedLengthOffset, cursor.position());
-    }
-
     private record BodyMutation(String name, Consumer<ByteBuffer> mutator) {
-    }
-
-    private record PayloadLayout(int codecOffset, int storedLengthOffset, int payloadOffset) {
     }
 
     private static ObjectEntry version(String key, String versionId) {

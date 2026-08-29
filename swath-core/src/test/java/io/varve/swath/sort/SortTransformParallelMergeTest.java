@@ -17,7 +17,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import org.junit.jupiter.api.Test;
@@ -169,40 +168,10 @@ class SortTransformParallelMergeTest {
         Path priorFinal = Files.writeString(d.output.resolve(StagingNames.finalPart(0)), "prior");
         SortedFileWriterFactory undercountsClosedRows = (path, fileIndex) -> {
             SortedFileWriter delegate = SortedFileWriterFactory.DEFAULT.create(path, fileIndex);
-            return new SortedFileWriter() {
-                @Override
-                public void write(ListEntry entry) throws IOException {
-                    delegate.write(entry);
-                }
-
+            return new SortTestSupport.DelegatingSortedFileWriter(delegate) {
                 @Override
                 public long rows() {
-                    return Math.max(0L, delegate.rows() - 1L);
-                }
-
-                @Override
-                public long dataSize() {
-                    return delegate.dataSize();
-                }
-
-                @Override
-                public void markFinal() {
-                    delegate.markFinal();
-                }
-
-                @Override
-                public void setFileIndex(int index) {
-                    delegate.setFileIndex(index);
-                }
-
-                @Override
-                public Optional<FinalPartMetadata> finalMetadata() {
-                    return delegate.finalMetadata();
-                }
-
-                @Override
-                public void close() throws IOException {
-                    delegate.close();
+                    return Math.max(0L, delegate().rows() - 1L);
                 }
             };
         };

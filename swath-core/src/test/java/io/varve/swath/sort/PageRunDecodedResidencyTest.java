@@ -85,6 +85,53 @@ class PageRunDecodedResidencyTest {
     }
 
     @Test
+    void serialTransformDoesNotTrustOrCompareTheUnvalidatedType3Underclaim(@TempDir Path root)
+            throws IOException {
+        Path output = Files.createDirectories(root.resolve("data"));
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path segment = writeCompressed(staging.resolve("underclaim.pageseg"),
+                List.of(List.of(object("compressible-key-" + "x".repeat(900)))));
+        int exactMaximum = catalog(segment).maxRawPayloadLength();
+        underclaimDecodedMaximum(segment, exactMaximum - 1);
+        SortRun run = new SortRun(SortConfigs.base().withMergeParallelism(1), CMP,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
+                MergeDiskPolicy.bypassed());
+
+        SortTransformResult result = new SortTransform(run).transform(List.of(segment), output,
+                staging, PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP);
+
+        assertThat(result.totalRows()).isOne();
+    }
+
+    @Test
+    void serialTransformUsesActualHeaderResidencyBeforeDecompression(@TempDir Path root)
+            throws IOException {
+        Path output = Files.createDirectories(root.resolve("data"));
+        Path staging = Files.createDirectories(root.resolve("_staging"));
+        Path segment = writeCompressed(staging.resolve("bomb.pageseg"),
+                List.of(List.of(object("a" + "x".repeat(900)))));
+        forgeRawPayloadLength(segment, 128 * 1024 * 1024);
+        SortRun run = new SortRun(SortConfigs.base().withMergeParallelism(1)
+                .withMergeBudgetBytes(1L << 20), CMP,
+                DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW, SortMetrics.NO_OP,
+                SortedFileWriterFactory.DEFAULT,
+                MergeInputProfile.STRUCTURED_RANGE_OWNED_PAGES, RangeMergeTimer.NO_OP,
+                SortRun.PROCESS_SOFT_FD_LIMIT, StaleFinalSweep.OWN_PARTS_ONLY,
+                MergeDiskPolicy.bypassed());
+
+        assertThatThrownBy(() -> new SortTransform(run).transform(List.of(segment), output,
+                staging, PublishListener.NO_OP, ignored -> { }, FinalPassListener.NO_OP))
+                .isInstanceOf(MergeMemoryExhaustedException.class)
+                .hasMessageContaining("decoded-page retained residency exceeds");
+
+        assertThat(segment).exists();
+        assertThat(output).isEmptyDirectory();
+    }
+
+    @Test
     void legacyType2AndExtensionlessSegmentsRemainReadableWithoutBodyPreflight(@TempDir Path dir)
             throws IOException {
         Path type2 = writeCompressed(dir.resolve("type2.pageseg"),
@@ -114,8 +161,10 @@ class PageRunDecodedResidencyTest {
         Path second = writeCompressed(dir.resolve("second.pageseg"),
                 List.of(List.of(object("z" + "x".repeat(900)))));
         PageRunCatalog catalog = PageRunCatalog.preflight(List.of(first, second),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
-        long streamPrice = 2 * catalog.maxRecordLen() + catalog.maxRawPayloadLength();
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
+        long streamPrice = 2 * catalog.maxRecordLen() + catalog.maxRawPayloadLength()
+                + 2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES;
         SortConfig clampedConfig = SortConfigs.base().withFanIn(10)
                 .withMergePerStreamBytes(1).withMergeBudgetBytes(streamPrice * 2 + streamPrice / 2);
         MergePlanner clamped = new MergePlanner(clampedConfig, SortMetrics.NO_OP, () -> -1);
@@ -165,7 +214,8 @@ class PageRunDecodedResidencyTest {
                 List.of(object("a"), object("z" + "x".repeat(900))),
                 List.of(object("b"), object("y" + "x".repeat(900)))));
         PageRunCatalog catalog = catalog(segment);
-        long oneStreamPrice = 2 * catalog.maxRecordLen() + catalog.maxRawPayloadLength();
+        long oneStreamPrice = 2 * catalog.maxRecordLen() + catalog.maxRawPayloadLength()
+                + 2L * PageBlockCodec.PERSISTED_DICTIONARY_COORDINATE_BYTES;
         SortConfig config = SortConfigs.base().withMergeParallelism(1)
                 .withMergePerStreamBytes(1).withMergeBudgetBytes(oneStreamPrice);
         SortRun run = new SortRun(config, CMP, DuplicateHook.NO_OP, EqualKeyPolicy.ALLOW,
@@ -207,7 +257,8 @@ class PageRunDecodedResidencyTest {
 
     private static PageRunCatalog catalog(Path segment) throws IOException {
         return PageRunCatalog.preflight(List.of(segment),
-                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP), Optional.empty());
+                path -> PageRunSegmentIo.open(path, SortMetrics.NO_OP),
+                Optional.of(ignored -> { }));
     }
 
     private static void underclaimDecodedMaximum(Path path, int value) throws IOException {

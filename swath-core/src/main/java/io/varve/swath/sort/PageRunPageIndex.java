@@ -58,6 +58,25 @@ final class PageRunPageIndex {
         }
     }
 
+    /** O(1) extension-header probe used when sparse entries are not needed. */
+    record Probe(Status status, short extensionType, short version, long payloadLength,
+                 long declaredCount, long extensionStart, long extensionBytes,
+                 long bytesRead, byte[] header) {
+
+        boolean supportedPhysicalType() {
+            if (status == Status.ABSENT) {
+                return true;
+            }
+            if (status != null) {
+                return false;
+            }
+            return (extensionType == PageRunBoundarySample.TYPE
+                    && version == PageRunBoundarySample.VERSION)
+                    || ((extensionType == TYPE || extensionType == LEGACY_TYPE)
+                    && version == VERSION);
+        }
+    }
+
     /** One decoded page-index entry. Arrays are owned by this value and treated as read-only. */
     record IndexEntry(long pageOrdinal, long fileOffset, long cumulativeEntries,
                       long cumulativeFramedBytes, byte[] minKey, byte[] prefixMax) {
@@ -82,9 +101,41 @@ final class PageRunPageIndex {
         return new PageRunPageIndexBuilder(totalPages);
     }
 
-    static ReadResult skipped(long totalRecords) {
-        return new ReadResult(Status.SKIPPED, (short) 0, 0, totalRecords, 0, -1, -1,
-                -1, null, PageRunBoundarySample.skipped(totalRecords));
+    static ReadResult skipped(long totalRecords, Probe probe) {
+        if (probe.status() != null) {
+            return result(probe.status(), probe.extensionType(), 0, totalRecords,
+                    probe.bytesRead(), -1, -1, null);
+        }
+        return new ReadResult(Status.SKIPPED, probe.extensionType(), 0, totalRecords,
+                probe.bytesRead(), -1, -1, -1, null,
+                new PageRunBoundarySample.ReadResult(PageRunBoundarySample.Status.SKIPPED,
+                        0, totalRecords, probe.bytesRead()));
+    }
+
+    /** Read only the fixed optional-extension header, never its sparse payload. */
+    static Probe probe(PageRunSegmentIo io, PageRunTrailer.Trailer trailer) throws IOException {
+        long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
+        long extensionStart = trailer.extensionStart();
+        long extensionBytes = fixedTailStart - extensionStart;
+        if (extensionBytes == 0) {
+            return new Probe(Status.ABSENT, (short) 0, (short) 0, 0, 0,
+                    extensionStart, 0, 0, null);
+        }
+        if (extensionBytes < PageRunBoundarySample.HEADER_BYTES
+                + PageRunBoundarySample.CRC_BYTES) {
+            return new Probe(Status.INVALID_LENGTH, (short) 0, (short) 0, 0, 0,
+                    extensionStart, extensionBytes, 0, null);
+        }
+        byte[] header = io.readAt(extensionStart, PageRunBoundarySample.HEADER_BYTES).array();
+        ByteBuffer fields = ByteBuffer.wrap(header);
+        int magic = fields.getInt();
+        short type = fields.getShort();
+        short version = fields.getShort();
+        long payloadLength = fields.getInt() & 0xFFFFFFFFL;
+        long declaredCount = fields.getInt() & 0xFFFFFFFFL;
+        Status status = magic == PageRunBoundarySample.MAGIC ? null : Status.UNKNOWN;
+        return new Probe(status, type, version, payloadLength, declaredCount,
+                extensionStart, extensionBytes, header.length, header);
     }
 
     /**
@@ -93,29 +144,28 @@ final class PageRunPageIndex {
      */
     static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
                            Consumer<byte[]> validMinKeySink) throws IOException {
-        long fixedTailStart = io.fileSize - PageRunSegmentWriter.TRAILER_FIXED_TAIL_BYTES;
-        long extensionStart = trailer.extensionStart();
-        long extensionBytes = fixedTailStart - extensionStart;
-        if (extensionBytes == 0) {
+        return read(io, trailer, validMinKeySink, probe(io, trailer));
+    }
+
+    /** Fully validate and parse a sparse extension after an O(1) header probe. */
+    static ReadResult read(PageRunSegmentIo io, PageRunTrailer.Trailer trailer,
+            Consumer<byte[]> validMinKeySink, Probe probe) throws IOException {
+        if (probe.status() == Status.ABSENT) {
             return result(Status.ABSENT, (short) 0, 0, trailer.totalRecords(), 0, -1, -1,
                     null);
         }
-        if (extensionBytes < PageRunBoundarySample.HEADER_BYTES + PageRunBoundarySample.CRC_BYTES) {
+        if (probe.status() == Status.INVALID_LENGTH) {
             return result(Status.INVALID_LENGTH, (short) 0, 0, trailer.totalRecords(), 0, -1, -1,
                     null);
         }
-
-        byte[] header = io.readAt(extensionStart, PageRunBoundarySample.HEADER_BYTES).array();
-        ByteBuffer fields = ByteBuffer.wrap(header);
-        int magic = fields.getInt();
-        short type = fields.getShort();
-        short version = fields.getShort();
-        long payloadLength = fields.getInt() & 0xFFFFFFFFL;
-        long declaredCount = fields.getInt() & 0xFFFFFFFFL;
-        if (magic != PageRunBoundarySample.MAGIC) {
-            return result(Status.UNKNOWN, type, 0, trailer.totalRecords(), header.length, -1, -1,
+        if (probe.status() == Status.UNKNOWN) {
+            return result(Status.UNKNOWN, probe.extensionType(), 0, trailer.totalRecords(),
+                    probe.bytesRead(), -1, -1,
                     null);
         }
+        short type = probe.extensionType();
+        short version = probe.version();
+        byte[] header = probe.header();
         if (type == PageRunBoundarySample.TYPE && version == PageRunBoundarySample.VERSION) {
             PageRunBoundarySample.ReadResult legacy = PageRunBoundarySample.read(
                     io, trailer, validMinKeySink, header);
@@ -127,8 +177,9 @@ final class PageRunPageIndex {
             return result(Status.UNKNOWN, type, 0, trailer.totalRecords(), header.length, -1, -1,
                     null);
         }
-        return readType2(io, trailer, validMinKeySink, extensionStart, extensionBytes,
-                header, payloadLength, declaredCount, type);
+        return readType2(io, trailer, validMinKeySink,
+                probe.extensionStart(), probe.extensionBytes(), header,
+                probe.payloadLength(), probe.declaredCount(), type);
     }
 
     /** Open a bounded, non-retaining cursor over an already validated page-index block. */
